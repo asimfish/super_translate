@@ -21,6 +21,12 @@ def sanitize_error(error: Exception) -> str:
     leak server configuration or network topology.
     """
     msg = str(error)
+    # Remove API keys (Bearer tokens, query params, env vars, sk- prefixed keys)
+    msg = re.sub(r"Bearer\s+\S+", "Bearer [redacted]", msg, flags=re.IGNORECASE)
+    msg = re.sub(r"(?i)(api[_-]?key|token|secret)\s*[=:]\s*\S+", r"\1=[redacted]", msg)
+    msg = re.sub(r"\bsk-[a-zA-Z0-9_-]{8,}", "[redacted]", msg)
+    # Remove env var assignments that look like secrets
+    msg = re.sub(r"\b[A-Z_]+(?:API_KEY|SECRET|TOKEN|PASSWORD)=[^\s,;]+", "[redacted]", msg)
     # Remove file paths (Unix and Windows)
     msg = re.sub(r"(/[^\s:]+)+", "[path]", msg)
     msg = re.sub(r"([A-Z]:\\[^\s:]+)+", "[path]", msg)

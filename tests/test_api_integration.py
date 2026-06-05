@@ -1104,3 +1104,36 @@ class TestEnsureDirs:
             ensure_dirs()  # Should not raise
 
         assert (tmp_path / "test_data" / "papers").is_dir()
+
+
+class TestInitDb:
+    """Test database initialization."""
+
+    @pytest.mark.asyncio
+    async def test_init_db_creates_tables(self):
+        """Test that init_db creates all tables."""
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy.pool import StaticPool
+        from app.core.database import Base, init_db
+
+        test_engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+
+        # Patch the engine used by init_db
+        with patch("app.core.database.engine", test_engine):
+            await init_db()
+
+        # Verify tables were created
+        async with test_engine.connect() as conn:
+            result = await conn.run_sync(
+                lambda sync_conn: sync_conn.execute(
+                    __import__("sqlalchemy").text("SELECT name FROM sqlite_master WHERE type='table'")
+                ).fetchall()
+            )
+            table_names = [row[0] for row in result]
+            assert "papers" in table_names
+
+        await test_engine.dispose()

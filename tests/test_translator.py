@@ -744,6 +744,48 @@ class TestSanitizeError(unittest.TestCase):
         self.assertNotIn("localhost:8080", result)
         self.assertIn("[host]", result)
 
+    def test_removes_bearer_token(self):
+        from app.services.translator import sanitize_error
+        err = Exception("HTTP 401: Authorization: Bearer sk-abc123def456ghi789jkl012mno345")
+        result = sanitize_error(err)
+        self.assertNotIn("sk-abc123def456ghi789jkl012mno345", result)
+        self.assertIn("[redacted]", result)
+
+    def test_removes_sk_prefixed_key(self):
+        from app.services.translator import sanitize_error
+        err = Exception("Invalid API key sk-proj-abc123def456ghi789jkl012mno345pqr678")
+        result = sanitize_error(err)
+        self.assertNotIn("sk-proj-", result)
+        self.assertIn("[redacted]", result)
+
+    def test_removes_api_key_query_param(self):
+        from app.services.translator import sanitize_error
+        err = Exception("Request failed: api_key=sk-secret123abc456def789")
+        result = sanitize_error(err)
+        self.assertNotIn("sk-secret123abc456def789", result)
+        self.assertIn("[redacted]", result)
+
+    def test_removes_env_var_api_key(self):
+        from app.services.translator import sanitize_error
+        err = Exception("DEEPSEEK_API_KEY=sk-abc123def456ghi789jkl012mno345pqr678stu901")
+        result = sanitize_error(err)
+        self.assertNotIn("sk-abc123def456ghi789", result)
+        self.assertIn("[redacted]", result)
+
+    def test_removes_openai_key_in_error(self):
+        from app.services.translator import sanitize_error
+        err = Exception("OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012")
+        result = sanitize_error(err)
+        self.assertNotIn("sk-proj-abc123", result)
+        self.assertIn("[redacted]", result)
+
+    def test_removes_bearer_short_token(self):
+        from app.services.translator import sanitize_error
+        err = Exception("Auth failed: Bearer abc123xyz")
+        result = sanitize_error(err)
+        self.assertNotIn("abc123xyz", result)
+        self.assertIn("[redacted]", result)
+
 
 if __name__ == "__main__":
     unittest.main()
