@@ -470,17 +470,26 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
                     logger.error("Paper %s not found for translation", paper_id)
                     return
 
-                input_path = settings.papers_path / paper.stored_filename
+                # Validate paths (defense-in-depth)
+                papers_base = settings.papers_path.resolve()
+                input_path = (settings.papers_path / paper.stored_filename).resolve()
+                if not input_path.is_relative_to(papers_base):
+                    logger.error("Path traversal detected for paper %s", paper_id)
+                    paper.translation_status = TranslationStatus.FAILED.value
+                    paper.translation_error = "Invalid file path"
+                    await db.commit()
+                    return
+
                 output_dir = settings.translations_path / paper.id
 
                 if not input_path.exists():
-                    logger.error("Original file missing for paper %s: %s", paper_id, paper.stored_filename)
+                    logger.error("Original file missing for paper %s", paper_id)
                     paper.translation_status = TranslationStatus.FAILED.value
                     paper.translation_error = "Original PDF file not found"
                     await db.commit()
                     return
 
-                logger.info("Starting translation for paper %s (backend=%s, quality=%s, key=%s)", paper_id, config.backend, quality, "SET" if config.api_key else "NONE")
+                logger.info("Starting translation for paper %s (backend=%s, quality=%s)", paper_id, config.backend, quality)
 
                 # Progress callback: schedules async DB update from sync context
                 def _on_progress(pct: float) -> None:

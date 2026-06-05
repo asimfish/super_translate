@@ -917,6 +917,32 @@ class TestRunTranslation:
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
+    def test_path_traversal_blocked(self, mock_settings, mock_translate, tmp_path):
+        from app.api.papers import _run_translation
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "../../../etc/passwd"
+        paper.translation_status = "translating"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("paper123", "google", "fast")
+
+        assert paper.translation_status == "failed"
+        assert paper.translation_error == "Invalid file path"
+        mock_translate.assert_not_called()
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
     def test_translation_exception_sets_failed(self, mock_settings, mock_translate, tmp_path):
         from app.api.papers import _run_translation
 
