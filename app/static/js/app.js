@@ -121,7 +121,7 @@ async function batchTranslate() {
 
   for (const paper of pending) {
     try {
-      await api.translatePaper(paper.id, 'deepseek', quality);
+      await api.translatePaper(paper.id, '', quality);
       success++;
     } catch (e) {
       failed++;
@@ -529,11 +529,11 @@ async function doTranslate(paperId, btn) {
 async function startTranslate() {
   if (!currentPaper) return;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
-  doTranslateDirect(currentPaper.id, 'deepseek', quality);
+  doTranslateDirect(currentPaper.id, '', quality);
 }
 
 async function quickTranslate(paperId) {
-  doTranslateDirect(paperId, 'deepseek', 'balanced');
+  doTranslateDirect(paperId, '', 'balanced');
 }
 
 async function doTranslateDirect(paperId, backend, quality) {
