@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-china"
+version = "0.2.0"
+description = "Local AI-powered paper reading + Chinese translation system"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pdf2zh>=1.8",
+    "fastapi>=0.104",
+    "uvicorn[standard]>=0.24",
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.19",
+    "python-multipart>=0.0.6",
+    "jinja2>=3.1",
+    "aiofiles>=23.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "httpx>=0.25",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+paper-china = "app.main:cli"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

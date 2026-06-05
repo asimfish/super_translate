@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paper China - AI 论文翻译阅读系统</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div id="app">
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <h1 class="logo">📄 Paper China</h1>
+      <span class="subtitle">AI 论文翻译阅读系统</span>
+    </div>
+    <div class="header-right">
+      <button class="btn btn-primary" onclick="showUpload()">+ 上传论文</button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="main">
+    <!-- Paper Library View -->
+    <div id="library-view" class="view active">
+      <div class="toolbar">
+        <div class="search-box">
+          <input type="text" id="search-input" placeholder="搜索论文标题..." oninput="debounceSearch()">
+        </div>
+        <div class="filter-box">
+          <select id="status-filter" onchange="loadPapers()">
+            <option value="">全部状态</option>
+            <option value="pending">待翻译</option>
+            <option value="translating">翻译中</option>
+            <option value="completed">已完成</option>
+            <option value="failed">失败</option>
+          </select>
+        </div>
+        <div class="toolbar-actions">
+          <span id="stats-bar" class="stats-bar"></span>
+          <button class="btn btn-outline btn-sm" onclick="batchTranslate()">批量翻译</button>
+        </div>
+      </div>
+      <div id="paper-list" class="paper-grid"></div>
+      <div id="pagination"></div>
+      <div id="empty-state" class="empty-state" style="display:none">
+        <div class="empty-icon">📚</div>
+        <h3>还没有论文</h3>
+        <p>上传英文 PDF 开始使用</p>
+        <button class="btn btn-primary" onclick="showUpload()">上传第一篇论文</button>
+      </div>
+    </div>
+
+    <!-- Upload View -->
+    <div id="upload-view" class="view">
+      <div class="upload-container">
+        <button class="btn-back" onclick="showLibrary()">← 返回</button>
+        <h2>上传论文</h2>
+        <div id="drop-zone" class="drop-zone">
+          <div class="drop-icon">📄</div>
+          <p>拖拽 PDF 文件到这里，或</p>
+          <label class="btn btn-outline">
+            选择文件
+            <input type="file" id="file-input" accept=".pdf" hidden onchange="handleFileSelect(this)">
+          </label>
+        </div>
+        <div id="upload-preview" class="upload-preview" style="display:none">
+          <div class="file-info">
+            <span id="file-name"></span>
+            <span id="file-size"></span>
+          </div>
+          <div class="upload-actions">
+            <input type="text" id="upload-tags" placeholder="标签（可选，逗号分隔）">
+            <button class="btn btn-primary" onclick="doUpload()">上传</button>
+            <button class="btn btn-outline" onclick="cancelUpload()">取消</button>
+          </div>
+        </div>
+        <div id="upload-progress" style="display:none">
+          <div class="progress-bar"><div class="progress-fill" id="upload-progress-fill"></div></div>
+          <span id="upload-status">上传中...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reader View (Side-by-side) -->
+    <div id="reader-view" class="view">
+      <div class="reader-toolbar">
+        <button class="btn-back" onclick="showLibrary()">← 返回</button>
+        <div class="reader-title" id="reader-title"></div>
+        <div class="reader-actions">
+          <div class="translate-controls">
+            <select id="quality-preset" class="quality-select">
+              <option value="fast">快速 (Google)</option>
+              <option value="balanced" selected>标准 (DeepSeek)</option>
+              <option value="quality">高质量 (DeepSeek+优化)</option>
+            </select>
+            <button class="btn btn-sm btn-primary" id="btn-translate" onclick="startTranslate()">翻译</button>
+          </div>
+          <button class="btn btn-sm btn-primary" id="btn-sync-scroll" onclick="toggleSyncScroll()">同步滚动: 开</button>
+          <button class="btn btn-sm" id="btn-download-mono" onclick="downloadTranslated()" style="display:none">下载译文</button>
+          <button class="btn btn-sm" id="btn-download-dual" onclick="downloadDual()" style="display:none">下载双语</button>
+        </div>
+      </div>
+      <div class="reader-body">
+        <div class="pdf-panel" id="left-panel">
+          <div class="panel-header">原文 (English) <span id="page-info-original" class="page-info">第 1 页</span></div>
+          <div id="pdf-container-original" class="pdf-container"></div>
+        </div>
+        <div class="resizer" id="resizer"></div>
+        <div class="pdf-panel" id="right-panel">
+          <div class="panel-header">译文 (中文) <span id="page-info-translated" class="page-info">第 1 页</span></div>
+          <div id="pdf-container-translated" class="pdf-container"></div>
+          <div id="translate-placeholder" class="translate-placeholder">
+            <div class="placeholder-icon">🌐</div>
+            <p>点击"翻译"按钮生成中文译文</p>
+            <button class="btn btn-primary" onclick="startTranslate()">开始翻译</button>
+          </div>
+        </div>
+      </div>
+      <!-- Translation Progress Panel -->
+      <div id="translation-progress" class="translation-progress" style="display:none">
+        <div class="progress-header">
+          <span id="trans-status">翻译中...</span>
+          <span id="trans-percent">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="trans-progress-fill"></div></div>
+        <div id="trans-log" class="trans-log"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/js/pdf.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

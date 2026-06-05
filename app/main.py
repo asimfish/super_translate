@@ -1,0 +1,117 @@
+"""Main application entry point."""
+
+import logging
+import webbrowser
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, Response
+
+from app.core.config import settings, ensure_dirs
+from app.core.database import init_db
+from app.core.rate_limit import RateLimitMiddleware
+from app.api.papers import router as papers_router
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ensure_dirs()
+    await init_db()
+    logger.info("Paper China started at http://localhost:8000")
+    yield
+
+
+app = FastAPI(title="Paper China", version="0.2.0", lifespan=lifespan)
+
+# CORS for development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Rate limiting
+app.add_middleware(
+    RateLimitMiddleware,
+    requests_per_minute=60,
+    requests_per_hour=500,
+)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'"
+    )
+    return response
+
+app.include_router(papers_router)
+
+static_dir = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    html_path = static_dir / "index.html"
+    if html_path.exists():
+        return html_path.read_text(encoding="utf-8")
+    return "<h1>Paper China</h1><p>Static files not found.</p>"
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "version": "0.2.0"}
+
+
+@app.get("/api/stats")
+async def stats():
+    from sqlalchemy import select, func
+    from app.core.database import async_session
+    from app.models.paper import Paper
+
+    async with async_session() as db:
+        total = await db.scalar(select(func.count(Paper.id)))
+        completed = await db.scalar(
+            select(func.count(Paper.id)).where(Paper.translation_status == "completed")
+        )
+        return {
+            "total_papers": total or 0,
+            "completed_translations": completed or 0,
+            "storage_path": str(settings.base_dir / settings.data_dir),
+        }
+
+
+def cli():
+    import uvicorn
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Paper China - AI Paper Translation System")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--open", action="store_true", help="Open browser on start")
+    args = parser.parse_args()
+
+    if args.open:
+        webbrowser.open(f"http://{args.host}:{args.port}")
+
+    uvicorn.run("app.main:app", host=args.host, port=args.port, reload=settings.debug)
+
+
+if __name__ == "__main__":
+    cli()
