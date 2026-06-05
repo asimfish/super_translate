@@ -1007,6 +1007,74 @@ class TestRunTranslation:
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
+    def test_progress_callback_throttled(self, mock_settings, mock_translate, tmp_path):
+        """Test that progress callback throttles DB writes to 1% increments."""
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translated_filename = None
+        paper.dual_filename = None
+        paper.translation_status = "translating"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        mono_path.parent.mkdir(parents=True)
+        mono_path.write_bytes(b"translated")
+
+        progress_db = AsyncMock()
+        progress_paper = MagicMock()
+        progress_paper.translation_status = "translating"
+        progress_db.get = AsyncMock(return_value=progress_paper)
+        progress_db.commit = AsyncMock()
+
+        session_call_count = [0]
+        original_mock = self._make_async_session_mock(db)
+
+        def session_factory():
+            session_call_count[0] += 1
+            if session_call_count[0] == 1:
+                return original_mock()
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=progress_db)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            return ctx
+
+        def fake_translate(input_path, output_dir, config, progress_callback=None):
+            if progress_callback:
+                # Many small increments within 1% — only first should fire
+                for i in range(1, 10):
+                    progress_callback(i / 1000.0)  # 0.001, 0.002, ..., 0.009
+                # This crosses 1% threshold — should fire
+                progress_callback(0.015)
+                # Final 100% — should always fire
+                progress_callback(1.0)
+            return TranslationResult(mono_path=mono_path)
+
+        mock_translate.side_effect = fake_translate
+
+        with patch("app.core.database.async_session", side_effect=session_factory):
+            _run_translation("paper123", "google", "fast")
+
+        # Session created: 1 (main) + 2 (0.015, 1.0) = 3
+        # The 9 calls from 0.001-0.009 are all within 1% of 0.0 → throttled
+        assert session_call_count[0] == 3
+        assert paper.translation_status == "completed"
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
     def test_paper_not_found(self, mock_settings, mock_translate):
         from app.api.papers import _run_translation
 

@@ -503,8 +503,15 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
 
                 logger.info("Starting translation for paper %s (backend=%s, quality=%s)", paper_id, config.backend, quality)
 
-                # Progress callback: schedules async DB update from sync context
+                # Progress callback: schedules async DB update from sync context.
+                # Throttled to 1% increments to avoid excessive DB writes.
+                _last_pct: list[float] = [0.0]
+
                 def _on_progress(pct: float) -> None:
+                    if pct - _last_pct[0] < 0.01 and pct < 1.0:
+                        return
+                    _last_pct[0] = pct
+
                     async def _update():
                         async with async_session() as p_db:
                             p = await p_db.get(Paper, paper_id)
