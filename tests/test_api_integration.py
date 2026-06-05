@@ -45,7 +45,7 @@ def mock_db():
 def sample_paper():
     """Create a sample paper object."""
     paper = MagicMock(spec=Paper)
-    paper.id = "test12345678"
+    paper.id = "abcd12345678"
     paper.title = "Test Paper"
     paper.original_filename = "test.pdf"
     paper.stored_filename = "stored_test.pdf"
@@ -268,7 +268,7 @@ class TestPaperDetailEndpoint:
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
 
-        response = client.get("/api/papers/nonexistent")
+        response = client.get("/api/papers/000000000000")
         assert response.status_code == 404
 
     def test_get_paper_success(self, client, mock_db, sample_paper):
@@ -308,7 +308,7 @@ class TestPaperDeleteEndpoint:
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
 
-        response = client.delete("/api/papers/nonexistent")
+        response = client.delete("/api/papers/000000000000")
         assert response.status_code == 404
 
     def test_delete_paper_success(self, client, mock_db, sample_paper):
@@ -342,7 +342,7 @@ class TestPaperUpdateEndpoint:
         mock_db.execute.return_value = mock_result
 
         response = client.patch(
-            "/api/papers/nonexistent",
+            "/api/papers/000000000000",
             json={"title": "New Title"},
         )
         assert response.status_code == 404
@@ -379,7 +379,7 @@ class TestPaperUpdateEndpoint:
         mock_db.execute.return_value = mock_result
 
         response = client.patch(
-            "/api/papers/test123",
+            "/api/papers/000000000000",
             json={"title": "x" * 501},
         )
         assert response.status_code == 400
@@ -391,7 +391,7 @@ class TestPaperUpdateEndpoint:
         mock_db.execute.return_value = mock_result
 
         response = client.patch(
-            "/api/papers/test123",
+            "/api/papers/000000000000",
             json={"tags": "x" * 1001},
         )
         assert response.status_code == 400
@@ -403,7 +403,7 @@ class TestPaperUpdateEndpoint:
         mock_db.execute.return_value = mock_result
 
         response = client.patch(
-            "/api/papers/test123",
+            "/api/papers/000000000000",
             json={"notes": "x" * 10001},
         )
         assert response.status_code == 400
@@ -465,7 +465,7 @@ class TestTranslationEndpoint:
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
 
-        response = client.post("/api/papers/nonexistent/translate")
+        response = client.post("/api/papers/000000000000/translate")
         assert response.status_code == 404
 
     def test_translate_already_in_progress(self, client, mock_db, sample_paper):
@@ -532,7 +532,7 @@ class TestDownloadEndpoints:
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
 
-        response = client.get("/api/papers/nonexistent/download/original")
+        response = client.get("/api/papers/000000000000/download/original")
         assert response.status_code == 404
 
     def test_download_translated_not_found(self, client, mock_db, sample_paper):
@@ -696,7 +696,7 @@ class TestErrorHandling:
         mock_db.execute.return_value = mock_result
 
         response = client.get("/api/papers/invalid-id-format")
-        assert response.status_code == 404
+        assert response.status_code == 400
 
     def test_upload_no_file(self, client):
         """Test that upload without file returns 422."""
@@ -1103,7 +1103,7 @@ class TestRunTranslation:
         db.execute = AsyncMock(return_value=mock_result)
 
         with patch("app.core.database.async_session", self._make_async_session_mock(db)):
-            _run_translation("nonexistent", "google", "fast")
+            _run_translation("000000000000", "google", "fast")
 
         mock_translate.assert_not_called()
 
@@ -1397,7 +1397,7 @@ class TestRunTranslation:
         mock_db.execute.return_value = mock_result
 
         response = client.patch(
-            "/api/papers/test123",
+            "/api/papers/000000000000",
             json={"title": "x" * 501},
         )
         assert response.status_code == 400
@@ -1445,7 +1445,7 @@ class TestSecurityHeaders:
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
 
-        response = client.get("/api/papers/nonexistent")
+        response = client.get("/api/papers/000000000000")
         assert response.status_code == 404
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -41,6 +42,16 @@ _UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/papers", tags=["papers"])
+
+# Paper ID format: 12-character hex string (uuid4 hex[:12])
+_PAPER_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _validate_paper_id(paper_id: str) -> str:
+    """Validate paper ID format. Returns the ID if valid, raises 400 otherwise."""
+    if not _PAPER_ID_RE.match(paper_id):
+        raise HTTPException(400, "Invalid paper ID format")
+    return paper_id
 
 
 class PaperResponse(BaseModel):
@@ -189,6 +200,7 @@ def _file_exists_safe(
 
 async def _get_paper_or_404(paper_id: str, db: AsyncSession) -> Paper:
     """Fetch paper by ID or raise 404."""
+    _validate_paper_id(paper_id)
     result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:
