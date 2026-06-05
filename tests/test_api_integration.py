@@ -258,6 +258,22 @@ class TestPaperDetailEndpoint:
             assert data["id"] == sample_paper.id
             assert data["title"] == sample_paper.title
 
+    def test_progress_clamped_to_valid_range(self, client, mock_db, sample_paper):
+        """Progress values outside 0-1 are clamped at the API level."""
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        # Test out-of-range values
+        for invalid_val in [-0.5, 1.5, 999.0]:
+            sample_paper.translation_progress = invalid_val
+            with patch("pathlib.Path.exists", return_value=False):
+                response = client.get(f"/api/papers/{sample_paper.id}")
+                data = response.json()
+                assert 0.0 <= data["translation_progress"] <= 1.0, (
+                    f"Expected clamped progress for input {invalid_val}, got {data['translation_progress']}"
+                )
+
 
 class TestPaperDeleteEndpoint:
     """Test paper delete endpoint."""
@@ -1216,6 +1232,8 @@ class TestSecurityHeaders:
         assert "script-src 'self'" in csp
         assert "style-src 'self'" in csp
         assert "connect-src 'self'" in csp
+        assert "font-src 'self'" in csp
+        assert "frame-ancestors 'none'" in csp
         assert "'unsafe-inline'" not in csp
 
     def test_security_headers_on_api(self, client, mock_db):

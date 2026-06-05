@@ -122,7 +122,7 @@ def _paper_to_response(
         file_size=paper.file_size,
         page_count=paper.page_count,
         translation_status=paper.translation_status,
-        translation_progress=paper.translation_progress,
+        translation_progress=max(0.0, min(1.0, paper.translation_progress)),
         translation_error=paper.translation_error,
         tags=paper.tags,
         notes=paper.notes,

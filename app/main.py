@@ -98,7 +98,8 @@ async def add_security_headers(request: Request, call_next):
         "img-src 'self' data:; "
         "connect-src 'self'; "
         "object-src 'none'; "
-        "base-uri 'self'"
+        "base-uri 'self'; "
+        "frame-ancestors 'none'"
     )
     return response
 
