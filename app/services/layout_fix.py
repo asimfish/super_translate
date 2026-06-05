@@ -126,12 +126,11 @@ def _redact_blocks(page: object, blocks: list[TextBlockInfo]) -> None:
 
     # Apply all redactions at once
     try:
-        import fitz as _fitz
         kwargs = {}
-        if hasattr(_fitz, "PDF_REDACT_IMAGE_NONE"):
-            kwargs["images"] = _fitz.PDF_REDACT_IMAGE_NONE
-        if hasattr(_fitz, "PDF_REDACT_LINE_ART_NONE"):
-            kwargs["graphics"] = _fitz.PDF_REDACT_LINE_ART_NONE
+        if hasattr(fitz, "PDF_REDACT_IMAGE_NONE"):
+            kwargs["images"] = fitz.PDF_REDACT_IMAGE_NONE
+        if hasattr(fitz, "PDF_REDACT_LINE_ART_NONE"):
+            kwargs["graphics"] = fitz.PDF_REDACT_LINE_ART_NONE
         page.apply_redactions(**kwargs)
     except (TypeError, AttributeError):
         page.apply_redactions()
@@ -314,9 +313,9 @@ def _analyze_page_layout(
     # Find most common width among "full-width" blocks
     full_widths = [w for w in width_values if w > 300]
     if full_widths:
-        col_width = float(max(set(full_widths), key=full_widths.count))
+        col_width = float(statistics.mode(full_widths))
     else:
-        col_width = float(max(set(width_values), key=width_values.count))
+        col_width = float(statistics.mode(width_values))
 
     return (left_margin, col_width)
 
@@ -365,7 +364,7 @@ def _needs_fix(
         return True
 
     # Fix blocks that are too narrow
-    return bool(width < col_width * MIN_COL_WIDTH_RATIO and width < MIN_BLOCK_WIDTH)
+    return width < col_width * MIN_COL_WIDTH_RATIO and width < MIN_BLOCK_WIDTH
 
 
 def _is_line_number_text(text: str) -> bool:
