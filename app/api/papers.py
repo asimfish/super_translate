@@ -470,14 +470,14 @@ def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> Tran
     model_name = ""
 
     if backend == "deepseek":
-        api_key = settings.deepseek_api_key
+        api_key = settings.deepseek_api_key.get_secret_value()
         model_name = settings.deepseek_model
     elif backend == "openai":
-        api_key = settings.openai_api_key
+        api_key = settings.openai_api_key.get_secret_value()
         base_url = settings.openai_base_url
         model_name = settings.openai_model
     elif backend == "deepl":
-        api_key = settings.deepl_api_key
+        api_key = settings.deepl_api_key.get_secret_value()
     elif backend == "ollama":
         base_url = settings.ollama_host
 

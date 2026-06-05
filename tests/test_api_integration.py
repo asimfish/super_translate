@@ -879,10 +879,12 @@ class TestHelpers:
         assert config.api_key == ""
 
     def test_resolve_backend_config_deepseek(self):
+        from pydantic import SecretStr
+
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
         with patch("app.api.papers.settings") as mock_settings:
-            mock_settings.deepseek_api_key = "test-key"
+            mock_settings.deepseek_api_key = SecretStr("test-key")
             mock_settings.deepseek_model = "deepseek-v4"
             config = _resolve_backend_config("deepseek", QualityPreset.BALANCED)
             assert config.backend == "deepseek"
@@ -890,10 +892,12 @@ class TestHelpers:
             assert config.model == "deepseek-v4"
 
     def test_resolve_backend_config_openai(self):
+        from pydantic import SecretStr
+
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
         with patch("app.api.papers.settings") as mock_settings:
-            mock_settings.openai_api_key = "oa-key"
+            mock_settings.openai_api_key = SecretStr("oa-key")
             mock_settings.openai_base_url = "https://api.openai.com/v1"
             mock_settings.openai_model = "gpt-4o-mini"
             config = _resolve_backend_config("openai", QualityPreset.BALANCED)
@@ -903,10 +907,12 @@ class TestHelpers:
             assert config.model == "gpt-4o-mini"
 
     def test_resolve_backend_config_deepl(self):
+        from pydantic import SecretStr
+
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
         with patch("app.api.papers.settings") as mock_settings:
-            mock_settings.deepl_api_key = "dl-test-key"
+            mock_settings.deepl_api_key = SecretStr("dl-test-key")
             config = _resolve_backend_config("deepl", QualityPreset.BALANCED)
             assert config.backend == "deepl"
             assert config.api_key == "dl-test-key"
@@ -922,22 +928,25 @@ class TestHelpers:
 
     def test_resolve_backend_config_missing_api_key_raises(self):
         from fastapi import HTTPException
+        from pydantic import SecretStr
 
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
         with patch("app.api.papers.settings") as mock_settings, \
              patch.dict("os.environ", {}, clear=True):
-            mock_settings.deepseek_api_key = ""
+            mock_settings.deepseek_api_key = SecretStr("")
             with pytest.raises(HTTPException) as exc_info:
                 _resolve_backend_config("deepseek", QualityPreset.BALANCED)
             assert exc_info.value.status_code == 400
             assert "API key" in exc_info.value.detail
 
     def test_resolve_backend_config_missing_key_allowed_in_fast_mode(self):
+        from pydantic import SecretStr
+
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
         with patch("app.api.papers.settings") as mock_settings:
-            mock_settings.deepseek_api_key = ""
+            mock_settings.deepseek_api_key = SecretStr("")
             config = _resolve_backend_config("deepseek", QualityPreset.FAST)
             assert config.backend == "google"
 
