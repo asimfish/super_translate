@@ -425,6 +425,105 @@ class TestTranslatePdfSync(unittest.TestCase):
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
+    def test_retry_cleans_up_partial_files(self, mock_get_model, mock_translate):
+        """Test that partial output files are deleted on retry failure."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        call_count = [0]
+
+        def fail_then_succeed(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("Temporary API error")
+
+        mock_translate.side_effect = fail_then_succeed
+
+        config = TranslationConfig(
+            backend="google",
+            quality=QualityPreset.FAST,
+            max_retries=2,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+            # Create partial output files that should be cleaned up
+            partial1 = output_dir / "partial1.pdf"
+            partial2 = output_dir / "partial2.txt"
+            partial1.write_bytes(b"partial")
+            partial2.write_bytes(b"partial")
+
+            # Create the expected output file for the second attempt
+            (output_dir / "input-mono.pdf").write_bytes(b"translated")
+
+            result = translate_pdf_sync(
+                Path(tmpdir) / "input.pdf",
+                output_dir,
+                config,
+            )
+            self.assertIsNone(result.error)
+            self.assertEqual(call_count[0], 2)
+            # Partial files should have been cleaned up
+            self.assertFalse(partial1.exists())
+            self.assertFalse(partial2.exists())
+
+    @patch("app.services.layout_fix.fix_translated_layout")
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_layout_fix_called_on_output(self, mock_get_model, mock_translate, mock_fix):
+        """Test that layout fix is applied to translated output files."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+        mock_fix.return_value = True
+
+        config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+            mono = output_dir / "input-mono.pdf"
+            dual = output_dir / "input-dual.pdf"
+            mono.write_bytes(b"mono content")
+            dual.write_bytes(b"dual content")
+
+            result = translate_pdf_sync(
+                Path(tmpdir) / "input.pdf",
+                output_dir,
+                config,
+            )
+            self.assertTrue(result.success)
+            # Layout fix should have been called on both files
+            self.assertEqual(mock_fix.call_count, 2)
+
+    @patch("app.services.layout_fix.fix_translated_layout")
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_layout_fix_failure_is_non_fatal(self, mock_get_model, mock_translate, mock_fix):
+        """Test that layout fix failure doesn't break translation."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+        mock_fix.side_effect = Exception("Font not found")
+
+        config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+            mono = output_dir / "input-mono.pdf"
+            mono.write_bytes(b"mono content")
+
+            result = translate_pdf_sync(
+                Path(tmpdir) / "input.pdf",
+                output_dir,
+                config,
+            )
+            # Translation should still succeed despite layout fix failure
+            self.assertTrue(result.success)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
     def test_all_retries_exhausted(self, mock_get_model, mock_translate):
         """Test that error is returned when all retries are exhausted."""
         mock_get_model.return_value = MagicMock()
