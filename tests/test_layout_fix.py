@@ -169,6 +169,26 @@ class TestNeedsFix(unittest.TestCase):
         block = self._make_block((91, 100, 504, 120), font_size=5.0)
         self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
 
+    def test_very_small_block_skipped(self):
+        """Blocks with height < 3 or width < 10 are skipped (images/decorations)."""
+        block = self._make_block((91, 100, 95, 101))  # width=4, height=1
+        self.assertFalse(_needs_fix(block, left_margin=91, col_width=413))
+
+    def test_embedded_line_numbers_needs_fix(self):
+        """Blocks with embedded line numbers should be fixed."""
+        block = self._make_block((91, 100, 504, 120), text="这是正文内容24")
+        self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
+
+    def test_short_text_narrow_width_skipped(self):
+        """Short text in narrow blocks is likely figure labels — skip."""
+        block = self._make_block((91, 100, 160, 120), text="Time")  # len=4, width=69
+        self.assertFalse(_needs_fix(block, left_margin=91, col_width=413))
+
+    def test_short_text_wide_width_needs_fix(self):
+        """Short text in wide blocks is still checked for margin offset."""
+        block = self._make_block((150, 100, 504, 120), text="Time")  # len=4, width=354
+        self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
+
 
 if __name__ == "__main__":
     unittest.main()
