@@ -8,6 +8,10 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+# Maximum number of distinct client IPs to track simultaneously.
+# Prevents unbounded memory growth from spoofed-source DDoS.
+_MAX_TRACKED_IPS = 10_000
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Sliding window rate limiter.
@@ -29,7 +33,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.requests_per_hour = requests_per_hour
         self.window_seconds = window_seconds
         self.trust_proxy = trust_proxy
-        # {ip: [(timestamp, ...), ...]}
+        # {ip: [timestamp, ...]}
         self._minute_requests: dict[str, list[float]] = defaultdict(list)
         self._hour_requests: dict[str, list[float]] = defaultdict(list)
         self._last_cleanup = time.time()
@@ -121,6 +125,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         client_ip = self._get_client_ip(request)
         self._cleanup_old_entries()
+
+        # Reject if tracking too many distinct IPs (likely DDoS with spoofed sources)
+        if (
+            client_ip not in self._minute_requests
+            and len(self._minute_requests) >= _MAX_TRACKED_IPS
+        ):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many clients, try again later"},
+                headers={"Retry-After": "60"},
+            )
 
         allowed, error_msg = self._check_rate_limit(client_ip)
         if not allowed:

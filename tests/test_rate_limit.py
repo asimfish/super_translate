@@ -156,3 +156,60 @@ class TestCleanup:
         middleware._cleanup_old_entries()
         # Should NOT have cleaned up because last_cleanup was recent
         assert len(middleware._minute_requests["1.2.3.4"]) == 1
+
+
+class TestIpCap:
+    """Test IP tracking cap to prevent memory exhaustion."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_new_ips_when_at_cap(self):
+        import time
+        from unittest.mock import patch as _patch
+
+        app = FastAPI()
+        middleware = RateLimitMiddleware(app, requests_per_minute=100, requests_per_hour=1000)
+        now = time.time()
+        # Fill up to the cap with distinct IPs (use small cap for test speed)
+        cap = 5
+        for i in range(cap):
+            middleware._minute_requests[f"10.0.0.{i}"] = [now]
+        middleware._last_cleanup = now
+
+        request = MagicMock()
+        request.headers = {}
+        request.client.host = "192.168.1.1"
+        request.url.path = "/test"
+
+        async def call_next(req):
+            return MagicMock(status_code=200)
+
+        with _patch("app.core.rate_limit._MAX_TRACKED_IPS", cap):
+            response = await middleware.dispatch(request, call_next)
+        assert response.status_code == 429
+        assert "Too many clients" in response.body.decode()
+
+    @pytest.mark.asyncio
+    async def test_allows_existing_ip_at_cap(self):
+        import time
+        from unittest.mock import patch as _patch
+
+        app = FastAPI()
+        middleware = RateLimitMiddleware(app, requests_per_minute=100, requests_per_hour=1000)
+        now = time.time()
+        cap = 5
+        for i in range(cap - 1):
+            middleware._minute_requests[f"10.0.0.{i}"] = [now]
+        middleware._minute_requests["192.168.1.1"] = [now]
+        middleware._last_cleanup = now
+
+        request = MagicMock()
+        request.headers = {}
+        request.client.host = "192.168.1.1"
+        request.url.path = "/test"
+
+        async def call_next(req):
+            return MagicMock(status_code=200)
+
+        with _patch("app.core.rate_limit._MAX_TRACKED_IPS", cap):
+            response = await middleware.dispatch(request, call_next)
+        assert response.status_code == 200
