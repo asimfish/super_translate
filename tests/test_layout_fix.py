@@ -331,6 +331,133 @@ class TestHasEmbeddedLineNumberEdgeCases(unittest.TestCase):
         self.assertFalse(_has_embedded_line_numbers("   "))
 
 
+class TestExtractTextBlocks(unittest.TestCase):
+    """Test _extract_text_blocks edge cases."""
+
+    def _make_page(self, blocks_data):
+        """Create a mock page with given block data."""
+        page = unittest.mock.MagicMock()
+        page.get_text.return_value = {"blocks": blocks_data}
+        return page
+
+    def test_skips_image_blocks(self):
+        """Non-text blocks (type=1) are skipped."""
+        from app.services.layout_fix import _extract_text_blocks
+        blocks_data = [
+            {"type": 1, "bbox": [0, 0, 100, 100]},  # image
+            {
+                "type": 0,
+                "bbox": [91, 100, 504, 120],
+                "lines": [{"spans": [{"text": "body text", "size": 10.0}]}],
+            },
+        ]
+        page = self._make_page(blocks_data)
+        blocks = _extract_text_blocks(page)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].text, "body text")
+
+    def test_skips_empty_text_blocks(self):
+        """Blocks with no text content are skipped."""
+        from app.services.layout_fix import _extract_text_blocks
+        blocks_data = [
+            {
+                "type": 0,
+                "bbox": [91, 100, 504, 120],
+                "lines": [{"spans": [{"text": "   ", "size": 10.0}]}],
+            },
+        ]
+        page = self._make_page(blocks_data)
+        blocks = _extract_text_blocks(page)
+        self.assertEqual(len(blocks), 0)
+
+    def test_skips_null_bytes(self):
+        """Blocks containing null bytes are skipped."""
+        from app.services.layout_fix import _extract_text_blocks
+        blocks_data = [
+            {
+                "type": 0,
+                "bbox": [91, 100, 504, 120],
+                "lines": [{"spans": [{"text": "text\x00content", "size": 10.0}]}],
+            },
+        ]
+        page = self._make_page(blocks_data)
+        blocks = _extract_text_blocks(page)
+        self.assertEqual(len(blocks), 0)
+
+    def test_empty_page(self):
+        """Page with no blocks returns empty list."""
+        from app.services.layout_fix import _extract_text_blocks
+        page = self._make_page([])
+        blocks = _extract_text_blocks(page)
+        self.assertEqual(len(blocks), 0)
+
+    def test_joins_multiline_text(self):
+        """Multiple lines are joined with newline."""
+        from app.services.layout_fix import _extract_text_blocks
+        blocks_data = [
+            {
+                "type": 0,
+                "bbox": [91, 100, 504, 160],
+                "lines": [
+                    {"spans": [{"text": "line one", "size": 10.0}]},
+                    {"spans": [{"text": "line two", "size": 10.0}]},
+                ],
+            },
+        ]
+        page = self._make_page(blocks_data)
+        blocks = _extract_text_blocks(page)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].text, "line one\nline two")
+
+
+class TestFixPageLayoutEdgeCases(unittest.TestCase):
+    """Test _fix_page_layout edge cases with mocked pages."""
+
+    def test_empty_page_returns_zero(self):
+        """Page with no text blocks returns 0 fixed."""
+        from app.services.layout_fix import _fix_page_layout
+        page = unittest.mock.MagicMock()
+        page.get_text.return_value = {"blocks": []}
+        result = _fix_page_layout(page)
+        self.assertEqual(result, 0)
+
+    def test_small_column_width_returns_zero(self):
+        """Page with very narrow layout returns 0 (can't determine layout)."""
+        from app.services.layout_fix import _fix_page_layout
+        page = unittest.mock.MagicMock()
+        page.get_text.return_value = {"blocks": [
+            {
+                "type": 0,
+                "bbox": [10, 100, 50, 120],
+                "lines": [{"spans": [{"text": "tiny", "size": 10.0}]}],
+            },
+        ]}
+        page.rect.height = 792
+        result = _fix_page_layout(page)
+        self.assertEqual(result, 0)
+
+    def test_no_blocks_needing_fix_returns_zero(self):
+        """Page with properly aligned blocks returns 0."""
+        from app.services.layout_fix import _fix_page_layout
+        page = unittest.mock.MagicMock()
+        page.get_text.return_value = {"blocks": [
+            {
+                "type": 0,
+                "bbox": [91, 100, 504, 120],
+                "lines": [{"spans": [{"text": "a" * 50, "size": 10.0}]}],
+            },
+            {
+                "type": 0,
+                "bbox": [91, 130, 504, 150],
+                "lines": [{"spans": [{"text": "b" * 50, "size": 10.0}]}],
+            },
+        ]}
+        page.rect.height = 792
+        page.rect.width = 612
+        result = _fix_page_layout(page)
+        self.assertEqual(result, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 
