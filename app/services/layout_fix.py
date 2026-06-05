@@ -4,8 +4,6 @@ pdf2zh's ONNX layout detection model sometimes creates text regions with
 incorrect positions/widths. This module corrects them using PyMuPDF.
 """
 
-from __future__ import annotations
-
 import logging
 import re
 import statistics
