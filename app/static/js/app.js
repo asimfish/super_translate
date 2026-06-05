@@ -60,6 +60,11 @@ const api = {
 
 // === Views ===
 function showView(name) {
+  // Clean up polling when leaving reader
+  if (name !== 'reader' && translationPollId) {
+    clearInterval(translationPollId);
+    translationPollId = null;
+  }
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`${name}-view`).classList.add('active');
 }
