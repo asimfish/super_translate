@@ -180,8 +180,9 @@ async def list_papers(
     Returns:
         PaperListResponse with papers and total count
     """
-    # Clamp limit
+    # Clamp limit and offset
     limit = min(max(limit, 1), 200)
+    offset = max(offset, 0)
 
     # Base query
     query = select(Paper).order_by(Paper.created_at.desc())
