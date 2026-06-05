@@ -241,6 +241,16 @@ class TestPaperDeleteEndpoint:
             assert response.json()["ok"] is True
             mock_delete.assert_called_once()
 
+    def test_delete_paper_while_translating(self, client, mock_db, sample_paper):
+        sample_paper.translation_status = "translating"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.delete(f"/api/papers/{sample_paper.id}")
+        assert response.status_code == 409
+        assert "translation is in progress" in response.json()["detail"]
+
 
 class TestPaperUpdateEndpoint:
     """Test paper update endpoint."""

@@ -297,12 +297,14 @@ async def delete_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
         Success status
 
     Raises:
-        HTTPException: If paper not found (404)
+        HTTPException: If paper not found (404) or translation in progress (409)
     """
     result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:
         raise HTTPException(404, "Paper not found")
+    if paper.translation_status == TranslationStatus.TRANSLATING.value:
+        raise HTTPException(409, "Cannot delete paper while translation is in progress")
     await delete_paper_files(paper)
     await db.delete(paper)
     await db.commit()
