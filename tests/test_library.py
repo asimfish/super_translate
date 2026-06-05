@@ -238,6 +238,62 @@ class TestDeletePaperFiles:
             # Should not raise
             await delete_paper_files(paper)
 
+    @pytest.mark.asyncio
+    async def test_cleans_empty_translation_directory(self, tmp_path):
+        """Empty translation output directory should be removed after file deletion."""
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+
+        # Create files inside a subdirectory (like paper.id/)
+        subdir = translations_dir / "abc123"
+        subdir.mkdir()
+        translated = subdir / "test-mono.pdf"
+        translated.write_bytes(b"translated")
+
+        with patch("app.services.library.settings") as mock_settings:
+            mock_settings.papers_path = papers_dir
+            mock_settings.translations_path = translations_dir
+
+            paper = MagicMock()
+            paper.stored_filename = "test.pdf"
+            paper.translated_filename = "abc123/test-mono.pdf"
+            paper.dual_filename = None
+
+            await delete_paper_files(paper)
+            assert not translated.exists()
+            assert not subdir.exists()  # empty directory should be cleaned up
+
+    @pytest.mark.asyncio
+    async def test_preserves_nonempty_translation_directory(self, tmp_path):
+        """Translation directory with other files should not be removed."""
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+
+        subdir = translations_dir / "abc123"
+        subdir.mkdir()
+        translated = subdir / "test-mono.pdf"
+        translated.write_bytes(b"translated")
+        other_file = subdir / "other.pdf"
+        other_file.write_bytes(b"other")
+
+        with patch("app.services.library.settings") as mock_settings:
+            mock_settings.papers_path = papers_dir
+            mock_settings.translations_path = translations_dir
+
+            paper = MagicMock()
+            paper.stored_filename = "test.pdf"
+            paper.translated_filename = "abc123/test-mono.pdf"
+            paper.dual_filename = None
+
+            await delete_paper_files(paper)
+            assert not translated.exists()
+            assert subdir.exists()  # directory has other files, keep it
+            assert other_file.exists()
+
 
 class TestSafeDelete:
     """Test _safe_delete path traversal protection."""

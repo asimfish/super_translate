@@ -69,6 +69,22 @@ async def delete_paper_files(paper: Paper) -> None:
         _safe_delete(settings.translations_path, paper.translated_filename)
     if paper.dual_filename:
         _safe_delete(settings.translations_path, paper.dual_filename)
+    # Clean up empty translation output directory
+    if paper.translated_filename or paper.dual_filename:
+        ref_filename = paper.translated_filename or paper.dual_filename
+        if ref_filename:
+            ref_path = (settings.translations_path / ref_filename).resolve()
+            parent = ref_path.parent
+            translations_base = settings.translations_path.resolve()
+            if (
+                parent != translations_base
+                and str(parent).startswith(str(translations_base))
+                and parent.is_dir()
+            ):
+                try:
+                    parent.rmdir()  # only removes if empty
+                except OSError:
+                    pass  # directory not empty, leave it
 
 
 def _safe_delete(base_dir: Path, filename: str) -> None:
