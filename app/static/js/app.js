@@ -525,6 +525,8 @@ function showTranslateDialog(paperId) {
         <option value="google">Google (免费，无需API Key)</option>
         <option value="deepseek">DeepSeek (需要API Key)</option>
         <option value="openai">OpenAI (需要API Key)</option>
+        <option value="deepl">DeepL (需要API Key)</option>
+        <option value="ollama">Ollama (本地)</option>
       </select>
       <div class="modal-actions">
         <button class="btn btn-primary" data-action="do-translate-modal" data-paper-id="${esc(paperId)}">开始翻译</button>
