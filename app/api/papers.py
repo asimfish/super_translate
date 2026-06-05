@@ -471,8 +471,6 @@ def _reset_paper_status(paper_id: str, error_message: str) -> None:
 
 
 def _run_translation(paper_id: str, backend: str, quality: str = "balanced") -> None:
-    from app.core.database import async_session
-
     acquired = _translation_semaphore.acquire(timeout=300)
     if not acquired:
         logger.error("Translation queue full, rejecting paper %s", paper_id)

@@ -89,11 +89,6 @@ def fix_translated_layout(
 
 def _fix_page_layout(page: object) -> int:
     """Fix text blocks on a single page. Returns number of blocks fixed."""
-    try:
-        import fitz
-    except ImportError:
-        return 0
-
     blocks = _extract_text_blocks(page)
     if not blocks:
         return 0
