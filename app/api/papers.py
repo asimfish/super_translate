@@ -626,6 +626,7 @@ async def _serve_paper_file(
 async def download_original(
     paper_id: str, db: AsyncSession = Depends(get_session)
 ) -> FileResponse:
+    """Download the original PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     return await _serve_paper_file(
         paper_id, "stored_filename", settings.papers_path, db, paper.original_filename
@@ -636,6 +637,7 @@ async def download_original(
 async def download_translated(
     paper_id: str, db: AsyncSession = Depends(get_session)
 ) -> FileResponse:
+    """Download the translated PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_zh.pdf"
     return await _serve_paper_file(
@@ -645,6 +647,7 @@ async def download_translated(
 
 @router.get("/{paper_id}/download/dual")
 async def download_dual(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
+    """Download the dual-language PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_dual.pdf"
     return await _serve_paper_file(paper_id, "dual_filename", settings.translations_path, db, name)
@@ -652,11 +655,13 @@ async def download_dual(paper_id: str, db: AsyncSession = Depends(get_session)) 
 
 @router.get("/{paper_id}/view/original")
 async def view_original(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
+    """View the original PDF file in browser."""
     return await _serve_paper_file(paper_id, "stored_filename", settings.papers_path, db)
 
 
 @router.get("/{paper_id}/view/translated")
 async def view_translated(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
+    """View the translated PDF file in browser."""
     return await _serve_paper_file(paper_id, "translated_filename", settings.translations_path, db)
 
 
@@ -666,6 +671,7 @@ async def update_paper(
     request: PaperUpdateRequest,
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, bool]:
+    """Update paper metadata (title, tags, notes)."""
     paper = await _get_paper_or_404(paper_id, db)
     if request.title is not None:
         paper.title = request.title

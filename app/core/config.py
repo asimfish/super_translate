@@ -26,14 +26,17 @@ class Settings(BaseSettings):
 
     @property
     def db_url(self) -> str:
+        """Get the database connection URL."""
         return f"sqlite+aiosqlite:///{self.base_dir / self.db_path}"
 
     @property
     def papers_path(self) -> Path:
+        """Get the papers storage directory path."""
         return self.base_dir / self.papers_dir
 
     @property
     def translations_path(self) -> Path:
+        """Get the translations storage directory path."""
         return self.base_dir / self.translations_dir
 
     model_config = {"env_prefix": "PAPER_CHINA_", "env_file": ".env"}
@@ -43,6 +46,7 @@ settings = Settings()
 
 
 def ensure_dirs() -> None:
+    """Ensure all required directories exist."""
     settings.papers_path.mkdir(parents=True, exist_ok=True)
     settings.translations_path.mkdir(parents=True, exist_ok=True)
     (settings.base_dir / settings.data_dir).mkdir(parents=True, exist_ok=True)
