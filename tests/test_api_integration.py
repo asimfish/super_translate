@@ -943,6 +943,70 @@ class TestRunTranslation:
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
+    def test_progress_callback_updates_db(self, mock_settings, mock_translate, tmp_path):
+        """Test that the progress callback updates translation_progress in DB."""
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translated_filename = None
+        paper.dual_filename = None
+        paper.translation_status = "translating"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        mono_path.parent.mkdir(parents=True)
+        mono_path.write_bytes(b"translated")
+
+        def fake_translate(input_path, output_dir, config, progress_callback=None):
+            # Simulate pdf2zh calling the progress callback
+            if progress_callback:
+                progress_callback(0.5)
+            return TranslationResult(mono_path=mono_path)
+
+        mock_translate.side_effect = fake_translate
+
+        # Mock async_session for both the main DB and the progress callback DB
+        progress_db = AsyncMock()
+        progress_paper = MagicMock()
+        progress_paper.translation_status = "translating"
+        progress_result = MagicMock()
+        progress_result.scalar_one_or_none.return_value = progress_paper
+        progress_db.get = AsyncMock(return_value=progress_paper)
+        progress_db.commit = AsyncMock()
+
+        call_count = [0]
+        original_mock = self._make_async_session_mock(db)
+
+        def session_factory():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return original_mock()
+            # Second call is from progress callback
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=progress_db)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            return ctx
+
+        with patch("app.core.database.async_session", side_effect=session_factory):
+            _run_translation("paper123", "google", "fast")
+
+        assert paper.translation_status == "completed"
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
     def test_paper_not_found(self, mock_settings, mock_translate):
         from app.api.papers import _run_translation
 
