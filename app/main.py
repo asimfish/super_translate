@@ -138,12 +138,12 @@ async def index() -> HTMLResponse:
 
 
 @app.get("/health")
-async def health():
+async def health() -> dict[str, str]:
     return {"status": "ok", "version": "0.2.0"}
 
 
 @app.get("/api/stats")
-async def stats():
+async def stats() -> dict[str, int]:
     """Get system statistics with caching.
 
     Returns cached stats for 30 seconds to reduce database queries.

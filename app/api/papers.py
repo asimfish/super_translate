@@ -590,32 +590,32 @@ async def _serve_paper_file(
 
 
 @router.get("/{paper_id}/download/original")
-async def download_original(paper_id: str, db: AsyncSession = Depends(get_session)):
+async def download_original(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
     paper = await _get_paper_or_404(paper_id, db)
     return await _serve_paper_file(paper_id, "stored_filename", settings.papers_path, db, paper.original_filename)
 
 
 @router.get("/{paper_id}/download/translated")
-async def download_translated(paper_id: str, db: AsyncSession = Depends(get_session)):
+async def download_translated(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_zh.pdf"
     return await _serve_paper_file(paper_id, "translated_filename", settings.translations_path, db, name)
 
 
 @router.get("/{paper_id}/download/dual")
-async def download_dual(paper_id: str, db: AsyncSession = Depends(get_session)):
+async def download_dual(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_dual.pdf"
     return await _serve_paper_file(paper_id, "dual_filename", settings.translations_path, db, name)
 
 
 @router.get("/{paper_id}/view/original")
-async def view_original(paper_id: str, db: AsyncSession = Depends(get_session)):
+async def view_original(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
     return await _serve_paper_file(paper_id, "stored_filename", settings.papers_path, db)
 
 
 @router.get("/{paper_id}/view/translated")
-async def view_translated(paper_id: str, db: AsyncSession = Depends(get_session)):
+async def view_translated(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
     return await _serve_paper_file(paper_id, "translated_filename", settings.translations_path, db)
 
 
