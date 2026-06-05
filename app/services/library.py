@@ -76,7 +76,7 @@ async def delete_paper_files(paper: Paper) -> None:
             translations_base = settings.translations_path.resolve()
             if (
                 parent != translations_base
-                and str(parent).startswith(str(translations_base))
+                and parent.is_relative_to(translations_base)
                 and parent.is_dir()
             ):
                 try:
@@ -90,7 +90,7 @@ def _safe_delete(base_dir: Path, filename: str) -> None:
     if not filename:
         return
     file_path = (base_dir / filename).resolve()
-    if not str(file_path).startswith(str(base_dir.resolve())):
+    if not file_path.is_relative_to(base_dir.resolve()):
         logger.warning("Refusing to delete path outside base dir: %s", filename)
         return
     if file_path.exists():
