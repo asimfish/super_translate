@@ -180,7 +180,7 @@ async def stats() -> dict[str, int]:
         return result
 
 
-def cli():
+def cli() -> None:
     import argparse
 
     import uvicorn

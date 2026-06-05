@@ -279,7 +279,7 @@ def _translate_sync(
     onnx_model = get_model()
     threads = preset.get("threads", config.threads)
 
-    def pdf2zh_callback(*args):
+    def pdf2zh_callback(*args: object) -> None:
         try:
             pct = None
             if len(args) == 1 and hasattr(args[0], "n") and hasattr(args[0], "total"):
