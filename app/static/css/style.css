@@ -201,10 +201,6 @@ body {
   border-radius: var(--radius) var(--radius) 0 0; font-size: 13px;
   font-weight: 500; color: var(--text-dim);
 }
-.pdf-frame {
-  flex: 1; border: 1px solid var(--border); border-top: none;
-  border-radius: 0 0 var(--radius) var(--radius); background: #fff;
-}
 .pdf-container {
   flex: 1; overflow-y: auto; background: #525659; display: flex;
   flex-direction: column; align-items: center; gap: 4px;
@@ -234,11 +230,6 @@ body {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; border: 1px solid var(--border); border-top: none;
   border-radius: 0 0 var(--radius) var(--radius); background: var(--bg-card);
-}
-.page-nav {
-  display: flex; align-items: center; justify-content: center; gap: 12px;
-  padding: 6px 12px; background: var(--bg-card); border: 1px solid var(--border);
-  border-top: none; border-radius: 0 0 var(--radius) var(--radius);
 }
 .page-info {
   font-size: 13px; color: var(--text-dim); min-width: 60px; text-align: center;
