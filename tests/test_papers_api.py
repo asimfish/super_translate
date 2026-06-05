@@ -18,11 +18,11 @@ class TestPaperToResponse(unittest.TestCase):
         paper.page_count = kwargs.get("page_count", 10)
         paper.translation_status = kwargs.get("translation_status", "pending")
         paper.translation_progress = kwargs.get("translation_progress", 0.0)
-        paper.translation_error = kwargs.get("translation_error", None)
+        paper.translation_error = kwargs.get("translation_error")
         paper.tags = kwargs.get("tags", "")
         paper.notes = kwargs.get("notes", "")
-        paper.created_at = kwargs.get("created_at", None)
-        paper.updated_at = kwargs.get("updated_at", None)
+        paper.created_at = kwargs.get("created_at")
+        paper.updated_at = kwargs.get("updated_at")
         return paper
 
     def test_basic_conversion(self):

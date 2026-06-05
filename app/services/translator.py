@@ -371,17 +371,11 @@ def _collect_output(
 
     if not mono_path.exists():
         mono_candidates = list(output_dir.glob("*mono*"))
-        if mono_candidates:
-            mono_path = mono_candidates[0]
-        else:
-            mono_path = None
+        mono_path = mono_candidates[0] if mono_candidates else None
 
     if not dual_path.exists():
         dual_candidates = list(output_dir.glob("*dual*"))
-        if dual_candidates:
-            dual_path = dual_candidates[0]
-        else:
-            dual_path = None
+        dual_path = dual_candidates[0] if dual_candidates else None
 
     if mono_path is None and dual_path is None:
         any_pdf = list(output_dir.glob("*.pdf"))

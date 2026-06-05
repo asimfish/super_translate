@@ -257,8 +257,8 @@ class TestPaperUploadEndpoint:
             return stored_path
 
         with patch("app.api.papers.save_uploaded_pdf", side_effect=fake_save), \
-             patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")):
-            with TestClient(app, raise_server_exceptions=False) as c:
+             patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")), \
+             TestClient(app, raise_server_exceptions=False) as c:
                 c.post(
                     "/api/papers/upload",
                     files={"file": ("test.pdf", pdf_content, "application/pdf")},
@@ -1642,8 +1642,8 @@ class TestCliFunction:
     def test_cli_non_localhost_warns(self, mock_run):
         """Test that binding to non-localhost triggers a warning."""
         from app.main import cli
-        with patch("sys.argv", ["paper-china", "--host", "0.0.0.0"]):
-            with patch("app.main.logger") as mock_logger:
+        with patch("sys.argv", ["paper-china", "--host", "0.0.0.0"]), \
+             patch("app.main.logger") as mock_logger:
                 cli()
                 mock_logger.warning.assert_called_once()
                 assert "no authentication" in mock_logger.warning.call_args[0][0].lower()

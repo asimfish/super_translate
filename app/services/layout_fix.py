@@ -51,10 +51,7 @@ def fix_translated_layout(
         return False
 
     translated_path = Path(translated_path)
-    if output_path is None:
-        output_path = translated_path
-    else:
-        output_path = Path(output_path)
+    output_path = translated_path if output_path is None else Path(output_path)
 
     doc = fitz.open(str(translated_path))
     try:
@@ -368,10 +365,7 @@ def _needs_fix(
         return True
 
     # Fix blocks that are too narrow
-    if width < col_width * MIN_COL_WIDTH_RATIO and width < MIN_BLOCK_WIDTH:
-        return True
-
-    return False
+    return bool(width < col_width * MIN_COL_WIDTH_RATIO and width < MIN_BLOCK_WIDTH)
 
 
 def _is_line_number_text(text: str) -> bool:
@@ -384,9 +378,7 @@ def _is_line_number_text(text: str) -> bool:
         return True
     # Multiple line numbers: "24\n25\n26"
     lines = stripped.split("\n")
-    if len(lines) >= 2 and all(LINE_NUMBER_RE.match(line.strip()) for line in lines):
-        return True
-    return False
+    return bool(len(lines) >= 2 and all(LINE_NUMBER_RE.match(line.strip()) for line in lines))
 
 
 def _has_embedded_line_numbers(text: str) -> bool:
