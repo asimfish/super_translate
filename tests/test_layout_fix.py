@@ -583,6 +583,97 @@ class TestFixTranslatedLayout(unittest.TestCase):
                 os.unlink(out_path)
 
 
+class TestRedactBlocks(unittest.TestCase):
+    """Test _redact_blocks edge cases."""
+
+    def test_skips_empty_text_blocks(self):
+        """Blocks with empty text after strip are skipped."""
+        from app.services.layout_fix import _redact_blocks
+        page = unittest.mock.MagicMock()
+        blocks = [
+            _tb((91, 100, 504, 120), text="  "),
+            _tb((91, 130, 504, 150), text="valid text"),
+        ]
+        _redact_blocks(page, blocks)
+        # Only one redact annotation should be added (for the non-empty block)
+        self.assertEqual(page.add_redact_annot.call_count, 1)
+
+    def test_fallback_when_kwargs_unsupported(self):
+        """Falls back to apply_redactions() when kwargs are not supported."""
+        from app.services.layout_fix import _redact_blocks
+        page = unittest.mock.MagicMock()
+        page.apply_redactions.side_effect = [TypeError("unsupported"), None]
+        blocks = [_tb((91, 100, 504, 120), text="text")]
+        # Should not raise
+        _redact_blocks(page, blocks)
+        self.assertEqual(page.apply_redactions.call_count, 2)
+
+
+class TestReinsertBlocks(unittest.TestCase):
+    """Test _reinsert_blocks filtering edge cases."""
+
+    def test_skips_short_cleaned_text(self):
+        """Blocks where _clean_text produces < 2 chars are skipped."""
+        from app.services.layout_fix import _reinsert_blocks
+        page = unittest.mock.MagicMock()
+        page.rect.width = 612
+        page.get_fonts.return_value = []
+        # Single CJK char + trailing number → cleaned to 1 char
+        blocks = [_tb((91, 100, 504, 120), text="你", font_size=10)]
+        result = _reinsert_blocks(page, blocks, left_margin=91, col_width=413)
+        self.assertEqual(result, 0)
+
+    def test_skips_very_short_small_font(self):
+        """Very short text (<=3 chars) with small font (<8) is skipped."""
+        from app.services.layout_fix import _reinsert_blocks
+        page = unittest.mock.MagicMock()
+        page.rect.width = 612
+        page.get_fonts.return_value = []
+        blocks = [_tb((91, 100, 504, 120), text="ab", font_size=7)]
+        result = _reinsert_blocks(page, blocks, left_margin=91, col_width=413)
+        self.assertEqual(result, 0)
+
+    def test_skips_right_margin_blocks(self):
+        """Blocks in the right margin area (x0 > 70% of page width, narrow) are skipped."""
+        from app.services.layout_fix import _reinsert_blocks
+        page = unittest.mock.MagicMock()
+        page.rect.width = 612
+        page.get_fonts.return_value = []
+        # x0=440 > 612*0.7=428.4, width=45 < 80
+        blocks = [_tb((440, 100, 485, 120), text="label text", font_size=10)]
+        result = _reinsert_blocks(page, blocks, left_margin=91, col_width=413)
+        self.assertEqual(result, 0)
+
+    def test_skips_short_fragment_at_correct_x(self):
+        """Short fragments already at correct x position with narrow width are skipped."""
+        from app.services.layout_fix import _reinsert_blocks
+        page = unittest.mock.MagicMock()
+        page.rect.width = 612
+        page.get_fonts.return_value = []
+        # x0=91 matches left_margin, len(text)=9 < 10, width=50 < 80
+        blocks = [_tb((91, 100, 141, 120), text="short txt", font_size=10)]
+        result = _reinsert_blocks(page, blocks, left_margin=91, col_width=413)
+        self.assertEqual(result, 0)
+
+
+class TestInsertTextWithFallback(unittest.TestCase):
+    """Test _insert_text_with_fallback edge cases."""
+
+    def test_fallback_when_all_sizes_fail(self):
+        """When all font sizes return negative, falls back to minimum size."""
+        from app.services.layout_fix import _insert_text_with_fallback
+        page = unittest.mock.MagicMock()
+        shape = unittest.mock.MagicMock()
+        shape.insert_textbox.return_value = -1  # all sizes fail
+        page.new_shape.return_value = shape
+
+        rect = unittest.mock.MagicMock()
+        result = _insert_text_with_fallback(page, rect, "test text", "helv", 10.0)
+        self.assertTrue(result)
+        # Should have called commit at least once (for the fallback)
+        self.assertTrue(shape.commit.called)
+
+
 class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
     """Test fix_translated_layout edge cases."""
 
