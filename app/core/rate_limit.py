@@ -31,6 +31,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._hour_requests: dict[str, list[float]] = defaultdict(list)
         self._last_cleanup = time.time()
 
+    def reset(self) -> None:
+        """Reset rate limit state (for testing)."""
+        self._minute_requests.clear()
+        self._hour_requests.clear()
+        self._last_cleanup = time.time()
+
     def _get_client_ip(self, request: Request) -> str:
         """Extract client IP from request."""
         forwarded = request.headers.get("X-Forwarded-For")

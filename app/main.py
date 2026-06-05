@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, Response
 
@@ -44,6 +45,9 @@ app.add_middleware(
     requests_per_minute=60,
     requests_per_hour=500,
 )
+
+# Response compression
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.middleware("http")

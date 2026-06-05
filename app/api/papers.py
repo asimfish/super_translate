@@ -27,6 +27,8 @@ router = APIRouter(prefix="/api/papers", tags=["papers"])
 
 
 class PaperResponse(BaseModel):
+    """Response model for paper data."""
+
     id: str
     title: str
     original_filename: str
@@ -47,28 +49,36 @@ class PaperResponse(BaseModel):
 
 
 class PaperListResponse(BaseModel):
+    """Response model for paper list with pagination."""
+
     papers: list[PaperResponse]
     total: int
 
 
 class PaperUpdateRequest(BaseModel):
+    """Request model for updating paper metadata."""
+
     title: Optional[str] = None
     tags: Optional[str] = None
     notes: Optional[str] = None
 
     def validate_title(self) -> None:
+        """Validate title length."""
         if self.title is not None and len(self.title) > 500:
             raise ValueError("Title must be 500 characters or less")
 
     def validate_tags(self) -> None:
+        """Validate tags length."""
         if self.tags is not None and len(self.tags) > 1000:
             raise ValueError("Tags must be 1000 characters or less")
 
     def validate_notes(self) -> None:
+        """Validate notes length."""
         if self.notes is not None and len(self.notes) > 10000:
             raise ValueError("Notes must be 10000 characters or less")
 
     def validate_all(self) -> None:
+        """Validate all fields."""
         self.validate_title()
         self.validate_tags()
         self.validate_notes()
@@ -108,6 +118,17 @@ async def list_papers(
     limit: int = 50,
     db: AsyncSession = Depends(get_session),
 ):
+    """List papers with optional filtering and pagination.
+
+    Args:
+        search: Search term for paper title
+        status: Filter by translation status
+        offset: Number of papers to skip
+        limit: Maximum number of papers to return (1-200)
+
+    Returns:
+        PaperListResponse with papers and total count
+    """
     # Clamp limit
     limit = min(max(limit, 1), 200)
 
@@ -153,6 +174,18 @@ async def upload_paper(
     tags: str = Form(""),
     db: AsyncSession = Depends(get_session),
 ):
+    """Upload a PDF paper.
+
+    Args:
+        file: PDF file to upload
+        tags: Comma-separated tags for the paper
+
+    Returns:
+        PaperResponse with the uploaded paper data
+
+    Raises:
+        HTTPException: If file is not PDF, too large, or invalid
+    """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are accepted")
 
@@ -185,6 +218,17 @@ async def upload_paper(
 
 @router.get("/{paper_id}", response_model=PaperResponse)
 async def get_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
+    """Get a specific paper by ID.
+
+    Args:
+        paper_id: The paper's unique identifier
+
+    Returns:
+        PaperResponse with the paper data
+
+    Raises:
+        HTTPException: If paper not found (404)
+    """
     result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:
@@ -199,6 +243,17 @@ async def get_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
 
 @router.delete("/{paper_id}")
 async def delete_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
+    """Delete a paper and its associated files.
+
+    Args:
+        paper_id: The paper's unique identifier
+
+    Returns:
+        Success status
+
+    Raises:
+        HTTPException: If paper not found (404)
+    """
     result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:
@@ -217,6 +272,19 @@ async def start_translation(
     quality: str = "balanced",
     db: AsyncSession = Depends(get_session),
 ):
+    """Start translation for a paper.
+
+    Args:
+        paper_id: The paper's unique identifier
+        backend: Translation backend (deepseek, openai, google)
+        quality: Quality preset (fast, balanced, quality)
+
+    Returns:
+        Success status with translation status
+
+    Raises:
+        HTTPException: If paper not found (404) or translation in progress (409)
+    """
     result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:

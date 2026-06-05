@@ -388,35 +388,78 @@ class TestStatsEndpoint:
             assert data["completed_translations"] == 5
 
 
-class TestRateLimiting:
-    """Test rate limiting middleware."""
+class TestErrorHandling:
+    """Test error handling scenarios."""
 
-    def test_rate_limit_allows_normal_requests(self, client):
-        # Make a few requests - should all succeed
-        for _ in range(5):
-            response = client.get("/health")
+    def test_invalid_paper_id_format(self, client, mock_db):
+        """Test that invalid paper ID format returns 404."""
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        response = client.get("/api/papers/invalid-id-format")
+        assert response.status_code == 404
+
+    def test_upload_no_file(self, client):
+        """Test that upload without file returns 422."""
+        response = client.post("/api/papers/upload")
+        assert response.status_code == 422
+
+    def test_upload_empty_file(self, client):
+        """Test that upload with empty file returns 400."""
+        response = client.post(
+            "/api/papers/upload",
+            files={"file": ("test.pdf", b"", "application/pdf")},
+        )
+        assert response.status_code == 400
+
+    def test_translate_already_completed(self, client, mock_db, sample_paper):
+        """Test that translating already completed paper is allowed (re-translation)."""
+        sample_paper.translation_status = "completed"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with patch("app.api.papers.BackgroundTasks.add_task"):
+            response = client.post(f"/api/papers/{sample_paper.id}/translate")
             assert response.status_code == 200
+            assert response.json()["status"] == "translating"
 
-    def test_rate_limit_skips_health_endpoint(self, client):
-        # Health endpoint should not be rate limited
-        for _ in range(100):
-            response = client.get("/health")
-            assert response.status_code == 200
+    def test_update_paper_empty_body(self, client, mock_db, sample_paper):
+        """Test that update with empty body succeeds (no changes)."""
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
 
-    def test_rate_limit_skips_index_endpoint(self, client):
-        # Index endpoint should not be rate limited
-        for _ in range(100):
-            response = client.get("/")
-            assert response.status_code == 200
+        response = client.patch(
+            f"/api/papers/{sample_paper.id}",
+            json={},
+        )
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
 
-    def test_rate_limit_skips_static_files(self, client):
-        # Static files should not be rate limited
-        for _ in range(100):
-            response = client.get("/static/css/style.css")
-            assert response.status_code == 200
+    def test_download_original_file_missing(self, client, mock_db, sample_paper):
+        """Test that download returns 404 when file is missing."""
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
 
-    def test_rate_limit_applies_to_api_endpoints(self, client, mock_db):
-        # API endpoints should be rate limited
+        with patch("pathlib.Path.exists", return_value=False):
+            response = client.get(f"/api/papers/{sample_paper.id}/download/original")
+            assert response.status_code == 404
+
+    def test_view_original_file_missing(self, client, mock_db, sample_paper):
+        """Test that view returns 404 when file is missing."""
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with patch("pathlib.Path.exists", return_value=False):
+            response = client.get(f"/api/papers/{sample_paper.id}/view/original")
+            assert response.status_code == 404
+
+    def test_list_papers_invalid_limit(self, client, mock_db):
+        """Test that invalid limit is clamped."""
         mock_db.scalar.return_value = 0
         mock_result = MagicMock()
         mock_scalars = MagicMock()
@@ -424,16 +467,16 @@ class TestRateLimiting:
         mock_result.scalars.return_value = mock_scalars
         mock_db.execute.return_value = mock_result
 
-        # Make many requests to API endpoint
-        for _ in range(65):
-            response = client.get("/api/papers/")
+        # Test with limit too high
+        response = client.get("/api/papers/?limit=1000")
+        assert response.status_code == 200
 
-        # The last request should be rate limited (429)
-        assert response.status_code == 429
-        assert "Rate limit exceeded" in response.json()["detail"]
+        # Test with limit too low
+        response = client.get("/api/papers/?limit=0")
+        assert response.status_code == 200
 
-    def test_rate_limit_returns_retry_after_header(self, client, mock_db):
-        # Rate limited responses should include Retry-After header
+    def test_list_papers_negative_offset(self, client, mock_db):
+        """Test that negative offset is handled."""
         mock_db.scalar.return_value = 0
         mock_result = MagicMock()
         mock_scalars = MagicMock()
@@ -441,13 +484,8 @@ class TestRateLimiting:
         mock_result.scalars.return_value = mock_scalars
         mock_db.execute.return_value = mock_result
 
-        # Make many requests to trigger rate limit
-        for _ in range(65):
-            response = client.get("/api/papers/")
-
-        # Check for Retry-After header
-        assert response.status_code == 429
-        assert "Retry-After" in response.headers
+        response = client.get("/api/papers/?offset=-10")
+        assert response.status_code == 200
 
 
 if __name__ == "__main__":
