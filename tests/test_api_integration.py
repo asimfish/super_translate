@@ -212,7 +212,7 @@ class TestPaperUploadEndpoint:
             b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
         )
 
-        with patch("app.api.papers.save_uploaded_pdf") as mock_save, \
+        with patch("app.api.papers.save_uploaded_pdf_streaming") as mock_save, \
              patch("app.api.papers.get_pdf_info") as mock_info, \
              patch("app.api.papers.extract_title_from_pdf") as mock_title:
 
@@ -254,11 +254,13 @@ class TestPaperUploadEndpoint:
         pdf_content = b"%PDF-1.4 test"
         stored_path = tmp_path / "stored_test.pdf"
 
-        def fake_save(content, filename):
-            stored_path.write_bytes(content)
+        def fake_save(chunks, filename):
+            with stored_path.open("wb") as f:
+                for chunk in chunks:
+                    f.write(chunk)
             return stored_path
 
-        with patch("app.api.papers.save_uploaded_pdf", side_effect=fake_save), \
+        with patch("app.api.papers.save_uploaded_pdf_streaming", side_effect=fake_save), \
              patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")), \
              TestClient(app, raise_server_exceptions=False) as c:
                 c.post(

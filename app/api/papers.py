@@ -23,6 +23,7 @@ from app.services.library import (
     extract_title_from_pdf,
     get_pdf_info,
     save_uploaded_pdf,
+    save_uploaded_pdf_streaming,
 )
 from app.services.translator import (
     QualityPreset,
@@ -303,19 +304,22 @@ async def upload_paper(
     # Stream upload to reject oversized files before loading fully into memory
     chunks: list[bytes] = []
     total_size = 0
+    first_chunk = True
     while chunk := await file.read(settings.upload_chunk_size):
         total_size += len(chunk)
         if total_size > settings.max_upload_size:
             max_mb = settings.max_upload_size // (1024 * 1024)
             raise HTTPException(400, f"File too large (max {max_mb}MB)")
+        if first_chunk:
+            if not chunk[:5].startswith(b'%PDF'):
+                raise HTTPException(400, "Invalid PDF file (missing PDF header)")
+            first_chunk = False
         chunks.append(chunk)
-    content = b"".join(chunks)
 
-    # Validate PDF magic bytes
-    if not content[:5].startswith(b'%PDF'):
-        raise HTTPException(400, "Invalid PDF file (missing PDF header)")
+    if first_chunk:
+        raise HTTPException(400, "Empty PDF file")
 
-    stored_path = await save_uploaded_pdf(content, file.filename)
+    stored_path = await save_uploaded_pdf_streaming(chunks, file.filename)
     try:
         page_count, file_size = await asyncio.to_thread(get_pdf_info, stored_path)
         title = await asyncio.to_thread(extract_title_from_pdf, stored_path)

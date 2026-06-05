@@ -82,6 +82,26 @@ async def save_uploaded_pdf(file_content: bytes, filename: str) -> Path:
     return stored_path
 
 
+async def save_uploaded_pdf_streaming(
+    chunks: list[bytes], filename: str
+) -> Path:
+    """Save uploaded PDF from pre-read chunks and return stored path.
+
+    Writes chunks directly to disk to avoid holding the full file in memory.
+    """
+    stored_name = generate_stored_filename(filename)
+    stored_path = settings.papers_path / stored_name
+
+    def _write_file() -> None:
+        stored_path.parent.mkdir(parents=True, exist_ok=True)
+        with stored_path.open("wb") as f:
+            for chunk in chunks:
+                f.write(chunk)
+
+    await asyncio.to_thread(_write_file)
+    return stored_path
+
+
 async def delete_paper_files(paper: Paper) -> None:
     """Delete all files associated with a paper."""
     def _delete_files() -> None:
