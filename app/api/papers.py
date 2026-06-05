@@ -595,9 +595,11 @@ def _update_paper_result(
         paper.translation_status = TranslationStatus.COMPLETED.value
         paper.translation_progress = 1.0
         if trans_result.mono_path:
-            paper.translated_filename = str(trans_result.mono_path.relative_to(settings.translations_path))
+            rel_path = trans_result.mono_path.relative_to(settings.translations_path)
+            paper.translated_filename = str(rel_path)
         if trans_result.dual_path:
-            paper.dual_filename = str(trans_result.dual_path.relative_to(settings.translations_path))
+            rel_path = trans_result.dual_path.relative_to(settings.translations_path)
+            paper.dual_filename = str(rel_path)
         logger.info("Translation completed for paper %s", paper.id)
     else:
         paper.translation_status = TranslationStatus.FAILED.value
@@ -621,16 +623,24 @@ async def _serve_paper_file(
 
 
 @router.get("/{paper_id}/download/original")
-async def download_original(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
+async def download_original(
+    paper_id: str, db: AsyncSession = Depends(get_session)
+) -> FileResponse:
     paper = await _get_paper_or_404(paper_id, db)
-    return await _serve_paper_file(paper_id, "stored_filename", settings.papers_path, db, paper.original_filename)
+    return await _serve_paper_file(
+        paper_id, "stored_filename", settings.papers_path, db, paper.original_filename
+    )
 
 
 @router.get("/{paper_id}/download/translated")
-async def download_translated(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
+async def download_translated(
+    paper_id: str, db: AsyncSession = Depends(get_session)
+) -> FileResponse:
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_zh.pdf"
-    return await _serve_paper_file(paper_id, "translated_filename", settings.translations_path, db, name)
+    return await _serve_paper_file(
+        paper_id, "translated_filename", settings.translations_path, db, name
+    )
 
 
 @router.get("/{paper_id}/download/dual")

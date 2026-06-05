@@ -411,7 +411,8 @@ def _has_embedded_line_numbers(text: str) -> bool:
         if "[" in stripped and "]" in stripped:
             continue
         # Pure section number: "1 Introduction" (no trailing number)
-        if re.match(r"^\d{1,3}\s+[A-Z一-鿿]", stripped) and not re.search(r"\d{1,3}$", stripped[3:]):
+        if (re.match(r"^\d{1,3}\s+[A-Z一-鿿]", stripped)
+                and not re.search(r"\d{1,3}$", stripped[3:])):
             continue
         # Standalone line number as first line: "25\ntext..."
         if i == 0 and re.match(r"^\d{1,3}$", stripped):
