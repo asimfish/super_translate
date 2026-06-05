@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     deepl_api_key: str = ""
     ollama_host: str = ""
 
+    # Rate limiting
+    rate_limit_per_minute: int = 60
+    rate_limit_per_hour: int = 500
+
+    # Upload limits
+    max_upload_size: int = 100 * 1024 * 1024  # 100MB
+    upload_chunk_size: int = 1024 * 1024  # 1MB
+
+    # Translation concurrency
+    max_concurrent_translations: int = 2
+
     @property
     def db_url(self) -> str:
         """Get the database connection URL."""

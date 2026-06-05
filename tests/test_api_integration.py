@@ -190,7 +190,9 @@ class TestPaperUploadEndpoint:
     def test_upload_file_too_large_streaming_reject(self, client):
         """Test that oversized files are rejected during streaming read."""
         # Patch the max size to a small value to test without creating 100MB
-        with patch("app.api.papers._MAX_UPLOAD_SIZE", 100):
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.max_upload_size = 100
+            mock_settings.upload_chunk_size = 50
             content = b"%PDF-1.4 " + b"x" * 200
             response = client.post(
                 "/api/papers/upload",

@@ -79,8 +79,8 @@ app.add_middleware(
 # Rate limiting
 app.add_middleware(
     RateLimitMiddleware,
-    requests_per_minute=60,
-    requests_per_hour=500,
+    requests_per_minute=settings.rate_limit_per_minute,
+    requests_per_hour=settings.rate_limit_per_hour,
 )
 
 # Response compression

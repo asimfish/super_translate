@@ -31,14 +31,12 @@ from app.services.translator import (
 )
 
 # Limit concurrent translations to prevent resource exhaustion
-_translation_semaphore = threading.Semaphore(2)
+_translation_semaphore = threading.Semaphore(settings.max_concurrent_translations)
 _quality_map = {
     "fast": QualityPreset.FAST,
     "balanced": QualityPreset.BALANCED,
     "quality": QualityPreset.QUALITY,
 }
-_MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
-_UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/papers", tags=["papers"])
@@ -304,9 +302,9 @@ async def upload_paper(
     # Stream upload to reject oversized files before loading fully into memory
     chunks: list[bytes] = []
     total_size = 0
-    while chunk := await file.read(_UPLOAD_CHUNK_SIZE):
+    while chunk := await file.read(settings.upload_chunk_size):
         total_size += len(chunk)
-        if total_size > _MAX_UPLOAD_SIZE:
+        if total_size > settings.max_upload_size:
             raise HTTPException(400, "File too large (max 100MB)")
         chunks.append(chunk)
     content = b"".join(chunks)
