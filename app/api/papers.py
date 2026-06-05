@@ -482,8 +482,21 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
 
                 logger.info("Starting translation for paper %s (backend=%s, quality=%s, key=%s)", paper_id, config.backend, quality, "SET" if config.api_key else "NONE")
 
+                # Progress callback: schedules async DB update from sync context
+                def _on_progress(pct: float) -> None:
+                    async def _update():
+                        async with async_session() as p_db:
+                            p = await p_db.get(Paper, paper_id)
+                            if p and p.translation_status == TranslationStatus.TRANSLATING.value:
+                                p.translation_progress = pct
+                                await p_db.commit()
+                    try:
+                        asyncio.run_coroutine_threadsafe(_update(), loop)
+                    except Exception:
+                        pass  # non-fatal
+
                 try:
-                    trans_result = translate_pdf_sync(input_path, output_dir, config)
+                    trans_result = translate_pdf_sync(input_path, output_dir, config, _on_progress)
                 except Exception as e:
                     logger.exception("Translation crashed for paper %s", paper_id)
                     paper.translation_status = TranslationStatus.FAILED.value

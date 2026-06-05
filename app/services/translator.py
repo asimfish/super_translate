@@ -174,13 +174,17 @@ def translate_pdf_sync(
     input_path: Path,
     output_dir: Path,
     config: TranslationConfig,
+    progress_callback: Optional[callable] = None,
 ) -> TranslationResult:
     """Synchronous translation entry point for use in thread pools.
 
     Delegates to _translate_sync which handles API key resolution and fallback.
+
+    Args:
+        progress_callback: Optional callable(float) receiving progress 0.0-1.0
     """
     try:
-        return _translate_sync(input_path, output_dir, config)
+        return _translate_sync(input_path, output_dir, config, progress_callback)
     except Exception as e:
         logger.exception("Translation failed for %s", input_path)
         return TranslationResult(error=sanitize_error(e))
@@ -258,6 +262,7 @@ def _translate_sync(
     input_path: Path,
     output_dir: Path,
     config: TranslationConfig,
+    progress_callback: Optional[callable] = None,
 ) -> TranslationResult:
     """Synchronous translation via pdf2zh with retry logic."""
     from pdf2zh import translate
@@ -272,15 +277,21 @@ def _translate_sync(
 
     def pdf2zh_callback(*args):
         try:
-            if len(args) == 2:
+            pct = None
+            if len(args) == 1 and hasattr(args[0], "n") and hasattr(args[0], "total"):
+                # tqdm progress object
+                p = args[0]
+                pct = p.n / p.total if p.total > 0 else 0
+            elif len(args) == 2:
                 current, total = args
                 pct = current / total if total > 0 else 0
-            elif len(args) == 1:
+            elif len(args) == 1 and isinstance(args[0], (int, float)):
                 pct = args[0]
-            else:
-                return
 
-            logger.debug("Translation progress: %.0f%%", pct * 100)
+            if pct is not None:
+                logger.debug("Translation progress: %.0f%%", pct * 100)
+                if progress_callback:
+                    progress_callback(min(pct, 1.0))
         except Exception as e:
             logger.debug("Progress callback error: %s", e)
 
