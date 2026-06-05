@@ -424,6 +424,9 @@ def _clean_text(text: str) -> str:
     return "\n".join(cleaned)
 
 
+_CHINESE_FONT_NAMES = frozenset(["Noto", "SimSun", "SimHei", "Ming", "Song"])
+
+
 def _find_chinese_font(page: object) -> str:
     """Find a Chinese font already embedded in the page."""
     fonts = page.get_fonts()
@@ -433,7 +436,7 @@ def _find_chinese_font(page: object) -> str:
         if "SourceHanSerif" in font_name or "Source Han Serif" in font_name:
             return font_info[4] if len(font_info) > 4 else "noto"
         # Check for other common Chinese fonts
-        if any(name in font_name for name in ["Noto", "SimSun", "SimHei", "Ming", "Song"]):
+        if any(name in font_name for name in _CHINESE_FONT_NAMES):
             return font_info[4] if len(font_info) > 4 else font_name
 
     # Fallback: use PyMuPDF's built-in Chinese font
