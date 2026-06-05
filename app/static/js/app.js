@@ -584,7 +584,21 @@ function pollTranslationStatus(paperId) {
   if (logEl) logEl.innerHTML = '';
   addTransLog('开始翻译...');
 
+  const MAX_POLLS = 300; // 10 minutes at 2s intervals
+  let pollCount = 0;
+
   translationPollId = setInterval(async () => {
+    pollCount++;
+    if (pollCount > MAX_POLLS) {
+      clearInterval(translationPollId);
+      translationPollId = null;
+      statusEl.textContent = '翻译超时';
+      addTransLog('翻译超时，请稍后重试', 'error');
+      fill.style.background = 'var(--error)';
+      loadPapers();
+      return;
+    }
+
     try {
       const paper = await api.getPaper(paperId);
       const pct = Math.round(paper.translation_progress * 100);
