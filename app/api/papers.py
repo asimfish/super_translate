@@ -624,7 +624,7 @@ async def update_paper(
     paper_id: str,
     request: PaperUpdateRequest,
     db: AsyncSession = Depends(get_session),
-):
+) -> dict[str, bool]:
     paper = await _get_paper_or_404(paper_id, db)
     if request.title is not None:
         paper.title = request.title
