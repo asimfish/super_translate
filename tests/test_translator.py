@@ -664,6 +664,90 @@ class TestTranslatePdfSync(unittest.TestCase):
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
+    def test_callback_with_two_args(self, mock_get_model, mock_translate):
+        """Test pdf2zh callback with (current, total) arguments."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+            (output_dir / "input-mono.pdf").write_bytes(b"translated")
+
+            translate_pdf_sync(
+                Path(tmpdir) / "input.pdf",
+                output_dir,
+                config,
+            )
+
+            # Extract the callback that was passed to pdf2zh.translate
+            call_kwargs = mock_translate.call_args
+            callback = call_kwargs.kwargs.get("callback") or call_kwargs[1].get("callback")
+            if callback and callable(callback):
+                # Simulate pdf2zh calling the callback with (current, total)
+                callback(5, 10)
+                callback(10, 10)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_callback_with_one_arg(self, mock_get_model, mock_translate):
+        """Test pdf2zh callback with single (percentage) argument."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+            (output_dir / "input-mono.pdf").write_bytes(b"translated")
+
+            translate_pdf_sync(
+                Path(tmpdir) / "input.pdf",
+                output_dir,
+                config,
+            )
+
+            call_kwargs = mock_translate.call_args
+            callback = call_kwargs.kwargs.get("callback") or call_kwargs[1].get("callback")
+            if callback and callable(callback):
+                # Single arg (percentage)
+                callback(0.5)
+                callback(1.0)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_callback_with_no_args_is_noop(self, mock_get_model, mock_translate):
+        """Test pdf2zh callback with no arguments returns early."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+            (output_dir / "input-mono.pdf").write_bytes(b"translated")
+
+            translate_pdf_sync(
+                Path(tmpdir) / "input.pdf",
+                output_dir,
+                config,
+            )
+
+            call_kwargs = mock_translate.call_args
+            callback = call_kwargs.kwargs.get("callback") or call_kwargs[1].get("callback")
+            if callback and callable(callback):
+                # No args — should return early without error
+                callback()
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
     def test_os_environ_not_mutated(self, mock_get_model, mock_translate):
         """Test that os.environ is NOT mutated during translation."""
         import os
