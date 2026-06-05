@@ -57,30 +57,34 @@ def fix_translated_layout(
         output_path = Path(output_path)
 
     doc = fitz.open(str(translated_path))
-    total_fixed = 0
+    try:
+        total_fixed = 0
 
-    for page_idx in range(doc.page_count):
-        page = doc[page_idx]
-        fixed = _fix_page_layout(page)
-        total_fixed += fixed
+        for page_idx in range(doc.page_count):
+            page = doc[page_idx]
+            fixed = _fix_page_layout(page)
+            total_fixed += fixed
 
-    if total_fixed > 0:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        # Always save to a temp file first, then replace (avoids incremental save issues)
-        if output_path == translated_path:
-            tmp_path = translated_path.with_suffix(".tmp.pdf")
-            doc.save(str(tmp_path), garbage=4, deflate=True)
-            doc.close()
-            tmp_path.replace(translated_path)
+        if total_fixed > 0:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            # Always save to a temp file first, then replace (avoids incremental save issues)
+            if output_path == translated_path:
+                tmp_path = translated_path.with_suffix(".tmp.pdf")
+                doc.save(str(tmp_path), garbage=4, deflate=True)
+                doc.close()
+                tmp_path.replace(translated_path)
+            else:
+                doc.save(str(output_path), garbage=4, deflate=True)
+                doc.close()
+            logger.info("Layout fix: corrected %d blocks in %s", total_fixed, translated_path)
         else:
-            doc.save(str(output_path), garbage=4, deflate=True)
+            logger.debug("Layout fix: no corrections needed for %s", translated_path)
             doc.close()
-        logger.info("Layout fix: corrected %d blocks in %s", total_fixed, translated_path)
-    else:
-        logger.debug("Layout fix: no corrections needed for %s", translated_path)
-        doc.close()
 
-    return total_fixed > 0
+        return total_fixed > 0
+    except Exception:
+        doc.close()
+        raise
 
 
 def _fix_page_layout(page: object) -> int:
