@@ -675,9 +675,8 @@ class TestStatsEndpoint:
         """Stats should be cached and not hit DB on repeated calls."""
         import app.main as main_module
         # Reset cache
-        with main_module._stats_lock:
-            main_module._stats_cache = None
-            main_module._stats_cache_time = 0.0
+        main_module._stats_cache = None
+        main_module._stats_cache_time = 0.0
 
         with patch("app.core.database.async_session") as mock_session_cls:
             mock_session = AsyncMock()
@@ -697,9 +696,8 @@ class TestStatsEndpoint:
             assert r2.json()["total_papers"] == 10
 
         # Cleanup
-        with main_module._stats_lock:
-            main_module._stats_cache = None
-            main_module._stats_cache_time = 0.0
+        main_module._stats_cache = None
+        main_module._stats_cache_time = 0.0
 
 
 class TestErrorHandling:

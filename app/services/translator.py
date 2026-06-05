@@ -21,6 +21,9 @@ def sanitize_error(error: Exception) -> str:
     leak server configuration or network topology.
     """
     msg = str(error)
+    # Truncate early to bound regex processing time (prevents ReDoS)
+    if len(msg) > 500:
+        msg = msg[:500]
     # Remove API keys (Bearer tokens, query params, env vars, sk- prefixed keys)
     msg = re.sub(r"Bearer\s+\S+", "Bearer [redacted]", msg, flags=re.IGNORECASE)
     msg = re.sub(r"(?i)(api[_-]?key|token|secret)\s*[=:]\s*\S+", r"\1=[redacted]", msg)

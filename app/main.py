@@ -1,7 +1,7 @@
 """Main application entry point."""
 
+import asyncio
 import logging
-import threading
 import time
 import webbrowser
 from collections.abc import AsyncGenerator
@@ -23,10 +23,10 @@ from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
 from app.core.rate_limit import RateLimitMiddleware
 
-# Thread-safe stats cache
+# Stats cache with async lock
 _stats_cache: dict | None = None
 _stats_cache_time: float = 0.0
-_stats_lock = threading.Lock()
+_stats_lock = asyncio.Lock()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ async def stats() -> dict[str, int]:
     now = time.time()
 
     # Fast path: return cached result if fresh
-    with _stats_lock:
+    async with _stats_lock:
         if _stats_cache and (now - _stats_cache_time) < 30:
             return _stats_cache
 
@@ -176,7 +176,7 @@ async def stats() -> dict[str, int]:
             "completed_translations": completed or 0,
         }
 
-        with _stats_lock:
+        async with _stats_lock:
             _stats_cache = result
             _stats_cache_time = now
 

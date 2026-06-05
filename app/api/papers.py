@@ -333,8 +333,10 @@ async def upload_paper(
         raise HTTPException(400, "Empty PDF file")
 
     try:
-        page_count, file_size = await asyncio.to_thread(get_pdf_info, stored_path)
-        title = await asyncio.to_thread(extract_title_from_pdf, stored_path)
+        (page_count, file_size), title = await asyncio.gather(
+            asyncio.to_thread(get_pdf_info, stored_path),
+            asyncio.to_thread(extract_title_from_pdf, stored_path),
+        )
     except Exception:
         stored_path.unlink(missing_ok=True)
         raise
