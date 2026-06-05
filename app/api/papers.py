@@ -154,11 +154,16 @@ def _get_paper_file(
     return file_path
 
 
-def _file_exists_safe(base_dir: Path, filename: str | None) -> bool:
+def _file_exists_safe(
+    base_dir: Path,
+    filename: str | None,
+    resolved_base: Path | None = None,
+) -> bool:
     """Check if a file exists safely (no path traversal)."""
     if not filename:
         return False
-    resolved_base = base_dir.resolve()
+    if resolved_base is None:
+        resolved_base = base_dir.resolve()
     file_path = (base_dir / filename).resolve()
     if not str(file_path).startswith(str(resolved_base)):
         return False
@@ -217,13 +222,16 @@ async def list_papers(
     papers = result.scalars().all()
 
     # Check file existence per paper (safe path validation, max 200 papers)
+    # Pre-resolve base dirs once to avoid repeated resolve() calls per paper
+    papers_base = settings.papers_path.resolve()
+    trans_base = settings.translations_path.resolve()
     paper_responses = []
     for p in papers:
         paper_responses.append(_paper_to_response(
             p,
-            has_original=_file_exists_safe(settings.papers_path, p.stored_filename),
-            has_translated=_file_exists_safe(settings.translations_path, p.translated_filename),
-            has_dual=_file_exists_safe(settings.translations_path, p.dual_filename),
+            has_original=_file_exists_safe(settings.papers_path, p.stored_filename, papers_base),
+            has_translated=_file_exists_safe(settings.translations_path, p.translated_filename, trans_base),
+            has_dual=_file_exists_safe(settings.translations_path, p.dual_filename, trans_base),
         ))
 
     return PaperListResponse(papers=paper_responses, total=total)

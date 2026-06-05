@@ -724,6 +724,16 @@ class TestHelpers:
         (tmp_path.parent / "secret.pdf").write_bytes(b"secret")
         assert _file_exists_safe(tmp_path, "../secret.pdf") is False
 
+    def test_file_exists_safe_with_precomputed_base(self, tmp_path):
+        from app.api.papers import _file_exists_safe
+        from pathlib import Path
+        (tmp_path / "test.pdf").write_bytes(b"content")
+        resolved = tmp_path.resolve()
+        # Precomputed base should work the same
+        assert _file_exists_safe(tmp_path, "test.pdf", resolved) is True
+        assert _file_exists_safe(tmp_path, "missing.pdf", resolved) is False
+        assert _file_exists_safe(tmp_path, None, resolved) is False
+
     def test_get_paper_file_valid(self, tmp_path):
         from app.api.papers import _get_paper_file
         (tmp_path / "test.pdf").write_bytes(b"content")
