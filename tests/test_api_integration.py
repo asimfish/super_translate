@@ -240,6 +240,26 @@ class TestPaperUploadEndpoint:
                 assert data["title"] == "Test Paper Title"
                 assert data["page_count"] == 10
 
+    def test_upload_cleans_file_on_pdf_info_failure(self, mock_db, tmp_path):
+        """Test that uploaded file is deleted if get_pdf_info raises."""
+        from fastapi.testclient import TestClient as TC
+        pdf_content = b"%PDF-1.4 test"
+        stored_path = tmp_path / "stored_test.pdf"
+
+        def fake_save(content, filename):
+            stored_path.write_bytes(content)
+            return stored_path
+
+        with patch("app.api.papers.save_uploaded_pdf", side_effect=fake_save), \
+             patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")):
+            with TC(app, raise_server_exceptions=False) as c:
+                c.post(
+                    "/api/papers/upload",
+                    files={"file": ("test.pdf", pdf_content, "application/pdf")},
+                    data={"tags": ""},
+                )
+        assert not stored_path.exists(), "Orphaned file should be cleaned up"
+
 
 class TestPaperDetailEndpoint:
     """Test paper detail endpoint."""

@@ -288,8 +288,12 @@ async def upload_paper(
         raise HTTPException(400, "Invalid PDF file (missing PDF header)")
 
     stored_path = await save_uploaded_pdf(content, file.filename)
-    page_count, file_size = await asyncio.to_thread(get_pdf_info, stored_path)
-    title = await asyncio.to_thread(extract_title_from_pdf, stored_path)
+    try:
+        page_count, file_size = await asyncio.to_thread(get_pdf_info, stored_path)
+        title = await asyncio.to_thread(extract_title_from_pdf, stored_path)
+    except Exception:
+        stored_path.unlink(missing_ok=True)
+        raise
 
     paper = Paper(
         title=title,
