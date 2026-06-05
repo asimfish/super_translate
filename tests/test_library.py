@@ -14,6 +14,7 @@ from app.services.library import (
     generate_stored_filename,
     get_pdf_info,
     save_uploaded_pdf,
+    save_uploaded_pdf_streaming,
 )
 
 
@@ -181,6 +182,45 @@ class TestSaveUploadedPdf:
         with patch("app.services.library.settings") as mock_settings:
             mock_settings.papers_path = nested
             result = await save_uploaded_pdf(b"content", "test.pdf")
+            assert result.exists()
+
+
+class TestSaveUploadedPdfStreaming:
+    """Test streaming PDF upload saving."""
+
+    @pytest.mark.asyncio
+    async def test_writes_chunks_to_file(self, tmp_path):
+        with patch("app.services.library.settings") as mock_settings:
+            mock_settings.papers_path = tmp_path
+            chunks = [b"%PDF-1.4 ", b"test ", b"content"]
+            result = await save_uploaded_pdf_streaming(chunks, "upload.pdf")
+            assert result.exists()
+            assert result.read_bytes() == b"%PDF-1.4 test content"
+
+    @pytest.mark.asyncio
+    async def test_empty_chunks_creates_empty_file(self, tmp_path):
+        with patch("app.services.library.settings") as mock_settings:
+            mock_settings.papers_path = tmp_path
+            result = await save_uploaded_pdf_streaming([], "empty.pdf")
+            assert result.exists()
+            assert result.read_bytes() == b""
+
+    @pytest.mark.asyncio
+    async def test_unique_names(self, tmp_path):
+        with patch("app.services.library.settings") as mock_settings:
+            mock_settings.papers_path = tmp_path
+            p1 = await save_uploaded_pdf_streaming([b"pdf1"], "same.pdf")
+            p2 = await save_uploaded_pdf_streaming([b"pdf2"], "same.pdf")
+            assert p1 != p2
+            assert p1.exists()
+            assert p2.exists()
+
+    @pytest.mark.asyncio
+    async def test_creates_parent_dirs(self, tmp_path):
+        nested = tmp_path / "deep" / "nested"
+        with patch("app.services.library.settings") as mock_settings:
+            mock_settings.papers_path = nested
+            result = await save_uploaded_pdf_streaming([b"content"], "test.pdf")
             assert result.exists()
 
 
