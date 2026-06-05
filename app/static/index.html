@@ -25,10 +25,10 @@
     <div id="library-view" class="view active">
       <div class="toolbar">
         <div class="search-box">
-          <input type="text" id="search-input" placeholder="搜索论文标题..." data-action="debounce-search">
+          <input type="text" id="search-input" placeholder="搜索论文标题..." aria-label="搜索论文标题" data-action="debounce-search">
         </div>
         <div class="filter-box">
-          <select id="status-filter" data-action="load-papers">
+          <select id="status-filter" aria-label="按状态筛选" data-action="load-papers">
             <option value="">全部状态</option>
             <option value="pending">待翻译</option>
             <option value="translating">翻译中</option>
@@ -70,7 +70,7 @@
             <span id="file-size"></span>
           </div>
           <div class="upload-actions">
-            <input type="text" id="upload-tags" placeholder="标签（可选，逗号分隔）">
+            <input type="text" id="upload-tags" placeholder="标签（可选，逗号分隔）" aria-label="标签">
             <button class="btn btn-primary" data-action="do-upload">上传</button>
             <button class="btn btn-outline" data-action="cancel-upload">取消</button>
           </div>
@@ -89,7 +89,7 @@
         <div class="reader-title" id="reader-title"></div>
         <div class="reader-actions">
           <div class="translate-controls">
-            <select id="quality-preset" class="quality-select">
+            <select id="quality-preset" class="quality-select" aria-label="翻译质量">
               <option value="fast">快速 (Google)</option>
               <option value="balanced" selected>标准 (DeepSeek)</option>
               <option value="quality">高质量 (DeepSeek+优化)</option>
