@@ -24,7 +24,8 @@ def get_pdf_info(pdf_path: Path) -> tuple[int, int]:
     try:
         with fitz.open(str(pdf_path)) as doc:
             return doc.page_count, pdf_path.stat().st_size
-    except Exception:
+    except Exception as e:
+        logger.debug("Could not read PDF info from %s: %s", pdf_path.name, e)
         return 0, pdf_path.stat().st_size
 
 
@@ -47,8 +48,8 @@ def extract_title_from_pdf(pdf_path: Path) -> str:
                                     text = span.get("text", "").strip()
                                     if len(text) > 5:
                                         return text[:200]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Could not extract title from %s: %s", pdf_path.name, e)
     return pdf_path.stem.replace("_", " ").replace("-", " ").title()
 
 
