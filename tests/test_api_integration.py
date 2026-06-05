@@ -798,6 +798,24 @@ class TestHelpers:
             assert config.base_url == "https://api.openai.com/v1"
             assert config.model == "gpt-4o-mini"
 
+    def test_resolve_backend_config_deepl(self):
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.deepl_api_key = "dl-test-key"
+            config = _resolve_backend_config("deepl", QualityPreset.BALANCED)
+            assert config.backend == "deepl"
+            assert config.api_key == "dl-test-key"
+
+    def test_resolve_backend_config_ollama(self):
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.ollama_host = "http://localhost:11434"
+            config = _resolve_backend_config("ollama", QualityPreset.BALANCED)
+            assert config.backend == "ollama"
+            assert config.base_url == "http://localhost:11434"
+
 
 class TestRunTranslation:
     """Test _run_translation background function."""

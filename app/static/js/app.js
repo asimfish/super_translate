@@ -717,10 +717,10 @@ function initResizer() {
 }
 
 // === Helpers ===
+const _escDiv = document.createElement('div');
 function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s || '';
-  return d.innerHTML.replace(/'/g, '&#39;');
+  _escDiv.textContent = s || '';
+  return _escDiv.innerHTML.replace(/'/g, '&#39;');
 }
 
 function sanitizeClass(s) {
@@ -728,6 +728,7 @@ function sanitizeClass(s) {
 }
 
 function formatSize(bytes) {
+  if (bytes == null || isNaN(bytes)) return '0 B';
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';

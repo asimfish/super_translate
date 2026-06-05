@@ -406,6 +406,10 @@ def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> Tran
         api_key = settings.openai_api_key
         base_url = settings.openai_base_url
         model_name = settings.openai_model
+    elif backend == "deepl":
+        api_key = settings.deepl_api_key
+    elif backend == "ollama":
+        base_url = settings.ollama_host
 
     # Fast mode forces Google Translate (no API key needed)
     if quality_preset == QualityPreset.FAST:
