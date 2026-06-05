@@ -1106,6 +1106,41 @@ class TestRunTranslation:
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
+    def test_translation_crash_cleans_up_output_dir(self, mock_settings, mock_translate, tmp_path):
+        """Test that crash handler cleans up partial output directory."""
+        from app.api.papers import _run_translation
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translation_status = "translating"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+
+        # Create partial output directory (simulating partial translation)
+        output_dir = translations_dir / "paper123"
+        output_dir.mkdir()
+        (output_dir / "partial.pdf").write_bytes(b"partial")
+
+        mock_translate.side_effect = Exception("API crash")
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("paper123", "deepseek", "balanced")
+
+        assert paper.translation_status == "failed"
+        assert not output_dir.exists()
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
     def test_translation_failure_cleans_up(self, mock_settings, mock_translate, tmp_path):
         from app.api.papers import _run_translation
         from app.services.translator import TranslationResult
