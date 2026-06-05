@@ -278,6 +278,56 @@ class TestTranslatePdfSync(unittest.TestCase):
         self.assertEqual(config.api_key, "test-key")
         self.assertEqual(config.model, "deepseek-v4-pro")
 
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_openai_no_api_key_falls_back(self, mock_get_model, mock_translate):
+        """Test that OpenAI falls back to Google when no API key."""
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        config = TranslationConfig(
+            backend="openai",
+            api_key="",
+            quality=QualityPreset.BALANCED,
+        )
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.glob", return_value=[]):
+                result = translate_pdf_sync(
+                    Path("/tmp/input.pdf"),
+                    Path("/tmp/output"),
+                    config,
+                )
+                self.assertIsNone(result.error)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_deepseek_env_vars_set(self, mock_get_model, mock_translate):
+        """Test that DeepSeek API key is set in environment."""
+        mock_get_model.return_value = MagicMock()
+
+        captured_env = {}
+        original_translate = mock_translate
+
+        def capture_translate(*args, **kwargs):
+            captured_env["DEEPSEEK_API_KEY"] = __import__("os").environ.get("DEEPSEEK_API_KEY")
+            return None
+
+        mock_translate.side_effect = capture_translate
+
+        config = TranslationConfig(
+            backend="deepseek",
+            api_key="test-key-123",
+            model="deepseek-v4",
+            quality=QualityPreset.BALANCED,
+        )
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.glob", return_value=[]):
+                translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
+
+        self.assertEqual(captured_env.get("DEEPSEEK_API_KEY"), "test-key-123")
+
 
 class TestSanitizeError(unittest.TestCase):
     """Test _sanitize_error function."""
