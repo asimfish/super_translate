@@ -185,6 +185,49 @@ def translate_pdf_sync(
         return TranslationResult(error=sanitize_error(e))
 
 
+def _resolve_service(config: TranslationConfig, fallback: str) -> str:
+    """Resolve translation service name from config backend."""
+    service_map = {
+        "deepseek": "deepseek",
+        "openai": "openai",
+        "google": "google",
+        "deepl": "deepl",
+        "ollama": "ollama",
+    }
+    service = service_map.get(config.backend, "google")
+
+    if config.backend == "deepseek" and not config.api_key:
+        if not os.environ.get("DEEPSEEK_API_KEY", ""):
+            logger.warning("No DeepSeek API key, falling back to %s", fallback)
+            return fallback
+    elif config.backend == "openai" and not config.api_key:
+        if not os.environ.get("OPENAI_API_KEY", ""):
+            logger.warning("No OpenAI API key, falling back to %s", fallback)
+            return fallback
+
+    return service
+
+
+def _build_env_overrides(
+    service: str, api_key: str, base_url: str, model_name: str
+) -> dict[str, str]:
+    """Build environment variable overrides for the translation service."""
+    overrides: dict[str, str] = {}
+    if service == "deepseek" and api_key:
+        overrides["DEEPSEEK_API_KEY"] = api_key
+        if base_url:
+            overrides["DEEPSEEK_API_URL"] = base_url
+        if model_name:
+            overrides["DEEPSEEK_MODEL"] = model_name
+    elif service == "openai" and api_key:
+        overrides["OPENAI_API_KEY"] = api_key
+        if base_url:
+            overrides["OPENAI_BASE_URL"] = base_url
+        if model_name:
+            overrides["OPENAI_MODEL"] = model_name
+    return overrides
+
+
 def _translate_sync(
     input_path: Path,
     output_dir: Path,
@@ -196,48 +239,17 @@ def _translate_sync(
 
     preset = QUALITY_PRESETS.get(config.quality, QUALITY_PRESETS[QualityPreset.BALANCED])
 
-    # Determine service
-    service_map = {
-        "deepseek": "deepseek",
-        "openai": "openai",
-        "google": "google",
-        "deepl": "deepl",
-        "ollama": "ollama",
-    }
-    service = service_map.get(config.backend, "google")
+    service = _resolve_service(config, preset["fallback_backend"])
 
-    # Resolve API key
+    # Resolve API key (may come from config or env)
     api_key = config.api_key
-    base_url = config.base_url
-    model_name = config.model
+    if config.backend in ("deepseek", "openai") and not api_key:
+        env_var = "DEEPSEEK_API_KEY" if config.backend == "deepseek" else "OPENAI_API_KEY"
+        api_key = os.environ.get(env_var, "")
 
-    if config.backend == "deepseek" and not api_key:
-        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        if not api_key:
-            logger.warning("No DeepSeek API key, falling back to %s", preset["fallback_backend"])
-            service = preset["fallback_backend"]
-    elif config.backend == "openai" and not api_key:
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            logger.warning("No OpenAI API key, falling back to %s", preset["fallback_backend"])
-            service = preset["fallback_backend"]
+    env_overrides = _build_env_overrides(service, api_key, config.base_url, config.model)
 
-    # Set environment variables
-    env_overrides = {}
-    if service == "deepseek" and api_key:
-        env_overrides["DEEPSEEK_API_KEY"] = api_key
-        if base_url:
-            env_overrides["DEEPSEEK_API_URL"] = base_url
-        if model_name:
-            env_overrides["DEEPSEEK_MODEL"] = model_name
-    elif service == "openai" and api_key:
-        env_overrides["OPENAI_API_KEY"] = api_key
-        if base_url:
-            env_overrides["OPENAI_BASE_URL"] = base_url
-        if model_name:
-            env_overrides["OPENAI_MODEL"] = model_name
-
-    old_env = {}
+    old_env: dict[str, str | None] = {}
 
     # Hold lock for entire translation to prevent env var races between
     # concurrent translations with different API keys

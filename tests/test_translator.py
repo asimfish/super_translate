@@ -787,5 +787,69 @@ class TestSanitizeError(unittest.TestCase):
         self.assertIn("[redacted]", result)
 
 
+class TestResolveService(unittest.TestCase):
+    """Test _resolve_service function."""
+
+    def test_google_passthrough(self):
+        from app.services.translator import _resolve_service
+        config = TranslationConfig(backend="google")
+        self.assertEqual(_resolve_service(config, "google"), "google")
+
+    def test_deepseek_with_key(self):
+        from app.services.translator import _resolve_service
+        config = TranslationConfig(backend="deepseek", api_key="test-key")
+        self.assertEqual(_resolve_service(config, "google"), "deepseek")
+
+    def test_deepseek_no_key_falls_back(self):
+        from app.services.translator import _resolve_service
+        import os
+        os.environ.pop("DEEPSEEK_API_KEY", None)
+        config = TranslationConfig(backend="deepseek", api_key="")
+        self.assertEqual(_resolve_service(config, "google"), "google")
+
+    def test_openai_no_key_falls_back(self):
+        from app.services.translator import _resolve_service
+        import os
+        os.environ.pop("OPENAI_API_KEY", None)
+        config = TranslationConfig(backend="openai", api_key="")
+        self.assertEqual(_resolve_service(config, "deepl"), "deepl")
+
+    def test_unknown_backend_defaults_google(self):
+        from app.services.translator import _resolve_service
+        config = TranslationConfig(backend="unknown")
+        self.assertEqual(_resolve_service(config, "google"), "google")
+
+
+class TestBuildEnvOverrides(unittest.TestCase):
+    """Test _build_env_overrides function."""
+
+    def test_deepseek_all_fields(self):
+        from app.services.translator import _build_env_overrides
+        env = _build_env_overrides("deepseek", "key", "https://api.ds.com", "ds-v4")
+        self.assertEqual(env["DEEPSEEK_API_KEY"], "key")
+        self.assertEqual(env["DEEPSEEK_API_URL"], "https://api.ds.com")
+        self.assertEqual(env["DEEPSEEK_MODEL"], "ds-v4")
+
+    def test_openai_all_fields(self):
+        from app.services.translator import _build_env_overrides
+        env = _build_env_overrides("openai", "sk-test", "https://api.openai.com/v1", "gpt-4o")
+        self.assertEqual(env["OPENAI_API_KEY"], "sk-test")
+        self.assertEqual(env["OPENAI_BASE_URL"], "https://api.openai.com/v1")
+        self.assertEqual(env["OPENAI_MODEL"], "gpt-4o")
+
+    def test_google_returns_empty(self):
+        from app.services.translator import _build_env_overrides
+        self.assertEqual(_build_env_overrides("google", "", "", ""), {})
+
+    def test_deepseek_no_optional_fields(self):
+        from app.services.translator import _build_env_overrides
+        env = _build_env_overrides("deepseek", "key", "", "")
+        self.assertEqual(env, {"DEEPSEEK_API_KEY": "key"})
+
+    def test_no_api_key_returns_empty(self):
+        from app.services.translator import _build_env_overrides
+        self.assertEqual(_build_env_overrides("deepseek", "", "", ""), {})
+
+
 if __name__ == "__main__":
     unittest.main()
