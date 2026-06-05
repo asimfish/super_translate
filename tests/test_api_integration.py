@@ -1456,3 +1456,45 @@ class TestInitDb:
             assert "papers" in table_names
 
         await test_engine.dispose()
+
+
+class TestCliFunction:
+    """Test CLI entry point."""
+
+    @patch("uvicorn.run")
+    def test_cli_default_args(self, mock_run):
+        """Test CLI with default arguments."""
+        from app.main import cli
+        with patch("sys.argv", ["paper-china"]):
+            cli()
+        mock_run.assert_called_once()
+        call_kwargs = mock_run.call_args
+        assert call_kwargs[1]["host"] == "127.0.0.1"
+        assert call_kwargs[1]["port"] == 8000
+
+    @patch("uvicorn.run")
+    def test_cli_custom_port(self, mock_run):
+        """Test CLI with custom port."""
+        from app.main import cli
+        with patch("sys.argv", ["paper-china", "--port", "9000"]):
+            cli()
+        assert mock_run.call_args[1]["port"] == 9000
+
+    @patch("uvicorn.run")
+    def test_cli_non_localhost_warns(self, mock_run):
+        """Test that binding to non-localhost triggers a warning."""
+        from app.main import cli
+        with patch("sys.argv", ["paper-china", "--host", "0.0.0.0"]):
+            with patch("app.main.logger") as mock_logger:
+                cli()
+                mock_logger.warning.assert_called_once()
+                assert "no authentication" in mock_logger.warning.call_args[0][0].lower()
+
+    @patch("app.main.webbrowser.open")
+    @patch("uvicorn.run")
+    def test_cli_open_browser(self, mock_run, mock_open):
+        """Test --open flag opens browser."""
+        from app.main import cli
+        with patch("sys.argv", ["paper-china", "--open"]):
+            cli()
+        mock_open.assert_called_once_with("http://127.0.0.1:8000")
