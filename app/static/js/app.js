@@ -44,8 +44,11 @@ const api = {
     return res.json();
   },
   async updatePaper(id, data) {
-    const params = new URLSearchParams(data);
-    const res = await fetch(`/api/papers/${id}?${params}`, { method: 'PATCH' });
+    const res = await fetch(`/api/papers/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
     if (!res.ok) throw new Error((await res.json()).detail || 'Update failed');
     return res.json();
   },

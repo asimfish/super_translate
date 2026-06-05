@@ -51,6 +51,29 @@ class PaperListResponse(BaseModel):
     total: int
 
 
+class PaperUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    tags: Optional[str] = None
+    notes: Optional[str] = None
+
+    def validate_title(self) -> None:
+        if self.title is not None and len(self.title) > 500:
+            raise ValueError("Title must be 500 characters or less")
+
+    def validate_tags(self) -> None:
+        if self.tags is not None and len(self.tags) > 1000:
+            raise ValueError("Tags must be 1000 characters or less")
+
+    def validate_notes(self) -> None:
+        if self.notes is not None and len(self.notes) > 10000:
+            raise ValueError("Notes must be 10000 characters or less")
+
+    def validate_all(self) -> None:
+        self.validate_title()
+        self.validate_tags()
+        self.validate_notes()
+
+
 def _paper_to_response(
     paper: Paper,
     has_original: bool = False,
@@ -375,20 +398,24 @@ async def view_translated(paper_id: str, db: AsyncSession = Depends(get_session)
 @router.patch("/{paper_id}")
 async def update_paper(
     paper_id: str,
-    title: Optional[str] = None,
-    tags: Optional[str] = None,
-    notes: Optional[str] = None,
+    request: PaperUpdateRequest,
     db: AsyncSession = Depends(get_session),
 ):
+    # Validate input
+    try:
+        request.validate_all()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
     result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:
         raise HTTPException(404, "Paper not found")
-    if title is not None:
-        paper.title = title
-    if tags is not None:
-        paper.tags = tags
-    if notes is not None:
-        paper.notes = notes
+    if request.title is not None:
+        paper.title = request.title
+    if request.tags is not None:
+        paper.tags = request.tags
+    if request.notes is not None:
+        paper.notes = request.notes
     await db.commit()
     return {"ok": True}

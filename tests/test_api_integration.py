@@ -250,7 +250,10 @@ class TestPaperUpdateEndpoint:
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
 
-        response = client.patch("/api/papers/nonexistent?title=New Title")
+        response = client.patch(
+            "/api/papers/nonexistent",
+            json={"title": "New Title"},
+        )
         assert response.status_code == 404
 
     def test_update_paper_success(self, client, mock_db, sample_paper):
@@ -259,12 +262,49 @@ class TestPaperUpdateEndpoint:
         mock_db.execute.return_value = mock_result
 
         response = client.patch(
-            f"/api/papers/{sample_paper.id}?title=New Title&tags=new,tag"
+            f"/api/papers/{sample_paper.id}",
+            json={"title": "New Title", "tags": "new,tag"},
         )
         assert response.status_code == 200
         assert response.json()["ok"] is True
         assert sample_paper.title == "New Title"
         assert sample_paper.tags == "new,tag"
+
+    def test_update_paper_validation_title_too_long(self, client, mock_db):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = MagicMock()
+        mock_db.execute.return_value = mock_result
+
+        response = client.patch(
+            "/api/papers/test123",
+            json={"title": "x" * 501},
+        )
+        assert response.status_code == 400
+        assert "Title must be 500 characters or less" in response.json()["detail"]
+
+    def test_update_paper_validation_tags_too_long(self, client, mock_db):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = MagicMock()
+        mock_db.execute.return_value = mock_result
+
+        response = client.patch(
+            "/api/papers/test123",
+            json={"tags": "x" * 1001},
+        )
+        assert response.status_code == 400
+        assert "Tags must be 1000 characters or less" in response.json()["detail"]
+
+    def test_update_paper_validation_notes_too_long(self, client, mock_db):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = MagicMock()
+        mock_db.execute.return_value = mock_result
+
+        response = client.patch(
+            "/api/papers/test123",
+            json={"notes": "x" * 10001},
+        )
+        assert response.status_code == 400
+        assert "Notes must be 10000 characters or less" in response.json()["detail"]
 
 
 class TestTranslationEndpoint:
@@ -362,6 +402,52 @@ class TestRateLimiting:
         for _ in range(100):
             response = client.get("/health")
             assert response.status_code == 200
+
+    def test_rate_limit_skips_index_endpoint(self, client):
+        # Index endpoint should not be rate limited
+        for _ in range(100):
+            response = client.get("/")
+            assert response.status_code == 200
+
+    def test_rate_limit_skips_static_files(self, client):
+        # Static files should not be rate limited
+        for _ in range(100):
+            response = client.get("/static/css/style.css")
+            assert response.status_code == 200
+
+    def test_rate_limit_applies_to_api_endpoints(self, client, mock_db):
+        # API endpoints should be rate limited
+        mock_db.scalar.return_value = 0
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = []
+        mock_result.scalars.return_value = mock_scalars
+        mock_db.execute.return_value = mock_result
+
+        # Make many requests to API endpoint
+        for _ in range(65):
+            response = client.get("/api/papers/")
+
+        # The last request should be rate limited (429)
+        assert response.status_code == 429
+        assert "Rate limit exceeded" in response.json()["detail"]
+
+    def test_rate_limit_returns_retry_after_header(self, client, mock_db):
+        # Rate limited responses should include Retry-After header
+        mock_db.scalar.return_value = 0
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = []
+        mock_result.scalars.return_value = mock_scalars
+        mock_db.execute.return_value = mock_result
+
+        # Make many requests to trigger rate limit
+        for _ in range(65):
+            response = client.get("/api/papers/")
+
+        # Check for Retry-After header
+        assert response.status_code == 429
+        assert "Retry-After" in response.headers
 
 
 if __name__ == "__main__":
