@@ -517,7 +517,12 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
                         pass  # non-fatal
 
                 try:
-                    trans_result = translate_pdf_sync(input_path, output_dir, config, _on_progress)
+                    # Run in executor so the event loop can process progress callbacks
+                    # scheduled by run_coroutine_threadsafe from the sync callback
+                    loop = asyncio.get_event_loop()
+                    trans_result = await loop.run_in_executor(
+                        None, lambda: translate_pdf_sync(input_path, output_dir, config, _on_progress)
+                    )
                 except Exception as e:
                     logger.exception("Translation crashed for paper %s", paper_id)
                     paper.translation_status = TranslationStatus.FAILED.value
