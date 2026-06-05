@@ -290,6 +290,18 @@ class TestPaperUpdateEndpoint:
         assert sample_paper.title == "New Title"
         assert sample_paper.tags == "new,tag"
 
+    def test_update_paper_with_notes(self, client, mock_db, sample_paper):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.patch(
+            f"/api/papers/{sample_paper.id}",
+            json={"notes": "Important paper on attention mechanisms"},
+        )
+        assert response.status_code == 200
+        assert sample_paper.notes == "Important paper on attention mechanisms"
+
     def test_update_paper_validation_title_too_long(self, client, mock_db):
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = MagicMock()
@@ -452,6 +464,22 @@ class TestDownloadEndpoints:
         with _patch("app.api.papers.settings") as mock_settings:
             mock_settings.papers_path = tmp_path
             response = client.get(f"/api/papers/{sample_paper.id}/view/original")
+            assert response.status_code == 200
+
+    def test_view_translated_success(self, client, mock_db, sample_paper, tmp_path):
+        """Test successful translated PDF view."""
+        from unittest.mock import patch as _patch
+        sample_paper.translated_filename = "paper123/mono.pdf"
+        (tmp_path / "paper123").mkdir()
+        (tmp_path / "paper123" / "mono.pdf").write_bytes(b"%PDF-1.4 translated")
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.translations_path = tmp_path
+            response = client.get(f"/api/papers/{sample_paper.id}/view/translated")
             assert response.status_code == 200
 
     def test_download_translated_success(self, client, mock_db, sample_paper, tmp_path):
