@@ -74,6 +74,17 @@ class TestGetPdfInfo(unittest.TestCase):
         self.assertGreater(file_size, 0)
         path.unlink()
 
+    def test_deleted_file_returns_zero(self):
+        """File deleted between open and stat should return (0, 0)."""
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(b"not a pdf")
+            path = Path(f.name)
+        path.unlink()  # delete before calling
+
+        page_count, file_size = get_pdf_info(path)
+        self.assertEqual(page_count, 0)
+        self.assertEqual(file_size, 0)
+
 
 class TestExtractTitleFromPdf(unittest.TestCase):
     """Test title extraction."""

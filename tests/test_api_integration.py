@@ -13,6 +13,22 @@ from app.models.paper import Paper
 @pytest.fixture
 def client():
     """Create test client."""
+    # Reset rate limiter to avoid 429s from accumulated requests across tests
+    from app.core.rate_limit import RateLimitMiddleware
+
+    def _find_middleware(stack, cls):
+        if isinstance(stack, cls):
+            return stack
+        if hasattr(stack, "app"):
+            return _find_middleware(stack.app, cls)
+        return None
+
+    if app.middleware_stack is None:
+        app.middleware_stack = app.build_middleware_stack()
+    rl = _find_middleware(app.middleware_stack, RateLimitMiddleware)
+    if rl:
+        rl.reset()
+
     return TestClient(app)
 
 
@@ -176,6 +192,21 @@ class TestPaperUploadEndpoint:
         )
         assert response.status_code == 400
         assert "PDF header" in response.json()["detail"]
+
+    def test_upload_missing_eof_marker(self, client, tmp_path):
+        """PDF without %%EOF marker in last 1KB should be rejected."""
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.papers_path = tmp_path
+            mock_settings.max_upload_size = 100 * 1024 * 1024
+            mock_settings.upload_chunk_size = 1024 * 1024
+            # Valid header but no %%EOF
+            content = b"%PDF-1.4 " + b"x" * 2000
+            response = client.post(
+                "/api/papers/upload",
+                files={"file": ("test.pdf", content, "application/pdf")},
+            )
+            assert response.status_code == 400
+            assert "%%EOF" in response.json()["detail"]
 
     def test_upload_tags_too_long(self, client):
         pdf_content = b"%PDF-1.4 test"
