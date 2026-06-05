@@ -604,3 +604,62 @@ class TestHelpers:
         with pytest.raises(HTTPException) as exc_info:
             _get_paper_file(paper, "stored_filename", tmp_path)
         assert exc_info.value.status_code == 403
+
+
+class TestRecoverStuckTranslations:
+    """Test startup recovery of stuck translations."""
+
+    @pytest.mark.asyncio
+    async def test_recovers_stuck_papers(self):
+        from app.main import _recover_stuck_translations
+
+        paper1 = MagicMock()
+        paper1.translation_status = "translating"
+        paper1.translation_error = None
+
+        paper2 = MagicMock()
+        paper2.translation_status = "translating"
+        paper2.translation_error = None
+
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = [paper1, paper2]
+        mock_result.scalars.return_value = mock_scalars
+
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session.commit = AsyncMock()
+
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx_manager)
+        with patch("app.core.database.async_session", mock_factory):
+            await _recover_stuck_translations()
+
+        assert paper1.translation_status == "failed"
+        assert paper2.translation_status == "failed"
+        assert "interrupted" in paper1.translation_error.lower()
+        mock_session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_noop_when_no_stuck_papers(self):
+        from app.main import _recover_stuck_translations
+
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = []
+        mock_result.scalars.return_value = mock_scalars
+
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session.commit = AsyncMock()
+
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx_manager)
+        with patch("app.core.database.async_session", mock_factory):
+            await _recover_stuck_translations()
+
+        mock_session.commit.assert_not_awaited()
