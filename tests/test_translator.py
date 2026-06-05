@@ -303,14 +303,13 @@ class TestTranslatePdfSync(unittest.TestCase):
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
     def test_deepseek_env_vars_set(self, mock_get_model, mock_translate):
-        """Test that DeepSeek API key is set in environment."""
+        """Test that DeepSeek API key is passed via envs parameter."""
         mock_get_model.return_value = MagicMock()
 
-        captured_env = {}
-        original_translate = mock_translate
+        captured_envs = {}
 
         def capture_translate(*args, **kwargs):
-            captured_env["DEEPSEEK_API_KEY"] = __import__("os").environ.get("DEEPSEEK_API_KEY")
+            captured_envs.update(kwargs.get("envs") or {})
             return None
 
         mock_translate.side_effect = capture_translate
@@ -326,20 +325,18 @@ class TestTranslatePdfSync(unittest.TestCase):
             with patch("pathlib.Path.glob", return_value=[]):
                 translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
-        self.assertEqual(captured_env.get("DEEPSEEK_API_KEY"), "test-key-123")
+        self.assertEqual(captured_envs.get("DEEPSEEK_API_KEY"), "test-key-123")
+        self.assertEqual(captured_envs.get("DEEPSEEK_MODEL"), "deepseek-v4")
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
     def test_openai_env_vars_set(self, mock_get_model, mock_translate):
-        """Test that OpenAI env vars are set correctly."""
-        import os
+        """Test that OpenAI env vars are passed via envs parameter."""
         mock_get_model.return_value = MagicMock()
-        captured_env = {}
+        captured_envs = {}
 
         def capture_translate(*args, **kwargs):
-            captured_env["OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY")
-            captured_env["OPENAI_BASE_URL"] = os.environ.get("OPENAI_BASE_URL")
-            captured_env["OPENAI_MODEL"] = os.environ.get("OPENAI_MODEL")
+            captured_envs.update(kwargs.get("envs") or {})
             return None
 
         mock_translate.side_effect = capture_translate
@@ -356,22 +353,19 @@ class TestTranslatePdfSync(unittest.TestCase):
             with patch("pathlib.Path.glob", return_value=[]):
                 translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
-        self.assertEqual(captured_env.get("OPENAI_API_KEY"), "sk-test")
-        self.assertEqual(captured_env.get("OPENAI_BASE_URL"), "https://custom.openai.com/v1")
-        self.assertEqual(captured_env.get("OPENAI_MODEL"), "gpt-4o")
+        self.assertEqual(captured_envs.get("OPENAI_API_KEY"), "sk-test")
+        self.assertEqual(captured_envs.get("OPENAI_BASE_URL"), "https://custom.openai.com/v1")
+        self.assertEqual(captured_envs.get("OPENAI_MODEL"), "gpt-4o")
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
-    def test_deepseek_base_url_and_model_env_vars(self, mock_get_model, mock_translate):
-        """Test that DeepSeek base_url and model are set in env."""
-        import os
+    def test_deepseek_model_env_var(self, mock_get_model, mock_translate):
+        """Test that DeepSeek API key and model are passed via envs."""
         mock_get_model.return_value = MagicMock()
-        captured_env = {}
+        captured_envs = {}
 
         def capture_translate(*args, **kwargs):
-            captured_env["DEEPSEEK_API_KEY"] = os.environ.get("DEEPSEEK_API_KEY")
-            captured_env["DEEPSEEK_API_URL"] = os.environ.get("DEEPSEEK_API_URL")
-            captured_env["DEEPSEEK_MODEL"] = os.environ.get("DEEPSEEK_MODEL")
+            captured_envs.update(kwargs.get("envs") or {})
             return None
 
         mock_translate.side_effect = capture_translate
@@ -379,7 +373,6 @@ class TestTranslatePdfSync(unittest.TestCase):
         config = TranslationConfig(
             backend="deepseek",
             api_key="ds-key",
-            base_url="https://custom.deepseek.com",
             model="deepseek-v4-pro",
             quality=QualityPreset.BALANCED,
         )
@@ -388,9 +381,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             with patch("pathlib.Path.glob", return_value=[]):
                 translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
-        self.assertEqual(captured_env.get("DEEPSEEK_API_KEY"), "ds-key")
-        self.assertEqual(captured_env.get("DEEPSEEK_API_URL"), "https://custom.deepseek.com")
-        self.assertEqual(captured_env.get("DEEPSEEK_MODEL"), "deepseek-v4-pro")
+        self.assertEqual(captured_envs.get("DEEPSEEK_API_KEY"), "ds-key")
+        self.assertEqual(captured_envs.get("DEEPSEEK_MODEL"), "deepseek-v4-pro")
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
@@ -622,35 +614,8 @@ class TestTranslatePdfSync(unittest.TestCase):
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
-    def test_env_vars_restored_after_translation(self, mock_get_model, mock_translate):
-        """Test that environment variables are restored after translation."""
-        import os
-        mock_get_model.return_value = MagicMock()
-        mock_translate.return_value = None
-
-        # Set a pre-existing env var
-        os.environ["DEEPSEEK_API_KEY"] = "original-key"
-
-        config = TranslationConfig(
-            backend="deepseek",
-            api_key="temp-key",
-            quality=QualityPreset.BALANCED,
-        )
-
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
-                translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
-
-        # Should be restored to original
-        self.assertEqual(os.environ.get("DEEPSEEK_API_KEY"), "original-key")
-
-        # Cleanup
-        os.environ.pop("DEEPSEEK_API_KEY", None)
-
-    @patch("pdf2zh.translate")
-    @patch("app.services.translator.get_model")
-    def test_env_vars_cleaned_up_when_not_previously_set(self, mock_get_model, mock_translate):
-        """Test that env vars are removed if they weren't set before."""
+    def test_os_environ_not_mutated(self, mock_get_model, mock_translate):
+        """Test that os.environ is NOT mutated during translation."""
         import os
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
@@ -668,7 +633,7 @@ class TestTranslatePdfSync(unittest.TestCase):
             with patch("pathlib.Path.glob", return_value=[]):
                 translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
-        # Should be cleaned up (not left as "temp-key")
+        # os.environ should NOT contain the temp key
         self.assertIsNone(os.environ.get("DEEPSEEK_API_KEY"))
 
 
@@ -820,35 +785,44 @@ class TestResolveService(unittest.TestCase):
         self.assertEqual(_resolve_service(config, "google"), "google")
 
 
-class TestBuildEnvOverrides(unittest.TestCase):
-    """Test _build_env_overrides function."""
+class TestBuildPdf2zhEnvs(unittest.TestCase):
+    """Test _build_pdf2zh_envs function."""
 
     def test_deepseek_all_fields(self):
-        from app.services.translator import _build_env_overrides
-        env = _build_env_overrides("deepseek", "key", "https://api.ds.com", "ds-v4")
+        from app.services.translator import _build_pdf2zh_envs
+        config = TranslationConfig(backend="deepseek", api_key="key", model="ds-v4")
+        env = _build_pdf2zh_envs("deepseek", config)
         self.assertEqual(env["DEEPSEEK_API_KEY"], "key")
-        self.assertEqual(env["DEEPSEEK_API_URL"], "https://api.ds.com")
         self.assertEqual(env["DEEPSEEK_MODEL"], "ds-v4")
 
     def test_openai_all_fields(self):
-        from app.services.translator import _build_env_overrides
-        env = _build_env_overrides("openai", "sk-test", "https://api.openai.com/v1", "gpt-4o")
+        from app.services.translator import _build_pdf2zh_envs
+        config = TranslationConfig(
+            backend="openai", api_key="sk-test",
+            base_url="https://api.openai.com/v1", model="gpt-4o",
+        )
+        env = _build_pdf2zh_envs("openai", config)
         self.assertEqual(env["OPENAI_API_KEY"], "sk-test")
         self.assertEqual(env["OPENAI_BASE_URL"], "https://api.openai.com/v1")
         self.assertEqual(env["OPENAI_MODEL"], "gpt-4o")
 
     def test_google_returns_empty(self):
-        from app.services.translator import _build_env_overrides
-        self.assertEqual(_build_env_overrides("google", "", "", ""), {})
+        from app.services.translator import _build_pdf2zh_envs
+        config = TranslationConfig(backend="google")
+        self.assertEqual(_build_pdf2zh_envs("google", config), {})
 
     def test_deepseek_no_optional_fields(self):
-        from app.services.translator import _build_env_overrides
-        env = _build_env_overrides("deepseek", "key", "", "")
+        from app.services.translator import _build_pdf2zh_envs
+        config = TranslationConfig(backend="deepseek", api_key="key")
+        env = _build_pdf2zh_envs("deepseek", config)
         self.assertEqual(env, {"DEEPSEEK_API_KEY": "key"})
 
     def test_no_api_key_returns_empty(self):
-        from app.services.translator import _build_env_overrides
-        self.assertEqual(_build_env_overrides("deepseek", "", "", ""), {})
+        from app.services.translator import _build_pdf2zh_envs
+        import os
+        os.environ.pop("DEEPSEEK_API_KEY", None)
+        config = TranslationConfig(backend="deepseek", api_key="")
+        self.assertEqual(_build_pdf2zh_envs("deepseek", config), {})
 
 
 if __name__ == "__main__":

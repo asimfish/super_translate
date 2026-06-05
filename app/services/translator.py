@@ -4,7 +4,6 @@ import asyncio
 import logging
 import os
 import re
-import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -46,7 +45,6 @@ def sanitize_error(error: Exception) -> str:
     return msg
 
 _model = None
-_env_lock = threading.Lock()
 
 
 class QualityPreset(str, Enum):
@@ -208,24 +206,37 @@ def _resolve_service(config: TranslationConfig, fallback: str) -> str:
     return service
 
 
-def _build_env_overrides(
-    service: str, api_key: str, base_url: str, model_name: str
-) -> dict[str, str]:
-    """Build environment variable overrides for the translation service."""
-    overrides: dict[str, str] = {}
-    if service == "deepseek" and api_key:
-        overrides["DEEPSEEK_API_KEY"] = api_key
-        if base_url:
-            overrides["DEEPSEEK_API_URL"] = base_url
+def _build_pdf2zh_envs(
+    service: str, config: TranslationConfig
+) -> dict[str, str | None]:
+    """Build envs dict for pdf2zh's translate() envs parameter.
+
+    Passes API keys directly instead of mutating os.environ,
+    enabling safe concurrent translations with different keys.
+    """
+    envs: dict[str, str | None] = {}
+    api_key = config.api_key
+    model_name = config.model
+
+    if service == "deepseek":
+        # Fall back to environment if config has no key
+        if not api_key:
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        if api_key:
+            envs["DEEPSEEK_API_KEY"] = api_key
         if model_name:
-            overrides["DEEPSEEK_MODEL"] = model_name
-    elif service == "openai" and api_key:
-        overrides["OPENAI_API_KEY"] = api_key
-        if base_url:
-            overrides["OPENAI_BASE_URL"] = base_url
+            envs["DEEPSEEK_MODEL"] = model_name
+    elif service == "openai":
+        if not api_key:
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+        if api_key:
+            envs["OPENAI_API_KEY"] = api_key
+        if config.base_url:
+            envs["OPENAI_BASE_URL"] = config.base_url
         if model_name:
-            overrides["OPENAI_MODEL"] = model_name
-    return overrides
+            envs["OPENAI_MODEL"] = model_name
+
+    return envs
 
 
 def _translate_sync(
@@ -240,95 +251,71 @@ def _translate_sync(
     preset = QUALITY_PRESETS.get(config.quality, QUALITY_PRESETS[QualityPreset.BALANCED])
 
     service = _resolve_service(config, preset["fallback_backend"])
+    envs = _build_pdf2zh_envs(service, config)
 
-    # Resolve API key (may come from config or env)
-    api_key = config.api_key
-    if config.backend in ("deepseek", "openai") and not api_key:
-        env_var = "DEEPSEEK_API_KEY" if config.backend == "deepseek" else "OPENAI_API_KEY"
-        api_key = os.environ.get(env_var, "")
+    # Shared progress state for sync->async communication
+    progress_state: dict[str, float | str] = {"pct": 0.0, "msg": ""}
 
-    env_overrides = _build_env_overrides(service, api_key, config.base_url, config.model)
+    onnx_model = get_model()
+    threads = preset.get("threads", config.threads)
 
-    old_env: dict[str, str | None] = {}
-
-    # Hold lock for entire translation to prevent env var races between
-    # concurrent translations with different API keys
-    with _env_lock:
-        for k, v in env_overrides.items():
-            old_env[k] = os.environ.get(k)
-            os.environ[k] = v
-
-        # Shared progress state for sync->async communication
-        progress_state = {"pct": 0.0, "msg": ""}
-
-        onnx_model = get_model()
-        threads = preset.get("threads", config.threads)
-
-        def pdf2zh_callback(*args):
-            try:
-                if len(args) == 2:
-                    current, total = args
-                    pct = current / total if total > 0 else 0
-                elif len(args) == 1:
-                    pct = args[0]
-                else:
-                    return
-
-                progress_state["pct"] = pct
-                progress_state["msg"] = f"Translating... {pct*100:.0f}%"
-
-                if progress_callback:
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            asyncio.run_coroutine_threadsafe(
-                                progress_callback(pct, progress_state["msg"]),
-                                loop
-                            )
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.debug("Progress callback error: %s", e)
-
+    def pdf2zh_callback(*args):
         try:
-            last_error = None
-            for attempt in range(config.max_retries + 1):
+            if len(args) == 2:
+                current, total = args
+                pct = current / total if total > 0 else 0
+            elif len(args) == 1:
+                pct = args[0]
+            else:
+                return
+
+            progress_state["pct"] = pct
+            progress_state["msg"] = f"Translating... {pct*100:.0f}%"
+
+            if progress_callback:
                 try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            progress_callback(pct, progress_state["msg"]),
+                            loop
+                        )
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug("Progress callback error: %s", e)
 
-                    translate(
-                        files=[str(input_path)],
-                        lang_in=config.lang_in,
-                        lang_out=config.lang_out,
-                        service=service,
-                        output=str(output_dir),
-                        model=onnx_model,
-                        thread=threads,
-                        callback=pdf2zh_callback,
-                        compatible=preset["compatible"],
-                        skip_subset_fonts=preset["skip_subset_fonts"],
-                        prompt=preset["prompt"],
-                        vfont=preset.get("vfont", ""),
-                        vchar=preset.get("vchar", ""),
-                    )
-                    break  # Success
+    last_error = None
+    for attempt in range(config.max_retries + 1):
+        try:
+            translate(
+                files=[str(input_path)],
+                lang_in=config.lang_in,
+                lang_out=config.lang_out,
+                service=service,
+                output=str(output_dir),
+                model=onnx_model,
+                thread=threads,
+                callback=pdf2zh_callback,
+                compatible=preset["compatible"],
+                skip_subset_fonts=preset["skip_subset_fonts"],
+                prompt=preset["prompt"],
+                vfont=preset.get("vfont", ""),
+                vchar=preset.get("vchar", ""),
+                envs=envs or None,
+            )
+            break  # Success
 
-                except Exception as e:
-                    last_error = e
-                    # Clean up partial output files from this attempt
-                    for f in output_dir.glob("*"):
-                        f.unlink()
-                    if attempt < config.max_retries:
-                        logger.warning("Translation attempt %d failed: %s. Retrying...", attempt + 1, e)
-                    else:
-                        logger.error("All translation attempts failed for %s", input_path)
-                        raise
-
-        finally:
-            for k, v in old_env.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+        except Exception as e:
+            last_error = e
+            # Clean up partial output files from this attempt
+            for f in output_dir.glob("*"):
+                f.unlink()
+            if attempt < config.max_retries:
+                logger.warning("Translation attempt %d failed: %s. Retrying...", attempt + 1, e)
+            else:
+                logger.error("All translation attempts failed for %s", input_path)
+                raise
 
     # Find output files
     stem = input_path.stem
