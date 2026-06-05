@@ -6,6 +6,7 @@ import logging
 import re
 import shutil
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
@@ -305,7 +306,8 @@ async def upload_paper(
     while chunk := await file.read(settings.upload_chunk_size):
         total_size += len(chunk)
         if total_size > settings.max_upload_size:
-            raise HTTPException(400, "File too large (max 100MB)")
+            max_mb = settings.max_upload_size // (1024 * 1024)
+            raise HTTPException(400, f"File too large (max {max_mb}MB)")
         chunks.append(chunk)
     content = b"".join(chunks)
 
@@ -580,7 +582,7 @@ async def _do_translate(
 def _create_progress_handler(
     paper_id: str,
     loop: asyncio.AbstractEventLoop,
-) -> callable:
+) -> Callable:
     """Create a progress callback that updates the database."""
     _last_pct: list[float] = [0.0]
 

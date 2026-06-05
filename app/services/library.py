@@ -91,19 +91,18 @@ async def delete_paper_files(paper: Paper) -> None:
         if paper.dual_filename:
             _safe_delete(settings.translations_path, paper.dual_filename)
         # Clean up empty translation output directory
-        if paper.translated_filename or paper.dual_filename:
-            ref_filename = paper.translated_filename or paper.dual_filename
-            if ref_filename:
-                ref_path = (settings.translations_path / ref_filename).resolve()
-                parent = ref_path.parent
-                translations_base = settings.translations_path.resolve()
-                if (
-                    parent != translations_base
-                    and parent.is_relative_to(translations_base)
-                    and parent.is_dir()
-                ):
-                    with contextlib.suppress(OSError):
-                        parent.rmdir()  # only removes if empty
+        ref_filename = paper.translated_filename or paper.dual_filename
+        if ref_filename:
+            ref_path = (settings.translations_path / ref_filename).resolve()
+            parent = ref_path.parent
+            translations_base = settings.translations_path.resolve()
+            if (
+                parent != translations_base
+                and parent.is_relative_to(translations_base)
+                and parent.is_dir()
+            ):
+                with contextlib.suppress(OSError):
+                    parent.rmdir()  # only removes if empty
 
     await asyncio.to_thread(_delete_files)
 
@@ -112,8 +111,9 @@ def _safe_delete(base_dir: Path, filename: str) -> None:
     """Delete a file if it exists and is within the base directory."""
     if not filename:
         return
+    resolved_base = base_dir.resolve()
     file_path = (base_dir / filename).resolve()
-    if not file_path.is_relative_to(base_dir.resolve()):
+    if not file_path.is_relative_to(resolved_base):
         logger.warning("Refusing to delete path outside base dir: %s", filename)
         return
     if file_path.exists():
