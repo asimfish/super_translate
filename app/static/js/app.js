@@ -164,7 +164,7 @@ function renderPaperList() {
         <span>${formatSize(p.file_size)}</span>
         <span>${formatDate(p.created_at)}</span>
       </div>
-      <span class="status status-${p.translation_status}">${statusLabel(p.translation_status)}</span>
+      <span class="status status-${sanitizeClass(p.translation_status)}">${statusLabel(p.translation_status)}</span>
       ${p.tags ? `<div class="meta" style="margin-top:6px">🏷 ${esc(p.tags)}</div>` : ''}
       <div class="actions" data-action="stop-propagation">
         ${p.translation_status === 'pending' || p.translation_status === 'failed' ?
@@ -706,6 +706,10 @@ function esc(s) {
   return d.innerHTML.replace(/'/g, '&#39;');
 }
 
+function sanitizeClass(s) {
+  return String(s || '').replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -721,7 +725,7 @@ function formatDate(iso) {
 
 function statusLabel(s) {
   const map = { pending: '待翻译', translating: '翻译中', completed: '已完成', failed: '失败' };
-  return map[s] || s;
+  return map[s] || esc(s);
 }
 
 // === Event Delegation ===
