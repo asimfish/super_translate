@@ -435,6 +435,10 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
                 logger.exception("Translation crashed for paper %s", paper_id)
                 paper.translation_status = TranslationStatus.FAILED.value
                 paper.translation_error = _sanitize_error(e)
+                # Clean up partial output files
+                import shutil
+                if output_dir.exists():
+                    shutil.rmtree(output_dir, ignore_errors=True)
                 await db.commit()
                 return
 
@@ -449,6 +453,10 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
             else:
                 paper.translation_status = TranslationStatus.FAILED.value
                 paper.translation_error = trans_result.error
+                # Clean up partial output files on failure
+                import shutil
+                if output_dir.exists():
+                    shutil.rmtree(output_dir, ignore_errors=True)
                 logger.error("Translation failed for paper %s: %s", paper_id, trans_result.error)
 
             await db.commit()
