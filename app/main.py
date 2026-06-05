@@ -33,7 +33,7 @@ async def _recover_stuck_translations() -> None:
     On startup, any paper with translation_status='translating' is marked
     as failed, since the translation process no longer exists.
     """
-    from sqlalchemy import select, update
+    from sqlalchemy import select
     from app.core.database import async_session
     from app.models.paper import Paper
 
