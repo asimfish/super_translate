@@ -777,6 +777,20 @@ class TestSanitizeError(unittest.TestCase):
         self.assertNotIn("abc123xyz", result)
         self.assertIn("[redacted]", result)
 
+    def test_removes_aws_access_key(self):
+        from app.services.translator import sanitize_error
+        err = Exception("AWS error with key AKIAIOSFODNN7EXAMPLE")
+        result = sanitize_error(err)
+        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", result)
+        self.assertIn("[redacted]", result)
+
+    def test_removes_github_token(self):
+        from app.services.translator import sanitize_error
+        err = Exception("GitHub auth failed: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef12")
+        result = sanitize_error(err)
+        self.assertNotIn("ghp_ABCDEF", result)
+        self.assertIn("[redacted]", result)
+
 
 class TestResolveService(unittest.TestCase):
     """Test _resolve_service function."""

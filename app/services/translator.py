@@ -24,6 +24,10 @@ def sanitize_error(error: Exception) -> str:
     msg = re.sub(r"Bearer\s+\S+", "Bearer [redacted]", msg, flags=re.IGNORECASE)
     msg = re.sub(r"(?i)(api[_-]?key|token|secret)\s*[=:]\s*\S+", r"\1=[redacted]", msg)
     msg = re.sub(r"\bsk-[a-zA-Z0-9_-]{8,}", "[redacted]", msg)
+    # AWS access keys
+    msg = re.sub(r"\bAKIA[0-9A-Z]{16}\b", "[redacted]", msg)
+    # GitHub tokens
+    msg = re.sub(r"\bgh[pousr]_[a-zA-Z0-9]{20,}\b", "[redacted]", msg)
     # Remove env var assignments that look like secrets
     msg = re.sub(r"\b[A-Z_]+(?:API_KEY|SECRET|TOKEN|PASSWORD)=[^\s,;]+", "[redacted]", msg)
     # Remove file paths (Unix and Windows)
