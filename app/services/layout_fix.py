@@ -11,7 +11,6 @@ import re
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,7 @@ PAGE_MARGIN_BOTTOM = 50.0  # ignore blocks in bottom margin (footers)
 @dataclass
 class TextBlockInfo:
     """Extracted info for a single text block."""
-    bbox: Tuple[float, float, float, float]
+    bbox: tuple[float, float, float, float]
     text: str
     avg_font_size: float
     block_index: int
@@ -104,7 +103,7 @@ def _fix_page_layout(page: object) -> int:
 
     # Find blocks that need fixing
     page_height = page.rect.height
-    to_fix: List[TextBlockInfo] = []
+    to_fix: list[TextBlockInfo] = []
     for block in blocks:
         if _needs_fix(block, left_margin, col_width, page_height):
             to_fix.append(block)
@@ -115,7 +114,6 @@ def _fix_page_layout(page: object) -> int:
     # Fix each block
     fixed_count = 0
     font_name = _find_chinese_font(page)
-    page_height = page.rect.height
 
     for block in to_fix:
         text = block.text.strip()
@@ -207,20 +205,20 @@ def _fix_page_layout(page: object) -> int:
     return fixed_count
 
 
-def _extract_text_blocks(page: object) -> List[TextBlockInfo]:
+def _extract_text_blocks(page: object) -> list[TextBlockInfo]:
     """Extract text blocks with font size info from a page."""
-    blocks: List[TextBlockInfo] = []
+    blocks: list[TextBlockInfo] = []
     page_dict = page.get_text("dict")
 
     for idx, raw_block in enumerate(page_dict.get("blocks", [])):
         if raw_block.get("type") != 0:
             continue
 
-        text_parts: List[str] = []
-        font_sizes: List[float] = []
+        text_parts: list[str] = []
+        font_sizes: list[float] = []
 
         for raw_line in raw_block.get("lines", []):
-            line_parts: List[str] = []
+            line_parts: list[str] = []
             for span in raw_line.get("spans", []):
                 span_text = span.get("text", "").replace(" ", " ")
                 if span_text:
@@ -250,16 +248,16 @@ def _extract_text_blocks(page: object) -> List[TextBlockInfo]:
 
 
 def _analyze_page_layout(
-    blocks: List[TextBlockInfo],
-) -> Tuple[float, float]:
+    blocks: list[TextBlockInfo],
+) -> tuple[float, float]:
     """Analyze text blocks to find dominant left margin and column width.
 
     Returns (left_margin, column_width).
     """
     # Collect x0 and width from blocks that look like body text,
     # weighted by text length (longer blocks are more likely body text)
-    x0_weighted: Dict[float, float] = {}
-    width_values: List[float] = []
+    x0_weighted: dict[float, float] = {}
+    width_values: list[float] = []
 
     for block in blocks:
         x0, y0, x1, y1 = block.bbox
@@ -414,7 +412,7 @@ def _clean_text(text: str) -> str:
     - English references like "Figure 3", "Table 2", "Chapter 5"
     """
     lines = text.split("\n")
-    cleaned: List[str] = []
+    cleaned: list[str] = []
     for line in lines:
         stripped = line.strip()
         # Skip lines that are just line numbers

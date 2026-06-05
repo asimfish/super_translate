@@ -282,9 +282,10 @@ def _translate_sync(
                 pct = args[0]
 
             if pct is not None:
+                pct = max(0.0, min(1.0, pct))
                 logger.debug("Translation progress: %.0f%%", pct * 100)
                 if progress_callback:
-                    progress_callback(min(pct, 1.0))
+                    progress_callback(pct)
         except Exception as e:
             logger.debug("Progress callback error: %s", e)
 
