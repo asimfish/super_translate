@@ -95,7 +95,9 @@ async def add_security_headers(request: Request, call_next):
         "script-src 'self'; "
         "style-src 'self'; "
         "img-src 'self' data:; "
-        "connect-src 'self'"
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'"
     )
     return response
 
