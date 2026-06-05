@@ -113,16 +113,22 @@ def _fix_page_layout(page: object) -> int:
     if not to_fix:
         return 0
 
-    # Fix each block
-    fixed_count = 0
-    font_name = _find_chinese_font(page)
+    # Redact and reinsert
+    _redact_blocks(page, to_fix)
+    return _reinsert_blocks(page, to_fix, left_margin, col_width)
 
-    for block in to_fix:
+
+def _redact_blocks(page: object, blocks: list[TextBlockInfo]) -> None:
+    """Redact text blocks from the page."""
+    try:
+        import fitz
+    except ImportError:
+        return
+
+    for block in blocks:
         text = block.text.strip()
         if not text:
             continue
-
-        # Redact original text
         rect = fitz.Rect(block.bbox)
         page.add_redact_annot(rect, fill=(1, 1, 1))
 
@@ -138,8 +144,23 @@ def _fix_page_layout(page: object) -> int:
     except (TypeError, AttributeError):
         page.apply_redactions()
 
-    # Reinsert text at correct positions
-    for block in to_fix:
+
+def _reinsert_blocks(
+    page: object,
+    blocks: list[TextBlockInfo],
+    left_margin: float,
+    col_width: float,
+) -> int:
+    """Reinsert cleaned text blocks at correct positions. Returns count of blocks reinserted."""
+    try:
+        import fitz
+    except ImportError:
+        return 0
+
+    fixed_count = 0
+    font_name = _find_chinese_font(page)
+
+    for block in blocks:
         text = _clean_text(block.text)
         if not text or len(text) < 2:
             continue
@@ -155,7 +176,6 @@ def _fix_page_layout(page: object) -> int:
             continue
 
         # Skip short fragments that are already at correct x position
-        # (these are likely split text that can't be meaningfully improved)
         block_width = block.bbox[2] - x0
         if abs(x0 - left_margin) <= X0_TOLERANCE and len(text) < 10 and block_width < 80:
             continue
@@ -164,47 +184,58 @@ def _fix_page_layout(page: object) -> int:
         y0 = block.bbox[1]
         y1 = block.bbox[3]
         height = y1 - y0
-        # Ensure minimum height for textbox
         if height < block.avg_font_size * 1.5:
             y1 = y0 + block.avg_font_size * 2.5
         correct_rect = fitz.Rect(left_margin, y0, left_margin + col_width, y1)
 
         # Try to insert with appropriate font size
-        # Use at least 9pt for body text to ensure readability
-        size = max(9.0, min(block.avg_font_size, 12.0))
-        inserted = False
-        while size >= 5.0:
-            shape = page.new_shape()
-            result = shape.insert_textbox(
-                correct_rect,
-                text,
-                fontname=font_name,
-                fontsize=size,
-                color=(0, 0, 0),
-                align=fitz.TEXT_ALIGN_LEFT,
-            )
-            if result >= 0:
-                shape.commit()
-                inserted = True
-                fixed_count += 1
-                break
-            size -= 0.5
-
-        if not inserted:
-            # Fallback: insert at minimum size
-            shape = page.new_shape()
-            shape.insert_textbox(
-                correct_rect,
-                text,
-                fontname=font_name,
-                fontsize=5.0,
-                color=(0, 0, 0),
-                align=fitz.TEXT_ALIGN_LEFT,
-            )
-            shape.commit()
+        if _insert_text_with_fallback(page, correct_rect, text, font_name, block.avg_font_size):
             fixed_count += 1
 
     return fixed_count
+
+
+def _insert_text_with_fallback(
+    page: object,
+    rect: object,
+    text: str,
+    font_name: str,
+    avg_font_size: float,
+) -> bool:
+    """Insert text into rect, trying decreasing font sizes. Returns True if inserted."""
+    try:
+        import fitz
+    except ImportError:
+        return False
+
+    size = max(9.0, min(avg_font_size, 12.0))
+    while size >= 5.0:
+        shape = page.new_shape()
+        result = shape.insert_textbox(
+            rect,
+            text,
+            fontname=font_name,
+            fontsize=size,
+            color=(0, 0, 0),
+            align=fitz.TEXT_ALIGN_LEFT,
+        )
+        if result >= 0:
+            shape.commit()
+            return True
+        size -= 0.5
+
+    # Fallback: insert at minimum size
+    shape = page.new_shape()
+    shape.insert_textbox(
+        rect,
+        text,
+        fontname=font_name,
+        fontsize=5.0,
+        color=(0, 0, 0),
+        align=fitz.TEXT_ALIGN_LEFT,
+    )
+    shape.commit()
+    return True
 
 
 def _extract_text_blocks(page: object) -> list[TextBlockInfo]:
