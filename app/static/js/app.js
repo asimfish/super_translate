@@ -72,9 +72,9 @@ function showLibrary() {
 function showUpload() {
   showView('upload');
   selectedFile = null;
-  document.getElementById('upload-preview').style.display = 'none';
-  document.getElementById('upload-progress').style.display = 'none';
-  document.getElementById('drop-zone').style.display = '';
+  document.getElementById('upload-preview').classList.add('hidden');
+  document.getElementById('upload-progress').classList.add('hidden');
+  document.getElementById('drop-zone').classList.remove('hidden');
   document.getElementById('file-input').value = '';
 }
 
@@ -143,10 +143,10 @@ function renderPaperList() {
 
   if (papers.length === 0) {
     container.innerHTML = '';
-    empty.style.display = '';
+    empty.classList.remove('hidden');
     return;
   }
-  empty.style.display = 'none';
+  empty.classList.add('hidden');
 
   container.innerHTML = papers.map(p => `
     <div class="paper-card" data-paper-id="${esc(p.id)}" data-action="open-reader">
@@ -222,16 +222,16 @@ function handleFileSelect(input) {
 
 function selectFile(file) {
   selectedFile = file;
-  document.getElementById('drop-zone').style.display = 'none';
-  document.getElementById('upload-preview').style.display = '';
+  document.getElementById('drop-zone').classList.add('hidden');
+  document.getElementById('upload-preview').classList.remove('hidden');
   document.getElementById('file-name').textContent = file.name;
   document.getElementById('file-size').textContent = formatSize(file.size);
 }
 
 function cancelUpload() {
   selectedFile = null;
-  document.getElementById('drop-zone').style.display = '';
-  document.getElementById('upload-preview').style.display = 'none';
+  document.getElementById('drop-zone').classList.remove('hidden');
+  document.getElementById('upload-preview').classList.add('hidden');
   document.getElementById('file-input').value = '';
 }
 
@@ -242,8 +242,8 @@ async function doUpload() {
   const fill = document.getElementById('upload-progress-fill');
   const status = document.getElementById('upload-status');
 
-  document.getElementById('upload-preview').style.display = 'none';
-  prog.style.display = '';
+  document.getElementById('upload-preview').classList.add('hidden');
+  prog.classList.remove('hidden');
   fill.style.width = '30%';
   status.textContent = '上传中...';
 
@@ -299,17 +299,19 @@ async function openReader(paperId) {
   await loadPdfDocument('original', `/api/papers/${paperId}/view/original`);
 
   if (currentPaper.has_translated) {
-    placeholder.style.display = 'none';
-    document.getElementById('pdf-container-translated').style.display = '';
+    placeholder.classList.add('hidden');
+    document.getElementById('pdf-container-translated').classList.remove('hidden');
     await loadPdfDocument('translated', `/api/papers/${paperId}/view/translated`);
-    document.getElementById('btn-download-mono').style.display = '';
+    document.getElementById('btn-download-mono').classList.remove('hidden');
   } else {
-    placeholder.style.display = '';
-    document.getElementById('pdf-container-translated').style.display = 'none';
-    document.getElementById('btn-download-mono').style.display = 'none';
+    placeholder.classList.remove('hidden');
+    document.getElementById('pdf-container-translated').classList.add('hidden');
+    document.getElementById('btn-download-mono').classList.add('hidden');
   }
 
-  document.getElementById('btn-download-dual').style.display = currentPaper.has_dual ? '' : 'none';
+  currentPaper.has_dual
+    ? document.getElementById('btn-download-dual').classList.remove('hidden')
+    : document.getElementById('btn-download-dual').classList.add('hidden');
 
   if (currentPaper.translation_status === 'translating') {
     pollTranslationStatus(paperId);
@@ -557,7 +559,7 @@ function pollTranslationStatus(paperId) {
   const statusEl = document.getElementById('trans-status');
   const percentEl = document.getElementById('trans-percent');
   const logEl = document.getElementById('trans-log');
-  prog.style.display = '';
+  prog.classList.remove('hidden');
   if (logEl) logEl.innerHTML = '';
   addTransLog('开始翻译...');
 
@@ -574,7 +576,7 @@ function pollTranslationStatus(paperId) {
         statusEl.textContent = '翻译完成';
         addTransLog('翻译完成！', 'success');
         setTimeout(() => {
-          prog.style.display = 'none';
+          prog.classList.add('hidden');
           if (currentPaper && currentPaper.id === paperId) {
             openReader(paperId);
           }

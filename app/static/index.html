@@ -43,7 +43,7 @@
       </div>
       <div id="paper-list" class="paper-grid"></div>
       <div id="pagination"></div>
-      <div id="empty-state" class="empty-state" style="display:none">
+      <div id="empty-state" class="empty-state hidden">
         <div class="empty-icon">📚</div>
         <h3>还没有论文</h3>
         <p>上传英文 PDF 开始使用</p>
@@ -64,7 +64,7 @@
             <input type="file" id="file-input" accept=".pdf" hidden data-action="handle-file-select">
           </label>
         </div>
-        <div id="upload-preview" class="upload-preview" style="display:none">
+        <div id="upload-preview" class="upload-preview hidden">
           <div class="file-info">
             <span id="file-name"></span>
             <span id="file-size"></span>
@@ -75,7 +75,7 @@
             <button class="btn btn-outline" data-action="cancel-upload">取消</button>
           </div>
         </div>
-        <div id="upload-progress" style="display:none">
+        <div id="upload-progress" class="hidden">
           <div class="progress-bar"><div class="progress-fill" id="upload-progress-fill"></div></div>
           <span id="upload-status">上传中...</span>
         </div>
@@ -97,8 +97,8 @@
             <button class="btn btn-sm btn-primary" id="btn-translate" data-action="start-translate">翻译</button>
           </div>
           <button class="btn btn-sm btn-primary" id="btn-sync-scroll" data-action="toggle-sync-scroll">同步滚动: 开</button>
-          <button class="btn btn-sm" id="btn-download-mono" data-action="download-translated" style="display:none">下载译文</button>
-          <button class="btn btn-sm" id="btn-download-dual" data-action="download-dual" style="display:none">下载双语</button>
+          <button class="btn btn-sm hidden" id="btn-download-mono" data-action="download-translated">下载译文</button>
+          <button class="btn btn-sm hidden" id="btn-download-dual" data-action="download-dual">下载双语</button>
         </div>
       </div>
       <div class="reader-body">
@@ -118,7 +118,7 @@
         </div>
       </div>
       <!-- Translation Progress Panel -->
-      <div id="translation-progress" class="translation-progress" style="display:none">
+      <div id="translation-progress" class="translation-progress hidden">
         <div class="progress-header">
           <span id="trans-status">翻译中...</span>
           <span id="trans-percent">0%</span>
