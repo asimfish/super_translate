@@ -5,10 +5,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from app.services.translator import (
+    QUALITY_PRESETS,
     QualityPreset,
     TranslationConfig,
     TranslationResult,
-    QUALITY_PRESETS,
     translate_pdf_sync,
 )
 
@@ -939,7 +939,11 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_jwt_token(self):
         from app.services.translator import sanitize_error
-        jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        jwt = (
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+            ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"
+            ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        )
         err = Exception(f"Auth failed with token {jwt}")
         result = sanitize_error(err)
         self.assertNotIn("eyJhbGci", result)
@@ -981,15 +985,17 @@ class TestResolveService(unittest.TestCase):
         self.assertEqual(_resolve_service(config, "google"), "deepseek")
 
     def test_deepseek_no_key_falls_back(self):
-        from app.services.translator import _resolve_service
         import os
+
+        from app.services.translator import _resolve_service
         os.environ.pop("DEEPSEEK_API_KEY", None)
         config = TranslationConfig(backend="deepseek", api_key="")
         self.assertEqual(_resolve_service(config, "google"), "google")
 
     def test_openai_no_key_falls_back(self):
-        from app.services.translator import _resolve_service
         import os
+
+        from app.services.translator import _resolve_service
         os.environ.pop("OPENAI_API_KEY", None)
         config = TranslationConfig(backend="openai", api_key="")
         self.assertEqual(_resolve_service(config, "deepl"), "deepl")
@@ -1000,8 +1006,9 @@ class TestResolveService(unittest.TestCase):
         self.assertEqual(_resolve_service(config, "google"), "google")
 
     def test_deepl_no_key_falls_back(self):
-        from app.services.translator import _resolve_service
         import os
+
+        from app.services.translator import _resolve_service
         os.environ.pop("DEEPL_API_KEY", None)
         config = TranslationConfig(backend="deepl", api_key="")
         self.assertEqual(_resolve_service(config, "google"), "google")
@@ -1040,8 +1047,9 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
         self.assertEqual(env, {"DEEPSEEK_API_KEY": "key"})
 
     def test_no_api_key_returns_empty(self):
-        from app.services.translator import _build_pdf2zh_envs
         import os
+
+        from app.services.translator import _build_pdf2zh_envs
         os.environ.pop("DEEPSEEK_API_KEY", None)
         config = TranslationConfig(backend="deepseek", api_key="")
         self.assertEqual(_build_pdf2zh_envs("deepseek", config), {})
@@ -1053,8 +1061,9 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
         self.assertEqual(env, {"DEEPL_API_KEY": "dl-key"})
 
     def test_deepl_falls_back_to_env(self):
-        from app.services.translator import _build_pdf2zh_envs
         import os
+
+        from app.services.translator import _build_pdf2zh_envs
         os.environ["DEEPL_API_KEY"] = "env-key"
         config = TranslationConfig(backend="deepl", api_key="")
         env = _build_pdf2zh_envs("deepl", config)
@@ -1068,33 +1077,14 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
         self.assertEqual(env, {"OLLAMA_HOST": "http://localhost:11434"})
 
     def test_ollama_falls_back_to_env(self):
-        from app.services.translator import _build_pdf2zh_envs
         import os
+
+        from app.services.translator import _build_pdf2zh_envs
         os.environ["OLLAMA_HOST"] = "http://remote:11434"
         config = TranslationConfig(backend="ollama", base_url="")
         env = _build_pdf2zh_envs("ollama", config)
         self.assertEqual(env, {"OLLAMA_HOST": "http://remote:11434"})
         os.environ.pop("OLLAMA_HOST", None)
-
-
-class TestTranslationResult(unittest.TestCase):
-    """Test TranslationResult class."""
-
-    def test_success_with_mono_path(self):
-        from app.services.translator import TranslationResult
-        result = TranslationResult(mono_path=Path("/tmp/mono.pdf"))
-        self.assertTrue(result.success)
-        self.assertIsNone(result.error)
-
-    def test_not_success_without_paths(self):
-        from app.services.translator import TranslationResult
-        result = TranslationResult()
-        self.assertFalse(result.success)
-
-    def test_not_success_with_error(self):
-        from app.services.translator import TranslationResult
-        result = TranslationResult(mono_path=Path("/tmp/mono.pdf"), error="fail")
-        self.assertFalse(result.success)
 
     def test_no_output_files_returns_error(self):
         from app.services.translator import TranslationResult

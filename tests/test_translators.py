@@ -5,12 +5,12 @@ from pathlib import Path
 from pdf_zh_translator.translators import (
     CachedTranslator,
     Translator,
-    coerce_translation_list,
     chunked_by_size,
-    normalize_deepseek_chat_url,
+    coerce_translation_list,
     normalize_chat_url,
-    parse_json_translations,
+    normalize_deepseek_chat_url,
     parse_json_string_list,
+    parse_json_translations,
     parse_translation_list,
 )
 

@@ -1,11 +1,12 @@
 """Integration tests for Paper China API endpoints."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.core.database import get_session
+from app.main import app
 from app.models.paper import Paper
 
 
@@ -200,7 +201,14 @@ class TestPaperUploadEndpoint:
 
     def test_upload_valid_pdf(self, client, mock_db):
         # Create a minimal valid PDF
-        pdf_content = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
+        pdf_content = (
+            b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+            b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+            b"3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\n"
+            b"xref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n"
+            b"0000000058 00000 n \n0000000115 00000 n \n"
+            b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
+        )
 
         with patch("app.api.papers.save_uploaded_pdf") as mock_save, \
              patch("app.api.papers.get_pdf_info") as mock_info, \
@@ -212,7 +220,7 @@ class TestPaperUploadEndpoint:
             mock_title.return_value = "Test Paper Title"
 
             # Mock the Paper constructor to return a proper object
-            with patch("app.api.papers.Paper") as MockPaper:
+            with patch("app.api.papers.Paper") as mock_paper_cls:
                 mock_paper = MagicMock()
                 mock_paper.id = "new123456789"
                 mock_paper.title = "Test Paper Title"
@@ -227,7 +235,7 @@ class TestPaperUploadEndpoint:
                 mock_paper.notes = ""
                 mock_paper.created_at = None
                 mock_paper.updated_at = None
-                MockPaper.return_value = mock_paper
+                mock_paper_cls.return_value = mock_paper
 
                 response = client.post(
                     "/api/papers/upload",
@@ -241,7 +249,6 @@ class TestPaperUploadEndpoint:
 
     def test_upload_cleans_file_on_pdf_info_failure(self, mock_db, tmp_path):
         """Test that uploaded file is deleted if get_pdf_info raises."""
-        from fastapi.testclient import TestClient as TC
         pdf_content = b"%PDF-1.4 test"
         stored_path = tmp_path / "stored_test.pdf"
 
@@ -251,7 +258,7 @@ class TestPaperUploadEndpoint:
 
         with patch("app.api.papers.save_uploaded_pdf", side_effect=fake_save), \
              patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")):
-            with TC(app, raise_server_exceptions=False) as c:
+            with TestClient(app, raise_server_exceptions=False) as c:
                 c.post(
                     "/api/papers/upload",
                     files={"file": ("test.pdf", pdf_content, "application/pdf")},
@@ -295,8 +302,9 @@ class TestPaperDetailEndpoint:
             with patch("pathlib.Path.exists", return_value=False):
                 response = client.get(f"/api/papers/{sample_paper.id}")
                 data = response.json()
-                assert 0.0 <= data["translation_progress"] <= 1.0, (
-                    f"Expected clamped progress for input {invalid_val}, got {data['translation_progress']}"
+                prog = data["translation_progress"]
+                assert 0.0 <= prog <= 1.0, (
+                    f"Expected clamped progress for {invalid_val}, got {prog}"
                 )
 
 
@@ -498,7 +506,7 @@ class TestTranslationEndpoint:
             response = client.post(f"/api/papers/{sample_paper.id}/translate?quality=fast")
             assert response.status_code == 200
             # Verify quality param was passed to background task
-            # add_task(func, paper_id, backend, quality) → call_args[0] = (paper_id, backend, quality)
+            # call_args[0] = (paper_id, backend, quality)
             mock_task.assert_called_once()
             call_args = mock_task.call_args[0]
             assert call_args[3] == "fast"  # quality is 4th arg (after func, paper_id, backend)
@@ -813,8 +821,8 @@ class TestHelpers:
         assert _file_exists_safe(tmp_path, "../secret.pdf") is False
 
     def test_file_exists_safe_with_precomputed_base(self, tmp_path):
+
         from app.api.papers import _file_exists_safe
-        from pathlib import Path
         (tmp_path / "test.pdf").write_bytes(b"content")
         resolved = tmp_path.resolve()
         # Precomputed base should work the same
@@ -831,8 +839,9 @@ class TestHelpers:
         assert result.name == "test.pdf"
 
     def test_get_paper_file_missing_attr(self, tmp_path):
-        from app.api.papers import _get_paper_file
         from fastapi import HTTPException
+
+        from app.api.papers import _get_paper_file
         paper = MagicMock()
         paper.stored_filename = None
         with pytest.raises(HTTPException) as exc_info:
@@ -840,8 +849,9 @@ class TestHelpers:
         assert exc_info.value.status_code == 404
 
     def test_get_paper_file_traversal(self, tmp_path):
-        from app.api.papers import _get_paper_file
         from fastapi import HTTPException
+
+        from app.api.papers import _get_paper_file
         paper = MagicMock()
         paper.stored_filename = "../../etc/passwd"
         with pytest.raises(HTTPException) as exc_info:
@@ -1268,7 +1278,9 @@ class TestRunTranslation:
 
         mock_semaphore.acquire.return_value = False
         _run_translation("paper123", "google", "fast")
-        mock_reset.assert_called_once_with("paper123", "Translation queue is busy, please try again later")
+        mock_reset.assert_called_once_with(
+            "paper123", "Translation queue is busy, please try again later"
+        )
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
@@ -1315,8 +1327,8 @@ class TestRunTranslation:
     @patch("app.api.papers.settings")
     def test_unhandled_exception_resets_paper_status(self, mock_settings, mock_translate):
         """Test that an unhandled exception outside _do_translate resets paper status."""
-        from app.api.papers import _run_translation
         import app.api.papers as papers_mod
+        from app.api.papers import _run_translation
 
         paper = MagicMock()
         paper.id = "paper123"
@@ -1324,7 +1336,10 @@ class TestRunTranslation:
         paper.translation_status = "translating"
 
         # Make _resolve_backend_config raise before _do_translate is defined
-        with patch.object(papers_mod, "_resolve_backend_config", side_effect=Exception("Config error")):
+        with patch.object(
+            papers_mod, "_resolve_backend_config",
+            side_effect=Exception("Config error"),
+        ):
             # Need to provide a mock db for the reset path
             reset_db = AsyncMock()
             reset_result = MagicMock()
@@ -1514,8 +1529,7 @@ class TestEnsureDirs:
     """Test directory creation on startup."""
 
     def test_creates_all_directories(self, tmp_path):
-        from app.core.config import Settings
-        from app.core.config import ensure_dirs
+        from app.core.config import Settings, ensure_dirs
 
         settings = Settings(
             base_dir=tmp_path,
@@ -1531,8 +1545,7 @@ class TestEnsureDirs:
         assert (tmp_path / "test_data" / "translations").is_dir()
 
     def test_idempotent(self, tmp_path):
-        from app.core.config import Settings
-        from app.core.config import ensure_dirs
+        from app.core.config import Settings, ensure_dirs
 
         settings = Settings(
             base_dir=tmp_path,
@@ -1576,6 +1589,7 @@ class TestInitDb:
         """Test that init_db creates all tables."""
         from sqlalchemy.ext.asyncio import create_async_engine
         from sqlalchemy.pool import StaticPool
+
         from app.core.database import init_db
 
         test_engine = create_async_engine(
@@ -1589,10 +1603,11 @@ class TestInitDb:
             await init_db()
 
         # Verify tables were created
+        import sqlalchemy as sa
         async with test_engine.connect() as conn:
             result = await conn.run_sync(
                 lambda sync_conn: sync_conn.execute(
-                    __import__("sqlalchemy").text("SELECT name FROM sqlite_master WHERE type='table'")
+                    sa.text("SELECT name FROM sqlite_master WHERE type='table'")
                 ).fetchall()
             )
             table_names = [row[0] for row in result]

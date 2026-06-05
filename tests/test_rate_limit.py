@@ -1,9 +1,10 @@
 """Tests for app.core.rate_limit module."""
 
-import pytest
 from unittest.mock import MagicMock
-from starlette.testclient import TestClient
+
+import pytest
 from fastapi import FastAPI
+from starlette.testclient import TestClient
 
 from app.core.rate_limit import RateLimitMiddleware
 

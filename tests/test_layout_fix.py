@@ -13,6 +13,14 @@ from app.services.layout_fix import (
 )
 
 
+def _tb(bbox, text="text", font_size=10.0, idx=0):
+    """Shorthand for creating TextBlockInfo in tests."""
+    return TextBlockInfo(
+        bbox=bbox, text=text,
+        avg_font_size=font_size, block_index=idx,
+    )
+
+
 class TestIsLineNumberText(unittest.TestCase):
     """Test detection of line number artifacts."""
 
@@ -119,10 +127,10 @@ class TestAnalyzePageLayout(unittest.TestCase):
 
     def test_finds_dominant_left_margin(self):
         blocks = [
-            TextBlockInfo(bbox=(91, 100, 504, 120), text="text1", avg_font_size=10, block_index=0),
-            TextBlockInfo(bbox=(91, 130, 504, 150), text="text2", avg_font_size=10, block_index=1),
-            TextBlockInfo(bbox=(91, 160, 504, 180), text="text3", avg_font_size=10, block_index=2),
-            TextBlockInfo(bbox=(108, 190, 300, 210), text="narrow", avg_font_size=10, block_index=3),
+            _tb((91, 100, 504, 120), "text1"),
+            _tb((91, 130, 504, 150), "text2"),
+            _tb((91, 160, 504, 180), "text3"),
+            _tb((108, 190, 300, 210), "narrow"),
         ]
         left_margin, col_width = _analyze_page_layout(blocks)
         self.assertAlmostEqual(left_margin, 91.0)
@@ -130,8 +138,8 @@ class TestAnalyzePageLayout(unittest.TestCase):
 
     def test_skips_small_blocks(self):
         blocks = [
-            TextBlockInfo(bbox=(91, 100, 504, 120), text="text", avg_font_size=10, block_index=0),
-            TextBlockInfo(bbox=(50, 100, 60, 105), text="tiny", avg_font_size=5, block_index=1),
+            _tb((91, 100, 504, 120), "text"),
+            _tb((50, 100, 60, 105), "tiny", font_size=5),
         ]
         left_margin, col_width = _analyze_page_layout(blocks)
         self.assertAlmostEqual(left_margin, 91.0)
@@ -144,8 +152,8 @@ class TestAnalyzePageLayout(unittest.TestCase):
     def test_skips_tiny_font_blocks(self):
         """Blocks with font size < BODY_TEXT_MIN_SIZE are skipped."""
         blocks = [
-            TextBlockInfo(bbox=(91, 100, 504, 120), text="body text", avg_font_size=10, block_index=0),
-            TextBlockInfo(bbox=(50, 100, 504, 120), text="footnote", avg_font_size=5, block_index=1),
+            _tb((91, 100, 504, 120), "body text"),
+            _tb((50, 100, 504, 120), "footnote", font_size=5),
         ]
         left_margin, col_width = _analyze_page_layout(blocks)
         self.assertAlmostEqual(left_margin, 91.0)
@@ -153,8 +161,8 @@ class TestAnalyzePageLayout(unittest.TestCase):
     def test_skips_line_number_text(self):
         """Blocks containing just line numbers are skipped."""
         blocks = [
-            TextBlockInfo(bbox=(91, 100, 504, 120), text="body text", avg_font_size=10, block_index=0),
-            TextBlockInfo(bbox=(50, 100, 60, 120), text="24\n25\n26", avg_font_size=10, block_index=1),
+            _tb((91, 100, 504, 120), "body text"),
+            _tb((50, 100, 60, 120), "24\n25\n26"),
         ]
         left_margin, col_width = _analyze_page_layout(blocks)
         self.assertAlmostEqual(left_margin, 91.0)
@@ -162,9 +170,9 @@ class TestAnalyzePageLayout(unittest.TestCase):
     def test_weights_by_text_length(self):
         """Longer blocks have more influence on dominant left margin."""
         blocks = [
-            TextBlockInfo(bbox=(91, 100, 504, 120), text="short", avg_font_size=10, block_index=0),
-            TextBlockInfo(bbox=(91, 130, 504, 200), text="a" * 200, avg_font_size=10, block_index=1),
-            TextBlockInfo(bbox=(100, 210, 504, 230), text="b" * 200, avg_font_size=10, block_index=2),
+            _tb((91, 100, 504, 120), "short"),
+            _tb((91, 130, 504, 200), "a" * 200),
+            _tb((100, 210, 504, 230), "b" * 200),
         ]
         left_margin, col_width = _analyze_page_layout(blocks)
         # Both x=91 and x=100 have same text length, but x=91 appears first
@@ -175,7 +183,7 @@ class TestNeedsFix(unittest.TestCase):
     """Test block fix detection."""
 
     def _make_block(self, bbox, text="text", font_size=10.0):
-        return TextBlockInfo(bbox=bbox, text=text, avg_font_size=font_size, block_index=0)
+        return _tb(bbox, text, font_size)
 
     def test_normal_block_no_fix(self):
         # Normal block at correct position with full width
@@ -188,8 +196,10 @@ class TestNeedsFix(unittest.TestCase):
         self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
 
     def test_narrow_block_needs_fix(self):
-        # Very narrow block with substantial text
-        block = self._make_block((91, 100, 114, 120), text="This is a paragraph of text")  # width=23
+        # Very narrow block with substantial text (width=23)
+        block = self._make_block(
+            (91, 100, 114, 120), text="This is a paragraph of text"
+        )
         self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
 
     def test_line_number_needs_fix(self):
@@ -479,10 +489,12 @@ class TestFixTranslatedLayout(unittest.TestCase):
 
     def test_fixes_misaligned_blocks(self):
         """Test that misaligned blocks are moved to correct position."""
-        from app.services.layout_fix import fix_translated_layout
-        import tempfile
         import os
+        import tempfile
+
         import fitz
+
+        from app.services.layout_fix import fix_translated_layout
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             path = f.name
@@ -493,11 +505,11 @@ class TestFixTranslatedLayout(unittest.TestCase):
             doc = fitz.open()
             page = doc.new_page(width=612, height=792)
             normal_blocks = [
-                (91, 100, 504, 130, "This is normal body text at the correct margin position for testing."),
-                (91, 140, 504, 170, "Another properly aligned body text block with enough content here."),
-                (91, 180, 504, 210, "Third normal block to establish the page layout pattern correctly."),
-                (91, 220, 504, 250, "Fourth normal block for reliable layout detection of the column."),
-                (91, 260, 504, 290, "Fifth normal block ensures column width is detected properly here."),
+                (91, 100, 504, 130, "Normal body text at the correct margin for testing."),
+                (91, 140, 504, 170, "Another aligned body text block with enough content."),
+                (91, 180, 504, 210, "Third block to establish page layout pattern."),
+                (91, 220, 504, 250, "Fourth block for reliable layout detection."),
+                (91, 260, 504, 290, "Fifth block ensures column width is detected."),
             ]
             for x0, y0, x1, y1, text in normal_blocks:
                 rect = fitz.Rect(x0, y0, x1, y1)
@@ -507,7 +519,10 @@ class TestFixTranslatedLayout(unittest.TestCase):
             # Misaligned block: x0=200, narrow width but fits text
             rect = fitz.Rect(200, 300, 504, 330)
             shape = page.new_shape()
-            shape.insert_textbox(rect, "Misaligned text block that should be fixed to correct position.", fontname="helv", fontsize=10, color=(0, 0, 0))
+            shape.insert_textbox(
+                rect, "Misaligned text that should be fixed.",
+                fontname="helv", fontsize=10, color=(0, 0, 0),
+            )
             shape.commit()
             doc.save(path)
             doc.close()
@@ -519,9 +534,10 @@ class TestFixTranslatedLayout(unittest.TestCase):
 
     def test_no_fix_needed_for_aligned_pdf(self):
         """Test that properly aligned PDFs are not modified."""
-        from app.services.layout_fix import fix_translated_layout
-        import tempfile
         import os
+        import tempfile
+
+        from app.services.layout_fix import fix_translated_layout
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             path = f.name
@@ -542,9 +558,10 @@ class TestFixTranslatedLayout(unittest.TestCase):
 
     def test_output_path_parameter(self):
         """Test that output_path parameter works."""
-        from app.services.layout_fix import fix_translated_layout
-        import tempfile
         import os
+        import tempfile
+
+        from app.services.layout_fix import fix_translated_layout
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             in_path = f.name
@@ -571,10 +588,12 @@ class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
 
     def test_exception_during_processing_closes_doc(self):
         """Exception during page processing closes the document and re-raises."""
-        from app.services.layout_fix import fix_translated_layout
-        import tempfile
         import os
+        import tempfile
+
         import fitz
+
+        from app.services.layout_fix import fix_translated_layout
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             path = f.name
@@ -596,10 +615,12 @@ class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
 
     def test_different_output_path_with_fixes(self):
         """When output_path differs and fixes are made, saves to output_path."""
-        from app.services.layout_fix import fix_translated_layout
-        import tempfile
         import os
+        import tempfile
+
         import fitz
+
+        from app.services.layout_fix import fix_translated_layout
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             in_path = f.name
@@ -611,11 +632,17 @@ class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
             for i in range(5):
                 rect = fitz.Rect(91, 100 + i * 40, 504, 130 + i * 40)
                 shape = page.new_shape()
-                shape.insert_textbox(rect, f"Normal body text block number {i} for layout detection.", fontname="helv", fontsize=10, color=(0, 0, 0))
+                shape.insert_textbox(
+                    rect, f"Normal body text block {i} for detection.",
+                    fontname="helv", fontsize=10, color=(0, 0, 0),
+                )
                 shape.commit()
             rect = fitz.Rect(200, 350, 504, 380)
             shape = page.new_shape()
-            shape.insert_textbox(rect, "Misaligned text that should be fixed by layout fixer.", fontname="helv", fontsize=10, color=(0, 0, 0))
+            shape.insert_textbox(
+                rect, "Misaligned text that should be fixed.",
+                fontname="helv", fontsize=10, color=(0, 0, 0),
+            )
             shape.commit()
             doc.save(in_path)
             doc.close()
