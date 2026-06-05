@@ -134,6 +134,25 @@ class TestExtractTitleFromPdf(unittest.TestCase):
         self.assertIn("Deep Learning", title)
         path.unlink()
 
+    def test_fallback_when_no_large_text(self):
+        """Should fall back to filename when page has only small text."""
+        import fitz
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            path = Path(f.name)
+
+        doc = fitz.open()
+        doc.set_metadata({"title": ""})
+        page = doc.new_page()
+        # Insert small text (font size <= 14)
+        page.insert_text((72, 72), "small", fontsize=10)
+        doc.save(str(path))
+        doc.close()
+
+        title = extract_title_from_pdf(path)
+        self.assertIsInstance(title, str)
+        self.assertGreater(len(title), 0)
+        path.unlink()
+
 
 class TestSaveUploadedPdf:
     """Test PDF upload saving."""
