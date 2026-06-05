@@ -612,7 +612,7 @@ function pollTranslationStatus(paperId) {
     try {
       const paper = await api.getPaper(paperId);
       consecutiveErrors = 0;
-      const pct = Math.round(paper.translation_progress * 100);
+      const pct = Math.round(Math.max(0, Math.min(1, paper.translation_progress)) * 100);
       fill.style.width = `${pct}%`;
       if (percentEl) percentEl.textContent = `${pct}%`;
 
