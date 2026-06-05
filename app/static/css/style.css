@@ -259,22 +259,6 @@ body {
 .trans-log .log-entry.error { color: var(--error); }
 .trans-log .log-entry.success { color: var(--success); }
 
-/* Modal */
-.modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-  display: flex; align-items: center; justify-content: center; z-index: 300;
-}
-.modal {
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 24px; min-width: 320px; max-width: 90vw;
-}
-.modal h3 { margin-bottom: 16px; }
-.modal select {
-  width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border);
-  border-radius: var(--radius); color: var(--text); font-size: 14px; margin-bottom: 16px;
-}
-.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
-
 /* Responsive */
 @media (max-width: 768px) {
   .paper-grid { grid-template-columns: 1fr; }

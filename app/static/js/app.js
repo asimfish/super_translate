@@ -533,42 +533,6 @@ function toggleSyncScroll() {
 }
 
 // === Translation ===
-function showTranslateDialog(paperId) {
-  const dialog = document.createElement('div');
-  dialog.className = 'modal-overlay';
-  dialog.innerHTML = `
-    <div class="modal">
-      <h3>选择翻译引擎</h3>
-      <select id="translate-backend">
-        <option value="google">Google (免费，无需API Key)</option>
-        <option value="deepseek">DeepSeek (需要API Key)</option>
-        <option value="openai">OpenAI (需要API Key)</option>
-        <option value="deepl">DeepL (需要API Key)</option>
-        <option value="ollama">Ollama (本地)</option>
-      </select>
-      <div class="modal-actions">
-        <button class="btn btn-primary" data-action="do-translate-modal" data-paper-id="${esc(paperId)}">开始翻译</button>
-        <button class="btn btn-outline" data-action="close-modal">取消</button>
-      </div>
-    </div>
-  `;
-  dialog.addEventListener('click', (e) => {
-    if (e.target === dialog) dialog.remove();
-  });
-  document.body.appendChild(dialog);
-}
-
-async function doTranslate(paperId, btn) {
-  const backend = document.getElementById('translate-backend').value;
-  btn.closest('.modal-overlay').remove();
-  try {
-    await api.translatePaper(paperId, backend);
-    pollTranslationStatus(paperId);
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
 async function startTranslate() {
   if (!currentPaper) return;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
@@ -808,13 +772,6 @@ const actionHandlers = {
   'go-to-page': (e) => {
     const page = parseInt(e.target.dataset.page, 10);
     if (page > 0) goToPage(page);
-  },
-  'do-translate-modal': (e) => {
-    const id = e.target.closest('[data-paper-id]')?.dataset.paperId;
-    if (id) doTranslate(id, e.target);
-  },
-  'close-modal': (e) => {
-    e.target.closest('.modal-overlay')?.remove();
   },
 };
 
