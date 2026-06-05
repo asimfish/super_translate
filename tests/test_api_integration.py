@@ -922,6 +922,27 @@ class TestHelpers:
             assert config.backend == "ollama"
             assert config.base_url == "http://localhost:11434"
 
+    def test_resolve_backend_config_missing_api_key_raises(self):
+        from fastapi import HTTPException
+
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+        with patch("app.api.papers.settings") as mock_settings, \
+             patch.dict("os.environ", {}, clear=True):
+            mock_settings.deepseek_api_key = ""
+            with pytest.raises(HTTPException) as exc_info:
+                _resolve_backend_config("deepseek", QualityPreset.BALANCED)
+            assert exc_info.value.status_code == 400
+            assert "API key" in exc_info.value.detail
+
+    def test_resolve_backend_config_missing_key_allowed_in_fast_mode(self):
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.deepseek_api_key = ""
+            config = _resolve_backend_config("deepseek", QualityPreset.FAST)
+            assert config.backend == "google"
+
 
 class TestRunTranslation:
     """Test _run_translation background function."""
