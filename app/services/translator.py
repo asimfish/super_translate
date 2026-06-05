@@ -289,7 +289,6 @@ def _translate_sync(
         except Exception as e:
             logger.debug("Progress callback error: %s", e)
 
-    last_error = None
     for attempt in range(config.max_retries + 1):
         try:
             translate(
@@ -311,7 +310,6 @@ def _translate_sync(
             break  # Success
 
         except Exception as e:
-            last_error = e
             # Clean up partial output files from this attempt
             for f in output_dir.glob("*"):
                 f.unlink()
