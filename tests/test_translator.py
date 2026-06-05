@@ -970,6 +970,24 @@ class TestSanitizeError(unittest.TestCase):
         self.assertNotIn("BEGIN RSA", result)
         self.assertIn("[redacted]", result)
 
+    def test_early_truncation_for_redos_prevention(self):
+        from app.services.translator import sanitize_error
+        # A message longer than 500 chars should be truncated before regex processing
+        long_msg = "A" * 600
+        err = Exception(long_msg)
+        result = sanitize_error(err)
+        # Final output is truncated to 200 chars
+        self.assertLessEqual(len(result), 203)  # 200 + "..."
+
+    def test_final_truncation_at_200_chars(self):
+        from app.services.translator import sanitize_error
+        # A message between 200 and 500 chars should be truncated at final stage
+        msg = "B" * 300
+        err = Exception(msg)
+        result = sanitize_error(err)
+        self.assertLessEqual(len(result), 203)  # 200 + "..."
+        self.assertTrue(result.endswith("..."))
+
 
 class TestResolveService(unittest.TestCase):
     """Test _resolve_service function."""

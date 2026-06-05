@@ -161,26 +161,25 @@ async def stats() -> dict[str, int]:
 
     now = time.time()
 
-    # Fast path: return cached result if fresh
     async with _stats_lock:
+        # Return cached result if fresh
         if _stats_cache and (now - _stats_cache_time) < 30:
             return _stats_cache
 
-    async with async_session() as db:
-        total = await db.scalar(select(func.count(Paper.id)))
-        completed = await db.scalar(
-            select(func.count(Paper.id)).where(Paper.translation_status == "completed")
-        )
-        result = {
-            "total_papers": total or 0,
-            "completed_translations": completed or 0,
-        }
+        async with async_session() as db:
+            total = await db.scalar(select(func.count(Paper.id)))
+            completed = await db.scalar(
+                select(func.count(Paper.id)).where(Paper.translation_status == "completed")
+            )
+            result = {
+                "total_papers": total or 0,
+                "completed_translations": completed or 0,
+            }
 
-        async with _stats_lock:
             _stats_cache = result
             _stats_cache_time = now
 
-        return result
+            return result
 
 
 def cli() -> None:

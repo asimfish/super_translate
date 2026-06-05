@@ -64,20 +64,16 @@ def fix_translated_layout(
             if output_path == translated_path:
                 tmp_path = translated_path.with_suffix(".tmp.pdf")
                 doc.save(str(tmp_path), garbage=4, deflate=True)
-                doc.close()
                 tmp_path.replace(translated_path)
             else:
                 doc.save(str(output_path), garbage=4, deflate=True)
-                doc.close()
             logger.info("Layout fix: corrected %d blocks in %s", total_fixed, translated_path)
         else:
             logger.debug("Layout fix: no corrections needed for %s", translated_path)
-            doc.close()
 
         return total_fixed > 0
-    except Exception:
+    finally:
         doc.close()
-        raise
 
 
 def _fix_page_layout(page: object) -> int:
