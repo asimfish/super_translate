@@ -1528,6 +1528,27 @@ class TestEnsureDirs:
         assert (tmp_path / "test_data" / "papers").is_dir()
 
 
+class TestLifespan:
+    """Test FastAPI lifespan context manager."""
+
+    @pytest.mark.asyncio
+    async def test_lifespan_calls_startup_functions(self):
+        """Test that lifespan calls ensure_dirs, init_db, and recover_stuck."""
+        from app.main import lifespan
+
+        with (
+            patch("app.main.ensure_dirs") as mock_dirs,
+            patch("app.main.init_db", new_callable=AsyncMock) as mock_db,
+            patch("app.main._recover_stuck_translations", new_callable=AsyncMock) as mock_recover,
+        ):
+            async with lifespan(MagicMock()):
+                pass
+
+        mock_dirs.assert_called_once()
+        mock_db.assert_awaited_once()
+        mock_recover.assert_awaited_once()
+
+
 class TestInitDb:
     """Test database initialization."""
 
