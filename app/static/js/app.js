@@ -120,7 +120,11 @@ async function updateStats() {
   }
 }
 
+let batchTranslating = false;
+
 async function batchTranslate() {
+  if (batchTranslating) return;
+
   const pending = papers.filter(p => p.translation_status === 'pending' || p.translation_status === 'failed');
   if (pending.length === 0) {
     alert('没有待翻译的论文');
@@ -129,21 +133,26 @@ async function batchTranslate() {
 
   if (!confirm(`确定翻译 ${pending.length} 篇论文？`)) return;
 
+  batchTranslating = true;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
   let success = 0;
   let failed = 0;
 
-  for (const paper of pending) {
-    try {
-      await api.translatePaper(paper.id, '', quality);
-      success++;
-    } catch (e) {
-      failed++;
+  try {
+    for (const paper of pending) {
+      try {
+        await api.translatePaper(paper.id, '', quality);
+        success++;
+      } catch (e) {
+        failed++;
+      }
     }
-  }
 
-  alert(`已提交 ${success} 篇翻译任务${failed > 0 ? `，${failed} 篇提交失败` : ''}。翻译在后台进行中，请稍后刷新查看结果。`);
-  loadPapers();
+    alert(`已提交 ${success} 篇翻译任务${failed > 0 ? `，${failed} 篇提交失败` : ''}。翻译在后台进行中，请稍后刷新查看结果。`);
+    loadPapers();
+  } finally {
+    batchTranslating = false;
+  }
 }
 
 function debounceSearch() {
@@ -261,8 +270,12 @@ function cancelUpload() {
   document.getElementById('file-input').value = '';
 }
 
+let uploading = false;
+
 async function doUpload() {
-  if (!selectedFile) return;
+  if (!selectedFile || uploading) return;
+  uploading = true;
+
   const tags = document.getElementById('upload-tags').value;
   const prog = document.getElementById('upload-progress');
   const fill = document.getElementById('upload-progress-fill');
@@ -282,6 +295,8 @@ async function doUpload() {
   } catch (e) {
     status.textContent = `上传失败: ${e.message}`;
     fill.style.background = 'var(--error)';
+  } finally {
+    uploading = false;
   }
 }
 
