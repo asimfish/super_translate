@@ -85,20 +85,41 @@ async def health():
 
 @app.get("/api/stats")
 async def stats():
+    """Get system statistics with caching.
+
+    Returns cached stats for 30 seconds to reduce database queries.
+    """
+    import time
     from sqlalchemy import select, func
     from app.core.database import async_session
     from app.models.paper import Paper
+
+    # Simple time-based cache
+    now = time.time()
+    if not hasattr(stats, '_cache') or not hasattr(stats, '_cache_time'):
+        stats._cache = None
+        stats._cache_time = 0
+
+    # Return cached result if within 30 seconds
+    if stats._cache and (now - stats._cache_time) < 30:
+        return stats._cache
 
     async with async_session() as db:
         total = await db.scalar(select(func.count(Paper.id)))
         completed = await db.scalar(
             select(func.count(Paper.id)).where(Paper.translation_status == "completed")
         )
-        return {
+        result = {
             "total_papers": total or 0,
             "completed_translations": completed or 0,
             "storage_path": str(settings.base_dir / settings.data_dir),
         }
+
+        # Update cache
+        stats._cache = result
+        stats._cache_time = now
+
+        return result
 
 
 def cli():

@@ -145,7 +145,11 @@ def translate_pdf_sync(
 
     Delegates to _translate_sync which handles API key resolution and fallback.
     """
-    return _translate_sync(input_path, output_dir, config)
+    try:
+        return _translate_sync(input_path, output_dir, config)
+    except Exception as e:
+        logger.exception("Translation failed for %s", input_path)
+        return TranslationResult(error=str(e))
 
 
 def _translate_sync(
