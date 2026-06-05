@@ -1,6 +1,5 @@
 """Translation service using pdf2zh with progress tracking and quality presets."""
 
-import asyncio
 import logging
 import os
 import re
@@ -8,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from string import Template
-from typing import Callable, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +246,6 @@ def _translate_sync(
     input_path: Path,
     output_dir: Path,
     config: TranslationConfig,
-    progress_callback: Optional[Callable] = None,
 ) -> TranslationResult:
     """Synchronous translation via pdf2zh with retry logic."""
     from pdf2zh import translate
@@ -270,18 +268,7 @@ def _translate_sync(
             else:
                 return
 
-            msg = f"Translating... {pct*100:.0f}%"
-
-            if progress_callback:
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            progress_callback(pct, msg),
-                            loop
-                        )
-                except Exception:
-                    pass
+            logger.debug("Translation progress: %.0f%%", pct * 100)
         except Exception as e:
             logger.debug("Progress callback error: %s", e)
 
