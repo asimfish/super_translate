@@ -333,8 +333,16 @@ async def start_translation(
         Success status with translation status
 
     Raises:
-        HTTPException: If paper not found (404) or translation in progress (409)
+        HTTPException: If paper not found (404), translation in progress (409),
+        or invalid backend/quality values (400)
     """
+    valid_backends = {"", "deepseek", "openai", "google", "deepl", "ollama"}
+    valid_qualities = {"fast", "balanced", "quality"}
+    if backend not in valid_backends:
+        raise HTTPException(400, f"Invalid backend: {backend}")
+    if quality not in valid_qualities:
+        raise HTTPException(400, f"Invalid quality: {quality}")
+
     result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:

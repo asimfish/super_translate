@@ -373,6 +373,26 @@ class TestTranslationEndpoint:
             call_args = mock_task.call_args[0]
             assert call_args[3] == "fast"  # quality is 4th arg (after func, paper_id, backend)
 
+    def test_translate_invalid_backend_rejected(self, client, mock_db, sample_paper):
+        sample_paper.translation_status = "pending"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.post(f"/api/papers/{sample_paper.id}/translate?backend=malicious")
+        assert response.status_code == 400
+        assert "Invalid backend" in response.json()["detail"]
+
+    def test_translate_invalid_quality_rejected(self, client, mock_db, sample_paper):
+        sample_paper.translation_status = "pending"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.post(f"/api/papers/{sample_paper.id}/translate?quality=ultra")
+        assert response.status_code == 400
+        assert "Invalid quality" in response.json()["detail"]
+
 
 class TestDownloadEndpoints:
     """Test download endpoints."""
