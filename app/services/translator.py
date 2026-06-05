@@ -14,7 +14,7 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 
-def _sanitize_error(error: Exception) -> str:
+def sanitize_error(error: Exception) -> str:
     """Sanitize error message for user-facing display.
 
     Removes file paths, hostnames, IPs, and internal details that could
@@ -176,7 +176,7 @@ def translate_pdf_sync(
         return _translate_sync(input_path, output_dir, config)
     except Exception as e:
         logger.exception("Translation failed for %s", input_path)
-        return TranslationResult(error=_sanitize_error(e))
+        return TranslationResult(error=sanitize_error(e))
 
 
 def _translate_sync(

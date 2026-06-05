@@ -574,74 +574,74 @@ class TestTranslatePdfSync(unittest.TestCase):
 
 
 class TestSanitizeError(unittest.TestCase):
-    """Test _sanitize_error function."""
+    """Test sanitize_error function."""
 
     def test_removes_unix_paths(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = FileNotFoundError("/Users/admin/project/data/papers/test.pdf not found")
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertNotIn("/Users/admin", result)
         self.assertIn("[path]", result)
 
     def test_removes_windows_paths(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = Exception("Error at C:\\Users\\admin\\file.txt")
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertNotIn("C:\\Users", result)
 
     def test_truncates_long_messages(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = Exception("x" * 500)
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertLessEqual(len(result), 210)  # 200 + "..."
 
     def test_preserves_short_messages(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = ValueError("Invalid format")
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertIn("Invalid format", result)
 
     def test_handles_api_errors(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = Exception("DeepSeek API error: 401 Unauthorized")
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertIn("401", result)
         self.assertIn("Unauthorized", result)
 
     def test_removes_ip_addresses(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = Exception("Timeout connecting to 192.168.1.100:3306")
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertNotIn("192.168.1.100", result)
         self.assertNotIn("3306", result)
         self.assertIn("[ip]", result)
 
     def test_removes_hostnames_with_ports(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = Exception("Connection to api.deepseek.com:443 failed")
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertNotIn("api.deepseek.com", result)
         self.assertIn("[host]", result)
 
     def test_removes_ipv6_bracketed(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = Exception("Connection to [::1]:8080 failed")
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertNotIn("[::1]", result)
         self.assertNotIn("8080", result)
         self.assertIn("[ip]", result)
 
     def test_removes_ipv6_bare(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = Exception("Connection to 2001:db8::1:443 failed")
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertNotIn("2001:db8::1", result)
         self.assertIn("[ip]", result)
 
     def test_removes_localhost_with_port(self):
-        from app.services.translator import _sanitize_error
+        from app.services.translator import sanitize_error
         err = Exception("Connection refused at localhost:8080")
-        result = _sanitize_error(err)
+        result = sanitize_error(err)
         self.assertNotIn("localhost:8080", result)
         self.assertIn("[host]", result)
 
