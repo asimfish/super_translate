@@ -591,7 +591,9 @@ function pollTranslationStatus(paperId) {
   addTransLog('开始翻译...');
 
   const MAX_POLLS = 300; // 10 minutes at 2s intervals
+  const MAX_CONSECUTIVE_ERRORS = 10; // stop after 20s of consecutive failures
   let pollCount = 0;
+  let consecutiveErrors = 0;
 
   translationPollId = setInterval(async () => {
     pollCount++;
@@ -607,6 +609,7 @@ function pollTranslationStatus(paperId) {
 
     try {
       const paper = await api.getPaper(paperId);
+      consecutiveErrors = 0;
       const pct = Math.round(paper.translation_progress * 100);
       fill.style.width = `${pct}%`;
       if (percentEl) percentEl.textContent = `${pct}%`;
@@ -637,7 +640,15 @@ function pollTranslationStatus(paperId) {
         }
       }
     } catch (e) {
-      // keep polling
+      consecutiveErrors++;
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        clearInterval(translationPollId);
+        translationPollId = null;
+        statusEl.textContent = '连接中断';
+        addTransLog('无法连接服务器，请检查网络后重试', 'error');
+        fill.style.background = 'var(--error)';
+        loadPapers();
+      }
     }
   }, 2000);
 }
