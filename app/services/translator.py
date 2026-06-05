@@ -190,29 +190,21 @@ def translate_pdf_sync(
         return TranslationResult(error=sanitize_error(e))
 
 
+_BACKEND_ENV_KEYS = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "deepl": "DEEPL_API_KEY",
+}
+
+
 def _resolve_service(config: TranslationConfig, fallback: str) -> str:
     """Resolve translation service name from config backend."""
-    service_map = {
-        "deepseek": "deepseek",
-        "openai": "openai",
-        "google": "google",
-        "deepl": "deepl",
-        "ollama": "ollama",
-    }
-    service = service_map.get(config.backend, "google")
+    service = config.backend if config.backend in _BACKEND_ENV_KEYS or config.backend in ("google", "ollama") else "google"
 
-    if config.backend == "deepseek" and not config.api_key:
-        if not os.environ.get("DEEPSEEK_API_KEY", ""):
-            logger.warning("No DeepSeek API key, falling back to %s", fallback)
-            return fallback
-    elif config.backend == "openai" and not config.api_key:
-        if not os.environ.get("OPENAI_API_KEY", ""):
-            logger.warning("No OpenAI API key, falling back to %s", fallback)
-            return fallback
-    elif config.backend == "deepl" and not config.api_key:
-        if not os.environ.get("DEEPL_API_KEY", ""):
-            logger.warning("No DeepL API key, falling back to %s", fallback)
-            return fallback
+    env_key = _BACKEND_ENV_KEYS.get(config.backend)
+    if env_key and not config.api_key and not os.environ.get(env_key, ""):
+        logger.warning("No %s, falling back to %s", config.backend, fallback)
+        return fallback
 
     return service
 
