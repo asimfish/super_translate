@@ -1577,7 +1577,7 @@ class TestInitDb:
         """Test that init_db creates all tables."""
         from sqlalchemy.ext.asyncio import create_async_engine
         from sqlalchemy.pool import StaticPool
-        from app.core.database import Base, init_db
+        from app.core.database import init_db
 
         test_engine = create_async_engine(
             "sqlite+aiosqlite://",
