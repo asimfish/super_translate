@@ -145,8 +145,9 @@ def _get_paper_file(
     fname = filename or getattr(paper, file_attr, None)
     if not fname:
         raise HTTPException(404, "File not found")
+    resolved_base = base_dir.resolve()
     file_path = (base_dir / fname).resolve()
-    if not str(file_path).startswith(str(base_dir.resolve())):
+    if not str(file_path).startswith(str(resolved_base)):
         raise HTTPException(403, "Access denied")
     if not file_path.exists():
         raise HTTPException(404, "File not found")
@@ -157,8 +158,9 @@ def _file_exists_safe(base_dir: Path, filename: str | None) -> bool:
     """Check if a file exists safely (no path traversal)."""
     if not filename:
         return False
+    resolved_base = base_dir.resolve()
     file_path = (base_dir / filename).resolve()
-    if not str(file_path).startswith(str(base_dir.resolve())):
+    if not str(file_path).startswith(str(resolved_base)):
         return False
     return file_path.exists()
 
