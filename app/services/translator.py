@@ -177,7 +177,7 @@ def get_model() -> object:
                 logger.info("Loading layout detection model...")
                 _model = OnnxModel.from_pretrained()
                 logger.info("Model loaded")
-    # Return inside lock context to ensure visibility across threads
+            return _model
     return _model
 
 
