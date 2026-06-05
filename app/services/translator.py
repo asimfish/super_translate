@@ -5,11 +5,11 @@ import os
 import re
 import shutil
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from string import Template
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -181,9 +181,9 @@ def get_model() -> object:
 class TranslationResult:
     def __init__(
         self,
-        mono_path: Optional[Path] = None,
-        dual_path: Optional[Path] = None,
-        error: Optional[str] = None,
+        mono_path: Path | None = None,
+        dual_path: Path | None = None,
+        error: str | None = None,
     ):
         self.mono_path = mono_path
         self.dual_path = dual_path
@@ -199,7 +199,7 @@ def translate_pdf_sync(
     input_path: Path,
     output_dir: Path,
     config: TranslationConfig,
-    progress_callback: Optional[callable] = None,
+    progress_callback: Callable | None = None,
 ) -> TranslationResult:
     """Synchronous translation entry point for use in thread pools.
 
@@ -280,7 +280,7 @@ def _translate_sync(
     input_path: Path,
     output_dir: Path,
     config: TranslationConfig,
-    progress_callback: Optional[callable] = None,
+    progress_callback: Callable | None = None,
 ) -> TranslationResult:
     """Synchronous translation via pdf2zh with retry logic."""
     from pdf2zh import translate
@@ -333,8 +333,8 @@ def _translate_sync(
 
 
 def _create_progress_callback(
-    progress_callback: Optional[callable],
-) -> callable:
+    progress_callback: Callable | None,
+) -> Callable:
     """Create a pdf2zh-compatible progress callback."""
     def pdf2zh_callback(*args: object) -> None:
         try:

@@ -207,8 +207,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.FAST,
         )
 
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
+        with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                 result = translate_pdf_sync(
                     Path("/tmp/input.pdf"),
                     Path("/tmp/output"),
@@ -230,8 +230,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
+        with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                 result = translate_pdf_sync(
                     Path("/tmp/input.pdf"),
                     Path("/tmp/output"),
@@ -291,8 +291,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
+        with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                 result = translate_pdf_sync(
                     Path("/tmp/input.pdf"),
                     Path("/tmp/output"),
@@ -318,8 +318,8 @@ class TestTranslatePdfSync(unittest.TestCase):
         try:
             config = TranslationConfig(backend="openai", api_key="", quality=QualityPreset.BALANCED)
 
-            with patch("pathlib.Path.exists", return_value=True):
-                with patch("pathlib.Path.glob", return_value=[]):
+            with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                     translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
             self.assertEqual(captured_envs.get("OPENAI_API_KEY"), "env-key-123")
@@ -347,8 +347,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
+        with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                 translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
         self.assertEqual(captured_envs.get("DEEPSEEK_API_KEY"), "test-key-123")
@@ -375,8 +375,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
+        with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                 translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
         self.assertEqual(captured_envs.get("OPENAI_API_KEY"), "sk-test")
@@ -403,8 +403,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
+        with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                 translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
         self.assertEqual(captured_envs.get("DEEPSEEK_API_KEY"), "ds-key")
@@ -431,8 +431,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             max_retries=2,
         )
 
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
+        with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                 result = translate_pdf_sync(
                     Path("/tmp/input.pdf"),
                     Path("/tmp/output"),
@@ -555,8 +555,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             max_retries=1,
         )
 
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
+        with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                 result = translate_pdf_sync(
                     Path("/tmp/input.pdf"),
                     Path("/tmp/output"),
@@ -801,8 +801,8 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("pathlib.Path.glob", return_value=[]):
+        with patch("pathlib.Path.exists", return_value=True), \
+     patch("pathlib.Path.glob", return_value=[]):
                 translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
         # os.environ should NOT contain the temp key

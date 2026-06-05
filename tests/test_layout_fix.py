@@ -607,9 +607,8 @@ class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
             with unittest.mock.patch(
                 "app.services.layout_fix._fix_page_layout",
                 side_effect=RuntimeError("test error"),
-            ):
-                with self.assertRaises(RuntimeError):
-                    fix_translated_layout(path)
+            ), self.assertRaises(RuntimeError):
+                fix_translated_layout(path)
         finally:
             os.unlink(path)
 

@@ -1,12 +1,12 @@
 """Paper management API routes."""
 
 import asyncio
+import contextlib
 import logging
 import re
 import shutil
 import threading
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -64,7 +64,7 @@ class PaperResponse(BaseModel):
     page_count: int
     translation_status: str
     translation_progress: float
-    translation_error: Optional[str]
+    translation_error: str | None
     tags: str
     notes: str
     has_original: bool
@@ -86,9 +86,9 @@ class PaperListResponse(BaseModel):
 class PaperUpdateRequest(BaseModel):
     """Request model for updating paper metadata."""
 
-    title: Optional[str] = None
-    tags: Optional[str] = None
-    notes: Optional[str] = None
+    title: str | None = None
+    tags: str | None = None
+    notes: str | None = None
 
     @field_validator("title")
     @classmethod
@@ -589,10 +589,8 @@ def _create_progress_handler(
                 if p and p.translation_status == TranslationStatus.TRANSLATING.value:
                     p.translation_progress = pct
                     await p_db.commit()
-        try:
+        with contextlib.suppress(Exception):
             asyncio.run_coroutine_threadsafe(_update(), loop)
-        except Exception:
-            pass  # non-fatal
 
     return _on_progress
 

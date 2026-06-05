@@ -1,6 +1,7 @@
 """Paper library management service."""
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from pathlib import Path
@@ -101,10 +102,8 @@ async def delete_paper_files(paper: Paper) -> None:
                     and parent.is_relative_to(translations_base)
                     and parent.is_dir()
                 ):
-                    try:
+                    with contextlib.suppress(OSError):
                         parent.rmdir()  # only removes if empty
-                    except OSError:
-                        pass  # directory not empty, leave it
 
     await asyncio.to_thread(_delete_files)
 
