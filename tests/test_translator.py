@@ -443,6 +443,21 @@ class TestSanitizeError(unittest.TestCase):
         self.assertNotIn("api.deepseek.com", result)
         self.assertIn("[host]", result)
 
+    def test_removes_ipv6_bracketed(self):
+        from app.services.translator import _sanitize_error
+        err = Exception("Connection to [::1]:8080 failed")
+        result = _sanitize_error(err)
+        self.assertNotIn("[::1]", result)
+        self.assertNotIn("8080", result)
+        self.assertIn("[ip]", result)
+
+    def test_removes_ipv6_bare(self):
+        from app.services.translator import _sanitize_error
+        err = Exception("Connection to 2001:db8::1:443 failed")
+        result = _sanitize_error(err)
+        self.assertNotIn("2001:db8::1", result)
+        self.assertIn("[ip]", result)
+
     def test_removes_localhost_with_port(self):
         from app.services.translator import _sanitize_error
         err = Exception("Connection refused at localhost:8080")
