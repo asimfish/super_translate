@@ -520,11 +520,7 @@ async function doTranslate(paperId, btn) {
   btn.closest('.modal-overlay').remove();
   try {
     await api.translatePaper(paperId, backend);
-    if (currentPaper && currentPaper.id === paperId) {
-      pollTranslationStatus(paperId);
-    } else {
-      pollTranslationStatus(paperId);
-    }
+    pollTranslationStatus(paperId);
   } catch (e) {
     alert(e.message);
   }
