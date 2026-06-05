@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass
 from enum import Enum
@@ -11,6 +12,24 @@ from string import Template
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_error(error: Exception) -> str:
+    """Sanitize error message for user-facing display.
+
+    Removes file paths, stack traces, and internal details that could
+    leak server configuration.
+    """
+    msg = str(error)
+    # Remove file paths (Unix and Windows)
+    msg = re.sub(r"(/[^\s:]+)+", "[path]", msg)
+    msg = re.sub(r"([A-Z]:\\[^\s:]+)+", "[path]", msg)
+    # Remove line numbers from tracebacks
+    msg = re.sub(r'File "[^"]*", line \d+', 'File "[module]"', msg)
+    # Truncate long messages
+    if len(msg) > 200:
+        msg = msg[:200] + "..."
+    return msg
 
 _model = None
 _env_lock = threading.Lock()
@@ -149,7 +168,7 @@ def translate_pdf_sync(
         return _translate_sync(input_path, output_dir, config)
     except Exception as e:
         logger.exception("Translation failed for %s", input_path)
-        return TranslationResult(error=str(e))
+        return TranslationResult(error=_sanitize_error(e))
 
 
 def _translate_sync(

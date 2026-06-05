@@ -279,5 +279,41 @@ class TestTranslatePdfSync(unittest.TestCase):
         self.assertEqual(config.model, "deepseek-v4-pro")
 
 
+class TestSanitizeError(unittest.TestCase):
+    """Test _sanitize_error function."""
+
+    def test_removes_unix_paths(self):
+        from app.services.translator import _sanitize_error
+        err = FileNotFoundError("/Users/admin/project/data/papers/test.pdf not found")
+        result = _sanitize_error(err)
+        self.assertNotIn("/Users/admin", result)
+        self.assertIn("[path]", result)
+
+    def test_removes_windows_paths(self):
+        from app.services.translator import _sanitize_error
+        err = Exception("Error at C:\\Users\\admin\\file.txt")
+        result = _sanitize_error(err)
+        self.assertNotIn("C:\\Users", result)
+
+    def test_truncates_long_messages(self):
+        from app.services.translator import _sanitize_error
+        err = Exception("x" * 500)
+        result = _sanitize_error(err)
+        self.assertLessEqual(len(result), 210)  # 200 + "..."
+
+    def test_preserves_short_messages(self):
+        from app.services.translator import _sanitize_error
+        err = ValueError("Invalid format")
+        result = _sanitize_error(err)
+        self.assertIn("Invalid format", result)
+
+    def test_handles_api_errors(self):
+        from app.services.translator import _sanitize_error
+        err = Exception("DeepSeek API error: 401 Unauthorized")
+        result = _sanitize_error(err)
+        self.assertIn("401", result)
+        self.assertIn("Unauthorized", result)
+
+
 if __name__ == "__main__":
     unittest.main()

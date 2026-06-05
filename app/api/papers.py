@@ -21,7 +21,7 @@ from app.services.library import (
     get_pdf_info,
     save_uploaded_pdf,
 )
-from app.services.translator import QualityPreset, TranslationConfig, translate_pdf_sync
+from app.services.translator import QualityPreset, TranslationConfig, translate_pdf_sync, _sanitize_error
 
 # Limit concurrent translations to prevent resource exhaustion
 _translation_semaphore = threading.Semaphore(2)
@@ -419,7 +419,7 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
             except Exception as e:
                 logger.exception("Translation crashed for paper %s", paper_id)
                 paper.translation_status = TranslationStatus.FAILED.value
-                paper.translation_error = str(e)
+                paper.translation_error = _sanitize_error(e)
                 await db.commit()
                 return
 
