@@ -366,6 +366,37 @@ async def start_translation(
     return {"ok": True, "status": "translating"}
 
 
+def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> TranslationConfig:
+    """Build TranslationConfig from backend name and quality preset.
+
+    Resolves API keys from settings, handles fast-mode override to Google.
+    """
+    api_key = ""
+    base_url = ""
+    model_name = ""
+
+    if backend == "deepseek":
+        api_key = settings.deepseek_api_key
+        model_name = settings.deepseek_model
+    elif backend == "openai":
+        api_key = settings.openai_api_key
+        base_url = settings.openai_base_url
+        model_name = settings.openai_model
+
+    # Fast mode forces Google Translate (no API key needed)
+    if quality_preset == QualityPreset.FAST:
+        backend = "google"
+        api_key = ""
+
+    return TranslationConfig(
+        backend=backend,
+        api_key=api_key,
+        base_url=base_url,
+        model=model_name,
+        quality=quality_preset,
+    )
+
+
 def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
     import asyncio
     from app.core.database import async_session
@@ -374,6 +405,14 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
     if not acquired:
         logger.error("Translation queue full, rejecting paper %s", paper_id)
         return
+
+    quality_map = {
+        "fast": QualityPreset.FAST,
+        "balanced": QualityPreset.BALANCED,
+        "quality": QualityPreset.QUALITY,
+    }
+    quality_preset = quality_map.get(quality, QualityPreset.BALANCED)
+    config = _resolve_backend_config(backend, quality_preset)
 
     async def _do_translate():
         async with async_session() as db:
@@ -386,39 +425,7 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
             input_path = settings.papers_path / paper.stored_filename
             output_dir = settings.translations_path / paper.id
 
-            api_key = ""
-            base_url = ""
-            model_name = ""
-            if backend == "deepseek":
-                api_key = settings.deepseek_api_key
-                model_name = settings.deepseek_model
-            elif backend == "openai":
-                api_key = settings.openai_api_key
-                base_url = settings.openai_base_url
-                model_name = settings.openai_model
-
-            # Map quality string to enum
-            quality_map = {
-                "fast": QualityPreset.FAST,
-                "balanced": QualityPreset.BALANCED,
-                "quality": QualityPreset.QUALITY,
-            }
-            quality_preset = quality_map.get(quality, QualityPreset.BALANCED)
-
-            # Fast mode forces Google Translate (no API key needed)
-            if quality_preset == QualityPreset.FAST:
-                backend = "google"
-                api_key = ""
-
-            logger.info("Starting translation for paper %s (backend=%s, quality=%s, key=%s)", paper_id, backend, quality, "SET" if api_key else "NONE")
-
-            config = TranslationConfig(
-                backend=backend,
-                api_key=api_key,
-                base_url=base_url,
-                model=model_name,
-                quality=quality_preset,
-            )
+            logger.info("Starting translation for paper %s (backend=%s, quality=%s, key=%s)", paper_id, config.backend, quality, "SET" if config.api_key else "NONE")
 
             # Run translation synchronously (this function runs in a background thread
             # via BackgroundTasks, so blocking is fine)

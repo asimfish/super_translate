@@ -625,6 +625,31 @@ class TestHelpers:
             _get_paper_file(paper, "stored_filename", tmp_path)
         assert exc_info.value.status_code == 403
 
+    def test_resolve_backend_config_google(self):
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+        config = _resolve_backend_config("google", QualityPreset.BALANCED)
+        assert config.backend == "google"
+        assert config.api_key == ""
+
+    def test_resolve_backend_config_fast_forces_google(self):
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+        config = _resolve_backend_config("deepseek", QualityPreset.FAST)
+        assert config.backend == "google"
+        assert config.api_key == ""
+
+    def test_resolve_backend_config_deepseek(self):
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.deepseek_api_key = "test-key"
+            mock_settings.deepseek_model = "deepseek-v4"
+            config = _resolve_backend_config("deepseek", QualityPreset.BALANCED)
+            assert config.backend == "deepseek"
+            assert config.api_key == "test-key"
+            assert config.model == "deepseek-v4"
+
 
 class TestRecoverStuckTranslations:
     """Test startup recovery of stuck translations."""
