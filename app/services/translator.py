@@ -26,8 +26,11 @@ def _sanitize_error(error: Exception) -> str:
     msg = re.sub(r"([A-Z]:\\[^\s:]+)+", "[path]", msg)
     # Remove line numbers from tracebacks
     msg = re.sub(r'File "[^"]*", line \d+', 'File "[module]"', msg)
-    # Remove IP addresses (IPv4, with optional port)
+    # Remove IP addresses (IPv4 with optional port, and IPv6)
     msg = re.sub(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?\b", "[ip]", msg)
+    # IPv6: bracketed form [::1]:port or bare form with 2+ colons
+    msg = re.sub(r"\[[0-9a-fA-F:%]+\](?::\d+)?", "[ip]", msg)
+    msg = re.sub(r"(?<![a-zA-Z0-9])[0-9a-fA-F]*(?::[0-9a-fA-F]*){2,}(?:%\w+)?(?::\d+)?(?![a-zA-Z0-9])", "[ip]", msg)
     # Remove hostnames with ports (e.g., api.example.com:443, localhost:8080)
     msg = re.sub(r"\b[a-zA-Z0-9.-]+\.\w{2,}:\d+\b", "[host]", msg)
     msg = re.sub(r"\blocalhost:\d+\b", "[host]", msg)
@@ -240,39 +243,39 @@ def _translate_sync(
         # Shared progress state for sync->async communication
         progress_state = {"pct": 0.0, "msg": ""}
 
+        onnx_model = get_model()
+        threads = preset.get("threads", config.threads)
+
+        def pdf2zh_callback(*args):
+            try:
+                if len(args) == 2:
+                    current, total = args
+                    pct = current / total if total > 0 else 0
+                elif len(args) == 1:
+                    pct = args[0]
+                else:
+                    return
+
+                progress_state["pct"] = pct
+                progress_state["msg"] = f"Translating... {pct*100:.0f}%"
+
+                if progress_callback:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.run_coroutine_threadsafe(
+                                progress_callback(pct, progress_state["msg"]),
+                                loop
+                            )
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug("Progress callback error: %s", e)
+
         try:
             last_error = None
             for attempt in range(config.max_retries + 1):
                 try:
-                    onnx_model = get_model()
-
-                    def pdf2zh_callback(*args):
-                        try:
-                            if len(args) == 2:
-                                current, total = args
-                                pct = current / total if total > 0 else 0
-                            elif len(args) == 1:
-                                pct = args[0]
-                            else:
-                                return
-
-                            progress_state["pct"] = pct
-                            progress_state["msg"] = f"Translating... {pct*100:.0f}%"
-
-                            if progress_callback:
-                                try:
-                                    loop = asyncio.get_event_loop()
-                                    if loop.is_running():
-                                        asyncio.run_coroutine_threadsafe(
-                                            progress_callback(pct, progress_state["msg"]),
-                                            loop
-                                        )
-                                except Exception:
-                                    pass
-                        except Exception as e:
-                            logger.debug("Progress callback error: %s", e)
-
-                    threads = preset.get("threads", config.threads)
 
                     translate(
                         files=[str(input_path)],
