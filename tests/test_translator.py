@@ -642,6 +642,28 @@ class TestTranslatePdfSync(unittest.TestCase):
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
+    def test_no_output_files_returns_error(self, mock_get_model, mock_translate):
+        """Test error when pdf2zh produces no output files."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+
+            config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+
+            result = translate_pdf_sync(
+                Path(tmpdir) / "paper.pdf",
+                output_dir,
+                config,
+            )
+            self.assertFalse(result.success)
+            self.assertIn("no output", result.error)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
     def test_os_environ_not_mutated(self, mock_get_model, mock_translate):
         """Test that os.environ is NOT mutated during translation."""
         import os
