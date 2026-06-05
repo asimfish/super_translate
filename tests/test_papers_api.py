@@ -59,5 +59,20 @@ class TestPaperToResponse(unittest.TestCase):
         self.assertEqual(resp.updated_at, "")
 
 
+class TestGenerateId(unittest.TestCase):
+    """Test paper ID generation."""
+
+    def test_returns_12_char_hex(self):
+        from app.models.paper import generate_id
+        id_str = generate_id()
+        self.assertEqual(len(id_str), 12)
+        self.assertTrue(all(c in '0123456789abcdef' for c in id_str))
+
+    def test_unique_ids(self):
+        from app.models.paper import generate_id
+        ids = {generate_id() for _ in range(100)}
+        self.assertEqual(len(ids), 100)
+
+
 if __name__ == "__main__":
     unittest.main()
