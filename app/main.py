@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 import webbrowser
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.responses import Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.core.config import settings, ensure_dirs
@@ -52,7 +55,7 @@ async def _recover_stuck_translations() -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ensure_dirs()
     await init_db()
     await _recover_stuck_translations()
@@ -83,7 +86,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.middleware("http")
-async def add_security_headers(request: Request, call_next):
+async def add_security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -105,7 +108,7 @@ async def add_security_headers(request: Request, call_next):
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Return 400 for value validation errors, 422 for missing fields."""
     errors = exc.errors()
     if errors:
@@ -127,7 +130,7 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
+async def index() -> HTMLResponse:
     html_path = static_dir / "index.html"
     if html_path.exists():
         return html_path.read_text(encoding="utf-8")
