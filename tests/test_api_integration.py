@@ -1067,3 +1067,40 @@ class TestRecoverStuckTranslations:
             await _recover_stuck_translations()
 
         mock_session.commit.assert_not_awaited()
+
+
+class TestEnsureDirs:
+    """Test directory creation on startup."""
+
+    def test_creates_all_directories(self, tmp_path):
+        from app.core.config import Settings
+        from app.core.config import ensure_dirs
+
+        settings = Settings(
+            base_dir=tmp_path,
+            data_dir="test_data",
+            papers_dir="test_data/papers",
+            translations_dir="test_data/translations",
+        )
+        with patch("app.core.config.settings", settings):
+            ensure_dirs()
+
+        assert (tmp_path / "test_data").is_dir()
+        assert (tmp_path / "test_data" / "papers").is_dir()
+        assert (tmp_path / "test_data" / "translations").is_dir()
+
+    def test_idempotent(self, tmp_path):
+        from app.core.config import Settings
+        from app.core.config import ensure_dirs
+
+        settings = Settings(
+            base_dir=tmp_path,
+            data_dir="test_data",
+            papers_dir="test_data/papers",
+            translations_dir="test_data/translations",
+        )
+        with patch("app.core.config.settings", settings):
+            ensure_dirs()
+            ensure_dirs()  # Should not raise
+
+        assert (tmp_path / "test_data" / "papers").is_dir()
