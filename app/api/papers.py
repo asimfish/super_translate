@@ -485,13 +485,16 @@ def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> Tran
         api_key = ""
     elif backend in _BACKEND_API_KEY_ATTRS:
         # Validate API key is configured (fail fast with clear error)
+        # Check both prefixed (PAPER_CHINA_*) and unprefixed env vars
+        # since _build_pdf2zh_envs falls back to unprefixed names
         attr = _BACKEND_API_KEY_ATTRS[backend]
-        env_key = f"PAPER_CHINA_{attr.upper()}"
-        if not api_key and not os.environ.get(env_key, ""):
+        prefixed_key = f"PAPER_CHINA_{attr.upper()}"
+        unprefixed_key = attr.upper()
+        if not api_key and not os.environ.get(prefixed_key, "") and not os.environ.get(unprefixed_key, ""):
             raise HTTPException(
                 400,
                 f"Backend '{backend}' requires an API key. "
-                f"Set {env_key} in your .env file.",
+                f"Set {prefixed_key} in your .env file.",
             )
 
     return TranslationConfig(
