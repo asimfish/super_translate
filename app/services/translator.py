@@ -211,7 +211,8 @@ _BACKEND_ENV_KEYS = {
 
 def _resolve_service(config: TranslationConfig, fallback: str) -> str:
     """Resolve translation service name from config backend."""
-    service = config.backend if config.backend in _BACKEND_ENV_KEYS or config.backend in ("google", "ollama") else "google"
+    valid_backends = set(_BACKEND_ENV_KEYS) | {"google", "ollama"}
+    service = config.backend if config.backend in valid_backends else "google"
 
     env_key = _BACKEND_ENV_KEYS.get(config.backend)
     if env_key and not config.api_key and not os.environ.get(env_key, ""):
@@ -307,7 +308,10 @@ def _translate_sync(
                 shutil.rmtree(output_dir, ignore_errors=True)
                 output_dir.mkdir(parents=True, exist_ok=True)
             if attempt < config.max_retries:
-                logger.warning("Translation attempt %d failed: %s. Retrying...", attempt + 1, sanitize_error(e))
+                logger.warning(
+                    "Translation attempt %d failed: %s. Retrying...",
+                    attempt + 1, sanitize_error(e),
+                )
             else:
                 logger.error("All translation attempts failed for %s", input_path.name)
                 raise

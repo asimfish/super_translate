@@ -384,7 +384,7 @@ def _is_line_number_text(text: str) -> bool:
         return True
     # Multiple line numbers: "24\n25\n26"
     lines = stripped.split("\n")
-    if len(lines) >= 2 and all(LINE_NUMBER_RE.match(l.strip()) for l in lines):
+    if len(lines) >= 2 and all(LINE_NUMBER_RE.match(line.strip()) for line in lines):
         return True
     return False
 
