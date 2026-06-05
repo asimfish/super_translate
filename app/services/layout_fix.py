@@ -367,13 +367,14 @@ def _has_embedded_line_numbers(text: str) -> bool:
     """Check if text contains line numbers embedded within content.
 
     Detects patterns like:
-    - "text content24" (number at end of line after Chinese/English text)
-    - "text content 24" (number at end with space)
-    - "。35" (number after punctuation on its own line)
+    - "正文内容24" (number directly attached to CJK text)
+    - "正文内容 24" (number after CJK text with space)
+    - "。35" (number after CJK punctuation)
     - "25\ntext content" (standalone number as first line of block)
     Does NOT flag:
     - Citation references: "[26, 27, 28, 25]"
     - Pure section numbers: "1 Introduction"
+    - English references: "Figure 3", "Table 2", "abc24"
     """
     lines = text.split("\n")
     for i, line in enumerate(lines):
@@ -389,10 +390,11 @@ def _has_embedded_line_numbers(text: str) -> bool:
         # Standalone line number as first line: "25\ntext..."
         if i == 0 and re.match(r"^\d{1,3}$", stripped):
             return True
-        # Trailing number after text: "content24", "content 24", "。35"
-        if re.search(r"[^\d\s\[,]\s\d{1,3}$", stripped):
+        # Trailing number after CJK text: "正文内容24", "正文内容 24", "。35"
+        # Only flag when preceded by a CJK character (not English like "Figure 3")
+        if re.search(r"[一-鿿　-〿＀-￯]\s\d{1,3}$", stripped):
             return True
-        if re.search(r"[^\d\s\[,]\d{1,3}$", stripped):
+        if re.search(r"[一-鿿　-〿＀-￯]\d{1,3}$", stripped):
             return True
     return False
 
@@ -406,8 +408,10 @@ def _clean_text(text: str) -> str:
 
     Line numbers appear as:
     - Standalone lines: "24" or "24\n25\n26"
-    - Trailing numbers: "text content24" or "text content 24" → "text content"
-    Does NOT remove leading section numbers like "1 引言".
+    - Trailing numbers attached to CJK text: "正文内容24" → "正文内容"
+    Does NOT remove:
+    - Leading section numbers like "1 引言"
+    - English references like "Figure 3", "Table 2", "Chapter 5"
     """
     lines = text.split("\n")
     cleaned: List[str] = []
@@ -416,10 +420,11 @@ def _clean_text(text: str) -> str:
         # Skip lines that are just line numbers
         if _LINE_NUM_LINE_RE.match(stripped):
             continue
-        # Remove trailing line numbers: "text content24" → "text content"
-        # Also handle space before number: "text content 24" → "text content"
-        # Match: non-digit char + optional space + 1-3 digits at end
-        stripped = re.sub(r"(?<=[^\d])\s?\d{1,3}$", "", stripped).strip()
+        # Remove trailing line numbers directly attached to CJK text
+        # Pattern: CJK char + 1-3 digits at end (no space between)
+        # Matches: "正文内容24" → "正文内容", "。35" → "。"
+        # Does NOT match: "Figure 3" (space before digit), "图 3" (space)
+        stripped = re.sub(r"([一-鿿　-〿＀-￯])\d{1,3}$", r"\1", stripped).strip()
         if stripped:
             cleaned.append(stripped)
     return "\n".join(cleaned)

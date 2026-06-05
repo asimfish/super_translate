@@ -80,12 +80,22 @@ class TestCleanText(unittest.TestCase):
         self.assertEqual(_clean_text("24\n25\n26\n正文内容"), "正文内容")
 
     def test_remove_trailing_numbers(self):
+        # Only strip numbers directly attached to CJK characters (no space)
         self.assertEqual(_clean_text("正文内容24"), "正文内容")
-        self.assertEqual(_clean_text("正文内容 24"), "正文内容")
+        # Numbers with space before them are preserved (could be meaningful)
+        self.assertEqual(_clean_text("正文内容 24"), "正文内容 24")
 
     def test_preserve_section_numbers(self):
         self.assertEqual(_clean_text("1 引言"), "1 引言")
         self.assertEqual(_clean_text("2 相关工作"), "2 相关工作")
+
+    def test_preserve_english_references(self):
+        # English text with trailing numbers should NOT be stripped
+        self.assertEqual(_clean_text("Figure 3"), "Figure 3")
+        self.assertEqual(_clean_text("Table 2"), "Table 2")
+        self.assertEqual(_clean_text("Chapter 5"), "Chapter 5")
+        self.assertEqual(_clean_text("abc24"), "abc24")
+        self.assertEqual(_clean_text("abc 24"), "abc 24")
 
     def test_preserve_citations(self):
         text = "如文献 [1, 2, 3] 所述"
