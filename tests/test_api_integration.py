@@ -906,6 +906,9 @@ class TestRunTranslation:
         mock_settings.papers_path = papers_dir
         mock_settings.translations_path = translations_dir
 
+        # Create the input file so the existence check passes
+        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+
         mock_translate.side_effect = Exception("API error")
 
         with patch("app.core.database.async_session", self._make_async_session_mock(db)):
