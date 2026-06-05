@@ -8,10 +8,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.core.config import settings, ensure_dirs
 from app.core.database import init_db
@@ -94,9 +95,6 @@ async def add_security_headers(request: Request, call_next):
         "connect-src 'self'"
     )
     return response
-
-
-from fastapi.exceptions import RequestValidationError
 
 
 @app.exception_handler(RequestValidationError)
