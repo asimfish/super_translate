@@ -303,28 +303,26 @@ async def upload_paper(
     # Stream upload: write chunks directly to disk to minimize memory usage
     stored_name = generate_stored_filename(file.filename)
     stored_path = settings.papers_path / stored_name
-    total_size = 0
-    first_chunk = True
-    try:
-        def _write_chunks() -> None:
-            nonlocal total_size, first_chunk
-            stored_path.parent.mkdir(parents=True, exist_ok=True)
-            with stored_path.open("wb") as f:
-                while chunk := file.file.read(settings.upload_chunk_size):
-                    total_size += len(chunk)
-                    if total_size > settings.max_upload_size:
-                        max_mb = settings.max_upload_size // (1024 * 1024)
-                        raise HTTPException(400, f"File too large (max {max_mb}MB)")
-                    if first_chunk:
-                        if not chunk[:5].startswith(b'%PDF'):
-                            raise HTTPException(400, "Invalid PDF file (missing PDF header)")
-                        first_chunk = False
-                    f.write(chunk)
 
-        await asyncio.to_thread(_write_chunks)
-    except HTTPException:
-        stored_path.unlink(missing_ok=True)
-        raise
+    def _write_chunks() -> tuple[int, bool]:
+        stored_path.parent.mkdir(parents=True, exist_ok=True)
+        total = 0
+        is_first = True
+        with stored_path.open("wb") as f:
+            while chunk := file.file.read(settings.upload_chunk_size):
+                total += len(chunk)
+                if total > settings.max_upload_size:
+                    max_mb = settings.max_upload_size // (1024 * 1024)
+                    raise HTTPException(400, f"File too large (max {max_mb}MB)")
+                if is_first:
+                    if not chunk[:5].startswith(b'%PDF'):
+                        raise HTTPException(400, "Invalid PDF file (missing PDF header)")
+                    is_first = False
+                f.write(chunk)
+        return total, is_first
+
+    try:
+        total_size, first_chunk = await asyncio.to_thread(_write_chunks)
     except Exception:
         stored_path.unlink(missing_ok=True)
         raise
@@ -588,7 +586,10 @@ async def _do_translate(
             paper.translation_status = TranslationStatus.FAILED.value
             paper.translation_error = sanitize_error(e)
             if output_dir.exists():
-                shutil.rmtree(output_dir, ignore_errors=True)
+                try:
+                    shutil.rmtree(output_dir)
+                except OSError as cleanup_err:
+                    logger.warning("Failed to clean up %s: %s", output_dir, cleanup_err)
             await db.commit()
             return
 

@@ -169,25 +169,20 @@ def get_model() -> object:
     global _model
     if _model is None:
         with _model_lock:
-            # Double-check after acquiring lock
             if _model is None:
                 from pdf2zh.doclayout import OnnxModel
                 logger.info("Loading layout detection model...")
                 _model = OnnxModel.from_pretrained()
                 logger.info("Model loaded")
+    # Return inside lock context to ensure visibility across threads
     return _model
 
 
+@dataclass(frozen=True)
 class TranslationResult:
-    def __init__(
-        self,
-        mono_path: Path | None = None,
-        dual_path: Path | None = None,
-        error: str | None = None,
-    ):
-        self.mono_path = mono_path
-        self.dual_path = dual_path
-        self.error = error
+    mono_path: Path | None = None
+    dual_path: Path | None = None
+    error: str | None = None
 
     @property
     def success(self) -> bool:
@@ -318,7 +313,10 @@ def _translate_sync(
         except Exception as e:
             # Clean up partial output from this attempt (files and subdirs)
             if output_dir.exists():
-                shutil.rmtree(output_dir, ignore_errors=True)
+                try:
+                    shutil.rmtree(output_dir)
+                except OSError as cleanup_err:
+                    logger.warning("Failed to clean up %s: %s", output_dir, cleanup_err)
                 output_dir.mkdir(parents=True, exist_ok=True)
             if attempt < config.max_retries:
                 logger.warning(

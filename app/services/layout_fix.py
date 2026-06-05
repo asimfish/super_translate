@@ -10,6 +10,8 @@ import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
+import fitz
+
 logger = logging.getLogger(__name__)
 
 # Thresholds
@@ -44,12 +46,6 @@ def fix_translated_layout(
     Returns:
         True if any blocks were fixed, False otherwise.
     """
-    try:
-        import fitz
-    except ImportError:
-        logger.warning("PyMuPDF not available, skipping layout fix")
-        return False
-
     translated_path = Path(translated_path)
     output_path = translated_path if output_path is None else Path(output_path)
 
@@ -112,11 +108,6 @@ def _fix_page_layout(page: object) -> int:
 
 def _redact_blocks(page: object, blocks: list[TextBlockInfo]) -> None:
     """Redact text blocks from the page."""
-    try:
-        import fitz
-    except ImportError:
-        return
-
     for block in blocks:
         text = block.text.strip()
         if not text:
@@ -143,11 +134,6 @@ def _reinsert_blocks(
     col_width: float,
 ) -> int:
     """Reinsert cleaned text blocks at correct positions. Returns count of blocks reinserted."""
-    try:
-        import fitz
-    except ImportError:
-        return 0
-
     fixed_count = 0
     font_name = _find_chinese_font(page)
 
@@ -194,11 +180,6 @@ def _insert_text_with_fallback(
     avg_font_size: float,
 ) -> bool:
     """Insert text into rect, trying decreasing font sizes. Returns True if inserted."""
-    try:
-        import fitz
-    except ImportError:
-        return False
-
     size = max(9.0, min(avg_font_size, 12.0))
     while size >= 5.0:
         shape = page.new_shape()
