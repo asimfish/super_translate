@@ -423,6 +423,37 @@ class TestDownloadEndpoints:
         response = client.get(f"/api/papers/{sample_paper.id}/download/dual")
         assert response.status_code == 404
 
+    def test_download_original_success(self, client, mock_db, sample_paper, tmp_path):
+        """Test successful original PDF download."""
+        from unittest.mock import patch as _patch
+        sample_paper.stored_filename = "test.pdf"
+        (tmp_path / "test.pdf").write_bytes(b"%PDF-1.4 fake content")
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.papers_path = tmp_path
+            response = client.get(f"/api/papers/{sample_paper.id}/download/original")
+            assert response.status_code == 200
+            assert response.headers["content-type"] == "application/pdf"
+
+    def test_view_original_success(self, client, mock_db, sample_paper, tmp_path):
+        """Test successful original PDF view."""
+        from unittest.mock import patch as _patch
+        sample_paper.stored_filename = "test.pdf"
+        (tmp_path / "test.pdf").write_bytes(b"%PDF-1.4 fake content")
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.papers_path = tmp_path
+            response = client.get(f"/api/papers/{sample_paper.id}/view/original")
+            assert response.status_code == 200
+
 
 class TestStatsEndpoint:
     """Test stats endpoint."""
