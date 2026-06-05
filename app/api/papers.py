@@ -114,6 +114,37 @@ def _paper_to_response(
     )
 
 
+def _get_paper_file(
+    paper: Paper,
+    file_attr: str,
+    base_dir: Path,
+    filename: str | None = None,
+) -> Path:
+    """Resolve and validate a paper file path.
+
+    Args:
+        paper: Paper database object
+        file_attr: Attribute name on paper for the filename (e.g. 'stored_filename')
+        base_dir: Base directory to resolve against
+        filename: Optional explicit filename (falls back to getattr(paper, file_attr))
+
+    Returns:
+        Resolved file path
+
+    Raises:
+        HTTPException: If file not found or path traversal detected
+    """
+    fname = filename or getattr(paper, file_attr, None)
+    if not fname:
+        raise HTTPException(404, "File not found")
+    file_path = (base_dir / fname).resolve()
+    if not str(file_path).startswith(str(base_dir.resolve())):
+        raise HTTPException(403, "Access denied")
+    if not file_path.exists():
+        raise HTTPException(404, "File not found")
+    return file_path
+
+
 @router.get("/", response_model=PaperListResponse)
 async def list_papers(
     search: str = "",
@@ -401,75 +432,49 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
         _translation_semaphore.release()
 
 
-@router.get("/{paper_id}/download/original")
-async def download_original(paper_id: str, db: AsyncSession = Depends(get_session)):
+async def _get_paper_or_404(paper_id: str, db: AsyncSession) -> Paper:
+    """Fetch paper by ID or raise 404."""
     result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:
         raise HTTPException(404, "Paper not found")
-    file_path = (settings.papers_path / paper.stored_filename).resolve()
-    if not str(file_path).startswith(str(settings.papers_path.resolve())):
-        raise HTTPException(403, "Access denied")
-    if not file_path.exists():
-        raise HTTPException(404, "File not found")
+    return paper
+
+
+@router.get("/{paper_id}/download/original")
+async def download_original(paper_id: str, db: AsyncSession = Depends(get_session)):
+    paper = await _get_paper_or_404(paper_id, db)
+    file_path = _get_paper_file(paper, "stored_filename", settings.papers_path)
     return FileResponse(file_path, filename=paper.original_filename, media_type="application/pdf")
 
 
 @router.get("/{paper_id}/download/translated")
 async def download_translated(paper_id: str, db: AsyncSession = Depends(get_session)):
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-    paper = result.scalar_one_or_none()
-    if not paper or not paper.translated_filename:
-        raise HTTPException(404, "Translated PDF not found")
-    file_path = (settings.translations_path / paper.translated_filename).resolve()
-    if not str(file_path).startswith(str(settings.translations_path.resolve())):
-        raise HTTPException(403, "Access denied")
-    if not file_path.exists():
-        raise HTTPException(404, "File not found")
+    paper = await _get_paper_or_404(paper_id, db)
+    file_path = _get_paper_file(paper, "translated_filename", settings.translations_path)
     name = f"{Path(paper.original_filename).stem}_zh.pdf"
     return FileResponse(file_path, filename=name, media_type="application/pdf")
 
 
 @router.get("/{paper_id}/download/dual")
 async def download_dual(paper_id: str, db: AsyncSession = Depends(get_session)):
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-    paper = result.scalar_one_or_none()
-    if not paper or not paper.dual_filename:
-        raise HTTPException(404, "Dual PDF not found")
-    file_path = (settings.translations_path / paper.dual_filename).resolve()
-    if not str(file_path).startswith(str(settings.translations_path.resolve())):
-        raise HTTPException(403, "Access denied")
-    if not file_path.exists():
-        raise HTTPException(404, "File not found")
+    paper = await _get_paper_or_404(paper_id, db)
+    file_path = _get_paper_file(paper, "dual_filename", settings.translations_path)
     name = f"{Path(paper.original_filename).stem}_dual.pdf"
     return FileResponse(file_path, filename=name, media_type="application/pdf")
 
 
 @router.get("/{paper_id}/view/original")
 async def view_original(paper_id: str, db: AsyncSession = Depends(get_session)):
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(404, "Paper not found")
-    file_path = (settings.papers_path / paper.stored_filename).resolve()
-    if not str(file_path).startswith(str(settings.papers_path.resolve())):
-        raise HTTPException(403, "Access denied")
-    if not file_path.exists():
-        raise HTTPException(404, "File not found")
+    paper = await _get_paper_or_404(paper_id, db)
+    file_path = _get_paper_file(paper, "stored_filename", settings.papers_path)
     return FileResponse(file_path, media_type="application/pdf")
 
 
 @router.get("/{paper_id}/view/translated")
 async def view_translated(paper_id: str, db: AsyncSession = Depends(get_session)):
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-    paper = result.scalar_one_or_none()
-    if not paper or not paper.translated_filename:
-        raise HTTPException(404, "Translated PDF not found")
-    file_path = (settings.translations_path / paper.translated_filename).resolve()
-    if not str(file_path).startswith(str(settings.translations_path.resolve())):
-        raise HTTPException(403, "Access denied")
-    if not file_path.exists():
-        raise HTTPException(404, "File not found")
+    paper = await _get_paper_or_404(paper_id, db)
+    file_path = _get_paper_file(paper, "translated_filename", settings.translations_path)
     return FileResponse(file_path, media_type="application/pdf")
 
 

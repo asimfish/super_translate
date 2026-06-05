@@ -1,6 +1,8 @@
 """Main application entry point."""
 
 import logging
+import threading
+import time
 import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +17,11 @@ from app.core.config import settings, ensure_dirs
 from app.core.database import init_db
 from app.core.rate_limit import RateLimitMiddleware
 from app.api.papers import router as papers_router
+
+# Thread-safe stats cache
+_stats_cache: dict | None = None
+_stats_cache_time: float = 0.0
+_stats_lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -88,21 +95,19 @@ async def stats():
     """Get system statistics with caching.
 
     Returns cached stats for 30 seconds to reduce database queries.
+    Thread-safe: uses a module-level lock to prevent race conditions.
     """
-    import time
+    global _stats_cache, _stats_cache_time
     from sqlalchemy import select, func
     from app.core.database import async_session
     from app.models.paper import Paper
 
-    # Simple time-based cache
     now = time.time()
-    if not hasattr(stats, '_cache') or not hasattr(stats, '_cache_time'):
-        stats._cache = None
-        stats._cache_time = 0
 
-    # Return cached result if within 30 seconds
-    if stats._cache and (now - stats._cache_time) < 30:
-        return stats._cache
+    # Fast path: return cached result if fresh
+    with _stats_lock:
+        if _stats_cache and (now - _stats_cache_time) < 30:
+            return _stats_cache
 
     async with async_session() as db:
         total = await db.scalar(select(func.count(Paper.id)))
@@ -115,9 +120,9 @@ async def stats():
             "storage_path": str(settings.base_dir / settings.data_dir),
         }
 
-        # Update cache
-        stats._cache = result
-        stats._cache_time = now
+        with _stats_lock:
+            _stats_cache = result
+            _stats_cache_time = now
 
         return result
 
