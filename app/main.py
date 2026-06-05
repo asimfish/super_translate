@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from app import __version__
 from app.api.papers import router as papers_router
 from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
@@ -64,7 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
 
-app = FastAPI(title="Paper China", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Paper China", version=__version__, lifespan=lifespan)
 
 # CORS for development
 app.add_middleware(
@@ -142,7 +143,7 @@ async def index() -> HTMLResponse:
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.2.0"}
+    return {"status": "ok", "version": __version__}
 
 
 @app.get("/api/stats")

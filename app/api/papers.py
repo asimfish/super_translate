@@ -254,16 +254,25 @@ async def list_papers(
     # Pre-resolve base dirs once to avoid repeated resolve() calls per paper
     papers_base = settings.papers_path.resolve()
     trans_base = settings.translations_path.resolve()
-    paper_responses = []
-    for p in papers:
-        paper_responses.append(_paper_to_response(
-            p,
-            has_original=_file_exists_safe(settings.papers_path, p.stored_filename, papers_base),
-            has_translated=_file_exists_safe(
-                settings.translations_path, p.translated_filename, trans_base
-            ),
-            has_dual=_file_exists_safe(settings.translations_path, p.dual_filename, trans_base),
-        ))
+
+    def _check_files() -> list[PaperResponse]:
+        responses = []
+        for p in papers:
+            responses.append(_paper_to_response(
+                p,
+                has_original=_file_exists_safe(
+                    settings.papers_path, p.stored_filename, papers_base
+                ),
+                has_translated=_file_exists_safe(
+                    settings.translations_path, p.translated_filename, trans_base
+                ),
+                has_dual=_file_exists_safe(
+                    settings.translations_path, p.dual_filename, trans_base
+                ),
+            ))
+        return responses
+
+    paper_responses = await asyncio.to_thread(_check_files)
 
     return PaperListResponse(papers=paper_responses, total=total)
 
@@ -620,14 +629,12 @@ def _update_paper_result(
 
 
 async def _serve_paper_file(
-    paper_id: str,
+    paper: Paper,
     file_attr: str,
     base_dir: Path,
-    db: AsyncSession,
     download_name: str | None = None,
 ) -> FileResponse:
     """Shared helper for download/view endpoints."""
-    paper = await _get_paper_or_404(paper_id, db)
     file_path = _get_paper_file(paper, file_attr, base_dir)
     return FileResponse(file_path, filename=download_name, media_type="application/pdf")
 
@@ -639,7 +646,7 @@ async def download_original(
     """Download the original PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     return await _serve_paper_file(
-        paper_id, "stored_filename", settings.papers_path, db, paper.original_filename
+        paper, "stored_filename", settings.papers_path, paper.original_filename
     )
 
 
@@ -651,7 +658,7 @@ async def download_translated(
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_zh.pdf"
     return await _serve_paper_file(
-        paper_id, "translated_filename", settings.translations_path, db, name
+        paper, "translated_filename", settings.translations_path, name
     )
 
 
@@ -660,19 +667,21 @@ async def download_dual(paper_id: str, db: AsyncSession = Depends(get_session)) 
     """Download the dual-language PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_dual.pdf"
-    return await _serve_paper_file(paper_id, "dual_filename", settings.translations_path, db, name)
+    return await _serve_paper_file(paper, "dual_filename", settings.translations_path, name)
 
 
 @router.get("/{paper_id}/view/original")
 async def view_original(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
     """View the original PDF file in browser."""
-    return await _serve_paper_file(paper_id, "stored_filename", settings.papers_path, db)
+    paper = await _get_paper_or_404(paper_id, db)
+    return await _serve_paper_file(paper, "stored_filename", settings.papers_path)
 
 
 @router.get("/{paper_id}/view/translated")
 async def view_translated(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
     """View the translated PDF file in browser."""
-    return await _serve_paper_file(paper_id, "translated_filename", settings.translations_path, db)
+    paper = await _get_paper_or_404(paper_id, db)
+    return await _serve_paper_file(paper, "translated_filename", settings.translations_path)
 
 
 @router.patch("/{paper_id}")
