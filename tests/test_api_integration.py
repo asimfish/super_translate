@@ -746,6 +746,178 @@ class TestHelpers:
             assert config.model == "deepseek-v4"
 
 
+class TestRunTranslation:
+    """Test _run_translation background function."""
+
+    def _make_async_session_mock(self, db_mock):
+        """Create a mock async_session factory that yields db_mock."""
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=db_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        return MagicMock(return_value=ctx)
+
+    def _setup_db_mock(self, paper):
+        """Create a mock DB session that returns the given paper."""
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = paper
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=mock_result)
+        db.commit = AsyncMock()
+        return db
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_successful_translation(self, mock_settings, mock_translate, tmp_path):
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translated_filename = None
+        paper.dual_filename = None
+        paper.translation_status = "pending"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        mono_path.parent.mkdir(parents=True)
+        mono_path.write_bytes(b"translated")
+        mock_translate.return_value = TranslationResult(mono_path=mono_path)
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("paper123", "google", "fast")
+
+        assert paper.translation_status == "completed"
+        assert paper.translation_progress == 1.0
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_paper_not_found(self, mock_settings, mock_translate):
+        from app.api.papers import _run_translation
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=mock_result)
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("nonexistent", "google", "fast")
+
+        mock_translate.assert_not_called()
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_translation_exception_sets_failed(self, mock_settings, mock_translate, tmp_path):
+        from app.api.papers import _run_translation
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translation_status = "translating"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        mock_translate.side_effect = Exception("API error")
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("paper123", "deepseek", "balanced")
+
+        assert paper.translation_status == "failed"
+        assert paper.translation_error is not None
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_translation_failure_cleans_up(self, mock_settings, mock_translate, tmp_path):
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translation_status = "translating"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        partial_dir = translations_dir / "paper123"
+        partial_dir.mkdir()
+        (partial_dir / "partial.pdf").write_bytes(b"partial")
+
+        mock_translate.return_value = TranslationResult(error="Translation failed")
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("paper123", "deepseek", "balanced")
+
+        assert paper.translation_status == "failed"
+        assert not partial_dir.exists()
+
+    @patch("app.api.papers._translation_semaphore")
+    def test_semaphore_timeout(self, mock_semaphore):
+        from app.api.papers import _run_translation
+
+        mock_semaphore.acquire.return_value = False
+        _run_translation("paper123", "google", "fast")
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_dual_path_stored(self, mock_settings, mock_translate, tmp_path):
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translated_filename = None
+        paper.dual_filename = None
+        paper.translation_status = "pending"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        out_dir = translations_dir / "paper123"
+        out_dir.mkdir()
+        mono = out_dir / "test-mono.pdf"
+        dual = out_dir / "test-dual.pdf"
+        mono.write_bytes(b"mono")
+        dual.write_bytes(b"dual")
+
+        mock_translate.return_value = TranslationResult(mono_path=mono, dual_path=dual)
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("paper123", "google", "fast")
+
+        assert paper.translation_status == "completed"
+        assert paper.translated_filename is not None
+        assert paper.dual_filename is not None
+
+
 class TestRecoverStuckTranslations:
     """Test startup recovery of stuck translations."""
 
