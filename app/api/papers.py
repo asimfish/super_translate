@@ -572,41 +572,47 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
         _translation_semaphore.release()
 
 
+async def _serve_paper_file(
+    paper_id: str,
+    file_attr: str,
+    base_dir: Path,
+    db: AsyncSession,
+    download_name: str | None = None,
+) -> FileResponse:
+    """Shared helper for download/view endpoints."""
+    paper = await _get_paper_or_404(paper_id, db)
+    file_path = _get_paper_file(paper, file_attr, base_dir)
+    return FileResponse(file_path, filename=download_name, media_type="application/pdf")
+
+
 @router.get("/{paper_id}/download/original")
 async def download_original(paper_id: str, db: AsyncSession = Depends(get_session)):
     paper = await _get_paper_or_404(paper_id, db)
-    file_path = _get_paper_file(paper, "stored_filename", settings.papers_path)
-    return FileResponse(file_path, filename=paper.original_filename, media_type="application/pdf")
+    return await _serve_paper_file(paper_id, "stored_filename", settings.papers_path, db, paper.original_filename)
 
 
 @router.get("/{paper_id}/download/translated")
 async def download_translated(paper_id: str, db: AsyncSession = Depends(get_session)):
     paper = await _get_paper_or_404(paper_id, db)
-    file_path = _get_paper_file(paper, "translated_filename", settings.translations_path)
     name = f"{Path(paper.original_filename).stem}_zh.pdf"
-    return FileResponse(file_path, filename=name, media_type="application/pdf")
+    return await _serve_paper_file(paper_id, "translated_filename", settings.translations_path, db, name)
 
 
 @router.get("/{paper_id}/download/dual")
 async def download_dual(paper_id: str, db: AsyncSession = Depends(get_session)):
     paper = await _get_paper_or_404(paper_id, db)
-    file_path = _get_paper_file(paper, "dual_filename", settings.translations_path)
     name = f"{Path(paper.original_filename).stem}_dual.pdf"
-    return FileResponse(file_path, filename=name, media_type="application/pdf")
+    return await _serve_paper_file(paper_id, "dual_filename", settings.translations_path, db, name)
 
 
 @router.get("/{paper_id}/view/original")
 async def view_original(paper_id: str, db: AsyncSession = Depends(get_session)):
-    paper = await _get_paper_or_404(paper_id, db)
-    file_path = _get_paper_file(paper, "stored_filename", settings.papers_path)
-    return FileResponse(file_path, media_type="application/pdf")
+    return await _serve_paper_file(paper_id, "stored_filename", settings.papers_path, db)
 
 
 @router.get("/{paper_id}/view/translated")
 async def view_translated(paper_id: str, db: AsyncSession = Depends(get_session)):
-    paper = await _get_paper_or_404(paper_id, db)
-    file_path = _get_paper_file(paper, "translated_filename", settings.translations_path)
-    return FileResponse(file_path, media_type="application/pdf")
+    return await _serve_paper_file(paper_id, "translated_filename", settings.translations_path, db)
 
 
 @router.patch("/{paper_id}")
