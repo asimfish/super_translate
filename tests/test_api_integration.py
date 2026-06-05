@@ -392,6 +392,17 @@ class TestPaperUpdateEndpoint:
         )
         assert response.status_code == 200
 
+    def test_update_whitespace_notes_stripped_to_none(self, client, mock_db, sample_paper):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.patch(
+            f"/api/papers/{sample_paper.id}",
+            json={"notes": "   "},
+        )
+        assert response.status_code == 200
+
     def test_update_title_with_leading_trailing_spaces(self, client, mock_db, sample_paper):
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = sample_paper
