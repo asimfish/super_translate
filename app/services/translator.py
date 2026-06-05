@@ -257,9 +257,6 @@ def _translate_sync(
     service = _resolve_service(config, preset["fallback_backend"])
     envs = _build_pdf2zh_envs(service, config)
 
-    # Shared progress state for sync->async communication
-    progress_state: dict[str, float | str] = {"pct": 0.0, "msg": ""}
-
     onnx_model = get_model()
     threads = preset.get("threads", config.threads)
 
@@ -273,15 +270,14 @@ def _translate_sync(
             else:
                 return
 
-            progress_state["pct"] = pct
-            progress_state["msg"] = f"Translating... {pct*100:.0f}%"
+            msg = f"Translating... {pct*100:.0f}%"
 
             if progress_callback:
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         asyncio.run_coroutine_threadsafe(
-                            progress_callback(pct, progress_state["msg"]),
+                            progress_callback(pct, msg),
                             loop
                         )
                 except Exception:

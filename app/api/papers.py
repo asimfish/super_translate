@@ -413,7 +413,6 @@ def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> Tran
 
 def _reset_paper_status(paper_id: str, error_message: str) -> None:
     """Reset a paper's translation status to failed (synchronous, for background threads)."""
-    import asyncio
     from app.core.database import async_session
 
     try:
@@ -437,7 +436,6 @@ def _reset_paper_status(paper_id: str, error_message: str) -> None:
 
 
 def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
-    import asyncio
     from app.core.database import async_session
 
     acquired = _translation_semaphore.acquire(timeout=300)
