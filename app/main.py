@@ -27,10 +27,34 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
+async def _recover_stuck_translations() -> None:
+    """Reset papers stuck in 'translating' status after a crash.
+
+    On startup, any paper with translation_status='translating' is marked
+    as failed, since the translation process no longer exists.
+    """
+    from sqlalchemy import select, update
+    from app.core.database import async_session
+    from app.models.paper import Paper
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(Paper).where(Paper.translation_status == "translating")
+        )
+        stuck = result.scalars().all()
+        if stuck:
+            for paper in stuck:
+                paper.translation_status = "failed"
+                paper.translation_error = "Translation was interrupted (server restart)"
+            await db.commit()
+            logger.info("Recovered %d stuck translation(s)", len(stuck))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_dirs()
     await init_db()
+    await _recover_stuck_translations()
     logger.info("Paper China started at http://localhost:8000")
     yield
 
