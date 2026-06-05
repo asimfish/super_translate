@@ -9,3 +9,4 @@ data/
 .coverage
 htmlcov/
 .pytest_cache/
+.gitnexus

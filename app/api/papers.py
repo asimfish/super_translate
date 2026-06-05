@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -22,7 +22,12 @@ from app.services.library import (
     get_pdf_info,
     save_uploaded_pdf,
 )
-from app.services.translator import QualityPreset, TranslationConfig, translate_pdf_sync, sanitize_error
+from app.services.translator import (
+    QualityPreset,
+    TranslationConfig,
+    sanitize_error,
+    translate_pdf_sync,
+)
 
 # Limit concurrent translations to prevent resource exhaustion
 _translation_semaphore = threading.Semaphore(2)

@@ -12,15 +12,15 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.responses import Response
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
 
-from app.core.config import settings, ensure_dirs
+from app.api.papers import router as papers_router
+from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
 from app.core.rate_limit import RateLimitMiddleware
-from app.api.papers import router as papers_router
 
 # Thread-safe stats cache
 _stats_cache: dict | None = None
@@ -38,6 +38,7 @@ async def _recover_stuck_translations() -> None:
     as failed, since the translation process no longer exists.
     """
     from sqlalchemy import select
+
     from app.core.database import async_session
     from app.models.paper import Paper
 
@@ -150,7 +151,8 @@ async def stats() -> dict[str, int]:
     Thread-safe: uses a module-level lock to prevent race conditions.
     """
     global _stats_cache, _stats_cache_time
-    from sqlalchemy import select, func
+    from sqlalchemy import func, select
+
     from app.core.database import async_session
     from app.models.paper import Paper
 
@@ -179,8 +181,9 @@ async def stats() -> dict[str, int]:
 
 
 def cli():
-    import uvicorn
     import argparse
+
+    import uvicorn
 
     parser = argparse.ArgumentParser(description="Paper China - AI Paper Translation System")
     parser.add_argument("--host", default="127.0.0.1")

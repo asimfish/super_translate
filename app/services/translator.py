@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -55,6 +56,7 @@ def sanitize_error(error: Exception) -> str:
     return msg
 
 _model = None
+_model_lock = threading.Lock()
 
 
 class QualityPreset(str, Enum):
@@ -153,10 +155,13 @@ QUALITY_PRESETS = {
 def get_model() -> object:
     global _model
     if _model is None:
-        from pdf2zh.doclayout import OnnxModel
-        logger.info("Loading layout detection model...")
-        _model = OnnxModel.from_pretrained()
-        logger.info("Model loaded")
+        with _model_lock:
+            # Double-check after acquiring lock
+            if _model is None:
+                from pdf2zh.doclayout import OnnxModel
+                logger.info("Loading layout detection model...")
+                _model = OnnxModel.from_pretrained()
+                logger.info("Model loaded")
     return _model
 
 
