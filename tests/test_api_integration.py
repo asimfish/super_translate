@@ -490,3 +490,52 @@ class TestErrorHandling:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestHelpers:
+    """Test internal helper functions."""
+
+    def test_file_exists_safe_valid(self, tmp_path):
+        from app.api.papers import _file_exists_safe
+        (tmp_path / "test.pdf").write_bytes(b"content")
+        assert _file_exists_safe(tmp_path, "test.pdf") is True
+
+    def test_file_exists_safe_missing(self, tmp_path):
+        from app.api.papers import _file_exists_safe
+        assert _file_exists_safe(tmp_path, "nonexistent.pdf") is False
+
+    def test_file_exists_safe_none(self, tmp_path):
+        from app.api.papers import _file_exists_safe
+        assert _file_exists_safe(tmp_path, None) is False
+
+    def test_file_exists_safe_traversal(self, tmp_path):
+        from app.api.papers import _file_exists_safe
+        # Should reject path traversal even if file exists
+        (tmp_path.parent / "secret.pdf").write_bytes(b"secret")
+        assert _file_exists_safe(tmp_path, "../secret.pdf") is False
+
+    def test_get_paper_file_valid(self, tmp_path):
+        from app.api.papers import _get_paper_file
+        (tmp_path / "test.pdf").write_bytes(b"content")
+        paper = MagicMock()
+        paper.stored_filename = "test.pdf"
+        result = _get_paper_file(paper, "stored_filename", tmp_path)
+        assert result.name == "test.pdf"
+
+    def test_get_paper_file_missing_attr(self, tmp_path):
+        from app.api.papers import _get_paper_file
+        from fastapi import HTTPException
+        paper = MagicMock()
+        paper.stored_filename = None
+        with pytest.raises(HTTPException) as exc_info:
+            _get_paper_file(paper, "stored_filename", tmp_path)
+        assert exc_info.value.status_code == 404
+
+    def test_get_paper_file_traversal(self, tmp_path):
+        from app.api.papers import _get_paper_file
+        from fastapi import HTTPException
+        paper = MagicMock()
+        paper.stored_filename = "../../etc/passwd"
+        with pytest.raises(HTTPException) as exc_info:
+            _get_paper_file(paper, "stored_filename", tmp_path)
+        assert exc_info.value.status_code == 403
