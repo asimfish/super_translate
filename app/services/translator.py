@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 def _sanitize_error(error: Exception) -> str:
     """Sanitize error message for user-facing display.
 
-    Removes file paths, stack traces, and internal details that could
-    leak server configuration.
+    Removes file paths, hostnames, IPs, and internal details that could
+    leak server configuration or network topology.
     """
     msg = str(error)
     # Remove file paths (Unix and Windows)
@@ -26,6 +26,11 @@ def _sanitize_error(error: Exception) -> str:
     msg = re.sub(r"([A-Z]:\\[^\s:]+)+", "[path]", msg)
     # Remove line numbers from tracebacks
     msg = re.sub(r'File "[^"]*", line \d+', 'File "[module]"', msg)
+    # Remove IP addresses (IPv4, with optional port)
+    msg = re.sub(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?\b", "[ip]", msg)
+    # Remove hostnames with ports (e.g., api.example.com:443, localhost:8080)
+    msg = re.sub(r"\b[a-zA-Z0-9.-]+\.\w{2,}:\d+\b", "[host]", msg)
+    msg = re.sub(r"\blocalhost:\d+\b", "[host]", msg)
     # Truncate long messages
     if len(msg) > 200:
         msg = msg[:200] + "..."

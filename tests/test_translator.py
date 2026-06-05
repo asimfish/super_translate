@@ -428,6 +428,28 @@ class TestSanitizeError(unittest.TestCase):
         self.assertIn("401", result)
         self.assertIn("Unauthorized", result)
 
+    def test_removes_ip_addresses(self):
+        from app.services.translator import _sanitize_error
+        err = Exception("Timeout connecting to 192.168.1.100:3306")
+        result = _sanitize_error(err)
+        self.assertNotIn("192.168.1.100", result)
+        self.assertNotIn("3306", result)
+        self.assertIn("[ip]", result)
+
+    def test_removes_hostnames_with_ports(self):
+        from app.services.translator import _sanitize_error
+        err = Exception("Connection to api.deepseek.com:443 failed")
+        result = _sanitize_error(err)
+        self.assertNotIn("api.deepseek.com", result)
+        self.assertIn("[host]", result)
+
+    def test_removes_localhost_with_port(self):
+        from app.services.translator import _sanitize_error
+        err = Exception("Connection refused at localhost:8080")
+        result = _sanitize_error(err)
+        self.assertNotIn("localhost:8080", result)
+        self.assertIn("[host]", result)
+
 
 if __name__ == "__main__":
     unittest.main()
