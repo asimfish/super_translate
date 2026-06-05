@@ -149,7 +149,7 @@ function renderPaperList() {
   empty.style.display = 'none';
 
   container.innerHTML = papers.map(p => `
-    <div class="paper-card" onclick="openReader('${p.id}')">
+    <div class="paper-card" data-paper-id="${esc(p.id)}" data-action="open-reader">
       <div class="title">${esc(p.title)}</div>
       <div class="meta">
         <span>${p.page_count} 页</span>
@@ -158,14 +158,14 @@ function renderPaperList() {
       </div>
       <span class="status status-${p.translation_status}">${statusLabel(p.translation_status)}</span>
       ${p.tags ? `<div class="meta" style="margin-top:6px">🏷 ${esc(p.tags)}</div>` : ''}
-      <div class="actions" onclick="event.stopPropagation()">
+      <div class="actions" data-action="stop-propagation">
         ${p.translation_status === 'pending' || p.translation_status === 'failed' ?
-          `<button class="btn btn-sm btn-primary" onclick="quickTranslate('${p.id}')">翻译</button>` : ''}
+          `<button class="btn btn-sm btn-primary" data-action="quick-translate" data-paper-id="${esc(p.id)}">翻译</button>` : ''}
         ${p.has_translated ?
-          `<button class="btn btn-sm btn-outline" onclick="downloadTranslatedById('${p.id}')">译文</button>` : ''}
+          `<button class="btn btn-sm btn-outline" data-action="download-translated-by-id" data-paper-id="${esc(p.id)}">译文</button>` : ''}
         ${p.has_dual ?
-          `<button class="btn btn-sm btn-outline" onclick="downloadDualById('${p.id}')">双语</button>` : ''}
-        <button class="btn btn-sm btn-outline" onclick="confirmDelete('${p.id}', '${esc(p.title)}')">删除</button>
+          `<button class="btn btn-sm btn-outline" data-action="download-dual-by-id" data-paper-id="${esc(p.id)}">双语</button>` : ''}
+        <button class="btn btn-sm btn-outline" data-action="confirm-delete" data-paper-id="${esc(p.id)}" data-paper-title="${esc(p.title)}">删除</button>
       </div>
     </div>
   `).join('');
@@ -185,11 +185,11 @@ function renderPagination() {
 
   let html = '<div class="pagination-controls">';
   if (currentPage > 1) {
-    html += `<button class="btn btn-sm btn-outline" onclick="goToPage(${currentPage - 1})">上一页</button>`;
+    html += `<button class="btn btn-sm btn-outline" data-action="go-to-page" data-page="${currentPage - 1}">上一页</button>`;
   }
   html += `<span class="pagination-info">${currentPage} / ${totalPages} (${pagination.total} 篇)</span>`;
   if (currentPage < totalPages) {
-    html += `<button class="btn btn-sm btn-outline" onclick="goToPage(${currentPage + 1})">下一页</button>`;
+    html += `<button class="btn btn-sm btn-outline" data-action="go-to-page" data-page="${currentPage + 1}">下一页</button>`;
   }
   html += '</div>';
   container.innerHTML = html;
@@ -507,8 +507,8 @@ function showTranslateDialog(paperId) {
         <option value="openai">OpenAI (需要API Key)</option>
       </select>
       <div class="modal-actions">
-        <button class="btn btn-primary" onclick="doTranslate('${paperId}', this)">开始翻译</button>
-        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">取消</button>
+        <button class="btn btn-primary" data-action="do-translate-modal" data-paper-id="${esc(paperId)}">开始翻译</button>
+        <button class="btn btn-outline" data-action="close-modal">取消</button>
       </div>
     </div>
   `;
@@ -704,10 +704,43 @@ const actionHandlers = {
   'debounce-search': debounceSearch,
   'load-papers': loadPapers,
   'handle-file-select': (e) => handleFileSelect(e.target),
+  'open-reader': (e) => {
+    const id = e.target.closest('[data-paper-id]')?.dataset.paperId;
+    if (id) openReader(id);
+  },
+  'stop-propagation': (e) => e.stopPropagation(),
+  'quick-translate': (e) => {
+    const id = e.target.closest('[data-paper-id]')?.dataset.paperId;
+    if (id) quickTranslate(id);
+  },
+  'download-translated-by-id': (e) => {
+    const id = e.target.closest('[data-paper-id]')?.dataset.paperId;
+    if (id) downloadTranslatedById(id);
+  },
+  'download-dual-by-id': (e) => {
+    const id = e.target.closest('[data-paper-id]')?.dataset.paperId;
+    if (id) downloadDualById(id);
+  },
+  'confirm-delete': (e) => {
+    const el = e.target.closest('[data-paper-id]');
+    if (el) confirmDelete(el.dataset.paperId, el.dataset.paperTitle || '');
+  },
+  'go-to-page': (e) => {
+    const page = parseInt(e.target.dataset.page, 10);
+    if (page > 0) goToPage(page);
+  },
+  'do-translate-modal': (e) => {
+    const id = e.target.closest('[data-paper-id]')?.dataset.paperId;
+    if (id) doTranslate(id, e.target);
+  },
+  'close-modal': (e) => {
+    e.target.closest('.modal-overlay')?.remove();
+  },
 };
 
 document.addEventListener('click', (e) => {
-  const action = e.target.closest('[data-action]')?.dataset.action;
+  const el = e.target.closest('[data-action]');
+  const action = el?.dataset.action;
   if (action && actionHandlers[action]) {
     actionHandlers[action](e);
   }
