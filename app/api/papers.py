@@ -309,6 +309,7 @@ async def upload_paper(
         stored_path.parent.mkdir(parents=True, exist_ok=True)
         total = 0
         is_first = True
+        last_chunk = b""
         with stored_path.open("wb") as f:
             while chunk := file.file.read(settings.upload_chunk_size):
                 total += len(chunk)
@@ -319,7 +320,11 @@ async def upload_paper(
                     if not chunk[:5].startswith(b'%PDF'):
                         raise HTTPException(400, "Invalid PDF file (missing PDF header)")
                     is_first = False
+                last_chunk = chunk
                 f.write(chunk)
+        # Validate PDF structure: check for %%EOF marker in last chunk
+        if not is_first and b"%%EOF" not in last_chunk[-1024:]:
+            raise HTTPException(400, "Invalid PDF file (missing %%EOF marker)")
         return total, is_first
 
     try:
