@@ -31,6 +31,8 @@ _quality_map = {
     "balanced": QualityPreset.BALANCED,
     "quality": QualityPreset.QUALITY,
 }
+_MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
+_UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/papers", tags=["papers"])
@@ -249,9 +251,15 @@ async def upload_paper(
     if len(tags) > 1000:
         raise HTTPException(400, "Tags must be 1000 characters or less")
 
-    content = await file.read()
-    if len(content) > 100 * 1024 * 1024:
-        raise HTTPException(400, "File too large (max 100MB)")
+    # Stream upload to reject oversized files before loading fully into memory
+    chunks: list[bytes] = []
+    total_size = 0
+    while chunk := await file.read(_UPLOAD_CHUNK_SIZE):
+        total_size += len(chunk)
+        if total_size > _MAX_UPLOAD_SIZE:
+            raise HTTPException(400, "File too large (max 100MB)")
+        chunks.append(chunk)
+    content = b"".join(chunks)
 
     # Validate PDF magic bytes
     if not content[:5].startswith(b'%PDF'):
@@ -412,60 +420,81 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
         logger.error("Translation queue full, rejecting paper %s", paper_id)
         return
 
-    quality_preset = _quality_map.get(quality, QualityPreset.BALANCED)
-    config = _resolve_backend_config(backend, quality_preset)
-
-    async def _do_translate():
-        async with async_session() as db:
-            result = await db.execute(select(Paper).where(Paper.id == paper_id))
-            paper = result.scalar_one_or_none()
-            if not paper:
-                logger.error("Paper %s not found for translation", paper_id)
-                return
-
-            input_path = settings.papers_path / paper.stored_filename
-            output_dir = settings.translations_path / paper.id
-
-            logger.info("Starting translation for paper %s (backend=%s, quality=%s, key=%s)", paper_id, config.backend, quality, "SET" if config.api_key else "NONE")
-
-            # Run translation synchronously (this function runs in a background thread
-            # via BackgroundTasks, so blocking is fine)
-            try:
-                trans_result = translate_pdf_sync(input_path, output_dir, config)
-            except Exception as e:
-                logger.exception("Translation crashed for paper %s", paper_id)
-                paper.translation_status = TranslationStatus.FAILED.value
-                paper.translation_error = sanitize_error(e)
-                # Clean up partial output files
-                if output_dir.exists():
-                    shutil.rmtree(output_dir, ignore_errors=True)
-                await db.commit()
-                return
-
-            if trans_result.success:
-                paper.translation_status = TranslationStatus.COMPLETED.value
-                paper.translation_progress = 1.0
-                if trans_result.mono_path:
-                    paper.translated_filename = str(trans_result.mono_path.relative_to(settings.translations_path))
-                if trans_result.dual_path:
-                    paper.dual_filename = str(trans_result.dual_path.relative_to(settings.translations_path))
-                logger.info("Translation completed for paper %s", paper_id)
-            else:
-                paper.translation_status = TranslationStatus.FAILED.value
-                paper.translation_error = trans_result.error
-                # Clean up partial output files on failure
-                if output_dir.exists():
-                    shutil.rmtree(output_dir, ignore_errors=True)
-                logger.error("Translation failed for paper %s: %s", paper_id, trans_result.error)
-
-            await db.commit()
-
-    # Run in a new event loop (BackgroundTasks runs sync functions in a thread)
-    loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(_do_translate())
+        quality_preset = _quality_map.get(quality, QualityPreset.BALANCED)
+        config = _resolve_backend_config(backend, quality_preset)
+
+        async def _do_translate():
+            async with async_session() as db:
+                result = await db.execute(select(Paper).where(Paper.id == paper_id))
+                paper = result.scalar_one_or_none()
+                if not paper:
+                    logger.error("Paper %s not found for translation", paper_id)
+                    return
+
+                input_path = settings.papers_path / paper.stored_filename
+                output_dir = settings.translations_path / paper.id
+
+                logger.info("Starting translation for paper %s (backend=%s, quality=%s, key=%s)", paper_id, config.backend, quality, "SET" if config.api_key else "NONE")
+
+                try:
+                    trans_result = translate_pdf_sync(input_path, output_dir, config)
+                except Exception as e:
+                    logger.exception("Translation crashed for paper %s", paper_id)
+                    paper.translation_status = TranslationStatus.FAILED.value
+                    paper.translation_error = sanitize_error(e)
+                    if output_dir.exists():
+                        shutil.rmtree(output_dir, ignore_errors=True)
+                    await db.commit()
+                    return
+
+                if trans_result.success:
+                    paper.translation_status = TranslationStatus.COMPLETED.value
+                    paper.translation_progress = 1.0
+                    if trans_result.mono_path:
+                        paper.translated_filename = str(trans_result.mono_path.relative_to(settings.translations_path))
+                    if trans_result.dual_path:
+                        paper.dual_filename = str(trans_result.dual_path.relative_to(settings.translations_path))
+                    logger.info("Translation completed for paper %s", paper_id)
+                else:
+                    paper.translation_status = TranslationStatus.FAILED.value
+                    paper.translation_error = trans_result.error
+                    if output_dir.exists():
+                        shutil.rmtree(output_dir, ignore_errors=True)
+                    logger.error("Translation failed for paper %s: %s", paper_id, trans_result.error)
+
+                await db.commit()
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_do_translate())
+        finally:
+            loop.close()
+
+    except Exception:
+        # Safety net: if anything outside _do_translate fails, reset paper status
+        # so it doesn't stay stuck as "translating" forever
+        logger.exception("Unhandled error in _run_translation for paper %s", paper_id)
+        try:
+            loop2 = asyncio.new_event_loop()
+
+            async def _reset_status():
+                async with async_session() as db:
+                    result = await db.execute(select(Paper).where(Paper.id == paper_id))
+                    paper = result.scalar_one_or_none()
+                    if paper and paper.translation_status == TranslationStatus.TRANSLATING.value:
+                        paper.translation_status = TranslationStatus.FAILED.value
+                        paper.translation_error = "Unexpected server error during translation"
+                        await db.commit()
+
+            try:
+                loop2.run_until_complete(_reset_status())
+            finally:
+                loop2.close()
+        except Exception:
+            logger.exception("Failed to reset paper status for %s", paper_id)
+
     finally:
-        loop.close()
         _translation_semaphore.release()
 
 

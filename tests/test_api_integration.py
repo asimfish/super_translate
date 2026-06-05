@@ -180,6 +180,18 @@ class TestPaperUploadEndpoint:
         assert response.status_code == 400
         assert "Tags must be 1000 characters or less" in response.json()["detail"]
 
+    def test_upload_file_too_large_streaming_reject(self, client):
+        """Test that oversized files are rejected during streaming read."""
+        # Patch the max size to a small value to test without creating 100MB
+        with patch("app.api.papers._MAX_UPLOAD_SIZE", 100):
+            content = b"%PDF-1.4 " + b"x" * 200
+            response = client.post(
+                "/api/papers/upload",
+                files={"file": ("test.pdf", content, "application/pdf")},
+            )
+            assert response.status_code == 400
+            assert "too large" in response.json()["detail"].lower()
+
     def test_upload_valid_pdf(self, client, mock_db):
         # Create a minimal valid PDF
         pdf_content = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
@@ -946,6 +958,37 @@ class TestRunTranslation:
         assert paper.translation_status == "completed"
         assert paper.translated_filename is not None
         assert paper.dual_filename is not None
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_unhandled_exception_resets_paper_status(self, mock_settings, mock_translate):
+        """Test that an unhandled exception outside _do_translate resets paper status."""
+        from app.api.papers import _run_translation
+        import app.api.papers as papers_mod
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translation_status = "translating"
+
+        # Make _resolve_backend_config raise before _do_translate is defined
+        with patch.object(papers_mod, "_resolve_backend_config", side_effect=Exception("Config error")):
+            # Need to provide a mock db for the reset path
+            reset_db = AsyncMock()
+            reset_result = MagicMock()
+            reset_result.scalar_one_or_none.return_value = paper
+            reset_db.execute = AsyncMock(return_value=reset_result)
+            reset_db.commit = AsyncMock()
+            reset_ctx = MagicMock()
+            reset_ctx.__aenter__ = AsyncMock(return_value=reset_db)
+            reset_ctx.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("app.core.database.async_session", MagicMock(return_value=reset_ctx)):
+                _run_translation("paper123", "deepseek", "balanced")
+
+        # Paper should be marked failed, not stuck as "translating"
+        assert paper.translation_status == "failed"
+        assert "Unexpected" in paper.translation_error
 
 
 class TestValidationErrorHandler:
