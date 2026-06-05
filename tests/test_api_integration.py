@@ -153,6 +153,16 @@ class TestPaperUploadEndpoint:
         assert response.status_code == 400
         assert "PDF header" in response.json()["detail"]
 
+    def test_upload_tags_too_long(self, client):
+        pdf_content = b"%PDF-1.4 test"
+        response = client.post(
+            "/api/papers/upload",
+            files={"file": ("test.pdf", pdf_content, "application/pdf")},
+            data={"tags": "x" * 1001},
+        )
+        assert response.status_code == 400
+        assert "Tags must be 1000 characters or less" in response.json()["detail"]
+
     def test_upload_valid_pdf(self, client, mock_db):
         # Create a minimal valid PDF
         pdf_content = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
@@ -396,6 +406,36 @@ class TestStatsEndpoint:
             data = response.json()
             assert data["total_papers"] == 10
             assert data["completed_translations"] == 5
+
+    def test_stats_caching(self, client):
+        """Stats should be cached and not hit DB on repeated calls."""
+        import app.main as main_module
+        # Reset cache
+        with main_module._stats_lock:
+            main_module._stats_cache = None
+            main_module._stats_cache_time = 0.0
+
+        with patch("app.core.database.async_session") as mock_session_cls:
+            mock_session = AsyncMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=False)
+            mock_session.scalar = AsyncMock(side_effect=[10, 5])
+            mock_session_cls.return_value = mock_session
+
+            # First call hits DB
+            r1 = client.get("/api/stats")
+            assert r1.status_code == 200
+            assert r1.json()["total_papers"] == 10
+
+            # Second call should use cache (no more scalar calls available)
+            r2 = client.get("/api/stats")
+            assert r2.status_code == 200
+            assert r2.json()["total_papers"] == 10
+
+        # Cleanup
+        with main_module._stats_lock:
+            main_module._stats_cache = None
+            main_module._stats_cache_time = 0.0
 
 
 class TestErrorHandling:

@@ -230,6 +230,9 @@ async def upload_paper(
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are accepted")
 
+    if len(tags) > 1000:
+        raise HTTPException(400, "Tags must be 1000 characters or less")
+
     content = await file.read()
     if len(content) > 100 * 1024 * 1024:
         raise HTTPException(400, "File too large (max 100MB)")
