@@ -8,6 +8,10 @@ let translationPollId = null;
 let pagination = { offset: 0, limit: 50, total: 0 };
 
 // === API ===
+async function errorDetail(res, fallback) {
+  try { return (await res.json()).detail || fallback; } catch { return fallback; }
+}
+
 const api = {
   async listPapers(search = '', status = '', offset = 0, limit = 50) {
     const params = new URLSearchParams();
@@ -16,7 +20,7 @@ const api = {
     params.set('offset', offset);
     params.set('limit', limit);
     const res = await fetch(`/api/papers/?${params}`);
-    if (!res.ok) throw new Error((await res.json()).detail || 'Failed to load papers');
+    if (!res.ok) throw new Error(await errorDetail(res, 'Failed to load papers'));
     return res.json();
   },
   async uploadPaper(file, tags = '') {
@@ -24,12 +28,12 @@ const api = {
     form.append('file', file);
     if (tags) form.append('tags', tags);
     const res = await fetch('/api/papers/upload', { method: 'POST', body: form });
-    if (!res.ok) throw new Error((await res.json()).detail || 'Upload failed');
+    if (!res.ok) throw new Error(await errorDetail(res, 'Upload failed'));
     return res.json();
   },
   async getPaper(id) {
     const res = await fetch(`/api/papers/${id}`);
-    if (!res.ok) throw new Error((await res.json()).detail || 'Paper not found');
+    if (!res.ok) throw new Error(await errorDetail(res, 'Paper not found'));
     return res.json();
   },
   async translatePaper(id, backend = '', quality = 'balanced') {
@@ -37,12 +41,12 @@ const api = {
     if (backend) params.set('backend', backend);
     if (quality) params.set('quality', quality);
     const res = await fetch(`/api/papers/${id}/translate?${params}`, { method: 'POST' });
-    if (!res.ok) throw new Error((await res.json()).detail || 'Translation failed');
+    if (!res.ok) throw new Error(await errorDetail(res, 'Translation failed'));
     return res.json();
   },
   async deletePaper(id) {
     const res = await fetch(`/api/papers/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error((await res.json()).detail || 'Delete failed');
+    if (!res.ok) throw new Error(await errorDetail(res, 'Delete failed'));
     return res.json();
   },
   async updatePaper(id, data) {
@@ -51,12 +55,12 @@ const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error((await res.json()).detail || 'Update failed');
+    if (!res.ok) throw new Error(await errorDetail(res, 'Update failed'));
     return res.json();
   },
   async getStats() {
     const res = await fetch('/api/stats');
-    if (!res.ok) throw new Error('Failed to load stats');
+    if (!res.ok) throw new Error(await errorDetail(res, 'Failed to load stats'));
     return res.json();
   }
 };
