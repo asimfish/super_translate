@@ -948,6 +948,66 @@ class TestRunTranslation:
         assert paper.dual_filename is not None
 
 
+class TestValidationErrorHandler:
+    """Test custom validation error handling."""
+
+    def test_value_error_returns_400(self, client, mock_db):
+        """Value validation errors should return 400."""
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = MagicMock()
+        mock_db.execute.return_value = mock_result
+
+        response = client.patch(
+            "/api/papers/test123",
+            json={"title": "x" * 501},
+        )
+        assert response.status_code == 400
+        assert "500 characters" in response.json()["detail"]
+
+    def test_missing_field_returns_422(self, client):
+        """Missing required fields should return 422."""
+        response = client.post("/api/papers/upload")
+        assert response.status_code == 422
+
+
+class TestSecurityHeaders:
+    """Test that security headers are set on all responses."""
+
+    def test_security_headers_on_health(self, client):
+        response = client.get("/health")
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert response.headers["X-XSS-Protection"] == "0"
+        assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+        assert "camera=()" in response.headers["Permissions-Policy"]
+        csp = response.headers["Content-Security-Policy"]
+        assert "default-src 'self'" in csp
+        assert "script-src 'self'" in csp
+        assert "connect-src 'self'" in csp
+
+    def test_security_headers_on_api(self, client, mock_db):
+        mock_db.scalar.return_value = 0
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = []
+        mock_result.scalars.return_value = mock_scalars
+        mock_db.execute.return_value = mock_result
+
+        response = client.get("/api/papers/")
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+
+    def test_security_headers_on_404(self, client, mock_db):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        response = client.get("/api/papers/nonexistent")
+        assert response.status_code == 404
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+
+
 class TestRecoverStuckTranslations:
     """Test startup recovery of stuck translations."""
 
