@@ -1,15 +1,13 @@
 """Paper library management service."""
 
 import logging
-import shutil
 import uuid
 from pathlib import Path
-from typing import Optional
 
 import fitz
 
 from app.core.config import settings
-from app.models.paper import Paper, TranslationStatus
+from app.models.paper import Paper
 
 logger = logging.getLogger(__name__)
 
