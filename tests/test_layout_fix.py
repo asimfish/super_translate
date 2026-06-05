@@ -458,10 +458,6 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
         self.assertEqual(result, 0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestFixTranslatedLayout(unittest.TestCase):
     """Test the main fix_translated_layout function with real PDFs."""
 
@@ -564,6 +560,68 @@ class TestFixTranslatedLayout(unittest.TestCase):
             self.assertIsInstance(result, bool)
             # Input should be unchanged
             self.assertTrue(os.path.exists(in_path))
+        finally:
+            os.unlink(in_path)
+            if os.path.exists(out_path):
+                os.unlink(out_path)
+
+
+class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
+    """Test fix_translated_layout edge cases."""
+
+    def test_exception_during_processing_closes_doc(self):
+        """Exception during page processing closes the document and re-raises."""
+        from app.services.layout_fix import fix_translated_layout
+        import tempfile
+        import os
+        import fitz
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            path = f.name
+
+        try:
+            doc = fitz.open()
+            doc.new_page()
+            doc.save(path)
+            doc.close()
+
+            with unittest.mock.patch(
+                "app.services.layout_fix._fix_page_layout",
+                side_effect=RuntimeError("test error"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    fix_translated_layout(path)
+        finally:
+            os.unlink(path)
+
+    def test_different_output_path_with_fixes(self):
+        """When output_path differs and fixes are made, saves to output_path."""
+        from app.services.layout_fix import fix_translated_layout
+        import tempfile
+        import os
+        import fitz
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            in_path = f.name
+        out_path = in_path + ".fixed.pdf"
+
+        try:
+            doc = fitz.open()
+            page = doc.new_page(width=612, height=792)
+            for i in range(5):
+                rect = fitz.Rect(91, 100 + i * 40, 504, 130 + i * 40)
+                shape = page.new_shape()
+                shape.insert_textbox(rect, f"Normal body text block number {i} for layout detection.", fontname="helv", fontsize=10, color=(0, 0, 0))
+                shape.commit()
+            rect = fitz.Rect(200, 350, 504, 380)
+            shape = page.new_shape()
+            shape.insert_textbox(rect, "Misaligned text that should be fixed by layout fixer.", fontname="helv", fontsize=10, color=(0, 0, 0))
+            shape.commit()
+            doc.save(in_path)
+            doc.close()
+
+            result = fix_translated_layout(in_path, output_path=out_path)
+            self.assertIsInstance(result, bool)
         finally:
             os.unlink(in_path)
             if os.path.exists(out_path):
