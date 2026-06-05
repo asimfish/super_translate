@@ -36,19 +36,35 @@ def extract_title_from_pdf(pdf_path: Path) -> str:
                 return meta_title
 
             if doc.page_count > 0:
-                page = doc[0]
-                blocks = page.get_text("dict")["blocks"]
-                for block in blocks:
-                    if block.get("type") == 0:
-                        for line in block.get("lines", []):
-                            for span in line.get("spans", []):
-                                if span.get("size", 0) > 14:
-                                    text = span.get("text", "").strip()
-                                    if len(text) > 5:
-                                        return text[:200]
+                title = _extract_title_from_first_page(doc[0])
+                if title:
+                    return title
     except Exception as e:
         logger.debug("Could not extract title from %s: %s", pdf_path.name, e)
     return pdf_path.stem.replace("_", " ").replace("-", " ").title()
+
+
+def _extract_title_from_first_page(page: object) -> str | None:
+    """Extract title from the first page's text blocks by font size."""
+    blocks = page.get_text("dict")["blocks"]
+    for block in blocks:
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            title = _find_large_text_in_line(line)
+            if title:
+                return title
+    return None
+
+
+def _find_large_text_in_line(line: dict) -> str | None:
+    """Find text with font size > 14 and length > 5 in a line."""
+    for span in line.get("spans", []):
+        if span.get("size", 0) > 14:
+            text = span.get("text", "").strip()
+            if len(text) > 5:
+                return text[:200]
+    return None
 
 
 async def save_uploaded_pdf(file_content: bytes, filename: str) -> Path:
