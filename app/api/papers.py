@@ -145,6 +145,16 @@ def _get_paper_file(
     return file_path
 
 
+def _file_exists_safe(base_dir: Path, filename: str | None) -> bool:
+    """Check if a file exists safely (no path traversal)."""
+    if not filename:
+        return False
+    file_path = (base_dir / filename).resolve()
+    if not str(file_path).startswith(str(base_dir.resolve())):
+        return False
+    return file_path.exists()
+
+
 @router.get("/", response_model=PaperListResponse)
 async def list_papers(
     search: str = "",
@@ -186,18 +196,14 @@ async def list_papers(
     result = await db.execute(query)
     papers = result.scalars().all()
 
-    # Pre-check file existence in batch (avoids N sync syscalls per paper)
-    originals = {f.name for f in settings.papers_path.iterdir()} if settings.papers_path.exists() else set()
-    translated_dir = settings.translations_path
-    translated_files = {f.name for f in translated_dir.iterdir()} if translated_dir.exists() else set()
-
+    # Check file existence per paper (safe path validation, max 200 papers)
     paper_responses = []
     for p in papers:
         paper_responses.append(_paper_to_response(
             p,
-            has_original=p.stored_filename in originals,
-            has_translated=p.translated_filename is not None and p.translated_filename in translated_files,
-            has_dual=p.dual_filename is not None and p.dual_filename in translated_files,
+            has_original=_file_exists_safe(settings.papers_path, p.stored_filename),
+            has_translated=_file_exists_safe(settings.translations_path, p.translated_filename),
+            has_dual=_file_exists_safe(settings.translations_path, p.dual_filename),
         ))
 
     return PaperListResponse(papers=paper_responses, total=total)
@@ -268,11 +274,15 @@ async def get_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
     paper = result.scalar_one_or_none()
     if not paper:
         raise HTTPException(404, "Paper not found")
+    # Check file existence safely (respects path traversal guard)
+    has_original = _file_exists_safe(settings.papers_path, paper.stored_filename)
+    has_translated = _file_exists_safe(settings.translations_path, paper.translated_filename)
+    has_dual = _file_exists_safe(settings.translations_path, paper.dual_filename)
     return _paper_to_response(
         paper,
-        has_original=(settings.papers_path / paper.stored_filename).exists(),
-        has_translated=paper.translated_filename is not None and (settings.translations_path / paper.translated_filename).exists(),
-        has_dual=paper.dual_filename is not None and (settings.translations_path / paper.dual_filename).exists(),
+        has_original=has_original,
+        has_translated=has_translated,
+        has_dual=has_dual,
     )
 
 
