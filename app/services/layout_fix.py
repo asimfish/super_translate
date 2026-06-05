@@ -150,7 +150,8 @@ def _fix_page_layout(page: object) -> int:
 
         # Skip blocks in the right margin area (table cells, figure elements)
         x0 = block.bbox[0]
-        if x0 > 400 and (block.bbox[2] - x0) < 80:
+        page_width = page.rect.width
+        if x0 > page_width * 0.7 and (block.bbox[2] - x0) < 80:
             continue
 
         # Skip short fragments that are already at correct x position

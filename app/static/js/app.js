@@ -267,6 +267,7 @@ let pageMetrics = { original: [], translated: [] }; // cached {top, height} per 
 let renderedPages = { original: new Set(), translated: new Set() };
 let pageWrappers = { original: [], translated: [] };
 let renderObservers = { original: null, translated: null };
+let scrollListeners = { original: null, translated: null };
 const RENDER_SCALE = 1.5;
 const OVERSCAN_PX = 600; // render pages within this distance of viewport
 
@@ -287,9 +288,16 @@ async function openReader(paperId) {
 
   const placeholder = document.getElementById('translate-placeholder');
 
-  // Clean up previous observers
+  // Clean up previous observers and scroll listeners
   if (renderObservers.original) renderObservers.original.disconnect();
   if (renderObservers.translated) renderObservers.translated.disconnect();
+  for (const panel of ['original', 'translated']) {
+    const el = document.getElementById(`pdf-container-${panel}`);
+    if (el && scrollListeners[panel]) {
+      el.removeEventListener('scroll', scrollListeners[panel]);
+      scrollListeners[panel] = null;
+    }
+  }
   pdfDocs = { original: null, translated: null };
   pageMetrics = { original: [], translated: [] };
   renderedPages = { original: new Set(), translated: new Set() };
@@ -442,7 +450,7 @@ function setupSmoothScrollSync(panel) {
   const container = document.getElementById(`pdf-container-${panel}`);
   const otherPanel = panel === 'original' ? 'translated' : 'original';
 
-  container.addEventListener('scroll', () => {
+  const listener = () => {
     if (!syncScrollEnabled || scrollSyncing) return;
     if (!pdfDocs[otherPanel]) return;
 
@@ -468,7 +476,9 @@ function setupSmoothScrollSync(panel) {
 
       requestAnimationFrame(() => { scrollSyncing = false; });
     });
-  });
+  };
+  container.addEventListener('scroll', listener);
+  scrollListeners[panel] = listener;
 }
 
 function updatePageInfo(panel, scrollTop) {
