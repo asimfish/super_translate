@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import shutil
 import threading
@@ -449,10 +450,18 @@ async def start_translation(
     return {"ok": True, "status": "translating"}
 
 
+_BACKEND_API_KEY_ATTRS = {
+    "deepseek": "deepseek_api_key",
+    "openai": "openai_api_key",
+    "deepl": "deepl_api_key",
+}
+
+
 def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> TranslationConfig:
     """Build TranslationConfig from backend name and quality preset.
 
     Resolves API keys from settings, handles fast-mode override to Google.
+    Raises HTTPException if a required API key is missing.
     """
     api_key = ""
     base_url = ""
@@ -474,6 +483,16 @@ def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> Tran
     if quality_preset == QualityPreset.FAST:
         backend = "google"
         api_key = ""
+    elif backend in _BACKEND_API_KEY_ATTRS:
+        # Validate API key is configured (fail fast with clear error)
+        attr = _BACKEND_API_KEY_ATTRS[backend]
+        env_key = f"PAPER_CHINA_{attr.upper()}"
+        if not api_key and not os.environ.get(env_key, ""):
+            raise HTTPException(
+                400,
+                f"Backend '{backend}' requires an API key. "
+                f"Set {env_key} in your .env file.",
+            )
 
     return TranslationConfig(
         backend=backend,
