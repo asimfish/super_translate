@@ -915,12 +915,14 @@ class TestRunTranslation:
         assert paper.translation_status == "failed"
         assert not partial_dir.exists()
 
+    @patch("app.api.papers._reset_paper_status")
     @patch("app.api.papers._translation_semaphore")
-    def test_semaphore_timeout(self, mock_semaphore):
+    def test_semaphore_timeout_resets_paper(self, mock_semaphore, mock_reset):
         from app.api.papers import _run_translation
 
         mock_semaphore.acquire.return_value = False
         _run_translation("paper123", "google", "fast")
+        mock_reset.assert_called_once_with("paper123", "Translation queue is busy, please try again later")
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
@@ -991,8 +993,52 @@ class TestRunTranslation:
         assert paper.translation_status == "failed"
         assert "Unexpected" in paper.translation_error
 
+    def test_reset_paper_status_resets_translating_paper(self):
+        """Test _reset_paper_status resets a paper stuck in translating state."""
+        from app.api.papers import _reset_paper_status
 
-class TestValidationErrorHandler:
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.translation_status = "translating"
+
+        db = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = paper
+        db.execute = AsyncMock(return_value=result)
+        db.commit = AsyncMock()
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.core.database.async_session", MagicMock(return_value=ctx)):
+            _reset_paper_status("paper123", "Queue busy")
+
+        assert paper.translation_status == "failed"
+        assert paper.translation_error == "Queue busy"
+
+    def test_reset_paper_status_skips_non_translating_paper(self):
+        """Test _reset_paper_status does not modify papers not in translating state."""
+        from app.api.papers import _reset_paper_status
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.translation_status = "completed"
+
+        db = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = paper
+        db.execute = AsyncMock(return_value=result)
+        db.commit = AsyncMock()
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.core.database.async_session", MagicMock(return_value=ctx)):
+            _reset_paper_status("paper123", "Queue busy")
+
+        # Should not have been modified
+        assert paper.translation_status == "completed"
+        db.commit.assert_not_called()
     """Test custom validation error handling."""
 
     def test_value_error_returns_400(self, client, mock_db):

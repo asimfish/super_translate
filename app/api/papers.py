@@ -411,6 +411,31 @@ def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> Tran
     )
 
 
+def _reset_paper_status(paper_id: str, error_message: str) -> None:
+    """Reset a paper's translation status to failed (synchronous, for background threads)."""
+    import asyncio
+    from app.core.database import async_session
+
+    try:
+        loop = asyncio.new_event_loop()
+
+        async def _do_reset():
+            async with async_session() as db:
+                result = await db.execute(select(Paper).where(Paper.id == paper_id))
+                paper = result.scalar_one_or_none()
+                if paper and paper.translation_status == TranslationStatus.TRANSLATING.value:
+                    paper.translation_status = TranslationStatus.FAILED.value
+                    paper.translation_error = error_message
+                    await db.commit()
+
+        try:
+            loop.run_until_complete(_do_reset())
+        finally:
+            loop.close()
+    except Exception:
+        logger.exception("Failed to reset paper status for %s", paper_id)
+
+
 def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
     import asyncio
     from app.core.database import async_session
@@ -418,6 +443,7 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
     acquired = _translation_semaphore.acquire(timeout=300)
     if not acquired:
         logger.error("Translation queue full, rejecting paper %s", paper_id)
+        _reset_paper_status(paper_id, "Translation queue is busy, please try again later")
         return
 
     try:
@@ -475,24 +501,7 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
         # Safety net: if anything outside _do_translate fails, reset paper status
         # so it doesn't stay stuck as "translating" forever
         logger.exception("Unhandled error in _run_translation for paper %s", paper_id)
-        try:
-            loop2 = asyncio.new_event_loop()
-
-            async def _reset_status():
-                async with async_session() as db:
-                    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-                    paper = result.scalar_one_or_none()
-                    if paper and paper.translation_status == TranslationStatus.TRANSLATING.value:
-                        paper.translation_status = TranslationStatus.FAILED.value
-                        paper.translation_error = "Unexpected server error during translation"
-                        await db.commit()
-
-            try:
-                loop2.run_until_complete(_reset_status())
-            finally:
-                loop2.close()
-        except Exception:
-            logger.exception("Failed to reset paper status for %s", paper_id)
+        _reset_paper_status(paper_id, "Unexpected server error during translation")
 
     finally:
         _translation_semaphore.release()
