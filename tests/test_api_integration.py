@@ -83,6 +83,12 @@ class TestIndexEndpoint:
         assert response.status_code == 200
         assert "Paper China" in response.text
 
+    def test_index_fallback_when_static_missing(self, client):
+        with patch("pathlib.Path.exists", return_value=False):
+            response = client.get("/")
+            assert response.status_code == 200
+            assert "Static files not found" in response.text
+
 
 class TestPapersListEndpoint:
     """Test papers list endpoint."""

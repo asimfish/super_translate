@@ -103,6 +103,30 @@ class TestGetClientIp:
         assert middleware._get_client_ip(request) == "unknown"
 
 
+class TestHourlyLimit:
+    """Test hourly rate limit enforcement."""
+
+    def test_blocks_when_hourly_limit_exceeded(self):
+        import time
+        app = FastAPI()
+        middleware = RateLimitMiddleware(app, requests_per_minute=100, requests_per_hour=5)
+        now = time.time()
+        # Pre-fill hour requests to just under the limit
+        middleware._hour_requests["1.2.3.4"] = [now - 300, now - 200, now - 100, now - 50, now - 10]
+        allowed, msg = middleware._check_rate_limit("1.2.3.4")
+        assert not allowed
+        assert "5 requests per hour" in msg
+
+    def test_allows_under_hourly_limit(self):
+        import time
+        app = FastAPI()
+        middleware = RateLimitMiddleware(app, requests_per_minute=100, requests_per_hour=10)
+        now = time.time()
+        middleware._hour_requests["1.2.3.4"] = [now - 300, now - 200, now - 100]
+        allowed, msg = middleware._check_rate_limit("1.2.3.4")
+        assert allowed
+
+
 class TestReset:
     """Test reset functionality."""
 
