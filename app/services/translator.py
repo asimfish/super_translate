@@ -30,6 +30,12 @@ def sanitize_error(error: Exception) -> str:
     msg = re.sub(r"\bgh[pousr]_[a-zA-Z0-9]{20,}\b", "[redacted]", msg)
     # Remove env var assignments that look like secrets
     msg = re.sub(r"\b[A-Z_]+(?:API_KEY|SECRET|TOKEN|PASSWORD)=[^\s,;]+", "[redacted]", msg)
+    # JWT tokens (eyJ header.payload.signature)
+    msg = re.sub(r"\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+", "[redacted]", msg)
+    # Connection strings with passwords (mongodb://, postgresql://, mysql://, redis://)
+    msg = re.sub(r"\b(?:mongodb|postgresql|mysql|redis|amqp)://[^\s]+", "[redacted]", msg)
+    # Private key headers
+    msg = re.sub(r"-----BEGIN [A-Z ]+ KEY-----", "[redacted]", msg)
     # Remove file paths (Unix and Windows)
     msg = re.sub(r"(/[^\s:]+)+", "[path]", msg)
     msg = re.sub(r"([A-Z]:\\[^\s:]+)+", "[path]", msg)

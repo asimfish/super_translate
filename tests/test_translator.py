@@ -937,6 +937,35 @@ class TestSanitizeError(unittest.TestCase):
         self.assertNotIn("ghp_ABCDEF", result)
         self.assertIn("[redacted]", result)
 
+    def test_removes_jwt_token(self):
+        from app.services.translator import sanitize_error
+        jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        err = Exception(f"Auth failed with token {jwt}")
+        result = sanitize_error(err)
+        self.assertNotIn("eyJhbGci", result)
+        self.assertIn("[redacted]", result)
+
+    def test_removes_connection_string(self):
+        from app.services.translator import sanitize_error
+        err = Exception("Connection failed: mongodb://admin:secret123@db.example.com:27017/mydb")
+        result = sanitize_error(err)
+        self.assertNotIn("secret123", result)
+        self.assertIn("[redacted]", result)
+
+    def test_removes_postgresql_connection_string(self):
+        from app.services.translator import sanitize_error
+        err = Exception("DSN: postgresql://user:pass@localhost:5432/dbname")
+        result = sanitize_error(err)
+        self.assertNotIn("pass@", result)
+        self.assertIn("[redacted]", result)
+
+    def test_removes_private_key_header(self):
+        from app.services.translator import sanitize_error
+        err = Exception("Failed to load -----BEGIN RSA PRIVATE KEY-----")
+        result = sanitize_error(err)
+        self.assertNotIn("BEGIN RSA", result)
+        self.assertIn("[redacted]", result)
+
 
 class TestResolveService(unittest.TestCase):
     """Test _resolve_service function."""
