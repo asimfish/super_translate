@@ -238,6 +238,14 @@ def _build_pdf2zh_envs(
             envs["OPENAI_BASE_URL"] = config.base_url
         if model_name:
             envs["OPENAI_MODEL"] = model_name
+    elif service == "deepl":
+        deepl_key = api_key or os.environ.get("DEEPL_API_KEY", "")
+        if deepl_key:
+            envs["DEEPL_API_KEY"] = deepl_key
+    elif service == "ollama":
+        ollama_url = config.base_url or os.environ.get("OLLAMA_HOST", "")
+        if ollama_url:
+            envs["OLLAMA_HOST"] = ollama_url
 
     return envs
 

@@ -972,6 +972,36 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
         config = TranslationConfig(backend="deepseek", api_key="")
         self.assertEqual(_build_pdf2zh_envs("deepseek", config), {})
 
+    def test_deepl_with_config_key(self):
+        from app.services.translator import _build_pdf2zh_envs
+        config = TranslationConfig(backend="deepl", api_key="dl-key")
+        env = _build_pdf2zh_envs("deepl", config)
+        self.assertEqual(env, {"DEEPL_API_KEY": "dl-key"})
+
+    def test_deepl_falls_back_to_env(self):
+        from app.services.translator import _build_pdf2zh_envs
+        import os
+        os.environ["DEEPL_API_KEY"] = "env-key"
+        config = TranslationConfig(backend="deepl", api_key="")
+        env = _build_pdf2zh_envs("deepl", config)
+        self.assertEqual(env, {"DEEPL_API_KEY": "env-key"})
+        os.environ.pop("DEEPL_API_KEY", None)
+
+    def test_ollama_with_base_url(self):
+        from app.services.translator import _build_pdf2zh_envs
+        config = TranslationConfig(backend="ollama", base_url="http://localhost:11434")
+        env = _build_pdf2zh_envs("ollama", config)
+        self.assertEqual(env, {"OLLAMA_HOST": "http://localhost:11434"})
+
+    def test_ollama_falls_back_to_env(self):
+        from app.services.translator import _build_pdf2zh_envs
+        import os
+        os.environ["OLLAMA_HOST"] = "http://remote:11434"
+        config = TranslationConfig(backend="ollama", base_url="")
+        env = _build_pdf2zh_envs("ollama", config)
+        self.assertEqual(env, {"OLLAMA_HOST": "http://remote:11434"})
+        os.environ.pop("OLLAMA_HOST", None)
+
 
 class TestTranslationResult(unittest.TestCase):
     """Test TranslationResult class."""
