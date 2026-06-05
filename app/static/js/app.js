@@ -104,7 +104,7 @@ async function loadPapers() {
   } catch (e) {
     console.error('Failed to load papers:', e);
     const container = document.getElementById('paper-list');
-    if (container) container.innerHTML = '<div class="empty-state"><p style="color:var(--error)">加载失败，请刷新重试</p></div>';
+    if (container) container.innerHTML = '<div class="empty-state"><p style="color:var(--error)">加载失败</p><button class="btn btn-primary" onclick="loadPapers()">重试</button></div>';
   }
 }
 
