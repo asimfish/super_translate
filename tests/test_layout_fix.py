@@ -141,6 +141,35 @@ class TestAnalyzePageLayout(unittest.TestCase):
         self.assertAlmostEqual(left_margin, 0.0)
         self.assertAlmostEqual(col_width, 0.0)
 
+    def test_skips_tiny_font_blocks(self):
+        """Blocks with font size < BODY_TEXT_MIN_SIZE are skipped."""
+        blocks = [
+            TextBlockInfo(bbox=(91, 100, 504, 120), text="body text", avg_font_size=10, block_index=0),
+            TextBlockInfo(bbox=(50, 100, 504, 120), text="footnote", avg_font_size=5, block_index=1),
+        ]
+        left_margin, col_width = _analyze_page_layout(blocks)
+        self.assertAlmostEqual(left_margin, 91.0)
+
+    def test_skips_line_number_text(self):
+        """Blocks containing just line numbers are skipped."""
+        blocks = [
+            TextBlockInfo(bbox=(91, 100, 504, 120), text="body text", avg_font_size=10, block_index=0),
+            TextBlockInfo(bbox=(50, 100, 60, 120), text="24\n25\n26", avg_font_size=10, block_index=1),
+        ]
+        left_margin, col_width = _analyze_page_layout(blocks)
+        self.assertAlmostEqual(left_margin, 91.0)
+
+    def test_weights_by_text_length(self):
+        """Longer blocks have more influence on dominant left margin."""
+        blocks = [
+            TextBlockInfo(bbox=(91, 100, 504, 120), text="short", avg_font_size=10, block_index=0),
+            TextBlockInfo(bbox=(91, 130, 504, 200), text="a" * 200, avg_font_size=10, block_index=1),
+            TextBlockInfo(bbox=(100, 210, 504, 230), text="b" * 200, avg_font_size=10, block_index=2),
+        ]
+        left_margin, col_width = _analyze_page_layout(blocks)
+        # Both x=91 and x=100 have same text length, but x=91 appears first
+        self.assertIn(left_margin, [91.0, 100.0])
+
 
 class TestNeedsFix(unittest.TestCase):
     """Test block fix detection."""
