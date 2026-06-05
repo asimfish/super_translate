@@ -1,5 +1,6 @@
 """Paper library management service."""
 
+import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -71,34 +72,41 @@ async def save_uploaded_pdf(file_content: bytes, filename: str) -> Path:
     """Save uploaded PDF and return stored path."""
     stored_name = generate_stored_filename(filename)
     stored_path = settings.papers_path / stored_name
-    stored_path.parent.mkdir(parents=True, exist_ok=True)
-    stored_path.write_bytes(file_content)
+
+    def _write_file() -> None:
+        stored_path.parent.mkdir(parents=True, exist_ok=True)
+        stored_path.write_bytes(file_content)
+
+    await asyncio.to_thread(_write_file)
     return stored_path
 
 
 async def delete_paper_files(paper: Paper) -> None:
     """Delete all files associated with a paper."""
-    _safe_delete(settings.papers_path, paper.stored_filename)
-    if paper.translated_filename:
-        _safe_delete(settings.translations_path, paper.translated_filename)
-    if paper.dual_filename:
-        _safe_delete(settings.translations_path, paper.dual_filename)
-    # Clean up empty translation output directory
-    if paper.translated_filename or paper.dual_filename:
-        ref_filename = paper.translated_filename or paper.dual_filename
-        if ref_filename:
-            ref_path = (settings.translations_path / ref_filename).resolve()
-            parent = ref_path.parent
-            translations_base = settings.translations_path.resolve()
-            if (
-                parent != translations_base
-                and parent.is_relative_to(translations_base)
-                and parent.is_dir()
-            ):
-                try:
-                    parent.rmdir()  # only removes if empty
-                except OSError:
-                    pass  # directory not empty, leave it
+    def _delete_files() -> None:
+        _safe_delete(settings.papers_path, paper.stored_filename)
+        if paper.translated_filename:
+            _safe_delete(settings.translations_path, paper.translated_filename)
+        if paper.dual_filename:
+            _safe_delete(settings.translations_path, paper.dual_filename)
+        # Clean up empty translation output directory
+        if paper.translated_filename or paper.dual_filename:
+            ref_filename = paper.translated_filename or paper.dual_filename
+            if ref_filename:
+                ref_path = (settings.translations_path / ref_filename).resolve()
+                parent = ref_path.parent
+                translations_base = settings.translations_path.resolve()
+                if (
+                    parent != translations_base
+                    and parent.is_relative_to(translations_base)
+                    and parent.is_dir()
+                ):
+                    try:
+                        parent.rmdir()  # only removes if empty
+                    except OSError:
+                        pass  # directory not empty, leave it
+
+    await asyncio.to_thread(_delete_files)
 
 
 def _safe_delete(base_dir: Path, filename: str) -> None:
