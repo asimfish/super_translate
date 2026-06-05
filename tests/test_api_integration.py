@@ -1,6 +1,5 @@
 """Integration tests for Paper China API endpoints."""
 
-import io
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
