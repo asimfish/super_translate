@@ -201,7 +201,7 @@ class TestPaperUploadEndpoint:
             assert response.status_code == 400
             assert "too large" in response.json()["detail"].lower()
 
-    def test_upload_valid_pdf(self, client, mock_db):
+    def test_upload_valid_pdf(self, client, mock_db, tmp_path):
         # Create a minimal valid PDF
         pdf_content = (
             b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -212,12 +212,16 @@ class TestPaperUploadEndpoint:
             b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
         )
 
-        with patch("app.api.papers.save_uploaded_pdf_streaming") as mock_save, \
+        with patch("app.api.papers.generate_stored_filename") as mock_gen, \
+             patch("app.api.papers.settings") as mock_settings, \
              patch("app.api.papers.get_pdf_info") as mock_info, \
              patch("app.api.papers.extract_title_from_pdf") as mock_title:
 
-            mock_save.return_value = MagicMock()
-            mock_save.return_value.name = "stored_test.pdf"
+            mock_gen.return_value = "stored_test.pdf"
+            mock_settings.papers_path = tmp_path
+            mock_settings.translations_path = tmp_path
+            mock_settings.max_upload_size = 100 * 1024 * 1024
+            mock_settings.upload_chunk_size = 1024 * 1024
             mock_info.return_value = (10, 1024)
             mock_title.return_value = "Test Paper Title"
 
@@ -254,15 +258,15 @@ class TestPaperUploadEndpoint:
         pdf_content = b"%PDF-1.4 test"
         stored_path = tmp_path / "stored_test.pdf"
 
-        def fake_save(chunks, filename):
-            with stored_path.open("wb") as f:
-                for chunk in chunks:
-                    f.write(chunk)
-            return stored_path
-
-        with patch("app.api.papers.save_uploaded_pdf_streaming", side_effect=fake_save), \
+        with patch("app.api.papers.generate_stored_filename") as mock_gen, \
+             patch("app.api.papers.settings") as mock_settings, \
              patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")), \
              TestClient(app, raise_server_exceptions=False) as c:
+                mock_gen.return_value = "stored_test.pdf"
+                mock_settings.papers_path = tmp_path
+                mock_settings.translations_path = tmp_path
+                mock_settings.max_upload_size = 100 * 1024 * 1024
+                mock_settings.upload_chunk_size = 1024 * 1024
                 c.post(
                     "/api/papers/upload",
                     files={"file": ("test.pdf", pdf_content, "application/pdf")},

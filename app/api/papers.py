@@ -21,9 +21,8 @@ from app.models.paper import Paper, TranslationStatus
 from app.services.library import (
     delete_paper_files,
     extract_title_from_pdf,
+    generate_stored_filename,
     get_pdf_info,
-    save_uploaded_pdf,
-    save_uploaded_pdf_streaming,
 )
 from app.services.translator import (
     QualityPreset,
@@ -301,25 +300,39 @@ async def upload_paper(
     if len(tags) > 1000:
         raise HTTPException(400, "Tags must be 1000 characters or less")
 
-    # Stream upload to reject oversized files before loading fully into memory
-    chunks: list[bytes] = []
+    # Stream upload: write chunks directly to disk to minimize memory usage
+    stored_name = generate_stored_filename(file.filename)
+    stored_path = settings.papers_path / stored_name
     total_size = 0
     first_chunk = True
-    while chunk := await file.read(settings.upload_chunk_size):
-        total_size += len(chunk)
-        if total_size > settings.max_upload_size:
-            max_mb = settings.max_upload_size // (1024 * 1024)
-            raise HTTPException(400, f"File too large (max {max_mb}MB)")
-        if first_chunk:
-            if not chunk[:5].startswith(b'%PDF'):
-                raise HTTPException(400, "Invalid PDF file (missing PDF header)")
-            first_chunk = False
-        chunks.append(chunk)
+    try:
+        def _write_chunks() -> None:
+            nonlocal total_size, first_chunk
+            stored_path.parent.mkdir(parents=True, exist_ok=True)
+            with stored_path.open("wb") as f:
+                while chunk := file.file.read(settings.upload_chunk_size):
+                    total_size += len(chunk)
+                    if total_size > settings.max_upload_size:
+                        max_mb = settings.max_upload_size // (1024 * 1024)
+                        raise HTTPException(400, f"File too large (max {max_mb}MB)")
+                    if first_chunk:
+                        if not chunk[:5].startswith(b'%PDF'):
+                            raise HTTPException(400, "Invalid PDF file (missing PDF header)")
+                        first_chunk = False
+                    f.write(chunk)
+
+        await asyncio.to_thread(_write_chunks)
+    except HTTPException:
+        stored_path.unlink(missing_ok=True)
+        raise
+    except Exception:
+        stored_path.unlink(missing_ok=True)
+        raise
 
     if first_chunk:
+        stored_path.unlink(missing_ok=True)
         raise HTTPException(400, "Empty PDF file")
 
-    stored_path = await save_uploaded_pdf_streaming(chunks, file.filename)
     try:
         page_count, file_size = await asyncio.to_thread(get_pdf_info, stored_path)
         title = await asyncio.to_thread(extract_title_from_pdf, stored_path)
