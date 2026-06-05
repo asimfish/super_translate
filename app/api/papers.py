@@ -607,11 +607,7 @@ async def _do_translate(
             logger.exception("Translation crashed for paper %s", paper_id)
             paper.translation_status = TranslationStatus.FAILED.value
             paper.translation_error = sanitize_error(e)
-            if output_dir.exists():
-                try:
-                    shutil.rmtree(output_dir)
-                except OSError as cleanup_err:
-                    logger.warning("Failed to clean up %s: %s", output_dir, cleanup_err)
+            _cleanup_output_dir(output_dir)
             await db.commit()
             return
 
@@ -644,6 +640,15 @@ def _create_progress_handler(
     return _on_progress
 
 
+def _cleanup_output_dir(output_dir: Path) -> None:
+    """Remove translation output directory on failure."""
+    if output_dir.exists():
+        try:
+            shutil.rmtree(output_dir)
+        except OSError as cleanup_err:
+            logger.warning("Failed to clean up %s: %s", output_dir, cleanup_err)
+
+
 def _update_paper_result(
     paper: Paper,
     trans_result: TranslationResult,
@@ -663,11 +668,7 @@ def _update_paper_result(
     else:
         paper.translation_status = TranslationStatus.FAILED.value
         paper.translation_error = trans_result.error
-        if output_dir.exists():
-            try:
-                shutil.rmtree(output_dir)
-            except OSError as cleanup_err:
-                logger.warning("Failed to clean up %s: %s", output_dir, cleanup_err)
+        _cleanup_output_dir(output_dir)
         logger.error("Translation failed for paper %s: %s", paper.id, trans_result.error)
 
 
