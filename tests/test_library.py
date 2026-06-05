@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.services.library import (
+    _safe_delete,
     delete_paper_files,
     extract_title_from_pdf,
     generate_stored_filename,
@@ -236,6 +237,42 @@ class TestDeletePaperFiles:
 
             # Should not raise
             await delete_paper_files(paper)
+
+
+class TestSafeDelete:
+    """Test _safe_delete path traversal protection."""
+
+    def test_deletes_existing_file(self, tmp_path):
+        f = tmp_path / "test.pdf"
+        f.write_bytes(b"content")
+        _safe_delete(tmp_path, "test.pdf")
+        assert not f.exists()
+
+    def test_ignores_missing_file(self, tmp_path):
+        # Should not raise
+        _safe_delete(tmp_path, "nonexistent.pdf")
+
+    def test_ignores_empty_filename(self, tmp_path):
+        _safe_delete(tmp_path, "")
+        _safe_delete(tmp_path, None)
+
+    def test_rejects_path_traversal(self, tmp_path):
+        """Should refuse to delete files outside the base directory."""
+        secret = tmp_path.parent / "secret.pdf"
+        secret.write_bytes(b"secret")
+        _safe_delete(tmp_path, "../secret.pdf")
+        # File should still exist (deletion refused)
+        assert secret.exists()
+        secret.unlink()
+
+    def test_allows_subdirectory_paths(self, tmp_path):
+        """Paths with subdirectories within base dir should work."""
+        subdir = tmp_path / "sub"
+        subdir.mkdir()
+        f = subdir / "test.pdf"
+        f.write_bytes(b"content")
+        _safe_delete(tmp_path, "sub/test.pdf")
+        assert not f.exists()
 
 
 if __name__ == "__main__":

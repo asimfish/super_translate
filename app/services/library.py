@@ -64,16 +64,20 @@ async def save_uploaded_pdf(file_content: bytes, filename: str) -> Path:
 
 async def delete_paper_files(paper: Paper) -> None:
     """Delete all files associated with a paper."""
-    original = settings.papers_path / paper.stored_filename
-    if original.exists():
-        original.unlink()
-
+    _safe_delete(settings.papers_path, paper.stored_filename)
     if paper.translated_filename:
-        translated = settings.translations_path / paper.translated_filename
-        if translated.exists():
-            translated.unlink()
-
+        _safe_delete(settings.translations_path, paper.translated_filename)
     if paper.dual_filename:
-        dual = settings.translations_path / paper.dual_filename
-        if dual.exists():
-            dual.unlink()
+        _safe_delete(settings.translations_path, paper.dual_filename)
+
+
+def _safe_delete(base_dir: Path, filename: str) -> None:
+    """Delete a file if it exists and is within the base directory."""
+    if not filename:
+        return
+    file_path = (base_dir / filename).resolve()
+    if not str(file_path).startswith(str(base_dir.resolve())):
+        logger.warning("Refusing to delete path outside base dir: %s", filename)
+        return
+    if file_path.exists():
+        file_path.unlink()
