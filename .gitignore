@@ -6,3 +6,6 @@ __pycache__/
 tmp/
 data/
 *.db
+.coverage
+htmlcov/
+.pytest_cache/
