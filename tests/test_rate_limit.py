@@ -114,3 +114,45 @@ class TestReset:
         middleware.reset()
         assert len(middleware._minute_requests) == 0
         assert len(middleware._hour_requests) == 0
+
+
+class TestCleanup:
+    """Test old entry cleanup."""
+
+    def test_cleanup_removes_expired_entries(self):
+        import time
+        app = FastAPI()
+        middleware = RateLimitMiddleware(app)
+        now = time.time()
+        # Add expired entries (older than 60s for minute, 3600s for hour)
+        middleware._minute_requests["1.2.3.4"] = [now - 120, now - 90]
+        middleware._hour_requests["1.2.3.4"] = [now - 7200, now - 3700]
+        # Force cleanup by setting last_cleanup to past
+        middleware._last_cleanup = now - 120
+        middleware._cleanup_old_entries()
+        assert len(middleware._minute_requests) == 0
+        assert len(middleware._hour_requests) == 0
+
+    def test_cleanup_keeps_recent_entries(self):
+        import time
+        app = FastAPI()
+        middleware = RateLimitMiddleware(app)
+        now = time.time()
+        # Mix of expired and recent entries
+        middleware._minute_requests["1.2.3.4"] = [now - 120, now - 10]
+        middleware._hour_requests["1.2.3.4"] = [now - 7200, now - 100]
+        middleware._last_cleanup = now - 120
+        middleware._cleanup_old_entries()
+        assert len(middleware._minute_requests["1.2.3.4"]) == 1
+        assert len(middleware._hour_requests["1.2.3.4"]) == 1
+
+    def test_cleanup_skips_if_recent(self):
+        import time
+        app = FastAPI()
+        middleware = RateLimitMiddleware(app)
+        now = time.time()
+        middleware._minute_requests["1.2.3.4"] = [now - 120]
+        middleware._last_cleanup = now - 10  # Recent cleanup
+        middleware._cleanup_old_entries()
+        # Should NOT have cleaned up because last_cleanup was recent
+        assert len(middleware._minute_requests["1.2.3.4"]) == 1
