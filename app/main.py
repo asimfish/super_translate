@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from app.core.config import settings, ensure_dirs
 from app.core.database import init_db
@@ -70,6 +70,26 @@ async def add_security_headers(request: Request, call_next):
         "connect-src 'self'"
     )
     return response
+
+
+from fastapi.exceptions import RequestValidationError
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return 400 for value validation errors, 422 for missing fields."""
+    errors = exc.errors()
+    if errors:
+        err_type = errors[0].get("type", "")
+        msg = errors[0].get("msg", "Validation error")
+        # Only convert value errors to 400; missing fields stay 422
+        if err_type.startswith("value_error"):
+            if msg.startswith("Value error, "):
+                msg = msg[len("Value error, "):]
+            return JSONResponse(status_code=400, content={"detail": msg})
+    # Missing fields get standard 422 response
+    return JSONResponse(status_code=422, content={"detail": errors})
+
 
 app.include_router(papers_router)
 

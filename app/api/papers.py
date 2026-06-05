@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,26 +66,26 @@ class PaperUpdateRequest(BaseModel):
     tags: Optional[str] = None
     notes: Optional[str] = None
 
-    def validate_title(self) -> None:
-        """Validate title length."""
-        if self.title is not None and len(self.title) > 500:
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 500:
             raise ValueError("Title must be 500 characters or less")
+        return v
 
-    def validate_tags(self) -> None:
-        """Validate tags length."""
-        if self.tags is not None and len(self.tags) > 1000:
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 1000:
             raise ValueError("Tags must be 1000 characters or less")
+        return v
 
-    def validate_notes(self) -> None:
-        """Validate notes length."""
-        if self.notes is not None and len(self.notes) > 10000:
+    @field_validator("notes")
+    @classmethod
+    def validate_notes(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 10000:
             raise ValueError("Notes must be 10000 characters or less")
-
-    def validate_all(self) -> None:
-        """Validate all fields."""
-        self.validate_title()
-        self.validate_tags()
-        self.validate_notes()
+        return v
 
 
 def _paper_to_response(
@@ -494,12 +494,6 @@ async def update_paper(
     request: PaperUpdateRequest,
     db: AsyncSession = Depends(get_session),
 ):
-    # Validate input
-    try:
-        request.validate_all()
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
     result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:
