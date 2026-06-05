@@ -448,11 +448,15 @@ class TestTranslatePdfSync(unittest.TestCase):
         import tempfile
         mock_get_model.return_value = MagicMock()
         call_count = [0]
+        output_dir_ref = [None]
 
         def fail_then_succeed(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise Exception("Temporary API error")
+            # Second call succeeds: create the expected output file
+            if output_dir_ref[0]:
+                (output_dir_ref[0] / "input-mono.pdf").write_bytes(b"translated")
 
         mock_translate.side_effect = fail_then_succeed
 
@@ -465,14 +469,12 @@ class TestTranslatePdfSync(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "output"
             output_dir.mkdir()
+            output_dir_ref[0] = output_dir
             # Create partial output files that should be cleaned up
             partial1 = output_dir / "partial1.pdf"
             partial2 = output_dir / "partial2.txt"
             partial1.write_bytes(b"partial")
             partial2.write_bytes(b"partial")
-
-            # Create the expected output file for the second attempt
-            (output_dir / "input-mono.pdf").write_bytes(b"translated")
 
             result = translate_pdf_sync(
                 Path(tmpdir) / "input.pdf",
@@ -863,6 +865,32 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
         os.environ.pop("DEEPSEEK_API_KEY", None)
         config = TranslationConfig(backend="deepseek", api_key="")
         self.assertEqual(_build_pdf2zh_envs("deepseek", config), {})
+
+
+class TestTranslationResult(unittest.TestCase):
+    """Test TranslationResult class."""
+
+    def test_success_with_mono_path(self):
+        from app.services.translator import TranslationResult
+        result = TranslationResult(mono_path=Path("/tmp/mono.pdf"))
+        self.assertTrue(result.success)
+        self.assertIsNone(result.error)
+
+    def test_not_success_without_paths(self):
+        from app.services.translator import TranslationResult
+        result = TranslationResult()
+        self.assertFalse(result.success)
+
+    def test_not_success_with_error(self):
+        from app.services.translator import TranslationResult
+        result = TranslationResult(mono_path=Path("/tmp/mono.pdf"), error="fail")
+        self.assertFalse(result.success)
+
+    def test_no_output_files_returns_error(self):
+        from app.services.translator import TranslationResult
+        result = TranslationResult(error="Translation produced no output files")
+        self.assertFalse(result.success)
+        self.assertIn("no output", result.error)
 
 
 if __name__ == "__main__":

@@ -342,6 +342,8 @@ def _translate_sync(
         any_pdf = list(output_dir.glob("*.pdf"))
         if any_pdf:
             mono_path = any_pdf[0]
+        else:
+            return TranslationResult(error="Translation produced no output files")
 
     # Post-process: fix text block layout issues from pdf2zh
     try:
