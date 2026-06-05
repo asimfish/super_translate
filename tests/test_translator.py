@@ -1103,5 +1103,42 @@ class TestTranslationResult(unittest.TestCase):
         self.assertIn("no output", result.error)
 
 
+class TestGetModel(unittest.TestCase):
+    """Test get_model function."""
+
+    def test_get_model_loads_onnx_model(self):
+        """Test that get_model loads the ONNX model on first call."""
+        import app.services.translator as mod
+        from app.services.translator import get_model
+
+        # Reset the global cache
+        original = mod._model
+        mod._model = None
+        try:
+            mock_model = MagicMock()
+            with patch("pdf2zh.doclayout.OnnxModel.from_pretrained", return_value=mock_model):
+                result = get_model()
+            self.assertIs(result, mock_model)
+        finally:
+            mod._model = original
+
+    def test_get_model_caches_instance(self):
+        """Test that get_model caches the model after first load."""
+        import app.services.translator as mod
+        from app.services.translator import get_model
+
+        original = mod._model
+        mod._model = None
+        try:
+            with patch("pdf2zh.doclayout.OnnxModel.from_pretrained") as mock_cls:
+                mock_cls.return_value = MagicMock()
+                first = get_model()
+                second = get_model()
+            self.assertIs(first, second)
+            mock_cls.assert_called_once()
+        finally:
+            mod._model = original
+
+
 if __name__ == "__main__":
     unittest.main()
