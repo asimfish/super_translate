@@ -302,6 +302,32 @@ class TestTranslatePdfSync(unittest.TestCase):
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
+    def test_openai_uses_env_var_key(self, mock_get_model, mock_translate):
+        """Test that OpenAI reads API key from env when config has none."""
+        import os
+        mock_get_model.return_value = MagicMock()
+        captured_envs = {}
+
+        def capture_translate(*args, **kwargs):
+            captured_envs.update(kwargs.get("envs") or {})
+            return None
+
+        mock_translate.side_effect = capture_translate
+
+        os.environ["OPENAI_API_KEY"] = "env-key-123"
+        try:
+            config = TranslationConfig(backend="openai", api_key="", quality=QualityPreset.BALANCED)
+
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("pathlib.Path.glob", return_value=[]):
+                    translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
+
+            self.assertEqual(captured_envs.get("OPENAI_API_KEY"), "env-key-123")
+        finally:
+            os.environ.pop("OPENAI_API_KEY", None)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
     def test_deepseek_env_vars_set(self, mock_get_model, mock_translate):
         """Test that DeepSeek API key is passed via envs parameter."""
         mock_get_model.return_value = MagicMock()

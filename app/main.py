@@ -181,6 +181,12 @@ def cli():
     parser.add_argument("--open", action="store_true", help="Open browser on start")
     args = parser.parse_args()
 
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        logger.warning(
+            "Binding to %s — API has no authentication! Ensure network is trusted.",
+            args.host,
+        )
+
     if args.open:
         webbrowser.open(f"http://{args.host}:{args.port}")
 
