@@ -161,6 +161,15 @@ def _file_exists_safe(base_dir: Path, filename: str | None) -> bool:
     return file_path.exists()
 
 
+async def _get_paper_or_404(paper_id: str, db: AsyncSession) -> Paper:
+    """Fetch paper by ID or raise 404."""
+    result = await db.execute(select(Paper).where(Paper.id == paper_id))
+    paper = result.scalar_one_or_none()
+    if not paper:
+        raise HTTPException(404, "Paper not found")
+    return paper
+
+
 @router.get("/", response_model=PaperListResponse)
 async def list_papers(
     search: str = "",
@@ -280,10 +289,7 @@ async def get_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
     Raises:
         HTTPException: If paper not found (404)
     """
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(404, "Paper not found")
+    paper = await _get_paper_or_404(paper_id, db)
     # Check file existence safely (respects path traversal guard)
     has_original = _file_exists_safe(settings.papers_path, paper.stored_filename)
     has_translated = _file_exists_safe(settings.translations_path, paper.translated_filename)
@@ -309,10 +315,7 @@ async def delete_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
     Raises:
         HTTPException: If paper not found (404) or translation in progress (409)
     """
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(404, "Paper not found")
+    paper = await _get_paper_or_404(paper_id, db)
     if paper.translation_status == TranslationStatus.TRANSLATING.value:
         raise HTTPException(409, "Cannot delete paper while translation is in progress")
     await delete_paper_files(paper)
@@ -350,11 +353,7 @@ async def start_translation(
     if quality not in valid_qualities:
         raise HTTPException(400, f"Invalid quality: {quality}")
 
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(404, "Paper not found")
-
+    paper = await _get_paper_or_404(paper_id, db)
     if paper.translation_status == TranslationStatus.TRANSLATING.value:
         raise HTTPException(409, "Translation already in progress")
 
@@ -470,15 +469,6 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
         _translation_semaphore.release()
 
 
-async def _get_paper_or_404(paper_id: str, db: AsyncSession) -> Paper:
-    """Fetch paper by ID or raise 404."""
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(404, "Paper not found")
-    return paper
-
-
 @router.get("/{paper_id}/download/original")
 async def download_original(paper_id: str, db: AsyncSession = Depends(get_session)):
     paper = await _get_paper_or_404(paper_id, db)
@@ -522,10 +512,7 @@ async def update_paper(
     request: PaperUpdateRequest,
     db: AsyncSession = Depends(get_session),
 ):
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(404, "Paper not found")
+    paper = await _get_paper_or_404(paper_id, db)
     if request.title is not None:
         paper.title = request.title
     if request.tags is not None:
