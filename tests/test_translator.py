@@ -392,6 +392,186 @@ class TestTranslatePdfSync(unittest.TestCase):
         self.assertEqual(captured_env.get("DEEPSEEK_API_URL"), "https://custom.deepseek.com")
         self.assertEqual(captured_env.get("DEEPSEEK_MODEL"), "deepseek-v4-pro")
 
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_retry_on_failure_then_succeed(self, mock_get_model, mock_translate):
+        """Test that translation retries on failure and succeeds on second attempt."""
+        mock_get_model.return_value = MagicMock()
+        call_count = [0]
+
+        def fail_then_succeed(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("Temporary API error")
+            # Second call succeeds (returns None)
+
+        mock_translate.side_effect = fail_then_succeed
+
+        config = TranslationConfig(
+            backend="google",
+            quality=QualityPreset.FAST,
+            max_retries=2,
+        )
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.glob", return_value=[]):
+                result = translate_pdf_sync(
+                    Path("/tmp/input.pdf"),
+                    Path("/tmp/output"),
+                    config,
+                )
+                self.assertIsNone(result.error)
+                self.assertEqual(call_count[0], 2)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_all_retries_exhausted(self, mock_get_model, mock_translate):
+        """Test that error is returned when all retries are exhausted."""
+        mock_get_model.return_value = MagicMock()
+        mock_translate.side_effect = Exception("Persistent API error")
+
+        config = TranslationConfig(
+            backend="google",
+            quality=QualityPreset.FAST,
+            max_retries=1,
+        )
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.glob", return_value=[]):
+                result = translate_pdf_sync(
+                    Path("/tmp/input.pdf"),
+                    Path("/tmp/output"),
+                    config,
+                )
+                self.assertIsNotNone(result.error)
+                self.assertIn("Persistent API error", result.error)
+                # Should have been called 2 times (initial + 1 retry)
+                self.assertEqual(mock_translate.call_count, 2)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_finds_mono_dual_output_files(self, mock_get_model, mock_translate):
+        """Test that translated/dual output files are correctly found."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+            (output_dir / "paper-mono.pdf").write_bytes(b"mono")
+            (output_dir / "paper-dual.pdf").write_bytes(b"dual")
+
+            config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+
+            result = translate_pdf_sync(
+                Path(tmpdir) / "paper.pdf",
+                output_dir,
+                config,
+            )
+            self.assertTrue(result.success)
+            self.assertEqual(result.mono_path.name, "paper-mono.pdf")
+            self.assertEqual(result.dual_path.name, "paper-dual.pdf")
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_finds_alternative_output_names(self, mock_get_model, mock_translate):
+        """Test fallback when expected file names don't match."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+            (output_dir / "translated_mono_v2.pdf").write_bytes(b"mono")
+            (output_dir / "bilingual_dual.pdf").write_bytes(b"dual")
+
+            config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+
+            result = translate_pdf_sync(
+                Path(tmpdir) / "paper.pdf",
+                output_dir,
+                config,
+            )
+            self.assertTrue(result.success)
+            self.assertIsNotNone(result.mono_path)
+            self.assertIsNotNone(result.dual_path)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_fallback_to_any_pdf_when_no_mono_dual(self, mock_get_model, mock_translate):
+        """Test fallback to any PDF when no mono/dual files found."""
+        import tempfile
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "output"
+            output_dir.mkdir()
+            (output_dir / "result.pdf").write_bytes(b"result")
+
+            config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+
+            result = translate_pdf_sync(
+                Path(tmpdir) / "paper.pdf",
+                output_dir,
+                config,
+            )
+            self.assertTrue(result.success)
+            self.assertEqual(result.mono_path.name, "result.pdf")
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_env_vars_restored_after_translation(self, mock_get_model, mock_translate):
+        """Test that environment variables are restored after translation."""
+        import os
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        # Set a pre-existing env var
+        os.environ["DEEPSEEK_API_KEY"] = "original-key"
+
+        config = TranslationConfig(
+            backend="deepseek",
+            api_key="temp-key",
+            quality=QualityPreset.BALANCED,
+        )
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.glob", return_value=[]):
+                translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
+
+        # Should be restored to original
+        self.assertEqual(os.environ.get("DEEPSEEK_API_KEY"), "original-key")
+
+        # Cleanup
+        os.environ.pop("DEEPSEEK_API_KEY", None)
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
+    def test_env_vars_cleaned_up_when_not_previously_set(self, mock_get_model, mock_translate):
+        """Test that env vars are removed if they weren't set before."""
+        import os
+        mock_get_model.return_value = MagicMock()
+        mock_translate.return_value = None
+
+        # Ensure env var is not set
+        os.environ.pop("DEEPSEEK_API_KEY", None)
+
+        config = TranslationConfig(
+            backend="deepseek",
+            api_key="temp-key",
+            quality=QualityPreset.BALANCED,
+        )
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.glob", return_value=[]):
+                translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
+
+        # Should be cleaned up (not left as "temp-key")
+        self.assertIsNone(os.environ.get("DEEPSEEK_API_KEY"))
+
 
 class TestSanitizeError(unittest.TestCase):
     """Test _sanitize_error function."""
