@@ -483,91 +483,9 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced") -> 
         quality_preset = _quality_map.get(quality, QualityPreset.BALANCED)
         config = _resolve_backend_config(backend, quality_preset)
 
-        async def _do_translate():
-            async with async_session() as db:
-                result = await db.execute(select(Paper).where(Paper.id == paper_id))
-                paper = result.scalar_one_or_none()
-                if not paper:
-                    logger.error("Paper %s not found for translation", paper_id)
-                    return
-
-                # Validate paths (defense-in-depth)
-                papers_base = settings.papers_path.resolve()
-                input_path = (settings.papers_path / paper.stored_filename).resolve()
-                if not input_path.is_relative_to(papers_base):
-                    logger.error("Path traversal detected for paper %s", paper_id)
-                    paper.translation_status = TranslationStatus.FAILED.value
-                    paper.translation_error = "Invalid file path"
-                    await db.commit()
-                    return
-
-                output_dir = settings.translations_path / paper.id
-
-                if not input_path.exists():
-                    logger.error("Original file missing for paper %s", paper_id)
-                    paper.translation_status = TranslationStatus.FAILED.value
-                    paper.translation_error = "Original PDF file not found"
-                    await db.commit()
-                    return
-
-                logger.info("Starting translation for paper %s (backend=%s, quality=%s)", paper_id, config.backend, quality)
-
-                # Progress callback: schedules async DB update from sync context.
-                # Throttled to 1% increments to avoid excessive DB writes.
-                _last_pct: list[float] = [0.0]
-
-                def _on_progress(pct: float) -> None:
-                    if pct - _last_pct[0] < 0.01 and pct < 1.0:
-                        return
-                    _last_pct[0] = pct
-
-                    async def _update():
-                        async with async_session() as p_db:
-                            p = await p_db.get(Paper, paper_id)
-                            if p and p.translation_status == TranslationStatus.TRANSLATING.value:
-                                p.translation_progress = pct
-                                await p_db.commit()
-                    try:
-                        asyncio.run_coroutine_threadsafe(_update(), loop)
-                    except Exception:
-                        pass  # non-fatal
-
-                try:
-                    # Run in executor so the event loop can process progress callbacks
-                    # scheduled by run_coroutine_threadsafe from the sync callback
-                    loop = asyncio.get_event_loop()
-                    trans_result = await loop.run_in_executor(
-                        None, lambda: translate_pdf_sync(input_path, output_dir, config, _on_progress)
-                    )
-                except Exception as e:
-                    logger.exception("Translation crashed for paper %s", paper_id)
-                    paper.translation_status = TranslationStatus.FAILED.value
-                    paper.translation_error = sanitize_error(e)
-                    if output_dir.exists():
-                        shutil.rmtree(output_dir, ignore_errors=True)
-                    await db.commit()
-                    return
-
-                if trans_result.success:
-                    paper.translation_status = TranslationStatus.COMPLETED.value
-                    paper.translation_progress = 1.0
-                    if trans_result.mono_path:
-                        paper.translated_filename = str(trans_result.mono_path.relative_to(settings.translations_path))
-                    if trans_result.dual_path:
-                        paper.dual_filename = str(trans_result.dual_path.relative_to(settings.translations_path))
-                    logger.info("Translation completed for paper %s", paper_id)
-                else:
-                    paper.translation_status = TranslationStatus.FAILED.value
-                    paper.translation_error = trans_result.error
-                    if output_dir.exists():
-                        shutil.rmtree(output_dir, ignore_errors=True)
-                    logger.error("Translation failed for paper %s: %s", paper_id, trans_result.error)
-
-                await db.commit()
-
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(_do_translate())
+            loop.run_until_complete(_do_translate(paper_id, config, quality, loop))
         finally:
             loop.close()
 
@@ -579,6 +497,111 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced") -> 
 
     finally:
         _translation_semaphore.release()
+
+
+async def _do_translate(
+    paper_id: str,
+    config: TranslationConfig,
+    quality: str,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Execute translation in async context."""
+    from app.core.database import async_session
+
+    async with async_session() as db:
+        result = await db.execute(select(Paper).where(Paper.id == paper_id))
+        paper = result.scalar_one_or_none()
+        if not paper:
+            logger.error("Paper %s not found for translation", paper_id)
+            return
+
+        # Validate paths (defense-in-depth)
+        papers_base = settings.papers_path.resolve()
+        input_path = (settings.papers_path / paper.stored_filename).resolve()
+        if not input_path.is_relative_to(papers_base):
+            logger.error("Path traversal detected for paper %s", paper_id)
+            paper.translation_status = TranslationStatus.FAILED.value
+            paper.translation_error = "Invalid file path"
+            await db.commit()
+            return
+
+        output_dir = settings.translations_path / paper.id
+
+        if not input_path.exists():
+            logger.error("Original file missing for paper %s", paper_id)
+            paper.translation_status = TranslationStatus.FAILED.value
+            paper.translation_error = "Original PDF file not found"
+            await db.commit()
+            return
+
+        logger.info("Starting translation for paper %s (backend=%s, quality=%s)", paper_id, config.backend, quality)
+
+        on_progress = _create_progress_handler(paper_id, loop)
+
+        try:
+            trans_result = await loop.run_in_executor(
+                None, lambda: translate_pdf_sync(input_path, output_dir, config, on_progress)
+            )
+        except Exception as e:
+            logger.exception("Translation crashed for paper %s", paper_id)
+            paper.translation_status = TranslationStatus.FAILED.value
+            paper.translation_error = sanitize_error(e)
+            if output_dir.exists():
+                shutil.rmtree(output_dir, ignore_errors=True)
+            await db.commit()
+            return
+
+        _update_paper_result(paper, trans_result, output_dir)
+        await db.commit()
+
+
+def _create_progress_handler(
+    paper_id: str,
+    loop: asyncio.AbstractEventLoop,
+) -> callable:
+    """Create a progress callback that updates the database."""
+    _last_pct: list[float] = [0.0]
+
+    def _on_progress(pct: float) -> None:
+        if pct - _last_pct[0] < 0.01 and pct < 1.0:
+            return
+        _last_pct[0] = pct
+
+        async def _update():
+            from app.core.database import async_session
+            async with async_session() as p_db:
+                p = await p_db.get(Paper, paper_id)
+                if p and p.translation_status == TranslationStatus.TRANSLATING.value:
+                    p.translation_progress = pct
+                    await p_db.commit()
+        try:
+            asyncio.run_coroutine_threadsafe(_update(), loop)
+        except Exception:
+            pass  # non-fatal
+
+    return _on_progress
+
+
+def _update_paper_result(
+    paper: Paper,
+    trans_result: object,
+    output_dir: Path,
+) -> None:
+    """Update paper with translation result."""
+    if trans_result.success:
+        paper.translation_status = TranslationStatus.COMPLETED.value
+        paper.translation_progress = 1.0
+        if trans_result.mono_path:
+            paper.translated_filename = str(trans_result.mono_path.relative_to(settings.translations_path))
+        if trans_result.dual_path:
+            paper.dual_filename = str(trans_result.dual_path.relative_to(settings.translations_path))
+        logger.info("Translation completed for paper %s", paper.id)
+    else:
+        paper.translation_status = TranslationStatus.FAILED.value
+        paper.translation_error = trans_result.error
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
+        logger.error("Translation failed for paper %s: %s", paper.id, trans_result.error)
 
 
 async def _serve_paper_file(
