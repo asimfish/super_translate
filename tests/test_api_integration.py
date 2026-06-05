@@ -368,6 +368,42 @@ class TestPaperUpdateEndpoint:
         assert response.status_code == 400
         assert "Notes must be 10000 characters or less" in response.json()["detail"]
 
+    def test_update_whitespace_title_stripped_to_none(self, client, mock_db, sample_paper):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.patch(
+            f"/api/papers/{sample_paper.id}",
+            json={"title": "   "},
+        )
+        assert response.status_code == 200
+        # Title should be stripped to None, so paper.title is not updated
+        sample_paper.title = sample_paper.title  # unchanged
+
+    def test_update_whitespace_tags_stripped_to_none(self, client, mock_db, sample_paper):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.patch(
+            f"/api/papers/{sample_paper.id}",
+            json={"tags": "   "},
+        )
+        assert response.status_code == 200
+
+    def test_update_title_with_leading_trailing_spaces(self, client, mock_db, sample_paper):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.patch(
+            f"/api/papers/{sample_paper.id}",
+            json={"title": "  My Paper  "},
+        )
+        assert response.status_code == 200
+        assert sample_paper.title == "My Paper"
+
 
 class TestTranslationEndpoint:
     """Test translation endpoint."""

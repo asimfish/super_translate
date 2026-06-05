@@ -77,22 +77,34 @@ class PaperUpdateRequest(BaseModel):
     @field_validator("title")
     @classmethod
     def validate_title(cls, v: str | None) -> str | None:
-        if v is not None and len(v) > 500:
-            raise ValueError("Title must be 500 characters or less")
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 500:
+                raise ValueError("Title must be 500 characters or less")
         return v
 
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, v: str | None) -> str | None:
-        if v is not None and len(v) > 1000:
-            raise ValueError("Tags must be 1000 characters or less")
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 1000:
+                raise ValueError("Tags must be 1000 characters or less")
         return v
 
     @field_validator("notes")
     @classmethod
     def validate_notes(cls, v: str | None) -> str | None:
-        if v is not None and len(v) > 10000:
-            raise ValueError("Notes must be 10000 characters or less")
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 10000:
+                raise ValueError("Notes must be 10000 characters or less")
         return v
 
 
