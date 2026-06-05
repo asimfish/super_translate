@@ -140,7 +140,7 @@ async function batchTranslate() {
     }
   }
 
-  alert(`批量翻译完成：${success} 成功，${failed} 失败`);
+  alert(`已提交 ${success} 篇翻译任务${failed > 0 ? `，${failed} 篇提交失败` : ''}。翻译在后台进行中，请稍后刷新查看结果。`);
   loadPapers();
 }
 
