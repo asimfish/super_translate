@@ -1,6 +1,7 @@
 """Tests for app.services.layout_fix module."""
 
 import unittest
+import unittest.mock
 
 from app.services.layout_fix import (
     TextBlockInfo,
@@ -198,6 +199,107 @@ class TestNeedsFix(unittest.TestCase):
         """Short text in wide blocks is still checked for margin offset."""
         block = self._make_block((150, 100, 504, 120), text="Time")  # len=4, width=354
         self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
+
+
+class TestFindChineseFont(unittest.TestCase):
+    """Test Chinese font detection in pages."""
+
+    def test_source_han_serif(self):
+        """Detects SourceHanSerif font."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = [
+            (0, 0, 0, "SourceHanSerif-Regular", "F1"),
+        ]
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "F1")
+
+    def test_noto_font(self):
+        """Detects Noto font."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = [
+            (0, 0, 0, "NotoSansSC-Regular", "F2"),
+        ]
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "F2")
+
+    def test_fallback_when_no_chinese_font(self):
+        """Falls back to china-ss when no Chinese font found."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = [
+            (0, 0, 0, "Helvetica", "F3"),
+        ]
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "china-ss")
+
+    def test_empty_font_list(self):
+        """Falls back when page has no fonts."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = []
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "china-ss")
+
+    def test_short_font_info(self):
+        """Handles font_info with fewer than 5 elements."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = [(0, 0, 0)]
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "china-ss")
+
+
+class TestCleanTextEdgeCases(unittest.TestCase):
+    """Test edge cases for _clean_text."""
+
+    def test_cjk_punctuation_trailing_number(self):
+        self.assertEqual(_clean_text("结束。35"), "结束。")
+
+    def test_multiple_cjk_trailing_numbers(self):
+        text = "第一段内容24\n第二段内容25"
+        result = _clean_text(text)
+        self.assertEqual(result, "第一段内容\n第二段内容")
+
+    def test_preserves_english_with_trailing_number(self):
+        """English text like 'abc24' should not be modified."""
+        self.assertEqual(_clean_text("abc24"), "abc24")
+
+    def test_mixed_cjk_and_english_lines(self):
+        text = "中文内容24\nFigure 3\n英文正文"
+        result = _clean_text(text)
+        self.assertIn("中文内容", result)
+        self.assertIn("Figure 3", result)
+        self.assertIn("英文正文", result)
+        self.assertNotIn("24", result)
+
+    def test_whitespace_only_lines_filtered(self):
+        text = "  \n正文内容\n  \n"
+        result = _clean_text(text)
+        self.assertEqual(result, "正文内容")
+
+
+class TestHasEmbeddedLineNumberEdgeCases(unittest.TestCase):
+    """Test edge cases for _has_embedded_line_numbers."""
+
+    def test_cjk_fullwidth_punctuation(self):
+        """Fullwidth punctuation followed by number."""
+        self.assertTrue(_has_embedded_line_numbers("内容。35"))
+
+    def test_multiline_first_line_number(self):
+        """First line is a standalone number."""
+        self.assertTrue(_has_embedded_line_numbers("42\n这是正文"))
+
+    def test_multiline_not_first_line(self):
+        """Standalone number on non-first line is not flagged."""
+        self.assertFalse(_has_embedded_line_numbers("正文内容\n正常的行"))
+
+    def test_section_number_with_chinese(self):
+        """Section headers like '1 引言' should not be flagged."""
+        self.assertFalse(_has_embedded_line_numbers("1 引言"))
+
+    def test_english_figure_reference(self):
+        """'Figure 3' should not be flagged."""
+        self.assertFalse(_has_embedded_line_numbers("Figure 3"))
+
+    def test_only_whitespace(self):
+        self.assertFalse(_has_embedded_line_numbers("   "))
 
 
 if __name__ == "__main__":
