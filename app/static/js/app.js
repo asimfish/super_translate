@@ -235,6 +235,18 @@ function handleFileSelect(input) {
 }
 
 function selectFile(file) {
+  if (!file.name.toLowerCase().endsWith('.pdf')) {
+    alert('请选择 PDF 文件');
+    return;
+  }
+  if (file.size > 100 * 1024 * 1024) {
+    alert('文件过大（最大 100MB）');
+    return;
+  }
+  if (file.size === 0) {
+    alert('文件为空');
+    return;
+  }
   selectedFile = file;
   document.getElementById('drop-zone').classList.add('hidden');
   document.getElementById('upload-preview').classList.remove('hidden');
@@ -667,17 +679,27 @@ function addTransLog(msg, cls = '') {
 }
 
 // === Downloads ===
+function downloadFile(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 function downloadTranslated() {
-  if (currentPaper) window.open(`/api/papers/${currentPaper.id}/download/translated`);
+  if (currentPaper) downloadFile(`/api/papers/${currentPaper.id}/download/translated`);
 }
 function downloadDual() {
-  if (currentPaper) window.open(`/api/papers/${currentPaper.id}/download/dual`);
+  if (currentPaper) downloadFile(`/api/papers/${currentPaper.id}/download/dual`);
 }
 function downloadTranslatedById(id) {
-  window.open(`/api/papers/${id}/download/translated`);
+  downloadFile(`/api/papers/${id}/download/translated`);
 }
 function downloadDualById(id) {
-  window.open(`/api/papers/${id}/download/dual`);
+  downloadFile(`/api/papers/${id}/download/dual`);
 }
 
 // === Delete ===
