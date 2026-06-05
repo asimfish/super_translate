@@ -279,26 +279,7 @@ def _translate_sync(
     onnx_model = get_model()
     threads = preset.get("threads", config.threads)
 
-    def pdf2zh_callback(*args: object) -> None:
-        try:
-            pct = None
-            if len(args) == 1 and hasattr(args[0], "n") and hasattr(args[0], "total"):
-                # tqdm progress object
-                p = args[0]
-                pct = p.n / p.total if p.total > 0 else 0
-            elif len(args) == 2:
-                current, total = args
-                pct = current / total if total > 0 else 0
-            elif len(args) == 1 and isinstance(args[0], (int, float)):
-                pct = args[0]
-
-            if pct is not None:
-                pct = max(0.0, min(1.0, pct))
-                logger.debug("Translation progress: %.0f%%", pct * 100)
-                if progress_callback:
-                    progress_callback(pct)
-        except Exception as e:
-            logger.debug("Progress callback error: %s", e)
+    pdf2zh_callback = _create_progress_callback(progress_callback)
 
     for attempt in range(config.max_retries + 1):
         try:
@@ -331,7 +312,42 @@ def _translate_sync(
                 logger.error("All translation attempts failed for %s", input_path.name)
                 raise
 
-    # Find output files
+    return _collect_output(input_path, output_dir)
+
+
+def _create_progress_callback(
+    progress_callback: Optional[callable],
+) -> callable:
+    """Create a pdf2zh-compatible progress callback."""
+    def pdf2zh_callback(*args: object) -> None:
+        try:
+            pct = None
+            if len(args) == 1 and hasattr(args[0], "n") and hasattr(args[0], "total"):
+                # tqdm progress object
+                p = args[0]
+                pct = p.n / p.total if p.total > 0 else 0
+            elif len(args) == 2:
+                current, total = args
+                pct = current / total if total > 0 else 0
+            elif len(args) == 1 and isinstance(args[0], (int, float)):
+                pct = args[0]
+
+            if pct is not None:
+                pct = max(0.0, min(1.0, pct))
+                logger.debug("Translation progress: %.0f%%", pct * 100)
+                if progress_callback:
+                    progress_callback(pct)
+        except Exception as e:
+            logger.debug("Progress callback error: %s", e)
+
+    return pdf2zh_callback
+
+
+def _collect_output(
+    input_path: Path,
+    output_dir: Path,
+) -> TranslationResult:
+    """Find and validate translation output files."""
     stem = input_path.stem
     mono_path = output_dir / f"{stem}-mono.pdf"
     dual_path = output_dir / f"{stem}-dual.pdf"
