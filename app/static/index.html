@@ -15,7 +15,7 @@
       <span class="subtitle">AI 论文翻译阅读系统</span>
     </div>
     <div class="header-right">
-      <button class="btn btn-primary" onclick="showUpload()">+ 上传论文</button>
+      <button class="btn btn-primary" data-action="show-upload">+ 上传论文</button>
     </div>
   </header>
 
@@ -25,10 +25,10 @@
     <div id="library-view" class="view active">
       <div class="toolbar">
         <div class="search-box">
-          <input type="text" id="search-input" placeholder="搜索论文标题..." oninput="debounceSearch()">
+          <input type="text" id="search-input" placeholder="搜索论文标题..." data-action="debounce-search">
         </div>
         <div class="filter-box">
-          <select id="status-filter" onchange="loadPapers()">
+          <select id="status-filter" data-action="load-papers">
             <option value="">全部状态</option>
             <option value="pending">待翻译</option>
             <option value="translating">翻译中</option>
@@ -38,7 +38,7 @@
         </div>
         <div class="toolbar-actions">
           <span id="stats-bar" class="stats-bar"></span>
-          <button class="btn btn-outline btn-sm" onclick="batchTranslate()">批量翻译</button>
+          <button class="btn btn-outline btn-sm" data-action="batch-translate">批量翻译</button>
         </div>
       </div>
       <div id="paper-list" class="paper-grid"></div>
@@ -47,21 +47,21 @@
         <div class="empty-icon">📚</div>
         <h3>还没有论文</h3>
         <p>上传英文 PDF 开始使用</p>
-        <button class="btn btn-primary" onclick="showUpload()">上传第一篇论文</button>
+        <button class="btn btn-primary" data-action="show-upload">上传第一篇论文</button>
       </div>
     </div>
 
     <!-- Upload View -->
     <div id="upload-view" class="view">
       <div class="upload-container">
-        <button class="btn-back" onclick="showLibrary()">← 返回</button>
+        <button class="btn-back" data-action="show-library">← 返回</button>
         <h2>上传论文</h2>
         <div id="drop-zone" class="drop-zone">
           <div class="drop-icon">📄</div>
           <p>拖拽 PDF 文件到这里，或</p>
           <label class="btn btn-outline">
             选择文件
-            <input type="file" id="file-input" accept=".pdf" hidden onchange="handleFileSelect(this)">
+            <input type="file" id="file-input" accept=".pdf" hidden data-action="handle-file-select">
           </label>
         </div>
         <div id="upload-preview" class="upload-preview" style="display:none">
@@ -71,8 +71,8 @@
           </div>
           <div class="upload-actions">
             <input type="text" id="upload-tags" placeholder="标签（可选，逗号分隔）">
-            <button class="btn btn-primary" onclick="doUpload()">上传</button>
-            <button class="btn btn-outline" onclick="cancelUpload()">取消</button>
+            <button class="btn btn-primary" data-action="do-upload">上传</button>
+            <button class="btn btn-outline" data-action="cancel-upload">取消</button>
           </div>
         </div>
         <div id="upload-progress" style="display:none">
@@ -85,7 +85,7 @@
     <!-- Reader View (Side-by-side) -->
     <div id="reader-view" class="view">
       <div class="reader-toolbar">
-        <button class="btn-back" onclick="showLibrary()">← 返回</button>
+        <button class="btn-back" data-action="show-library">← 返回</button>
         <div class="reader-title" id="reader-title"></div>
         <div class="reader-actions">
           <div class="translate-controls">
@@ -94,11 +94,11 @@
               <option value="balanced" selected>标准 (DeepSeek)</option>
               <option value="quality">高质量 (DeepSeek+优化)</option>
             </select>
-            <button class="btn btn-sm btn-primary" id="btn-translate" onclick="startTranslate()">翻译</button>
+            <button class="btn btn-sm btn-primary" id="btn-translate" data-action="start-translate">翻译</button>
           </div>
-          <button class="btn btn-sm btn-primary" id="btn-sync-scroll" onclick="toggleSyncScroll()">同步滚动: 开</button>
-          <button class="btn btn-sm" id="btn-download-mono" onclick="downloadTranslated()" style="display:none">下载译文</button>
-          <button class="btn btn-sm" id="btn-download-dual" onclick="downloadDual()" style="display:none">下载双语</button>
+          <button class="btn btn-sm btn-primary" id="btn-sync-scroll" data-action="toggle-sync-scroll">同步滚动: 开</button>
+          <button class="btn btn-sm" id="btn-download-mono" data-action="download-translated" style="display:none">下载译文</button>
+          <button class="btn btn-sm" id="btn-download-dual" data-action="download-dual" style="display:none">下载双语</button>
         </div>
       </div>
       <div class="reader-body">
@@ -113,7 +113,7 @@
           <div id="translate-placeholder" class="translate-placeholder">
             <div class="placeholder-icon">🌐</div>
             <p>点击"翻译"按钮生成中文译文</p>
-            <button class="btn btn-primary" onclick="startTranslate()">开始翻译</button>
+            <button class="btn btn-primary" data-action="start-translate">开始翻译</button>
           </div>
         </div>
       </div>

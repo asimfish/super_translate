@@ -690,6 +690,43 @@ function statusLabel(s) {
   return map[s] || s;
 }
 
+// === Event Delegation ===
+const actionHandlers = {
+  'show-upload': showUpload,
+  'show-library': showLibrary,
+  'batch-translate': batchTranslate,
+  'do-upload': doUpload,
+  'cancel-upload': cancelUpload,
+  'start-translate': startTranslate,
+  'toggle-sync-scroll': toggleSyncScroll,
+  'download-translated': downloadTranslated,
+  'download-dual': downloadDual,
+  'debounce-search': debounceSearch,
+  'load-papers': loadPapers,
+  'handle-file-select': (e) => handleFileSelect(e.target),
+};
+
+document.addEventListener('click', (e) => {
+  const action = e.target.closest('[data-action]')?.dataset.action;
+  if (action && actionHandlers[action]) {
+    actionHandlers[action](e);
+  }
+});
+
+document.addEventListener('input', (e) => {
+  const action = e.target.dataset.action;
+  if (action && actionHandlers[action]) {
+    actionHandlers[action](e);
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const action = e.target.dataset.action;
+  if (action && actionHandlers[action]) {
+    actionHandlers[action](e);
+  }
+});
+
 // === Init ===
 document.addEventListener('DOMContentLoaded', () => {
   initDropZone();
