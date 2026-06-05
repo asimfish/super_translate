@@ -13,6 +13,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """Sliding window rate limiter.
 
     Tracks request counts per client IP within a time window.
+    Only trusts X-Forwarded-For when trust_proxy is True.
     """
 
     def __init__(
@@ -21,11 +22,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         requests_per_minute: int = 60,
         requests_per_hour: int = 500,
         window_seconds: int = 60,
+        trust_proxy: bool = False,
     ):
         super().__init__(app)
         self.requests_per_minute = requests_per_minute
         self.requests_per_hour = requests_per_hour
         self.window_seconds = window_seconds
+        self.trust_proxy = trust_proxy
         # {ip: [(timestamp, ...), ...]}
         self._minute_requests: dict[str, list[float]] = defaultdict(list)
         self._hour_requests: dict[str, list[float]] = defaultdict(list)
@@ -38,10 +41,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._last_cleanup = time.time()
 
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP from request."""
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
+        """Extract client IP from request.
+
+        Only trusts X-Forwarded-For when trust_proxy is True to prevent
+        attackers from spoofing their IP to bypass rate limiting.
+        """
+        if self.trust_proxy:
+            forwarded = request.headers.get("X-Forwarded-For")
+            if forwarded:
+                return forwarded.split(",")[0].strip()
         return request.client.host if request.client else "unknown"
 
     def _cleanup_old_entries(self) -> None:

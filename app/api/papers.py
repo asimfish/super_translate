@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +22,9 @@ from app.services.library import (
     save_uploaded_pdf,
 )
 from app.services.translator import QualityPreset, TranslationConfig, translate_pdf_sync
+
+# Limit concurrent translations to prevent resource exhaustion
+_translation_semaphore = threading.Semaphore(2)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/papers", tags=["papers"])
@@ -312,6 +316,11 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
     import asyncio
     from app.core.database import async_session
 
+    acquired = _translation_semaphore.acquire(timeout=300)
+    if not acquired:
+        logger.error("Translation queue full, rejecting paper %s", paper_id)
+        return
+
     async def _do_translate():
         async with async_session() as db:
             result = await db.execute(select(Paper).where(Paper.id == paper_id))
@@ -389,6 +398,7 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
         loop.run_until_complete(_do_translate())
     finally:
         loop.close()
+        _translation_semaphore.release()
 
 
 @router.get("/{paper_id}/download/original")
