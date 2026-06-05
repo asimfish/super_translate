@@ -131,11 +131,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             client_ip not in self._minute_requests
             and len(self._minute_requests) >= _MAX_TRACKED_IPS
         ):
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Too many clients, try again later"},
-                headers={"Retry-After": "60"},
-            )
+            # Force cleanup to reclaim stale entries before rejecting
+            self._last_cleanup = 0
+            self._cleanup_old_entries()
+            if len(self._minute_requests) >= _MAX_TRACKED_IPS:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many clients, try again later"},
+                    headers={"Retry-After": "60"},
+                )
 
         allowed, error_msg = self._check_rate_limit(client_ip)
         if not allowed:
