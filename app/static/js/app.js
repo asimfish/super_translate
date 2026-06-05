@@ -16,6 +16,7 @@ const api = {
     params.set('offset', offset);
     params.set('limit', limit);
     const res = await fetch(`/api/papers/?${params}`);
+    if (!res.ok) throw new Error((await res.json()).detail || 'Failed to load papers');
     return res.json();
   },
   async uploadPaper(file, tags = '') {
@@ -28,6 +29,7 @@ const api = {
   },
   async getPaper(id) {
     const res = await fetch(`/api/papers/${id}`);
+    if (!res.ok) throw new Error((await res.json()).detail || 'Paper not found');
     return res.json();
   },
   async translatePaper(id, backend = '', quality = 'balanced') {
@@ -54,6 +56,7 @@ const api = {
   },
   async getStats() {
     const res = await fetch('/api/stats');
+    if (!res.ok) throw new Error('Failed to load stats');
     return res.json();
   }
 };
