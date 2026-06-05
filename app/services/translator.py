@@ -3,7 +3,6 @@
 import logging
 import os
 import re
-import shutil
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -315,12 +314,9 @@ def _translate_sync(
 
         except Exception as e:
             # Clean up partial output from this attempt (files and subdirs)
-            if output_dir.exists():
-                try:
-                    shutil.rmtree(output_dir)
-                except OSError as cleanup_err:
-                    logger.warning("Failed to clean up %s: %s", output_dir, cleanup_err)
-                output_dir.mkdir(parents=True, exist_ok=True)
+            from app.services.library import cleanup_output_dir
+            cleanup_output_dir(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
             if attempt < config.max_retries:
                 logger.warning(
                     "Translation attempt %d failed: %s. Retrying...",

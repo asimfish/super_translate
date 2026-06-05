@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import shutil
 import uuid
 from pathlib import Path
 
@@ -12,6 +13,15 @@ from app.core.config import settings
 from app.models.paper import Paper
 
 logger = logging.getLogger(__name__)
+
+
+def cleanup_output_dir(output_dir: Path) -> None:
+    """Remove translation output directory on failure."""
+    if output_dir.exists():
+        try:
+            shutil.rmtree(output_dir)
+        except OSError as cleanup_err:
+            logger.warning("Failed to clean up %s: %s", output_dir, cleanup_err)
 
 
 def generate_stored_filename(original_filename: str) -> str:
