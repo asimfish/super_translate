@@ -159,7 +159,6 @@ async def stats():
         result = {
             "total_papers": total or 0,
             "completed_translations": completed or 0,
-            "storage_path": str(settings.base_dir / settings.data_dir),
         }
 
         with _stats_lock:
