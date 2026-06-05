@@ -454,6 +454,42 @@ class TestDownloadEndpoints:
             response = client.get(f"/api/papers/{sample_paper.id}/view/original")
             assert response.status_code == 200
 
+    def test_download_translated_success(self, client, mock_db, sample_paper, tmp_path):
+        """Test successful translated PDF download."""
+        from unittest.mock import patch as _patch
+        sample_paper.translated_filename = "paper123/mono.pdf"
+        sample_paper.original_filename = "paper.pdf"
+        (tmp_path / "paper123").mkdir()
+        (tmp_path / "paper123" / "mono.pdf").write_bytes(b"%PDF-1.4 translated")
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.translations_path = tmp_path
+            response = client.get(f"/api/papers/{sample_paper.id}/download/translated")
+            assert response.status_code == 200
+            assert "paper_zh.pdf" in response.headers.get("content-disposition", "")
+
+    def test_download_dual_success(self, client, mock_db, sample_paper, tmp_path):
+        """Test successful dual PDF download."""
+        from unittest.mock import patch as _patch
+        sample_paper.dual_filename = "paper123/dual.pdf"
+        sample_paper.original_filename = "paper.pdf"
+        (tmp_path / "paper123").mkdir()
+        (tmp_path / "paper123" / "dual.pdf").write_bytes(b"%PDF-1.4 dual")
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.translations_path = tmp_path
+            response = client.get(f"/api/papers/{sample_paper.id}/download/dual")
+            assert response.status_code == 200
+            assert "paper_dual.pdf" in response.headers.get("content-disposition", "")
+
 
 class TestStatsEndpoint:
     """Test stats endpoint."""
