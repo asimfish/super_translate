@@ -247,7 +247,9 @@ async def list_papers(
         paper_responses.append(_paper_to_response(
             p,
             has_original=_file_exists_safe(settings.papers_path, p.stored_filename, papers_base),
-            has_translated=_file_exists_safe(settings.translations_path, p.translated_filename, trans_base),
+            has_translated=_file_exists_safe(
+                settings.translations_path, p.translated_filename, trans_base
+            ),
             has_dual=_file_exists_safe(settings.translations_path, p.dual_filename, trans_base),
         ))
 
@@ -532,7 +534,10 @@ async def _do_translate(
             await db.commit()
             return
 
-        logger.info("Starting translation for paper %s (backend=%s, quality=%s)", paper_id, config.backend, quality)
+        logger.info(
+            "Starting translation for paper %s (backend=%s, quality=%s)",
+            paper_id, config.backend, quality,
+        )
 
         on_progress = _create_progress_handler(paper_id, loop)
 
