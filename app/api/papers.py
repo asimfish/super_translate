@@ -461,6 +461,13 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
                 input_path = settings.papers_path / paper.stored_filename
                 output_dir = settings.translations_path / paper.id
 
+                if not input_path.exists():
+                    logger.error("Original file missing for paper %s: %s", paper_id, paper.stored_filename)
+                    paper.translation_status = TranslationStatus.FAILED.value
+                    paper.translation_error = "Original PDF file not found"
+                    await db.commit()
+                    return
+
                 logger.info("Starting translation for paper %s (backend=%s, quality=%s, key=%s)", paper_id, config.backend, quality, "SET" if config.api_key else "NONE")
 
                 try:

@@ -830,6 +830,9 @@ class TestRunTranslation:
         mock_settings.papers_path = papers_dir
         mock_settings.translations_path = translations_dir
 
+        # Create the input file so the existence check passes
+        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+
         mono_path = translations_dir / "paper123" / "test-mono.pdf"
         mono_path.parent.mkdir(parents=True)
         mono_path.write_bytes(b"translated")
@@ -854,6 +857,34 @@ class TestRunTranslation:
         with patch("app.core.database.async_session", self._make_async_session_mock(db)):
             _run_translation("nonexistent", "google", "fast")
 
+        mock_translate.assert_not_called()
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_missing_input_file_sets_failed(self, mock_settings, mock_translate, tmp_path):
+        from app.api.papers import _run_translation
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translation_status = "translating"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        # Do NOT create the input file — simulate missing original
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("paper123", "google", "fast")
+
+        assert paper.translation_status == "failed"
+        assert paper.translation_error == "Original PDF file not found"
         mock_translate.assert_not_called()
 
     @patch("app.api.papers.translate_pdf_sync")
@@ -903,6 +934,9 @@ class TestRunTranslation:
         mock_settings.papers_path = papers_dir
         mock_settings.translations_path = translations_dir
 
+        # Create the input file so the existence check passes
+        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+
         partial_dir = translations_dir / "paper123"
         partial_dir.mkdir()
         (partial_dir / "partial.pdf").write_bytes(b"partial")
@@ -945,6 +979,9 @@ class TestRunTranslation:
         translations_dir.mkdir()
         mock_settings.papers_path = papers_dir
         mock_settings.translations_path = translations_dir
+
+        # Create the input file so the existence check passes
+        (papers_dir / "test.pdf").write_bytes(b"PDF content")
 
         out_dir = translations_dir / "paper123"
         out_dir.mkdir()
