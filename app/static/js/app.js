@@ -529,6 +529,9 @@ function showTranslateDialog(paperId) {
       </div>
     </div>
   `;
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.remove();
+  });
   document.body.appendChild(dialog);
 }
 
