@@ -28,6 +28,7 @@ from app.services.library import (
 from app.services.translator import (
     QualityPreset,
     TranslationConfig,
+    TranslationResult,
     sanitize_error,
     translate_pdf_sync,
 )
@@ -645,7 +646,7 @@ def _create_progress_handler(
 
 def _update_paper_result(
     paper: Paper,
-    trans_result: object,
+    trans_result: TranslationResult,
     output_dir: Path,
 ) -> None:
     """Update paper with translation result."""
