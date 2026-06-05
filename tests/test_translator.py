@@ -156,6 +156,40 @@ class TestQualityPresets(unittest.TestCase):
             for key in required_keys:
                 self.assertIn(key, preset)
 
+    def test_balanced_prompt_contains_key_rules(self):
+        preset = QUALITY_PRESETS[QualityPreset.BALANCED]
+        prompt = preset["prompt"].safe_substitute(text="")
+        self.assertIn("纯中文", prompt)
+        self.assertIn("公式保护", prompt)
+        self.assertIn("引用保护", prompt)
+
+    def test_quality_prompt_contains_key_rules(self):
+        preset = QUALITY_PRESETS[QualityPreset.QUALITY]
+        prompt = preset["prompt"].safe_substitute(text="")
+        self.assertIn("纯中文", prompt)
+        self.assertIn("代码", prompt)
+        self.assertIn("图表", prompt)
+        self.assertIn("长句拆分", prompt)
+
+    def test_fast_preset_has_no_prompt(self):
+        preset = QUALITY_PRESETS[QualityPreset.FAST]
+        self.assertIsNone(preset["prompt"])
+
+    def test_balanced_vfont_matches_math_fonts(self):
+        import re
+        pattern = QUALITY_PRESETS[QualityPreset.BALANCED]["vfont"]
+        self.assertTrue(re.search(pattern, "CMMI10"))  # Computer Modern Math Italic
+        self.assertTrue(re.search(pattern, "CMSY10"))  # Computer Modern Symbols
+        self.assertTrue(re.search(pattern, "STIXMath"))
+        self.assertFalse(re.search(pattern, "CMR10"))  # CM Roman is text, not math
+
+    def test_quality_vchar_matches_greek(self):
+        import re
+        pattern = QUALITY_PRESETS[QualityPreset.QUALITY]["vchar"]
+        self.assertTrue(re.search(pattern, "α"))
+        self.assertTrue(re.search(pattern, "∑"))
+        self.assertTrue(re.search(pattern, "∫"))
+
 
 class TestTranslatePdfSync(unittest.TestCase):
     """Test translate_pdf_sync function."""

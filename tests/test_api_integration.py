@@ -358,6 +358,21 @@ class TestTranslationEndpoint:
             assert response.status_code == 200
             assert response.json()["status"] == "translating"
 
+    def test_translate_with_quality_param(self, client, mock_db, sample_paper):
+        sample_paper.translation_status = "pending"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
+            response = client.post(f"/api/papers/{sample_paper.id}/translate?quality=fast")
+            assert response.status_code == 200
+            # Verify quality param was passed to background task
+            # add_task(func, paper_id, backend, quality) → call_args[0] = (paper_id, backend, quality)
+            mock_task.assert_called_once()
+            call_args = mock_task.call_args[0]
+            assert call_args[3] == "fast"  # quality is 4th arg (after func, paper_id, backend)
+
 
 class TestDownloadEndpoints:
     """Test download endpoints."""
