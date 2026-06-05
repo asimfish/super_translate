@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,11 @@ from app.services.translator import QualityPreset, TranslationConfig, translate_
 
 # Limit concurrent translations to prevent resource exhaustion
 _translation_semaphore = threading.Semaphore(2)
+_quality_map = {
+    "fast": QualityPreset.FAST,
+    "balanced": QualityPreset.BALANCED,
+    "quality": QualityPreset.QUALITY,
+}
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/papers", tags=["papers"])
@@ -407,12 +412,7 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced"):
         logger.error("Translation queue full, rejecting paper %s", paper_id)
         return
 
-    quality_map = {
-        "fast": QualityPreset.FAST,
-        "balanced": QualityPreset.BALANCED,
-        "quality": QualityPreset.QUALITY,
-    }
-    quality_preset = quality_map.get(quality, QualityPreset.BALANCED)
+    quality_preset = _quality_map.get(quality, QualityPreset.BALANCED)
     config = _resolve_backend_config(backend, quality_preset)
 
     async def _do_translate():
