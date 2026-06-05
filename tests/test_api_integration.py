@@ -133,6 +133,23 @@ class TestPapersListEndpoint:
         response = client.get("/api/papers/?offset=10&limit=20")
         assert response.status_code == 200
 
+    def test_list_papers_returns_data(self, client, mock_db, sample_paper):
+        """Test that list returns paper data when papers exist."""
+        mock_db.scalar.return_value = 1
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = [sample_paper]
+        mock_result.scalars.return_value = mock_scalars
+        mock_db.execute.return_value = mock_result
+
+        with patch("pathlib.Path.exists", return_value=False):
+            response = client.get("/api/papers/")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["papers"]) == 1
+        assert data["papers"][0]["id"] == sample_paper.id
+
 
 class TestPaperUploadEndpoint:
     """Test paper upload endpoint."""
@@ -744,6 +761,19 @@ class TestHelpers:
             assert config.backend == "deepseek"
             assert config.api_key == "test-key"
             assert config.model == "deepseek-v4"
+
+    def test_resolve_backend_config_openai(self):
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.openai_api_key = "oa-key"
+            mock_settings.openai_base_url = "https://api.openai.com/v1"
+            mock_settings.openai_model = "gpt-4o-mini"
+            config = _resolve_backend_config("openai", QualityPreset.BALANCED)
+            assert config.backend == "openai"
+            assert config.api_key == "oa-key"
+            assert config.base_url == "https://api.openai.com/v1"
+            assert config.model == "gpt-4o-mini"
 
 
 class TestRunTranslation:
