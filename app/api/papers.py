@@ -489,8 +489,6 @@ def _reset_paper_status(paper_id: str, error_message: str) -> None:
     from app.core.database import async_session
 
     try:
-        loop = asyncio.new_event_loop()
-
         async def _do_reset():
             async with async_session() as db:
                 result = await db.execute(select(Paper).where(Paper.id == paper_id))
@@ -500,10 +498,7 @@ def _reset_paper_status(paper_id: str, error_message: str) -> None:
                     paper.translation_error = error_message
                     await db.commit()
 
-        try:
-            loop.run_until_complete(_do_reset())
-        finally:
-            loop.close()
+        asyncio.run(_do_reset())
     except Exception:
         logger.exception("Failed to reset paper status for %s", paper_id)
 
@@ -519,11 +514,7 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced") -> 
         quality_preset = _quality_map.get(quality, QualityPreset.BALANCED)
         config = _resolve_backend_config(backend, quality_preset)
 
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(_do_translate(paper_id, config, quality, loop))
-        finally:
-            loop.close()
+        asyncio.run(_do_translate(paper_id, config, quality))
 
     except Exception:
         # Safety net: if anything outside _do_translate fails, reset paper status
@@ -539,10 +530,11 @@ async def _do_translate(
     paper_id: str,
     config: TranslationConfig,
     quality: str,
-    loop: asyncio.AbstractEventLoop,
 ) -> None:
     """Execute translation in async context."""
     from app.core.database import async_session
+
+    loop = asyncio.get_running_loop()
 
     async with async_session() as db:
         result = await db.execute(select(Paper).where(Paper.id == paper_id))
@@ -642,7 +634,10 @@ def _update_paper_result(
         paper.translation_status = TranslationStatus.FAILED.value
         paper.translation_error = trans_result.error
         if output_dir.exists():
-            shutil.rmtree(output_dir, ignore_errors=True)
+            try:
+                shutil.rmtree(output_dir)
+            except OSError as cleanup_err:
+                logger.warning("Failed to clean up %s: %s", output_dir, cleanup_err)
         logger.error("Translation failed for paper %s: %s", paper.id, trans_result.error)
 
 
