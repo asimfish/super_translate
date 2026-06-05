@@ -99,6 +99,40 @@ class TestExtractTitleFromPdf(unittest.TestCase):
         self.assertIsInstance(title, str)
         path.unlink()
 
+    def test_extracts_title_from_metadata(self):
+        """Should extract title from PDF metadata when available."""
+        import fitz
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            path = Path(f.name)
+
+        doc = fitz.open()
+        doc.set_metadata({"title": "My Research Paper"})
+        doc.new_page()
+        doc.save(str(path))
+        doc.close()
+
+        title = extract_title_from_pdf(path)
+        self.assertEqual(title, "My Research Paper")
+        path.unlink()
+
+    def test_extracts_title_from_first_page_text(self):
+        """Should extract title from large text on first page."""
+        import fitz
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            path = Path(f.name)
+
+        doc = fitz.open()
+        doc.set_metadata({"title": ""})  # No metadata title
+        page = doc.new_page()
+        # Insert large text (font size > 14) as title
+        page.insert_text((72, 72), "Deep Learning for Natural Language Processing", fontsize=18)
+        doc.save(str(path))
+        doc.close()
+
+        title = extract_title_from_pdf(path)
+        self.assertIn("Deep Learning", title)
+        path.unlink()
+
 
 class TestSaveUploadedPdf:
     """Test PDF upload saving."""
