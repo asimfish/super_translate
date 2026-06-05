@@ -306,8 +306,9 @@ def _translate_sync(
 
         except Exception as e:
             # Clean up partial output files from this attempt
-            for f in output_dir.glob("*"):
-                f.unlink()
+            if output_dir.exists():
+                for f in output_dir.glob("*"):
+                    f.unlink(missing_ok=True)
             if attempt < config.max_retries:
                 logger.warning("Translation attempt %d failed: %s. Retrying...", attempt + 1, e)
             else:
