@@ -205,6 +205,10 @@ def _resolve_service(config: TranslationConfig, fallback: str) -> str:
         if not os.environ.get("OPENAI_API_KEY", ""):
             logger.warning("No OpenAI API key, falling back to %s", fallback)
             return fallback
+    elif config.backend == "deepl" and not config.api_key:
+        if not os.environ.get("DEEPL_API_KEY", ""):
+            logger.warning("No DeepL API key, falling back to %s", fallback)
+            return fallback
 
     return service
 

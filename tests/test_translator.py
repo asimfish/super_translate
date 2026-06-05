@@ -932,6 +932,13 @@ class TestResolveService(unittest.TestCase):
         config = TranslationConfig(backend="unknown")
         self.assertEqual(_resolve_service(config, "google"), "google")
 
+    def test_deepl_no_key_falls_back(self):
+        from app.services.translator import _resolve_service
+        import os
+        os.environ.pop("DEEPL_API_KEY", None)
+        config = TranslationConfig(backend="deepl", api_key="")
+        self.assertEqual(_resolve_service(config, "google"), "google")
+
 
 class TestBuildPdf2zhEnvs(unittest.TestCase):
     """Test _build_pdf2zh_envs function."""
