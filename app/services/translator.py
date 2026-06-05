@@ -150,7 +150,7 @@ QUALITY_PRESETS = {
 }
 
 
-def get_model():
+def get_model() -> object:
     global _model
     if _model is None:
         from pdf2zh.doclayout import OnnxModel

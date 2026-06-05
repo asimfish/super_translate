@@ -198,7 +198,7 @@ async def list_papers(
     offset: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_session),
-):
+) -> PaperListResponse:
     """List papers with optional filtering and pagination.
 
     Args:
@@ -254,7 +254,7 @@ async def upload_paper(
     file: UploadFile = File(...),
     tags: str = Form(""),
     db: AsyncSession = Depends(get_session),
-):
+) -> PaperResponse:
     """Upload a PDF paper.
 
     Args:
@@ -311,7 +311,7 @@ async def upload_paper(
 
 
 @router.get("/{paper_id}", response_model=PaperResponse)
-async def get_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
+async def get_paper(paper_id: str, db: AsyncSession = Depends(get_session)) -> PaperResponse:
     """Get a specific paper by ID.
 
     Args:
@@ -337,7 +337,7 @@ async def get_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
 
 
 @router.delete("/{paper_id}")
-async def delete_paper(paper_id: str, db: AsyncSession = Depends(get_session)):
+async def delete_paper(paper_id: str, db: AsyncSession = Depends(get_session)) -> dict[str, bool]:
     """Delete a paper and its associated files.
 
     Args:
@@ -365,7 +365,7 @@ async def start_translation(
     backend: str = "",
     quality: str = "balanced",
     db: AsyncSession = Depends(get_session),
-):
+) -> dict[str, bool | str]:
     """Start translation for a paper.
 
     Args:
