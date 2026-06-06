@@ -9,6 +9,8 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from typing import Annotated
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
@@ -253,13 +255,13 @@ async def _get_paper_or_404(paper_id: str, db: AsyncSession) -> Paper:
     return paper
 
 
-@router.get("/", response_model=PaperListResponse)
+@router.get("/")
 async def list_papers(
+    db: Annotated[AsyncSession, Depends(get_session)],
     search: str = "",
     status: str = "",
     offset: int = 0,
     limit: int = 50,
-    db: AsyncSession = Depends(get_session),
 ) -> PaperListResponse:
     """List papers with optional filtering and pagination.
 
@@ -321,11 +323,11 @@ async def list_papers(
     return PaperListResponse(papers=paper_responses, total=total, offset=offset, limit=limit)
 
 
-@router.post("/upload", response_model=PaperResponse)
+@router.post("/upload")
 async def upload_paper(
-    file: UploadFile = File(...),
-    tags: str = Form(""),
-    db: AsyncSession = Depends(get_session),
+    db: Annotated[AsyncSession, Depends(get_session)],
+    file: Annotated[UploadFile, File()],
+    tags: Annotated[str, Form()] = "",
 ) -> PaperResponse:
     """Upload a PDF paper.
 
@@ -395,8 +397,10 @@ async def upload_paper(
     return _paper_to_response(paper, has_original=True)
 
 
-@router.get("/{paper_id}", response_model=PaperResponse)
-async def get_paper(paper_id: str, db: AsyncSession = Depends(get_session)) -> PaperResponse:
+@router.get("/{paper_id}")
+async def get_paper(
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+) -> PaperResponse:
     """Get a specific paper by ID.
 
     Args:
@@ -422,7 +426,9 @@ async def get_paper(paper_id: str, db: AsyncSession = Depends(get_session)) -> P
 
 
 @router.delete("/{paper_id}")
-async def delete_paper(paper_id: str, db: AsyncSession = Depends(get_session)) -> dict[str, bool]:
+async def delete_paper(
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+) -> dict[str, bool]:
     """Delete a paper and its associated files.
 
     Args:
@@ -449,9 +455,9 @@ async def delete_paper(paper_id: str, db: AsyncSession = Depends(get_session)) -
 async def start_translation(
     paper_id: str,
     background_tasks: BackgroundTasks,
+    db: Annotated[AsyncSession, Depends(get_session)],
     backend: str = "",
     quality: str = "balanced",
-    db: AsyncSession = Depends(get_session),
 ) -> dict[str, bool | str]:
     """Start translation for a paper.
 
@@ -770,7 +776,7 @@ async def _serve_paper_file(
 
 @router.get("/{paper_id}/download/original")
 async def download_original(
-    paper_id: str, db: AsyncSession = Depends(get_session)
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
 ) -> FileResponse:
     """Download the original PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
@@ -781,7 +787,7 @@ async def download_original(
 
 @router.get("/{paper_id}/download/translated")
 async def download_translated(
-    paper_id: str, db: AsyncSession = Depends(get_session)
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
 ) -> FileResponse:
     """Download the translated PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
@@ -792,7 +798,9 @@ async def download_translated(
 
 
 @router.get("/{paper_id}/download/dual")
-async def download_dual(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
+async def download_dual(
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+) -> FileResponse:
     """Download the dual-language PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_dual.pdf"
@@ -800,24 +808,28 @@ async def download_dual(paper_id: str, db: AsyncSession = Depends(get_session)) 
 
 
 @router.get("/{paper_id}/view/original")
-async def view_original(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
+async def view_original(
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+) -> FileResponse:
     """View the original PDF file in browser."""
     paper = await _get_paper_or_404(paper_id, db)
     return await _serve_paper_file(paper, "stored_filename", settings.papers_path)
 
 
 @router.get("/{paper_id}/view/translated")
-async def view_translated(paper_id: str, db: AsyncSession = Depends(get_session)) -> FileResponse:
+async def view_translated(
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+) -> FileResponse:
     """View the translated PDF file in browser."""
     paper = await _get_paper_or_404(paper_id, db)
     return await _serve_paper_file(paper, "translated_filename", settings.translations_path)
 
 
-@router.patch("/{paper_id}", response_model=PaperResponse)
+@router.patch("/{paper_id}")
 async def update_paper(
     paper_id: str,
     request: PaperUpdateRequest,
-    db: AsyncSession = Depends(get_session),
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> PaperResponse:
     """Update paper metadata (title, tags, notes)."""
     paper = await _get_paper_or_404(paper_id, db)
