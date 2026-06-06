@@ -795,5 +795,59 @@ class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
                 os.unlink(out_path)
 
 
+class TestFixTranslatedLayoutTempFileError(unittest.TestCase):
+    """Test fix_translated_layout when temp file replacement fails."""
+
+    def test_oserror_on_temp_file_replace(self):
+        """OSError during temp file replacement should clean up and re-raise."""
+        import os
+        import tempfile
+
+        import fitz
+
+        from app.services.layout_fix import fix_translated_layout
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            path = f.name
+
+        try:
+            # Create a PDF with enough blocks to trigger fixes
+            doc = fitz.open()
+            page = doc.new_page(width=612, height=792)
+            for i in range(5):
+                rect = fitz.Rect(91, 100 + i * 40, 504, 130 + i * 40)
+                shape = page.new_shape()
+                shape.insert_textbox(
+                    rect, f"Normal body text block {i} for detection.",
+                    fontname="helv", fontsize=10, color=(0, 0, 0),
+                )
+                shape.commit()
+            rect = fitz.Rect(200, 350, 504, 380)
+            shape = page.new_shape()
+            shape.insert_textbox(
+                rect, "Misaligned text that should be fixed.",
+                fontname="helv", fontsize=10, color=(0, 0, 0),
+            )
+            shape.commit()
+            doc.save(path)
+            doc.close()
+
+            # Mock Path.replace to raise OSError
+            with unittest.mock.patch(
+                "pathlib.Path.replace",
+                side_effect=OSError("Permission denied"),
+            ):
+                with self.assertRaises(OSError):
+                    fix_translated_layout(path)
+
+            # Temp file should be cleaned up (unlink called)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+            tmp = path + ".tmp.pdf"
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+
 if __name__ == "__main__":
     unittest.main()

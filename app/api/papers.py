@@ -79,8 +79,6 @@ def _write_upload_chunks(
                 is_first = False
             last_chunk = chunk
             f.write(chunk)
-    if total > settings.max_upload_size:
-        return 0, True, f"File too large (max {max_mb}MB)"
     if not is_first and b"%%EOF" not in last_chunk[-1024:]:
         return 0, True, "Invalid PDF file (missing %%EOF marker)"
     return total, is_first, ""
