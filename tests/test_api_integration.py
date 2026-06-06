@@ -1,5 +1,6 @@
 """Integration tests for Paper China API endpoints."""
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1135,45 +1136,30 @@ class TestRunTranslation:
         mono_path.write_bytes(b"translated")
 
         def fake_translate(input_path, output_dir, config, progress_callback=None):
-            # Simulate pdf2zh calling the progress callback
             if progress_callback:
                 progress_callback(0.5)
             return TranslationResult(mono_path=mono_path)
 
         mock_translate.side_effect = fake_translate
 
-        # Mock async_session for main DB, progress callback DB, and result DB
-        progress_db = AsyncMock()
-        progress_paper = MagicMock()
-        progress_paper.translation_status = "translating"
-        progress_result = MagicMock()
-        progress_result.scalar_one_or_none.return_value = progress_paper
-        progress_db.get = AsyncMock(return_value=progress_paper)
-        progress_db.commit = AsyncMock()
+        # Unified session mock for all phases — progress callback and result
+        # writes happen concurrently via run_coroutine_threadsafe, so call
+        # ordering is non-deterministic.
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = paper
+        unified_db = AsyncMock()
+        unified_db.execute = AsyncMock(return_value=mock_result)
+        unified_db.commit = AsyncMock()
 
-        # Result DB (Phase 3) — returns the same paper mock
-        result_mock_result = MagicMock()
-        result_mock_result.scalar_one_or_none.return_value = paper
-        result_db = AsyncMock()
-        result_db.execute = AsyncMock(return_value=result_mock_result)
-        result_db.commit = AsyncMock()
-
-        call_count = [0]
         original_mock = self._make_async_session_mock(db)
+        call_count = [0]
 
         def session_factory():
             call_count[0] += 1
             if call_count[0] == 1:
                 return original_mock()
-            if call_count[0] == 2:
-                # Progress callback session
-                ctx = MagicMock()
-                ctx.__aenter__ = AsyncMock(return_value=progress_db)
-                ctx.__aexit__ = AsyncMock(return_value=False)
-                return ctx
-            # Phase 3 result session
             ctx = MagicMock()
-            ctx.__aenter__ = AsyncMock(return_value=result_db)
+            ctx.__aenter__ = AsyncMock(return_value=unified_db)
             ctx.__aexit__ = AsyncMock(return_value=False)
             return ctx
 
@@ -1182,87 +1168,33 @@ class TestRunTranslation:
 
         assert paper.translation_status == "completed"
 
-    @patch("app.api.papers.translate_pdf_sync")
-    @patch("app.api.papers.settings")
-    def test_progress_callback_throttled(self, mock_settings, mock_translate, tmp_path):
+    def test_progress_callback_throttled(self):
         """Test that progress callback throttles DB writes to 5% increments."""
-        from app.api.papers import _run_translation
-        from app.services.translator import TranslationResult
+        from app.api.papers import _create_progress_handler
 
-        paper = MagicMock()
-        paper.id = "paper123"
-        paper.stored_filename = "test.pdf"
-        paper.translated_filename = None
-        paper.dual_filename = None
-        paper.translation_status = "translating"
+        # Track how many times the handler passes the throttle and schedules
+        # a DB update. We patch run_coroutine_threadsafe at the module level
+        # where _create_progress_handler references it.
+        fire_count = [0]
+        original_run = asyncio.run_coroutine_threadsafe
 
-        db = self._setup_db_mock(paper)
+        def counting_run(coro, loop):
+            fire_count[0] += 1
+            coro.close()
+            return original_run(asyncio.sleep(0), loop)
 
-        papers_dir = tmp_path / "papers"
-        papers_dir.mkdir()
-        translations_dir = tmp_path / "translations"
-        translations_dir.mkdir()
-        mock_settings.papers_path = papers_dir
-        mock_settings.translations_path = translations_dir
+        handler = _create_progress_handler("paper123", asyncio.new_event_loop())
 
-        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+        with patch.object(asyncio, "run_coroutine_threadsafe", counting_run):
+            # Many small increments within 5% — all throttled
+            for i in range(1, 50):
+                handler(i / 1000.0)  # 0.001, 0.002, ..., 0.049
+            # This crosses 5% threshold — should fire
+            handler(0.06)
+            # Final 100% — should always fire
+            handler(1.0)
 
-        mono_path = translations_dir / "paper123" / "test-mono.pdf"
-        mono_path.parent.mkdir(parents=True)
-        mono_path.write_bytes(b"translated")
-
-        progress_db = AsyncMock()
-        progress_paper = MagicMock()
-        progress_paper.translation_status = "translating"
-        progress_db.get = AsyncMock(return_value=progress_paper)
-        progress_db.commit = AsyncMock()
-
-        # Result DB (Phase 3) — returns the same paper mock
-        result_mock_result = MagicMock()
-        result_mock_result.scalar_one_or_none.return_value = paper
-        result_db = AsyncMock()
-        result_db.execute = AsyncMock(return_value=result_mock_result)
-        result_db.commit = AsyncMock()
-
-        session_call_count = [0]
-        original_mock = self._make_async_session_mock(db)
-
-        def session_factory():
-            session_call_count[0] += 1
-            if session_call_count[0] == 1:
-                return original_mock()
-            if session_call_count[0] <= 3:
-                # Progress callback sessions (calls 2-3)
-                ctx = MagicMock()
-                ctx.__aenter__ = AsyncMock(return_value=progress_db)
-                ctx.__aexit__ = AsyncMock(return_value=False)
-                return ctx
-            # Phase 3 result session
-            ctx = MagicMock()
-            ctx.__aenter__ = AsyncMock(return_value=result_db)
-            ctx.__aexit__ = AsyncMock(return_value=False)
-            return ctx
-
-        def fake_translate(input_path, output_dir, config, progress_callback=None):
-            if progress_callback:
-                # Many small increments within 5% — all throttled
-                for i in range(1, 50):
-                    progress_callback(i / 1000.0)  # 0.001, 0.002, ..., 0.049
-                # This crosses 5% threshold — should fire
-                progress_callback(0.06)
-                # Final 100% — should always fire
-                progress_callback(1.0)
-            return TranslationResult(mono_path=mono_path)
-
-        mock_translate.side_effect = fake_translate
-
-        with patch("app.core.database.async_session", side_effect=session_factory):
-            _run_translation("paper123", "google", "fast")
-
-        # Session created: 1 (load) + 2 (progress: 0.06, 1.0) + 1 (result) = 4
-        # The 49 calls from 0.001-0.049 are all within 5% of 0.0 → throttled
-        assert session_call_count[0] == 4
-        assert paper.translation_status == "completed"
+        assert fire_count[0] == 2  # 0.06 and 1.0 only
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")

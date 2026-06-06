@@ -312,41 +312,39 @@ async def upload_paper(
     stored_name = generate_stored_filename(file.filename)
     stored_path = settings.papers_path / stored_name
 
-    def _write_chunks() -> tuple[int, bool]:
+    def _write_chunks() -> tuple[int, bool, str]:
+        """Write upload chunks to disk. Returns (total_size, is_empty, error)."""
         stored_path.parent.mkdir(parents=True, exist_ok=True)
         total = 0
         is_first = True
         last_chunk = b""
+        max_mb = settings.max_upload_size // (1024 * 1024)
         with stored_path.open("wb") as f:
             while chunk := file.file.read(settings.upload_chunk_size):
                 total += len(chunk)
                 if total > settings.max_upload_size:
-                    max_mb = settings.max_upload_size // (1024 * 1024)
-                    raise HTTPException(400, f"File too large (max {max_mb}MB)")
+                    return 0, True, f"File too large (max {max_mb}MB)"
                 if is_first:
                     if not chunk[:5].startswith(b'%PDF'):
-                        raise HTTPException(400, "Invalid PDF file (missing PDF header)")
+                        return 0, True, "Invalid PDF file (missing PDF header)"
                     is_first = False
                 last_chunk = chunk
                 f.write(chunk)
-        # Post-write size check (catches last-chunk overshoot)
         if total > settings.max_upload_size:
-            max_mb = settings.max_upload_size // (1024 * 1024)
-            raise HTTPException(400, f"File too large (max {max_mb}MB)")
-        # Validate PDF structure: check for %%EOF marker in last chunk
+            return 0, True, f"File too large (max {max_mb}MB)"
         if not is_first and b"%%EOF" not in last_chunk[-1024:]:
-            raise HTTPException(400, "Invalid PDF file (missing %%EOF marker)")
-        return total, is_first
+            return 0, True, "Invalid PDF file (missing %%EOF marker)"
+        return total, is_first, ""
 
     try:
-        total_size, first_chunk = await asyncio.to_thread(_write_chunks)
-    except HTTPException:
-        stored_path.unlink(missing_ok=True)
-        raise
+        total_size, first_chunk, error = await asyncio.to_thread(_write_chunks)
     except Exception:
         stored_path.unlink(missing_ok=True)
         logger.exception("Error writing uploaded file")
         raise HTTPException(500, "Failed to save uploaded file")
+    if error:
+        stored_path.unlink(missing_ok=True)
+        raise HTTPException(400, error)
 
     if first_chunk:
         stored_path.unlink(missing_ok=True)
@@ -640,9 +638,7 @@ async def _do_translate(
     on_progress = _create_progress_handler(paper_id, loop)
 
     try:
-        trans_result = await loop.run_in_executor(
-            None, lambda: translate_pdf_sync(input_path, output_dir, config, on_progress)
-        )
+        trans_result = translate_pdf_sync(input_path, output_dir, config, on_progress)
     except Exception as e:
         logger.exception("Translation crashed for paper %s", paper_id)
         async with async_session() as db:
@@ -681,12 +677,19 @@ def _create_progress_handler(
         _last_pct[0] = pct
 
         async def _update():
+            from sqlalchemy import update as sa_update
+
             from app.core.database import async_session
             async with async_session() as p_db:
-                p = await p_db.get(Paper, paper_id)
-                if p and p.translation_status == TranslationStatus.TRANSLATING.value:
-                    p.translation_progress = pct
-                    await p_db.commit()
+                await p_db.execute(
+                    sa_update(Paper)
+                    .where(
+                        Paper.id == paper_id,
+                        Paper.translation_status == TranslationStatus.TRANSLATING.value,
+                    )
+                    .values(translation_progress=pct)
+                )
+                await p_db.commit()
         with contextlib.suppress(Exception):
             asyncio.run_coroutine_threadsafe(_update(), loop)
 
