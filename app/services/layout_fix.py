@@ -23,6 +23,30 @@ BODY_TEXT_MIN_SIZE = 7.0  # ignore blocks with font size below this (line number
 PAGE_MARGIN_TOP = 60.0  # ignore blocks in top margin (headers)
 PAGE_MARGIN_BOTTOM = 50.0  # ignore blocks in bottom margin (footers)
 
+# Layout analysis constants
+_MIN_COL_WIDTH = 100  # minimum column width to attempt fixing
+_MIN_TEXT_LEN = 2  # minimum text length to process
+_ARTIFACT_TEXT_LEN = 3  # text length threshold for artifact detection
+_ARTIFACT_FONT_SIZE = 8.0  # font size threshold for artifact detection
+_RIGHT_MARGIN_RATIO = 0.7  # blocks past 70% of page width are in right margin
+_SHORT_TEXT_LEN = 10  # short text fragment threshold
+_MIN_INSERT_FONT = 5.0  # minimum font size for text insertion
+_MAX_TITLE_FONT = 14.0  # font size threshold for title detection
+_MIN_TITLE_LEN = 5  # minimum title text length
+_MAX_TITLE_LEN = 200  # maximum title text length
+_SMALL_BLOCK_HEIGHT = 5  # minimum block height
+_SMALL_BLOCK_WIDTH = 30  # minimum block width
+_TINY_BLOCK_HEIGHT = 3  # minimum block height for needs_fix
+_TINY_BLOCK_WIDTH = 10  # minimum block width for needs_fix
+_SHORT_HEADING_LEN = 25  # short heading text threshold
+_HEADING_WIDTH = 100  # heading block width threshold
+_FULL_WIDTH_THRESHOLD = 300  # minimum width for full-width blocks
+_LINE_NUMBER_MIN = 2  # minimum lines for multi-line number detection
+_FONT_INFO_TYPE_IDX = 3  # font info tuple index for font name
+_FONT_INFO_NAME_IDX = 4  # font info tuple index for font name string
+_MAX_SANITIZE_LEN = 500  # max error message length for sanitization
+_MAX_ERROR_LEN = 200  # max error message length after sanitization
+
 
 @dataclass
 class TextBlockInfo:
@@ -85,15 +109,12 @@ def _fix_page_layout(page: object) -> int:
 
     # Analyze page layout
     left_margin, col_width = _analyze_page_layout(blocks)
-    if col_width < 100:
+    if col_width < _MIN_COL_WIDTH:
         return 0  # Can't determine layout, skip
 
     # Find blocks that need fixing
     page_height = page.rect.height
-    to_fix: list[TextBlockInfo] = []
-    for block in blocks:
-        if _needs_fix(block, left_margin, col_width, page_height):
-            to_fix.append(block)
+    to_fix = [b for b in blocks if _needs_fix(b, left_margin, col_width, page_height)]
 
     if not to_fix:
         return 0
@@ -136,22 +157,22 @@ def _reinsert_blocks(
 
     for block in blocks:
         text = _clean_text(block.text)
-        if not text or len(text) < 2:
+        if not text or len(text) < _MIN_TEXT_LEN:
             continue
 
         # Skip very short text fragments (likely artifacts)
-        if len(text) <= 3 and block.avg_font_size < 8:
+        if len(text) <= _ARTIFACT_TEXT_LEN and block.avg_font_size < _ARTIFACT_FONT_SIZE:
             continue
 
         # Skip blocks in the right margin area (table cells, figure elements)
         x0 = block.bbox[0]
         page_width = page.rect.width
-        if x0 > page_width * 0.7 and (block.bbox[2] - x0) < 80:
+        if x0 > page_width * _RIGHT_MARGIN_RATIO and (block.bbox[2] - x0) < MIN_BLOCK_WIDTH:
             continue
 
         # Skip short fragments that are already at correct x position
         block_width = block.bbox[2] - x0
-        if abs(x0 - left_margin) <= X0_TOLERANCE and len(text) < 10 and block_width < 80:
+        if abs(x0 - left_margin) <= X0_TOLERANCE and len(text) < _SHORT_TEXT_LEN and block_width < MIN_BLOCK_WIDTH:
             continue
 
         # Calculate correct rect
@@ -178,7 +199,7 @@ def _insert_text_with_fallback(
 ) -> bool:
     """Insert text into rect, trying decreasing font sizes. Returns True if inserted."""
     size = max(9.0, min(avg_font_size, 12.0))
-    while size >= 5.0:
+    while size >= _MIN_INSERT_FONT:
         shape = page.new_shape()
         result = shape.insert_textbox(
             rect,
@@ -267,7 +288,7 @@ def _analyze_page_layout(
         height = y1 - y0
 
         # Skip very small blocks (line numbers, artifacts)
-        if height < 5 or width < 30:
+        if height < _SMALL_BLOCK_HEIGHT or width < _SMALL_BLOCK_WIDTH:
             continue
         # Skip blocks with tiny font (line numbers)
         if block.avg_font_size < BODY_TEXT_MIN_SIZE:
@@ -289,7 +310,7 @@ def _analyze_page_layout(
     left_margin = max(x0_weighted, key=x0_weighted.get)
 
     # Find most common width among "full-width" blocks
-    full_widths = [w for w in width_values if w > 300]
+    full_widths = [w for w in width_values if w > _FULL_WIDTH_THRESHOLD]
     widths_to_use = full_widths if full_widths else width_values
     col_width = float(statistics.mode(widths_to_use))
 
@@ -308,7 +329,7 @@ def _needs_fix(
     height = y1 - y0
 
     # Skip very small blocks (images, decorations)
-    if height < 3 or width < 10:
+    if height < _TINY_BLOCK_HEIGHT or width < _TINY_BLOCK_WIDTH:
         return False
 
     # Skip blocks in page margins (headers/footers)
@@ -326,7 +347,7 @@ def _needs_fix(
     # Skip short text that's likely figure labels or annotations
     # (e.g., "Time", "Opportunity", "Blur and Occlusion")
     text_stripped = block.text.strip()
-    if len(text_stripped) < 25 and width < 100:
+    if len(text_stripped) < _SHORT_HEADING_LEN and width < _HEADING_WIDTH:
         return False
 
     # Skip blocks with tiny font (likely footnotes/line numbers)
@@ -353,7 +374,7 @@ def _is_line_number_text(text: str) -> bool:
         return True
     # Multiple line numbers: "24\n25\n26"
     lines = stripped.split("\n")
-    return bool(len(lines) >= 2 and all(LINE_NUMBER_RE.match(line.strip()) for line in lines))
+    return bool(len(lines) >= _LINE_NUMBER_MIN and all(LINE_NUMBER_RE.match(line.strip()) for line in lines))
 
 
 def _has_embedded_line_numbers(text: str) -> bool:
@@ -431,13 +452,13 @@ def _find_chinese_font(page: object) -> str:
     """Find a Chinese font already embedded in the page."""
     fonts = page.get_fonts()
     for font_info in fonts:
-        font_name = font_info[3] if len(font_info) > 3 else ""
+        font_name = font_info[_FONT_INFO_TYPE_IDX] if len(font_info) > _FONT_INFO_TYPE_IDX else ""
         # Check for Source Han Serif (pdf2zh's default Chinese font)
         if "SourceHanSerif" in font_name or "Source Han Serif" in font_name:
-            return font_info[4] if len(font_info) > 4 else "noto"
+            return font_info[_FONT_INFO_NAME_IDX] if len(font_info) > _FONT_INFO_NAME_IDX else "noto"
         # Check for other common Chinese fonts
         if any(name in font_name for name in _CHINESE_FONT_NAMES):
-            return font_info[4] if len(font_info) > 4 else font_name
+            return font_info[_FONT_INFO_NAME_IDX] if len(font_info) > _FONT_INFO_NAME_IDX else font_name
 
     # Fallback: use PyMuPDF's built-in Chinese font
     return "china-ss"

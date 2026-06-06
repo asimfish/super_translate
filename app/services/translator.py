@@ -12,6 +12,10 @@ from string import Template
 
 logger = logging.getLogger(__name__)
 
+# Error sanitization constants
+_MAX_INITIAL_ERROR_LEN = 500  # max error message length before regex
+_MAX_FINAL_ERROR_LEN = 200  # max error message length after sanitization
+
 
 def sanitize_error(error: Exception) -> str:
     """Sanitize error message for user-facing display.
@@ -21,8 +25,8 @@ def sanitize_error(error: Exception) -> str:
     """
     msg = str(error)
     # Truncate early to bound regex processing time (prevents ReDoS)
-    if len(msg) > 500:
-        msg = msg[:500]
+    if len(msg) > _MAX_INITIAL_ERROR_LEN:
+        msg = msg[:_MAX_INITIAL_ERROR_LEN]
     # Remove API keys (Bearer tokens, query params, env vars, sk- prefixed keys)
     msg = re.sub(r"Bearer\s+\S+", "Bearer [redacted]", msg, flags=re.IGNORECASE)
     msg = re.sub(r"(?i)(api[_-]?key|token|secret)\s*[=:]\s*\S+", r"\1=[redacted]", msg)
@@ -57,8 +61,8 @@ def sanitize_error(error: Exception) -> str:
     msg = re.sub(r"\b[a-zA-Z0-9.-]+\.\w{2,}:\d+\b", "[host]", msg)
     msg = re.sub(r"\blocalhost:\d+\b", "[host]", msg)
     # Truncate long messages
-    if len(msg) > 200:
-        msg = msg[:200] + "..."
+    if len(msg) > _MAX_FINAL_ERROR_LEN:
+        msg = msg[:_MAX_FINAL_ERROR_LEN] + "..."
     return msg
 
 _model = None

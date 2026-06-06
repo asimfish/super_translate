@@ -14,6 +14,11 @@ from app.models.paper import Paper
 
 logger = logging.getLogger(__name__)
 
+# Title extraction constants
+_TITLE_FONT_SIZE = 14.0  # minimum font size for title detection
+_TITLE_MIN_LEN = 5  # minimum text length for title
+_TITLE_MAX_LEN = 200  # maximum title text length
+
 
 def cleanup_output_dir(output_dir: Path) -> None:
     """Remove translation output directory on failure."""
@@ -75,10 +80,10 @@ def _extract_title_from_first_page(page: object) -> str | None:
 def _find_large_text_in_line(line: dict) -> str | None:
     """Find text with font size > 14 and length > 5 in a line."""
     for span in line.get("spans", []):
-        if span.get("size", 0) > 14:
+        if span.get("size", 0) > _TITLE_FONT_SIZE:
             text = span.get("text", "").strip()
-            if len(text) > 5:
-                return text[:200]
+            if len(text) > _TITLE_MIN_LEN:
+                return text[:_TITLE_MAX_LEN]
     return None
 
 
