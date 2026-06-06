@@ -103,13 +103,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if len(self._minute_requests[client_ip]) >= self.requests_per_minute:
             oldest = min(self._minute_requests[client_ip])
             retry_after = max(int(60 - (now - oldest)) + 1, 1)
-            return False, f"Rate limit exceeded: {self.requests_per_minute} requests per minute", retry_after
+            msg = f"Rate limit exceeded: {self.requests_per_minute} requests per minute"
+            return False, msg, retry_after
 
         # Check hour limit
         if len(self._hour_requests[client_ip]) >= self.requests_per_hour:
             oldest = min(self._hour_requests[client_ip])
             retry_after = max(int(3600 - (now - oldest)) + 1, 1)
-            return False, f"Rate limit exceeded: {self.requests_per_hour} requests per hour", retry_after
+            msg = f"Rate limit exceeded: {self.requests_per_hour} requests per hour"
+            return False, msg, retry_after
 
         # Record this request
         self._minute_requests[client_ip].append(now)
