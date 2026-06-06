@@ -1,5 +1,6 @@
 """Integration tests for Paper China API endpoints."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1364,6 +1365,52 @@ class TestRunTranslation:
 
         assert paper.translation_status == "failed"
         assert not partial_dir.exists()
+
+    def test_update_paper_result_warns_on_outside_path(self):
+        """Test _update_paper_result logs warning for paths outside translations dir."""
+        from unittest.mock import MagicMock, patch
+
+        from app.api.papers import _update_paper_result
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+
+        # Use a path that's definitely outside the translations directory
+        outside_path = Path("/tmp/evil/test-mono.pdf")
+
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.translations_path = Path("/data/translations")
+            result = TranslationResult(mono_path=outside_path)
+            _update_paper_result(paper, result, Path("/data/translations/paper123"))
+
+        # Should not set translated_filename for outside path
+        assert paper.translation_status == "completed"
+        assert "translated_filename" not in paper.__dict__
+
+    def test_update_paper_result_warns_on_outside_dual_path(self):
+        """Test _update_paper_result logs warning for dual paths outside translations dir."""
+        from unittest.mock import MagicMock, patch
+
+        from app.api.papers import _update_paper_result
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+
+        # Valid mono path, invalid dual path
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.translations_path = Path("/data/translations")
+            result = TranslationResult(
+                mono_path=Path("/data/translations/paper123/test-mono.pdf"),
+                dual_path=Path("/tmp/evil/test-dual.pdf"),
+            )
+            _update_paper_result(paper, result, Path("/data/translations/paper123"))
+
+        # Mono path is valid so translated_filename is set; dual path is outside so dual_filename is not
+        assert paper.translation_status == "completed"
+        assert "translated_filename" in paper.__dict__
+        assert "dual_filename" not in paper.__dict__
 
     @patch("app.api.papers._reset_paper_status")
     @patch("app.api.papers._translation_semaphore")
