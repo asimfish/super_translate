@@ -1886,7 +1886,10 @@ class TestInitDb:
         async with test_engine.connect() as conn:
             result = await conn.run_sync(
                 lambda sync_conn: sync_conn.execute(
-                    sa.text("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'ix_%'")
+                    sa.text(
+                        "SELECT name FROM sqlite_master"
+                        " WHERE type='index' AND name LIKE 'ix_%'"
+                    )
                 ).fetchall()
             )
             index_names = {row[0] for row in result}
@@ -1911,7 +1914,9 @@ class TestGetSession:
             poolclass=StaticPool,
             connect_args={"check_same_thread": False},
         )
-        test_session_factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+        test_session_factory = async_sessionmaker(
+            test_engine, class_=AsyncSession, expire_on_commit=False
+        )
 
         async with test_engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

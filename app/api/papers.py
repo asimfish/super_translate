@@ -470,7 +470,7 @@ async def start_translation(
     )
     if result.rowcount == 0:
         # Either paper doesn't exist or already translating
-        paper = await _get_paper_or_404(paper_id, db)  # raises 404 if missing
+        await _get_paper_or_404(paper_id, db)  # raises 404 if missing
         raise HTTPException(409, "Translation already in progress")
     await db.commit()
 
