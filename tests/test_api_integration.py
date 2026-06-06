@@ -1649,6 +1649,97 @@ class TestRunTranslation:
         response = client.post("/api/papers/upload")
         assert response.status_code == 422
 
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_paper_disappeared_during_translation(self, mock_settings, mock_translate, tmp_path):
+        """Phase 3: paper deleted mid-translation should clean up and return."""
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translation_status = "translating"
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+
+        output_dir = translations_dir / "paper123"
+        output_dir.mkdir()
+        (output_dir / "result.pdf").write_bytes(b"result")
+
+        mono_path = output_dir / "test-mono.pdf"
+        mono_path.write_bytes(b"translated")
+        mock_translate.return_value = TranslationResult(mono_path=mono_path)
+
+        # Phase 1 returns paper, Phase 3 returns None (paper deleted)
+        phase1_result = MagicMock()
+        phase1_result.scalar_one_or_none.return_value = paper
+        phase1_db = AsyncMock()
+        phase1_db.execute = AsyncMock(return_value=phase1_result)
+        phase1_db.commit = AsyncMock()
+
+        phase3_result = MagicMock()
+        phase3_result.scalar_one_or_none.return_value = None
+        phase3_db = AsyncMock()
+        phase3_db.execute = AsyncMock(return_value=phase3_result)
+        phase3_db.commit = AsyncMock()
+
+        call_count = [0]
+        original_mock = self._make_async_session_mock(phase1_db)
+
+        def session_factory():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return original_mock()
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=phase3_db)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            return ctx
+
+        with patch("app.core.database.async_session", side_effect=session_factory):
+            _run_translation("paper123", "google", "fast")
+
+        # Output directory should be cleaned up
+        assert not output_dir.exists()
+
+    def test_progress_handler_executes_update_coroutine(self):
+        """Test that the progress handler's inner _update coroutine executes."""
+        from unittest.mock import AsyncMock
+
+        from app.api.papers import _create_progress_handler
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock()
+        mock_db.commit = AsyncMock()
+
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session_mock = MagicMock(return_value=ctx)
+
+        loop = MagicMock()
+
+        def fake_run_coro(coro, _loop):
+            # Execute the coroutine so lines 714-724 are covered
+            asyncio.run(coro)
+            return MagicMock()
+
+        handler = _create_progress_handler("paper123", loop)
+
+        with patch("app.core.database.async_session", session_mock), \
+             patch.object(asyncio, "run_coroutine_threadsafe", side_effect=fake_run_coro):
+            handler(0.5)
+
+        mock_db.execute.assert_called_once()
+        mock_db.commit.assert_called_once()
+
 
 class TestSecurityHeaders:
     """Test that security headers are set on all responses."""
