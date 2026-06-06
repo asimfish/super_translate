@@ -376,7 +376,10 @@ def _is_line_number_text(text: str) -> bool:
         return True
     # Multiple line numbers: "24\n25\n26"
     lines = stripped.split("\n")
-    return bool(len(lines) >= _LINE_NUMBER_MIN and all(LINE_NUMBER_RE.match(line.strip()) for line in lines))
+    return bool(
+        len(lines) >= _LINE_NUMBER_MIN
+        and all(LINE_NUMBER_RE.match(line.strip()) for line in lines)
+    )
 
 
 def _has_embedded_line_numbers(text: str) -> bool:
@@ -457,10 +460,14 @@ def _find_chinese_font(page: object) -> str:
         font_name = font_info[_FONT_INFO_TYPE_IDX] if len(font_info) > _FONT_INFO_TYPE_IDX else ""
         # Check for Source Han Serif (pdf2zh's default Chinese font)
         if "SourceHanSerif" in font_name or "Source Han Serif" in font_name:
-            return font_info[_FONT_INFO_NAME_IDX] if len(font_info) > _FONT_INFO_NAME_IDX else "noto"
+            if len(font_info) > _FONT_INFO_NAME_IDX:
+                return font_info[_FONT_INFO_NAME_IDX]
+            return "noto"
         # Check for other common Chinese fonts
         if any(name in font_name for name in _CHINESE_FONT_NAMES):
-            return font_info[_FONT_INFO_NAME_IDX] if len(font_info) > _FONT_INFO_NAME_IDX else font_name
+            if len(font_info) > _FONT_INFO_NAME_IDX:
+                return font_info[_FONT_INFO_NAME_IDX]
+            return font_name
 
     # Fallback: use PyMuPDF's built-in Chinese font
     return "china-ss"
