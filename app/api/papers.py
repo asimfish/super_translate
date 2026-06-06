@@ -498,7 +498,8 @@ def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> Tran
         attr = _BACKEND_API_KEY_ATTRS[backend]
         prefixed_key = f"PAPER_CHINA_{attr.upper()}"
         unprefixed_key = attr.upper()
-        if not api_key and not os.environ.get(prefixed_key, "") and not os.environ.get(unprefixed_key, ""):
+        has_env_key = os.environ.get(prefixed_key, "") or os.environ.get(unprefixed_key, "")
+        if not api_key and not has_env_key:
             raise HTTPException(
                 400,
                 f"Backend '{backend}' requires an API key. "
