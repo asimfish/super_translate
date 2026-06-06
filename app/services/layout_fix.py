@@ -394,10 +394,6 @@ def _has_embedded_line_numbers(text: str) -> bool:
     return False
 
 
-# Pattern for lines that are just line numbers
-_LINE_NUM_LINE_RE = re.compile(r"^[\d\s]{1,3}$")
-
-
 def _clean_text(text: str) -> str:
     """Remove line number artifacts from translated text.
 
@@ -413,7 +409,7 @@ def _clean_text(text: str) -> str:
     for line in lines:
         stripped = line.strip()
         # Skip lines that are just line numbers
-        if _LINE_NUM_LINE_RE.match(stripped):
+        if LINE_NUMBER_RE.match(stripped):
             continue
         # Remove trailing line numbers directly attached to CJK text
         # Pattern: CJK char + 1-3 digits at end (no space between)

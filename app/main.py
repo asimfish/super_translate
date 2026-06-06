@@ -52,8 +52,12 @@ async def _recover_stuck_translations() -> None:
             for paper in stuck:
                 paper.translation_status = TranslationStatus.FAILED.value
                 paper.translation_error = "Translation was interrupted (server restart)"
-            await db.commit()
-            logger.info("Recovered %d stuck translation(s)", len(stuck))
+            try:
+                await db.commit()
+                logger.info("Recovered %d stuck translation(s)", len(stuck))
+            except Exception:
+                await db.rollback()
+                logger.exception("Failed to recover stuck translations")
 
 
 @asynccontextmanager

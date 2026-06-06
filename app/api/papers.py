@@ -237,6 +237,10 @@ async def list_papers(
     limit = min(max(limit, 1), 200)
     offset = max(offset, 0)
 
+    # Validate search length to prevent resource abuse
+    if search and len(search) > 200:
+        raise HTTPException(400, "Search term too long (max 200 characters)")
+
     # Base query with filters
     base = select(Paper).order_by(Paper.created_at.desc())
     if search:
@@ -361,7 +365,13 @@ async def upload_paper(
         tags=tags,
     )
     db.add(paper)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        stored_path.unlink(missing_ok=True)
+        logger.exception("Failed to save paper record, cleaned up file")
+        raise HTTPException(500, "Failed to save paper record")
     await db.refresh(paper)
 
     return _paper_to_response(paper, has_original=True)
@@ -409,9 +419,11 @@ async def delete_paper(paper_id: str, db: AsyncSession = Depends(get_session)) -
     paper = await _get_paper_or_404(paper_id, db)
     if paper.translation_status == TranslationStatus.TRANSLATING.value:
         raise HTTPException(409, "Cannot delete paper while translation is in progress")
-    await delete_paper_files(paper)
+    # Delete DB record first; if commit fails, files are untouched (no orphaned record)
     await db.delete(paper)
     await db.commit()
+    # Clean up files after successful DB deletion
+    await delete_paper_files(paper)
     return {"ok": True}
 
 

@@ -39,9 +39,9 @@ def sanitize_error(error: Exception) -> str:
     msg = re.sub(r"\b(?:mongodb|postgresql|mysql|redis|amqp)://[^\s]+", "[redacted]", msg)
     # Private key headers
     msg = re.sub(r"-----BEGIN [A-Z ]+ KEY-----", "[redacted]", msg)
-    # Remove file paths (Unix and Windows)
-    msg = re.sub(r"(/[^\s:]+)+", "[path]", msg)
-    msg = re.sub(r"([A-Z]:\\[^\s:]+)+", "[path]", msg)
+    # Remove file paths (Unix and Windows) — negative lookbehinds avoid matching URL schemes
+    msg = re.sub(r"(?<![:/])/[a-zA-Z0-9._/-]+", "[path]", msg)
+    msg = re.sub(r"[A-Z]:\\[^\s:]+", "[path]", msg)
     # Remove line numbers from tracebacks
     msg = re.sub(r'File "[^"]*", line \d+', 'File "[module]"', msg)
     # Remove IP addresses (IPv4 with optional port, and IPv6)
@@ -282,6 +282,8 @@ def _translate_sync(
     """Synchronous translation via pdf2zh with retry logic."""
     from pdf2zh import translate
 
+    from app.services.library import cleanup_output_dir
+
     preset = QUALITY_PRESETS.get(config.quality, QUALITY_PRESETS[QualityPreset.BALANCED])
 
     service = _resolve_service(config, preset["fallback_backend"])
@@ -314,7 +316,6 @@ def _translate_sync(
 
         except Exception as e:
             # Clean up partial output from this attempt (files and subdirs)
-            from app.services.library import cleanup_output_dir
             cleanup_output_dir(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
             if attempt < config.max_retries:

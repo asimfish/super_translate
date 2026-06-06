@@ -160,6 +160,26 @@ class TestPapersListEndpoint:
         response = client.get("/api/papers/?status=completed")
         assert response.status_code == 200
 
+    def test_list_papers_rejects_long_search(self, client, mock_db):
+        """Search term over 200 characters should be rejected."""
+        long_search = "a" * 201
+        response = client.get(f"/api/papers/?search={long_search}")
+        assert response.status_code == 400
+        assert "too long" in response.json()["detail"].lower()
+
+    def test_list_papers_accepts_200_char_search(self, client, mock_db):
+        """Search term of exactly 200 characters should be accepted."""
+        mock_db.scalar.return_value = 0
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = []
+        mock_result.scalars.return_value = mock_scalars
+        mock_db.execute.return_value = mock_result
+
+        search_200 = "b" * 200
+        response = client.get(f"/api/papers/?search={search_200}")
+        assert response.status_code == 200
+
     def test_list_papers_with_pagination(self, client, mock_db):
         mock_db.scalar.return_value = 100
         mock_result = MagicMock()
@@ -321,6 +341,32 @@ class TestPaperUploadEndpoint:
         assert not stored_path.exists(), "Orphaned file should be cleaned up"
         assert resp.status_code == 500
         assert "corrupt PDF" not in resp.text, "Error must not leak internal details"
+
+    def test_upload_cleans_file_on_commit_failure(self, mock_db, tmp_path):
+        """Test that uploaded file is deleted if DB commit fails."""
+        pdf_content = b"%PDF-1.4 test\n%%EOF"
+        stored_path = tmp_path / "stored_test.pdf"
+
+        # Make db.commit() raise to simulate DB failure
+        mock_db.commit = AsyncMock(side_effect=Exception("disk full"))
+
+        with patch("app.api.papers.generate_stored_filename") as mock_gen, \
+             patch("app.api.papers.settings") as mock_settings, \
+             patch("app.api.papers.get_pdf_info", return_value=((1, 100), "Test")), \
+             patch("app.api.papers.extract_title_from_pdf", return_value="Test"), \
+             TestClient(app, raise_server_exceptions=False) as c:
+                mock_gen.return_value = "stored_test.pdf"
+                mock_settings.papers_path = tmp_path
+                mock_settings.translations_path = tmp_path
+                mock_settings.max_upload_size = 100 * 1024 * 1024
+                mock_settings.upload_chunk_size = 1024 * 1024
+                resp = c.post(
+                    "/api/papers/upload",
+                    files={"file": ("test.pdf", pdf_content, "application/pdf")},
+                    data={"tags": ""},
+                )
+        assert not stored_path.exists(), "Orphaned file should be cleaned up on commit failure"
+        assert resp.status_code == 500
 
     def test_upload_no_path_disclosure_on_write_error(self, mock_db, tmp_path):
         """Internal errors during upload must not leak server paths."""
@@ -1176,14 +1222,13 @@ class TestRunTranslation:
         # a DB update. We patch run_coroutine_threadsafe at the module level
         # where _create_progress_handler references it.
         fire_count = [0]
-        original_run = asyncio.run_coroutine_threadsafe
 
-        def counting_run(coro, loop):
+        def counting_run(coro, _loop):
             fire_count[0] += 1
             coro.close()
-            return original_run(asyncio.sleep(0), loop)
+            return MagicMock()
 
-        handler = _create_progress_handler("paper123", asyncio.new_event_loop())
+        handler = _create_progress_handler("paper123", MagicMock())
 
         with patch.object(asyncio, "run_coroutine_threadsafe", counting_run):
             # Many small increments within 5% — all throttled
@@ -1702,6 +1747,35 @@ class TestRecoverStuckTranslations:
             await _recover_stuck_translations()
 
         mock_session.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_handles_commit_failure_gracefully(self):
+        """Commit failure should rollback and log, not crash."""
+        from app.main import _recover_stuck_translations
+
+        paper = MagicMock()
+        paper.translation_status = "translating"
+        paper.translation_error = None
+
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = [paper]
+        mock_result.scalars.return_value = mock_scalars
+
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session.commit = AsyncMock(side_effect=Exception("database locked"))
+
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx_manager)
+        with patch("app.core.database.async_session", mock_factory):
+            # Should not raise
+            await _recover_stuck_translations()
+
+        mock_session.commit.assert_awaited_once()
+        mock_session.rollback.assert_awaited_once()
 
 
 class TestEnsureDirs:
