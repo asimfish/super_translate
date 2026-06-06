@@ -548,6 +548,8 @@ function toggleSyncScroll() {
 }
 
 // === Translation ===
+let translating = false;
+
 async function startTranslate() {
   if (!currentPaper) return;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
@@ -559,11 +561,15 @@ async function quickTranslate(paperId) {
 }
 
 async function doTranslateDirect(paperId, backend, quality) {
+  if (translating) return;
+  translating = true;
   try {
     await api.translatePaper(paperId, backend, quality);
     pollTranslationStatus(paperId);
   } catch (e) {
     alert(e.message);
+  } finally {
+    translating = false;
   }
 }
 

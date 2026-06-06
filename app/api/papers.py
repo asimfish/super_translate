@@ -673,12 +673,19 @@ def _update_paper_result(
     if trans_result.success:
         paper.translation_status = TranslationStatus.COMPLETED.value
         paper.translation_progress = 1.0
+        translations_base = settings.translations_path.resolve()
         if trans_result.mono_path:
-            rel_path = trans_result.mono_path.relative_to(settings.translations_path)
-            paper.translated_filename = str(rel_path)
+            resolved = trans_result.mono_path.resolve()
+            if resolved.is_relative_to(translations_base):
+                paper.translated_filename = str(resolved.relative_to(translations_base))
+            else:
+                logger.warning("Mono path outside translations dir: %s", trans_result.mono_path)
         if trans_result.dual_path:
-            rel_path = trans_result.dual_path.relative_to(settings.translations_path)
-            paper.dual_filename = str(rel_path)
+            resolved = trans_result.dual_path.resolve()
+            if resolved.is_relative_to(translations_base):
+                paper.dual_filename = str(resolved.relative_to(translations_base))
+            else:
+                logger.warning("Dual path outside translations dir: %s", trans_result.dual_path)
         logger.info("Translation completed for paper %s", paper.id)
     else:
         paper.translation_status = TranslationStatus.FAILED.value
