@@ -24,6 +24,7 @@ from app.core.database import init_db
 from app.core.rate_limit import RateLimitMiddleware
 
 # Stats cache with async lock
+_STATS_CACHE_TTL = 30  # seconds
 _stats_cache: dict | None = None
 _stats_cache_time: float = 0.0
 _stats_lock = asyncio.Lock()
@@ -125,8 +126,7 @@ async def validation_exception_handler(
         msg = errors[0].get("msg", "Validation error")
         # Only convert value errors to 400; missing fields stay 422
         if err_type.startswith("value_error"):
-            if msg.startswith("Value error, "):
-                msg = msg[len("Value error, "):]
+            msg = msg.removeprefix("Value error, ")
             return JSONResponse(status_code=400, content={"detail": msg})
     # Missing fields get standard 422 response
     return JSONResponse(status_code=422, content={"detail": errors})
@@ -168,7 +168,7 @@ async def stats() -> dict[str, int]:
 
     async with _stats_lock:
         # Return cached result if fresh
-        if _stats_cache and (now - _stats_cache_time) < 30:
+        if _stats_cache and (now - _stats_cache_time) < _STATS_CACHE_TTL:
             return _stats_cache
 
         async with async_session() as db:

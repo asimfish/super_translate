@@ -12,6 +12,11 @@ from starlette.responses import JSONResponse
 # Prevents unbounded memory growth from spoofed-source DDoS.
 _MAX_TRACKED_IPS = 10_000
 
+# Timing constants (seconds)
+_CLEANUP_INTERVAL = 60
+_MINUTE_WINDOW = 60
+_HOUR_WINDOW = 3600
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Sliding window rate limiter.
@@ -59,12 +64,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _cleanup_old_entries(self) -> None:
         """Remove expired entries to prevent memory leaks."""
         now = time.time()
-        if now - self._last_cleanup < 60:
+        if now - self._last_cleanup < _CLEANUP_INTERVAL:
             return
 
         self._last_cleanup = now
-        cutoff_minute = now - 60
-        cutoff_hour = now - 3600
+        cutoff_minute = now - _MINUTE_WINDOW
+        cutoff_hour = now - _HOUR_WINDOW
 
         # Clean minute requests
         for ip in list(self._minute_requests.keys()):
@@ -88,8 +93,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         Returns (allowed, error_message, retry_after_seconds).
         """
         now = time.time()
-        cutoff_minute = now - 60
-        cutoff_hour = now - 3600
+        cutoff_minute = now - _MINUTE_WINDOW
+        cutoff_hour = now - _HOUR_WINDOW
 
         # Clean old entries for this IP
         self._minute_requests[client_ip] = [
@@ -102,14 +107,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Check minute limit
         if len(self._minute_requests[client_ip]) >= self.requests_per_minute:
             oldest = min(self._minute_requests[client_ip])
-            retry_after = max(int(60 - (now - oldest)) + 1, 1)
+            retry_after = max(int(_MINUTE_WINDOW - (now - oldest)) + 1, 1)
             msg = f"Rate limit exceeded: {self.requests_per_minute} requests per minute"
             return False, msg, retry_after
 
         # Check hour limit
         if len(self._hour_requests[client_ip]) >= self.requests_per_hour:
             oldest = min(self._hour_requests[client_ip])
-            retry_after = max(int(3600 - (now - oldest)) + 1, 1)
+            retry_after = max(int(_HOUR_WINDOW - (now - oldest)) + 1, 1)
             msg = f"Rate limit exceeded: {self.requests_per_hour} requests per hour"
             return False, msg, retry_after
 

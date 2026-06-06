@@ -47,6 +47,13 @@ router = APIRouter(prefix="/api/papers", tags=["papers"])
 # Paper ID format: 12-character hex string (uuid4 hex[:12])
 _PAPER_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
+# Validation limits
+_MAX_TITLE_LEN = 500
+_MAX_TAGS_LEN = 1000
+_MAX_NOTES_LEN = 10_000
+_MAX_SEARCH_LEN = 200
+_PROGRESS_THROTTLE = 0.05
+
 
 def _validate_paper_id(paper_id: str) -> str:
     """Validate paper ID format. Returns the ID if valid, raises 400 otherwise."""
@@ -100,8 +107,8 @@ class PaperUpdateRequest(BaseModel):
             v = v.strip()
             if not v:
                 return None
-            if len(v) > 500:
-                raise ValueError("Title must be 500 characters or less")
+            if len(v) > _MAX_TITLE_LEN:
+                raise ValueError(f"Title must be {_MAX_TITLE_LEN} characters or less")
         return v
 
     @field_validator("tags")
@@ -111,8 +118,8 @@ class PaperUpdateRequest(BaseModel):
             v = v.strip()
             if not v:
                 return None
-            if len(v) > 1000:
-                raise ValueError("Tags must be 1000 characters or less")
+            if len(v) > _MAX_TAGS_LEN:
+                raise ValueError(f"Tags must be {_MAX_TAGS_LEN} characters or less")
         return v
 
     @field_validator("notes")
@@ -122,8 +129,8 @@ class PaperUpdateRequest(BaseModel):
             v = v.strip()
             if not v:
                 return None
-            if len(v) > 10000:
-                raise ValueError("Notes must be 10000 characters or less")
+            if len(v) > _MAX_NOTES_LEN:
+                raise ValueError(f"Notes must be {_MAX_NOTES_LEN} characters or less")
         return v
 
 
@@ -240,8 +247,8 @@ async def list_papers(
     offset = max(offset, 0)
 
     # Validate search length to prevent resource abuse
-    if search and len(search) > 200:
-        raise HTTPException(400, "Search term too long (max 200 characters)")
+    if search and len(search) > _MAX_SEARCH_LEN:
+        raise HTTPException(400, f"Search term too long (max {_MAX_SEARCH_LEN} characters)")
 
     # Base query with filters
     base = select(Paper).order_by(Paper.created_at.desc())
@@ -263,9 +270,8 @@ async def list_papers(
     trans_base = settings.translations_path.resolve()
 
     def _check_files() -> list[PaperResponse]:
-        responses = []
-        for p in papers:
-            responses.append(_paper_to_response(
+        return [
+            _paper_to_response(
                 p,
                 has_original=_file_exists_safe(
                     settings.papers_path, p.stored_filename, papers_base
@@ -276,8 +282,9 @@ async def list_papers(
                 has_dual=_file_exists_safe(
                     settings.translations_path, p.dual_filename, trans_base
                 ),
-            ))
-        return responses
+            )
+            for p in papers
+        ]
 
     paper_responses = await asyncio.to_thread(_check_files)
 
@@ -305,8 +312,8 @@ async def upload_paper(
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are accepted")
 
-    if len(tags) > 1000:
-        raise HTTPException(400, "Tags must be 1000 characters or less")
+    if len(tags) > _MAX_TAGS_LEN:
+        raise HTTPException(400, f"Tags must be {_MAX_TAGS_LEN} characters or less")
 
     stored_name = generate_stored_filename(file.filename)
     stored_path = settings.papers_path / stored_name
@@ -687,7 +694,7 @@ def _create_progress_handler(
     _last_pct: list[float] = [0.0]
 
     def _on_progress(pct: float) -> None:
-        if pct - _last_pct[0] < 0.05 and pct < 1.0:
+        if pct - _last_pct[0] < _PROGRESS_THROTTLE and pct < 1.0:
             return
         _last_pct[0] = pct
 
