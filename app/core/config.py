@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # Translation concurrency
     max_concurrent_translations: int = 2
 
+    # CORS
+    cors_origins: list[str] = ["http://localhost:8000", "http://127.0.0.1:8000"]
+
     @property
     def db_url(self) -> str:
         """Get the database connection URL."""

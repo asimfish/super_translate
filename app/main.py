@@ -38,23 +38,24 @@ async def _recover_stuck_translations() -> None:
     On startup, any paper with translation_status='translating' is marked
     as failed, since the translation process no longer exists.
     """
-    from sqlalchemy import select
+    from sqlalchemy import update as sa_update
 
     from app.core.database import async_session
     from app.models.paper import Paper, TranslationStatus
 
     async with async_session() as db:
         result = await db.execute(
-            select(Paper).where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
+            sa_update(Paper)
+            .where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
+            .values(
+                translation_status=TranslationStatus.FAILED.value,
+                translation_error="Translation was interrupted (server restart)",
+            )
         )
-        stuck = result.scalars().all()
-        if stuck:
-            for paper in stuck:
-                paper.translation_status = TranslationStatus.FAILED.value
-                paper.translation_error = "Translation was interrupted (server restart)"
+        if result.rowcount > 0:
             try:
                 await db.commit()
-                logger.info("Recovered %d stuck translation(s)", len(stuck))
+                logger.info("Recovered %d stuck translation(s)", result.rowcount)
             except Exception:
                 await db.rollback()
                 logger.exception("Failed to recover stuck translations")
@@ -71,10 +72,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="Paper China", version=__version__, lifespan=lifespan)
 
-# CORS for development
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

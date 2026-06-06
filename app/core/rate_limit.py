@@ -82,10 +82,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if not self._hour_requests[ip]:
                 del self._hour_requests[ip]
 
-    def _check_rate_limit(self, client_ip: str) -> tuple[bool, str]:
+    def _check_rate_limit(self, client_ip: str) -> tuple[bool, str, int]:
         """Check if request is within rate limits.
 
-        Returns (allowed, error_message).
+        Returns (allowed, error_message, retry_after_seconds).
         """
         now = time.time()
         cutoff_minute = now - 60
@@ -101,17 +101,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Check minute limit
         if len(self._minute_requests[client_ip]) >= self.requests_per_minute:
-            return False, f"Rate limit exceeded: {self.requests_per_minute} requests per minute"
+            oldest = min(self._minute_requests[client_ip])
+            retry_after = max(int(60 - (now - oldest)) + 1, 1)
+            return False, f"Rate limit exceeded: {self.requests_per_minute} requests per minute", retry_after
 
         # Check hour limit
         if len(self._hour_requests[client_ip]) >= self.requests_per_hour:
-            return False, f"Rate limit exceeded: {self.requests_per_hour} requests per hour"
+            oldest = min(self._hour_requests[client_ip])
+            retry_after = max(int(3600 - (now - oldest)) + 1, 1)
+            return False, f"Rate limit exceeded: {self.requests_per_hour} requests per hour", retry_after
 
         # Record this request
         self._minute_requests[client_ip].append(now)
         self._hour_requests[client_ip].append(now)
 
-        return True, ""
+        return True, "", 0
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request with rate limiting."""
@@ -141,12 +145,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     headers={"Retry-After": "60"},
                 )
 
-        allowed, error_msg = self._check_rate_limit(client_ip)
+        allowed, error_msg, retry_after = self._check_rate_limit(client_ip)
         if not allowed:
             return JSONResponse(
                 status_code=429,
                 content={"detail": error_msg},
-                headers={"Retry-After": "60"},
+                headers={"Retry-After": str(retry_after)},
             )
 
         return await call_next(request)

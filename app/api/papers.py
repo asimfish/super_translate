@@ -82,6 +82,8 @@ class PaperListResponse(BaseModel):
 
     papers: list[PaperResponse]
     total: int
+    offset: int
+    limit: int
 
 
 class PaperUpdateRequest(BaseModel):
@@ -279,7 +281,7 @@ async def list_papers(
 
     paper_responses = await asyncio.to_thread(_check_files)
 
-    return PaperListResponse(papers=paper_responses, total=total)
+    return PaperListResponse(papers=paper_responses, total=total, offset=offset, limit=limit)
 
 
 @router.post("/upload", response_model=PaperResponse)
@@ -795,12 +797,12 @@ async def view_translated(paper_id: str, db: AsyncSession = Depends(get_session)
     return await _serve_paper_file(paper, "translated_filename", settings.translations_path)
 
 
-@router.patch("/{paper_id}")
+@router.patch("/{paper_id}", response_model=PaperResponse)
 async def update_paper(
     paper_id: str,
     request: PaperUpdateRequest,
     db: AsyncSession = Depends(get_session),
-) -> dict[str, bool]:
+) -> PaperResponse:
     """Update paper metadata (title, tags, notes)."""
     paper = await _get_paper_or_404(paper_id, db)
     if request.title is not None:
@@ -810,4 +812,8 @@ async def update_paper(
     if request.notes is not None:
         paper.notes = request.notes
     await db.commit()
-    return {"ok": True}
+    await db.refresh(paper)
+    has_original = _file_exists_safe(settings.papers_path, paper.stored_filename)
+    has_translated = _file_exists_safe(settings.translations_path, paper.translated_filename)
+    has_dual = _file_exists_safe(settings.translations_path, paper.dual_filename)
+    return _paper_to_response(paper, has_original, has_translated, has_dual)

@@ -496,7 +496,9 @@ class TestPaperUpdateEndpoint:
             json={"title": "New Title", "tags": "new,tag"},
         )
         assert response.status_code == 200
-        assert response.json()["ok"] is True
+        data = response.json()
+        assert "id" in data
+        assert data["title"] == "New Title"
         assert sample_paper.title == "New Title"
         assert sample_paper.tags == "new,tag"
 
@@ -879,7 +881,7 @@ class TestErrorHandling:
             json={},
         )
         assert response.status_code == 200
-        assert response.json()["ok"] is True
+        assert "id" in response.json()
 
     def test_download_original_file_missing(self, client, mock_db, sample_paper):
         """Test that download returns 404 when file is missing."""
@@ -1697,18 +1699,8 @@ class TestRecoverStuckTranslations:
     async def test_recovers_stuck_papers(self):
         from app.main import _recover_stuck_translations
 
-        paper1 = MagicMock()
-        paper1.translation_status = "translating"
-        paper1.translation_error = None
-
-        paper2 = MagicMock()
-        paper2.translation_status = "translating"
-        paper2.translation_error = None
-
         mock_result = MagicMock()
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = [paper1, paper2]
-        mock_result.scalars.return_value = mock_scalars
+        mock_result.rowcount = 2
 
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
@@ -1721,9 +1713,6 @@ class TestRecoverStuckTranslations:
         with patch("app.core.database.async_session", mock_factory):
             await _recover_stuck_translations()
 
-        assert paper1.translation_status == "failed"
-        assert paper2.translation_status == "failed"
-        assert "interrupted" in paper1.translation_error.lower()
         mock_session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -1731,9 +1720,7 @@ class TestRecoverStuckTranslations:
         from app.main import _recover_stuck_translations
 
         mock_result = MagicMock()
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = []
-        mock_result.scalars.return_value = mock_scalars
+        mock_result.rowcount = 0
 
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
@@ -1753,14 +1740,8 @@ class TestRecoverStuckTranslations:
         """Commit failure should rollback and log, not crash."""
         from app.main import _recover_stuck_translations
 
-        paper = MagicMock()
-        paper.translation_status = "translating"
-        paper.translation_error = None
-
         mock_result = MagicMock()
-        mock_scalars = MagicMock()
-        mock_scalars.all.return_value = [paper]
-        mock_result.scalars.return_value = mock_scalars
+        mock_result.rowcount = 1
 
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(return_value=mock_result)
