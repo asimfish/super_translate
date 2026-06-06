@@ -55,6 +55,36 @@ _MAX_SEARCH_LEN = 200
 _PROGRESS_THROTTLE = 0.05
 
 
+def _write_upload_chunks(
+    file: UploadFile, stored_path: Path
+) -> tuple[int, bool, str]:
+    """Write uploaded file chunks to disk with validation.
+
+    Returns (total_size, is_empty, error_message).
+    """
+    stored_path.parent.mkdir(parents=True, exist_ok=True)
+    total = 0
+    is_first = True
+    last_chunk = b""
+    max_mb = settings.max_upload_size // (1024 * 1024)
+    with stored_path.open("wb") as f:
+        while chunk := file.file.read(settings.upload_chunk_size):
+            total += len(chunk)
+            if total > settings.max_upload_size:
+                return 0, True, f"File too large (max {max_mb}MB)"
+            if is_first:
+                if not chunk[:5].startswith(b'%PDF'):
+                    return 0, True, "Invalid PDF file (missing PDF header)"
+                is_first = False
+            last_chunk = chunk
+            f.write(chunk)
+    if total > settings.max_upload_size:
+        return 0, True, f"File too large (max {max_mb}MB)"
+    if not is_first and b"%%EOF" not in last_chunk[-1024:]:
+        return 0, True, "Invalid PDF file (missing %%EOF marker)"
+    return total, is_first, ""
+
+
 def _validate_paper_id(paper_id: str) -> str:
     """Validate paper ID format. Returns the ID if valid, raises 400 otherwise."""
     if not _PAPER_ID_RE.match(paper_id):
@@ -318,31 +348,10 @@ async def upload_paper(
     stored_name = generate_stored_filename(file.filename)
     stored_path = settings.papers_path / stored_name
 
-    def _write_chunks() -> tuple[int, bool, str]:
-        stored_path.parent.mkdir(parents=True, exist_ok=True)
-        total = 0
-        is_first = True
-        last_chunk = b""
-        max_mb = settings.max_upload_size // (1024 * 1024)
-        with stored_path.open("wb") as f:
-            while chunk := file.file.read(settings.upload_chunk_size):
-                total += len(chunk)
-                if total > settings.max_upload_size:
-                    return 0, True, f"File too large (max {max_mb}MB)"
-                if is_first:
-                    if not chunk[:5].startswith(b'%PDF'):
-                        return 0, True, "Invalid PDF file (missing PDF header)"
-                    is_first = False
-                last_chunk = chunk
-                f.write(chunk)
-        if total > settings.max_upload_size:
-            return 0, True, f"File too large (max {max_mb}MB)"
-        if not is_first and b"%%EOF" not in last_chunk[-1024:]:
-            return 0, True, "Invalid PDF file (missing %%EOF marker)"
-        return total, is_first, ""
-
     try:
-        _total_size, first_chunk, error = await asyncio.to_thread(_write_chunks)
+        _total_size, first_chunk, error = await asyncio.to_thread(
+            _write_upload_chunks, file, stored_path
+        )
     except Exception:
         stored_path.unlink(missing_ok=True)
         logger.exception("Error writing uploaded file")
