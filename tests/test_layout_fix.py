@@ -162,7 +162,7 @@ class TestAnalyzePageLayout(unittest.TestCase):
         """Blocks containing just line numbers are skipped."""
         blocks = [
             _tb((91, 100, 504, 120), "body text"),
-            _tb((50, 100, 60, 120), "24\n25\n26"),
+            _tb((50, 100, 400, 120), "24\n25\n26"),
         ]
         left_margin, col_width = _analyze_page_layout(blocks)
         self.assertAlmostEqual(left_margin, 91.0)
