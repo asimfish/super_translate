@@ -544,14 +544,23 @@ def _reset_paper_status(paper_id: str, error_message: str) -> None:
     from app.core.database import async_session
 
     try:
+
         async def _do_reset():
+            from sqlalchemy import update as sa_update
+
             async with async_session() as db:
-                result = await db.execute(select(Paper).where(Paper.id == paper_id))
-                paper = result.scalar_one_or_none()
-                if paper and paper.translation_status == TranslationStatus.TRANSLATING.value:
-                    paper.translation_status = TranslationStatus.FAILED.value
-                    paper.translation_error = error_message
-                    await db.commit()
+                await db.execute(
+                    sa_update(Paper)
+                    .where(
+                        Paper.id == paper_id,
+                        Paper.translation_status == TranslationStatus.TRANSLATING.value,
+                    )
+                    .values(
+                        translation_status=TranslationStatus.FAILED.value,
+                        translation_error=error_message,
+                    )
+                )
+                await db.commit()
 
         asyncio.run(_do_reset())
     except Exception:

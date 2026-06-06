@@ -1475,16 +1475,12 @@ class TestRunTranslation:
         paper.stored_filename = "test.pdf"
         paper.translation_status = "translating"
 
-        # Make _resolve_backend_config raise before _do_translate is defined
         with patch.object(
             papers_mod, "_resolve_backend_config",
             side_effect=Exception("Config error"),
         ):
-            # Need to provide a mock db for the reset path
             reset_db = AsyncMock()
-            reset_result = MagicMock()
-            reset_result.scalar_one_or_none.return_value = paper
-            reset_db.execute = AsyncMock(return_value=reset_result)
+            reset_db.execute = AsyncMock()
             reset_db.commit = AsyncMock()
             reset_ctx = MagicMock()
             reset_ctx.__aenter__ = AsyncMock(return_value=reset_db)
@@ -1493,9 +1489,12 @@ class TestRunTranslation:
             with patch("app.core.database.async_session", MagicMock(return_value=reset_ctx)):
                 _run_translation("paper123", "deepseek", "balanced")
 
-        # Paper should be marked failed, not stuck as "translating"
-        assert paper.translation_status == "failed"
-        assert "Unexpected" in paper.translation_error
+        # Verify bulk UPDATE was executed with error message
+        reset_db.execute.assert_called_once()
+        stmt = reset_db.execute.call_args[0][0]
+        compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+        assert "Unexpected" in str(compiled)
+        reset_db.commit.assert_called_once()
 
     @patch("app.api.papers.settings")
     def test_http_exception_preserves_error_message(self, mock_settings):
@@ -1513,9 +1512,7 @@ class TestRunTranslation:
             side_effect=HTTPException(400, "Backend 'deepseek' requires an API key."),
         ):
             reset_db = AsyncMock()
-            reset_result = MagicMock()
-            reset_result.scalar_one_or_none.return_value = paper
-            reset_db.execute = AsyncMock(return_value=reset_result)
+            reset_db.execute = AsyncMock()
             reset_db.commit = AsyncMock()
             reset_ctx = MagicMock()
             reset_ctx.__aenter__ = AsyncMock(return_value=reset_db)
@@ -1524,22 +1521,20 @@ class TestRunTranslation:
             with patch("app.core.database.async_session", MagicMock(return_value=reset_ctx)):
                 _run_translation("paper123", "deepseek", "balanced")
 
-        assert paper.translation_status == "failed"
-        assert "API key" in paper.translation_error
-        assert "Unexpected" not in paper.translation_error
+        # Verify bulk UPDATE contains the real error message, not generic
+        reset_db.execute.assert_called_once()
+        stmt = reset_db.execute.call_args[0][0]
+        compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+        assert "API key" in str(compiled)
+        assert "Unexpected" not in str(compiled)
+        reset_db.commit.assert_called_once()
 
     def test_reset_paper_status_resets_translating_paper(self):
         """Test _reset_paper_status resets a paper stuck in translating state."""
         from app.api.papers import _reset_paper_status
 
-        paper = MagicMock()
-        paper.id = "paper123"
-        paper.translation_status = "translating"
-
         db = AsyncMock()
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = paper
-        db.execute = AsyncMock(return_value=result)
+        db.execute = AsyncMock()
         db.commit = AsyncMock()
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=db)
@@ -1548,21 +1543,20 @@ class TestRunTranslation:
         with patch("app.core.database.async_session", MagicMock(return_value=ctx)):
             _reset_paper_status("paper123", "Queue busy")
 
-        assert paper.translation_status == "failed"
-        assert paper.translation_error == "Queue busy"
+        # Verify bulk UPDATE was executed with correct values
+        db.execute.assert_called_once()
+        stmt = db.execute.call_args[0][0]
+        compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+        assert "translation_status" in str(compiled)
+        assert "translation_error" in str(compiled)
+        db.commit.assert_called_once()
 
     def test_reset_paper_status_skips_non_translating_paper(self):
-        """Test _reset_paper_status does not modify papers not in translating state."""
+        """Test _reset_paper_status WHERE clause filters on translating status."""
         from app.api.papers import _reset_paper_status
 
-        paper = MagicMock()
-        paper.id = "paper123"
-        paper.translation_status = "completed"
-
         db = AsyncMock()
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = paper
-        db.execute = AsyncMock(return_value=result)
+        db.execute = AsyncMock()
         db.commit = AsyncMock()
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=db)
@@ -1571,9 +1565,11 @@ class TestRunTranslation:
         with patch("app.core.database.async_session", MagicMock(return_value=ctx)):
             _reset_paper_status("paper123", "Queue busy")
 
-        # Should not have been modified
-        assert paper.translation_status == "completed"
-        db.commit.assert_not_called()
+        # Verify WHERE clause includes translation_status filter
+        stmt = db.execute.call_args[0][0]
+        compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+        assert "translating" in str(compiled)
+        db.commit.assert_called_once()
 
     def test_reset_paper_status_handles_db_error(self):
         """Test _reset_paper_status logs and suppresses DB errors."""
