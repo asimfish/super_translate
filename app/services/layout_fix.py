@@ -46,6 +46,7 @@ _FONT_INFO_TYPE_IDX = 3  # font info tuple index for font name
 _FONT_INFO_NAME_IDX = 4  # font info tuple index for font name string
 _MAX_SANITIZE_LEN = 500  # max error message length for sanitization
 _MAX_ERROR_LEN = 200  # max error message length after sanitization
+_ASCII_CONTROL_MAX = 32  # ASCII control characters below this value (except \n\r\t)
 
 
 @dataclass
@@ -258,7 +259,7 @@ def _extract_text_blocks(page: object) -> list[TextBlockInfo]:
             continue
 
         # Skip blocks with null bytes or binary content
-        if "\x00" in text or any(ord(c) < 32 and c not in "\n\r\t" for c in text):
+        if "\x00" in text or any(ord(c) < _ASCII_CONTROL_MAX and c not in "\n\r\t" for c in text):
             continue
 
         avg_size = statistics.median(font_sizes)

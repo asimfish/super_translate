@@ -345,7 +345,7 @@ def _create_progress_callback(
                 # tqdm progress object
                 p = args[0]
                 pct = p.n / p.total if p.total > 0 else 0
-            elif len(args) == 2:
+            elif len(args) == 2:  # noqa: PLR2004 - pdf2zh callback (current, total) arity
                 current, total = args
                 pct = current / total if total > 0 else 0
             elif len(args) == 1 and isinstance(args[0], (int, float)):
