@@ -136,6 +136,18 @@ class TestPapersListEndpoint:
         response = client.get("/api/papers/?search=test")
         assert response.status_code == 200
 
+    def test_list_papers_search_escapes_like_wildcards(self, client, mock_db):
+        """Search with % and _ should treat them as literal characters, not wildcards."""
+        mock_db.scalar.return_value = 0
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = []
+        mock_result.scalars.return_value = mock_scalars
+        mock_db.execute.return_value = mock_result
+
+        response = client.get("/api/papers/?search=100%25")
+        assert response.status_code == 200
+
     def test_list_papers_with_status_filter(self, client, mock_db):
         mock_db.scalar.return_value = 0
         mock_result = MagicMock()
@@ -923,6 +935,26 @@ class TestHelpers:
         with pytest.raises(HTTPException) as exc_info:
             _get_paper_file(paper, "stored_filename", tmp_path)
         assert exc_info.value.status_code == 403
+
+    def test_escape_like_percent(self):
+        from app.api.papers import _escape_like
+        assert _escape_like("100%") == "100\\%"
+
+    def test_escape_like_underscore(self):
+        from app.api.papers import _escape_like
+        assert _escape_like("some_thing") == "some\\_thing"
+
+    def test_escape_like_backslash(self):
+        from app.api.papers import _escape_like
+        assert _escape_like("path\\file") == "path\\\\file"
+
+    def test_escape_like_combined(self):
+        from app.api.papers import _escape_like
+        assert _escape_like("%test_value\\") == "\\%test\\_value\\\\"
+
+    def test_escape_like_no_special_chars(self):
+        from app.api.papers import _escape_like
+        assert _escape_like("normal search") == "normal search"
 
     def test_resolve_backend_config_google(self):
         from app.api.papers import _resolve_backend_config

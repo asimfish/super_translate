@@ -151,6 +151,11 @@ def _paper_to_response(
     )
 
 
+def _escape_like(value: str) -> str:
+    """Escape LIKE wildcards so user-typed % and _ are treated literally."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _get_paper_file(
     paper: Paper,
     file_attr: str,
@@ -237,8 +242,9 @@ async def list_papers(
     count_query = select(func.count(Paper.id))
 
     if search:
-        query = query.where(Paper.title.contains(search))
-        count_query = count_query.where(Paper.title.contains(search))
+        escaped = _escape_like(search)
+        query = query.where(Paper.title.like(f"%{escaped}%", escape="\\"))
+        count_query = count_query.where(Paper.title.like(f"%{escaped}%", escape="\\"))
     if status:
         query = query.where(Paper.translation_status == status)
         count_query = count_query.where(Paper.translation_status == status)
