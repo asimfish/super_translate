@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 MIN_COL_WIDTH_RATIO = 0.6  # blocks narrower than 60% of column width need fixing
 X0_TOLERANCE = 40.0  # points of deviation from dominant left margin
 MIN_BLOCK_WIDTH = 80.0  # blocks narrower than this are always fixed
-LINE_NUMBER_RE = re.compile(r"^[\d\n\s]{1,3}$")
+LINE_NUMBER_RE = re.compile(r"^[\d\s]{1,3}$")
 BODY_TEXT_MIN_SIZE = 7.0  # ignore blocks with font size below this (line numbers, footnotes)
 PAGE_MARGIN_TOP = 60.0  # ignore blocks in top margin (headers)
 PAGE_MARGIN_BOTTOM = 50.0  # ignore blocks in bottom margin (footers)
@@ -379,9 +379,10 @@ def _has_embedded_line_numbers(text: str) -> bool:
         if "[" in stripped and "]" in stripped:
             continue
         # Pure section number: "1 Introduction" (no trailing number)
-        if (re.match(r"^\d{1,3}\s+[A-Z一-鿿]", stripped)
-                and not re.search(r"\d{1,3}$", stripped[3:])):
-            continue
+        sec_match = re.match(r"^\d{1,3}\s+", stripped)
+        if sec_match and re.match(r"[A-Z一-鿿]", stripped[sec_match.end():]):
+            if not re.search(r"\d{1,3}$", stripped[sec_match.end():]):
+                continue
         # Standalone line number as first line: "25\ntext..."
         if i == 0 and re.match(r"^\d{1,3}$", stripped):
             return True

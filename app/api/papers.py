@@ -562,11 +562,18 @@ async def _do_translate(
     config: TranslationConfig,
     quality: str,
 ) -> None:
-    """Execute translation in async context."""
+    """Execute translation in async context.
+
+    Uses two short DB sessions instead of one long one:
+    1. Load paper + validate paths, then close session
+    2. Run translation (no DB session held)
+    3. Open new session to write results
+    """
     from app.core.database import async_session
 
     loop = asyncio.get_running_loop()
 
+    # Phase 1: Load and validate (short session)
     async with async_session() as db:
         result = await db.execute(select(Paper).where(Paper.id == paper_id))
         paper = result.scalar_one_or_none()
@@ -574,17 +581,17 @@ async def _do_translate(
             logger.error("Paper %s not found for translation", paper_id)
             return
 
-        # Validate paths (defense-in-depth)
+        stored_filename = paper.stored_filename
+
+        # Validate paths while session is open (can write error status directly)
         papers_base = settings.papers_path.resolve()
-        input_path = (settings.papers_path / paper.stored_filename).resolve()
+        input_path = (settings.papers_path / stored_filename).resolve()
         if not input_path.is_relative_to(papers_base):
             logger.error("Path traversal detected for paper %s", paper_id)
             paper.translation_status = TranslationStatus.FAILED.value
             paper.translation_error = "Invalid file path"
             await db.commit()
             return
-
-        output_dir = settings.translations_path / paper.id
 
         if not input_path.exists():
             logger.error("Original file missing for paper %s", paper_id)
@@ -593,23 +600,39 @@ async def _do_translate(
             await db.commit()
             return
 
-        logger.info(
-            "Starting translation for paper %s (backend=%s, quality=%s)",
-            paper_id, config.backend, quality,
+    output_dir = settings.translations_path / paper_id
+
+    logger.info(
+        "Starting translation for paper %s (backend=%s, quality=%s)",
+        paper_id, config.backend, quality,
+    )
+
+    # Phase 2: Run translation (no DB session held)
+    on_progress = _create_progress_handler(paper_id, loop)
+
+    try:
+        trans_result = await loop.run_in_executor(
+            None, lambda: translate_pdf_sync(input_path, output_dir, config, on_progress)
         )
+    except Exception as e:
+        logger.exception("Translation crashed for paper %s", paper_id)
+        async with async_session() as db:
+            result = await db.execute(select(Paper).where(Paper.id == paper_id))
+            paper = result.scalar_one_or_none()
+            if paper:
+                paper.translation_status = TranslationStatus.FAILED.value
+                paper.translation_error = sanitize_error(e)
+                await db.commit()
+        cleanup_output_dir(output_dir)
+        return
 
-        on_progress = _create_progress_handler(paper_id, loop)
-
-        try:
-            trans_result = await loop.run_in_executor(
-                None, lambda: translate_pdf_sync(input_path, output_dir, config, on_progress)
-            )
-        except Exception as e:
-            logger.exception("Translation crashed for paper %s", paper_id)
-            paper.translation_status = TranslationStatus.FAILED.value
-            paper.translation_error = sanitize_error(e)
+    # Phase 3: Write results (short session)
+    async with async_session() as db:
+        result = await db.execute(select(Paper).where(Paper.id == paper_id))
+        paper = result.scalar_one_or_none()
+        if not paper:
+            logger.error("Paper %s disappeared during translation", paper_id)
             cleanup_output_dir(output_dir)
-            await db.commit()
             return
 
         _update_paper_result(paper, trans_result, output_dir)

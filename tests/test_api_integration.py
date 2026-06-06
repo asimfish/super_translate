@@ -1074,7 +1074,7 @@ class TestRunTranslation:
 
         mock_translate.side_effect = fake_translate
 
-        # Mock async_session for both the main DB and the progress callback DB
+        # Mock async_session for main DB, progress callback DB, and result DB
         progress_db = AsyncMock()
         progress_paper = MagicMock()
         progress_paper.translation_status = "translating"
@@ -1083,6 +1083,13 @@ class TestRunTranslation:
         progress_db.get = AsyncMock(return_value=progress_paper)
         progress_db.commit = AsyncMock()
 
+        # Result DB (Phase 3) — returns the same paper mock
+        result_mock_result = MagicMock()
+        result_mock_result.scalar_one_or_none.return_value = paper
+        result_db = AsyncMock()
+        result_db.execute = AsyncMock(return_value=result_mock_result)
+        result_db.commit = AsyncMock()
+
         call_count = [0]
         original_mock = self._make_async_session_mock(db)
 
@@ -1090,9 +1097,15 @@ class TestRunTranslation:
             call_count[0] += 1
             if call_count[0] == 1:
                 return original_mock()
-            # Second call is from progress callback
+            if call_count[0] == 2:
+                # Progress callback session
+                ctx = MagicMock()
+                ctx.__aenter__ = AsyncMock(return_value=progress_db)
+                ctx.__aexit__ = AsyncMock(return_value=False)
+                return ctx
+            # Phase 3 result session
             ctx = MagicMock()
-            ctx.__aenter__ = AsyncMock(return_value=progress_db)
+            ctx.__aenter__ = AsyncMock(return_value=result_db)
             ctx.__aexit__ = AsyncMock(return_value=False)
             return ctx
 
@@ -1136,6 +1149,13 @@ class TestRunTranslation:
         progress_db.get = AsyncMock(return_value=progress_paper)
         progress_db.commit = AsyncMock()
 
+        # Result DB (Phase 3) — returns the same paper mock
+        result_mock_result = MagicMock()
+        result_mock_result.scalar_one_or_none.return_value = paper
+        result_db = AsyncMock()
+        result_db.execute = AsyncMock(return_value=result_mock_result)
+        result_db.commit = AsyncMock()
+
         session_call_count = [0]
         original_mock = self._make_async_session_mock(db)
 
@@ -1143,8 +1163,15 @@ class TestRunTranslation:
             session_call_count[0] += 1
             if session_call_count[0] == 1:
                 return original_mock()
+            if session_call_count[0] <= 3:
+                # Progress callback sessions (calls 2-3)
+                ctx = MagicMock()
+                ctx.__aenter__ = AsyncMock(return_value=progress_db)
+                ctx.__aexit__ = AsyncMock(return_value=False)
+                return ctx
+            # Phase 3 result session
             ctx = MagicMock()
-            ctx.__aenter__ = AsyncMock(return_value=progress_db)
+            ctx.__aenter__ = AsyncMock(return_value=result_db)
             ctx.__aexit__ = AsyncMock(return_value=False)
             return ctx
 
@@ -1164,9 +1191,9 @@ class TestRunTranslation:
         with patch("app.core.database.async_session", side_effect=session_factory):
             _run_translation("paper123", "google", "fast")
 
-        # Session created: 1 (main) + 2 (0.015, 1.0) = 3
+        # Session created: 1 (load) + 2 (progress: 0.015, 1.0) + 1 (result) = 4
         # The 9 calls from 0.001-0.009 are all within 1% of 0.0 → throttled
-        assert session_call_count[0] == 3
+        assert session_call_count[0] == 4
         assert paper.translation_status == "completed"
 
     @patch("app.api.papers.translate_pdf_sync")
