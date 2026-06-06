@@ -302,12 +302,10 @@ async def upload_paper(
     if len(tags) > 1000:
         raise HTTPException(400, "Tags must be 1000 characters or less")
 
-    # Stream upload: write chunks directly to disk to minimize memory usage
     stored_name = generate_stored_filename(file.filename)
     stored_path = settings.papers_path / stored_name
 
     def _write_chunks() -> tuple[int, bool, str]:
-        """Write upload chunks to disk. Returns (total_size, is_empty, error)."""
         stored_path.parent.mkdir(parents=True, exist_ok=True)
         total = 0
         is_first = True
