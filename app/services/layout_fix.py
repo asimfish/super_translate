@@ -172,7 +172,9 @@ def _reinsert_blocks(
 
         # Skip short fragments that are already at correct x position
         block_width = block.bbox[2] - x0
-        if abs(x0 - left_margin) <= X0_TOLERANCE and len(text) < _SHORT_TEXT_LEN and block_width < MIN_BLOCK_WIDTH:
+        if (abs(x0 - left_margin) <= X0_TOLERANCE
+                and len(text) < _SHORT_TEXT_LEN
+                and block_width < MIN_BLOCK_WIDTH):
             continue
 
         # Calculate correct rect
@@ -311,7 +313,7 @@ def _analyze_page_layout(
 
     # Find most common width among "full-width" blocks
     full_widths = [w for w in width_values if w > _FULL_WIDTH_THRESHOLD]
-    widths_to_use = full_widths if full_widths else width_values
+    widths_to_use = full_widths or width_values
     col_width = float(statistics.mode(widths_to_use))
 
     return (left_margin, col_width)
