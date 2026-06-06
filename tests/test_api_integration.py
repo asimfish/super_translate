@@ -910,8 +910,6 @@ class TestHelpers:
         assert result.name == "test.pdf"
 
     def test_get_paper_file_missing_attr(self, tmp_path):
-        from fastapi import HTTPException
-
         from app.api.papers import _get_paper_file
         paper = MagicMock()
         paper.stored_filename = None
@@ -920,8 +918,6 @@ class TestHelpers:
         assert exc_info.value.status_code == 404
 
     def test_get_paper_file_traversal(self, tmp_path):
-        from fastapi import HTTPException
-
         from app.api.papers import _get_paper_file
         paper = MagicMock()
         paper.stored_filename = "../../etc/passwd"
@@ -992,7 +988,6 @@ class TestHelpers:
             assert config.base_url == "http://localhost:11434"
 
     def test_resolve_backend_config_missing_api_key_raises(self):
-        from fastapi import HTTPException
         from pydantic import SecretStr
 
         from app.api.papers import _resolve_backend_config
