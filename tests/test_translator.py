@@ -310,7 +310,6 @@ class TestTranslatePdfSync(unittest.TestCase):
 
         def capture_translate(*args, **kwargs):
             captured_envs.update(kwargs.get("envs") or {})
-            return None
 
         mock_translate.side_effect = capture_translate
 
@@ -336,7 +335,6 @@ class TestTranslatePdfSync(unittest.TestCase):
 
         def capture_translate(*args, **kwargs):
             captured_envs.update(kwargs.get("envs") or {})
-            return None
 
         mock_translate.side_effect = capture_translate
 
@@ -363,7 +361,6 @@ class TestTranslatePdfSync(unittest.TestCase):
 
         def capture_translate(*args, **kwargs):
             captured_envs.update(kwargs.get("envs") or {})
-            return None
 
         mock_translate.side_effect = capture_translate
 
@@ -392,7 +389,6 @@ class TestTranslatePdfSync(unittest.TestCase):
 
         def capture_translate(*args, **kwargs):
             captured_envs.update(kwargs.get("envs") or {})
-            return None
 
         mock_translate.side_effect = capture_translate
 

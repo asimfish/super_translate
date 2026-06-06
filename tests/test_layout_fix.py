@@ -141,7 +141,7 @@ class TestAnalyzePageLayout(unittest.TestCase):
             _tb((91, 100, 504, 120), "text"),
             _tb((50, 100, 60, 105), "tiny", font_size=5),
         ]
-        left_margin, col_width = _analyze_page_layout(blocks)
+        left_margin, _col_width = _analyze_page_layout(blocks)
         self.assertAlmostEqual(left_margin, 91.0)
 
     def test_empty_blocks(self):
@@ -155,7 +155,7 @@ class TestAnalyzePageLayout(unittest.TestCase):
             _tb((91, 100, 504, 120), "body text"),
             _tb((50, 100, 504, 120), "footnote", font_size=5),
         ]
-        left_margin, col_width = _analyze_page_layout(blocks)
+        left_margin, _col_width = _analyze_page_layout(blocks)
         self.assertAlmostEqual(left_margin, 91.0)
 
     def test_skips_line_number_text(self):
@@ -164,7 +164,7 @@ class TestAnalyzePageLayout(unittest.TestCase):
             _tb((91, 100, 504, 120), "body text"),
             _tb((50, 100, 400, 120), "24\n25\n26"),
         ]
-        left_margin, col_width = _analyze_page_layout(blocks)
+        left_margin, _col_width = _analyze_page_layout(blocks)
         self.assertAlmostEqual(left_margin, 91.0)
 
     def test_weights_by_text_length(self):
@@ -174,7 +174,7 @@ class TestAnalyzePageLayout(unittest.TestCase):
             _tb((91, 130, 504, 200), "a" * 200),
             _tb((100, 210, 504, 230), "b" * 200),
         ]
-        left_margin, col_width = _analyze_page_layout(blocks)
+        left_margin, _col_width = _analyze_page_layout(blocks)
         # Both x=91 and x=100 have same text length, but x=91 appears first
         self.assertIn(left_margin, [91.0, 100.0])
 

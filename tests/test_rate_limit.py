@@ -124,7 +124,7 @@ class TestHourlyLimit:
         middleware = RateLimitMiddleware(app, requests_per_minute=100, requests_per_hour=10)
         now = time.time()
         middleware._hour_requests["1.2.3.4"] = [now - 300, now - 200, now - 100]
-        allowed, msg = middleware._check_rate_limit("1.2.3.4")
+        allowed, _msg = middleware._check_rate_limit("1.2.3.4")
         assert allowed
 
 
