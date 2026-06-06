@@ -333,7 +333,7 @@ async def upload_paper(
         return total, is_first, ""
 
     try:
-        total_size, first_chunk, error = await asyncio.to_thread(_write_chunks)
+        _total_size, first_chunk, error = await asyncio.to_thread(_write_chunks)
     except Exception:
         stored_path.unlink(missing_ok=True)
         logger.exception("Error writing uploaded file")
