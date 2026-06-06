@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import HTTPException
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -1528,6 +1530,37 @@ class TestRunTranslation:
         # Paper should be marked failed, not stuck as "translating"
         assert paper.translation_status == "failed"
         assert "Unexpected" in paper.translation_error
+
+    @patch("app.api.papers.settings")
+    def test_http_exception_preserves_error_message(self, mock_settings):
+        """HTTPException from config validation should surface the real error, not a generic one."""
+        import app.api.papers as papers_mod
+        from app.api.papers import _run_translation
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.translation_status = "translating"
+
+        with patch.object(
+            papers_mod,
+            "_resolve_backend_config",
+            side_effect=HTTPException(400, "Backend 'deepseek' requires an API key."),
+        ):
+            reset_db = AsyncMock()
+            reset_result = MagicMock()
+            reset_result.scalar_one_or_none.return_value = paper
+            reset_db.execute = AsyncMock(return_value=reset_result)
+            reset_db.commit = AsyncMock()
+            reset_ctx = MagicMock()
+            reset_ctx.__aenter__ = AsyncMock(return_value=reset_db)
+            reset_ctx.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("app.core.database.async_session", MagicMock(return_value=reset_ctx)):
+                _run_translation("paper123", "deepseek", "balanced")
+
+        assert paper.translation_status == "failed"
+        assert "API key" in paper.translation_error
+        assert "Unexpected" not in paper.translation_error
 
     def test_reset_paper_status_resets_translating_paper(self):
         """Test _reset_paper_status resets a paper stuck in translating state."""

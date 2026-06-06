@@ -556,6 +556,9 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced") -> 
 
         asyncio.run(_do_translate(paper_id, config, quality))
 
+    except HTTPException as e:
+        # Config validation errors (missing API key, etc.) — surface the real message
+        _reset_paper_status(paper_id, e.detail)
     except Exception:
         # Safety net: if anything outside _do_translate fails, reset paper status
         # so it doesn't stay stuck as "translating" forever
