@@ -237,23 +237,17 @@ async def list_papers(
     limit = min(max(limit, 1), 200)
     offset = max(offset, 0)
 
-    # Base query
-    query = select(Paper).order_by(Paper.created_at.desc())
-    count_query = select(func.count(Paper.id))
-
+    # Base query with filters
+    base = select(Paper).order_by(Paper.created_at.desc())
     if search:
         escaped = _escape_like(search)
-        query = query.where(Paper.title.like(f"%{escaped}%", escape="\\"))
-        count_query = count_query.where(Paper.title.like(f"%{escaped}%", escape="\\"))
+        base = base.where(Paper.title.like(f"%{escaped}%", escape="\\"))
     if status:
-        query = query.where(Paper.translation_status == status)
-        count_query = count_query.where(Paper.translation_status == status)
+        base = base.where(Paper.translation_status == status)
 
-    # Get total count
-    total = await db.scalar(count_query) or 0
-
-    # Apply pagination
-    query = query.offset(offset).limit(limit)
+    # Count and paginate from the same filtered base
+    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    query = base.offset(offset).limit(limit)
     result = await db.execute(query)
     papers = result.scalars().all()
 

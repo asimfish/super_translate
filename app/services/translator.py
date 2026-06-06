@@ -230,6 +230,15 @@ def _resolve_service(config: TranslationConfig, fallback: str) -> str:
     return service
 
 
+# Service → (env_key_for_api_key, env_fallback, optional_model_env, optional_base_url_env)
+_SERVICE_ENV_MAP: dict[str, tuple[str, str, str | None, str | None]] = {
+    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL", None),
+    "openai": ("OPENAI_API_KEY", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL"),
+    "deepl": ("DEEPL_API_KEY", "DEEPL_API_KEY", None, None),
+    "ollama": (None, None, None, "OLLAMA_HOST"),
+}
+
+
 def _build_pdf2zh_envs(
     service: str, config: TranslationConfig
 ) -> dict[str, str | None]:
@@ -239,34 +248,27 @@ def _build_pdf2zh_envs(
     enabling safe concurrent translations with different keys.
     """
     envs: dict[str, str | None] = {}
-    api_key = config.api_key
-    model_name = config.model
+    mapping = _SERVICE_ENV_MAP.get(service)
+    if not mapping:
+        return envs
 
-    if service == "deepseek":
-        # Fall back to environment if config has no key
-        if not api_key:
-            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    key_env, fallback_env, model_env, url_env = mapping
+
+    # API key: prefer config, fall back to environment
+    if key_env:
+        api_key = config.api_key or os.environ.get(fallback_env, "")
         if api_key:
-            envs["DEEPSEEK_API_KEY"] = api_key
-        if model_name:
-            envs["DEEPSEEK_MODEL"] = model_name
-    elif service == "openai":
-        if not api_key:
-            api_key = os.environ.get("OPENAI_API_KEY", "")
-        if api_key:
-            envs["OPENAI_API_KEY"] = api_key
-        if config.base_url:
-            envs["OPENAI_BASE_URL"] = config.base_url
-        if model_name:
-            envs["OPENAI_MODEL"] = model_name
-    elif service == "deepl":
-        deepl_key = api_key or os.environ.get("DEEPL_API_KEY", "")
-        if deepl_key:
-            envs["DEEPL_API_KEY"] = deepl_key
-    elif service == "ollama":
-        ollama_url = config.base_url or os.environ.get("OLLAMA_HOST", "")
-        if ollama_url:
-            envs["OLLAMA_HOST"] = ollama_url
+            envs[key_env] = api_key
+
+    # Model name
+    if model_env and config.model:
+        envs[model_env] = config.model
+
+    # Base URL (for openai/ollama)
+    if url_env:
+        url = config.base_url or os.environ.get(url_env, "")
+        if url:
+            envs[url_env] = url
 
     return envs
 
