@@ -330,5 +330,31 @@ class TestSafeDelete:
         assert not f.exists()
 
 
+class TestCleanupOutputDir:
+    """Test cleanup_output_dir error handling."""
+
+    def test_logs_warning_on_os_error(self, tmp_path, caplog):
+        """Should log a warning if rmtree fails, not raise."""
+        import logging
+
+        from app.services.library import cleanup_output_dir
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        with patch("app.services.library.shutil.rmtree", side_effect=OSError("Permission denied")):
+            with caplog.at_level(logging.WARNING):
+                cleanup_output_dir(output_dir)
+
+        assert "Failed to clean up" in caplog.text
+        assert "Permission denied" in caplog.text
+
+    def test_noop_when_dir_missing(self, tmp_path):
+        """Should do nothing if directory doesn't exist."""
+        from app.services.library import cleanup_output_dir
+
+        cleanup_output_dir(tmp_path / "nonexistent")
+
+
 if __name__ == "__main__":
     unittest.main()

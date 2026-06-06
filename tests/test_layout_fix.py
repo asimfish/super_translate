@@ -178,6 +178,17 @@ class TestAnalyzePageLayout(unittest.TestCase):
         # Both x=91 and x=100 have same text length, but x=91 appears first
         self.assertIn(left_margin, [91.0, 100.0])
 
+    def test_returns_first_mode_on_distinct_widths(self):
+        """When all widths are distinct, statistics.mode returns the first."""
+        blocks = [
+            _tb((91, 100, 400, 120), "text1"),  # width=309
+            _tb((91, 130, 450, 150), "text2"),  # width=359
+            _tb((91, 160, 500, 180), "text3"),  # width=409
+        ]
+        left_margin, col_width = _analyze_page_layout(blocks)
+        self.assertAlmostEqual(left_margin, 91.0)
+        self.assertAlmostEqual(col_width, 309.0)  # first encountered
+
 
 class TestNeedsFix(unittest.TestCase):
     """Test block fix detection."""
