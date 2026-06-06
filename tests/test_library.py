@@ -342,9 +342,11 @@ class TestCleanupOutputDir:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        with patch("app.services.library.shutil.rmtree", side_effect=OSError("Permission denied")):
-            with caplog.at_level(logging.WARNING):
-                cleanup_output_dir(output_dir)
+        with (
+            patch("app.services.library.shutil.rmtree", side_effect=OSError("Permission denied")),
+            caplog.at_level(logging.WARNING),
+        ):
+            cleanup_output_dir(output_dir)
 
         assert "Failed to clean up" in caplog.text
         assert "Permission denied" in caplog.text

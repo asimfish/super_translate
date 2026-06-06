@@ -379,9 +379,12 @@ def _has_embedded_line_numbers(text: str) -> bool:
             continue
         # Pure section number: "1 Introduction" (no trailing number)
         sec_match = re.match(r"^\d{1,3}\s+", stripped)
-        if sec_match and re.match(r"[A-Z一-鿿]", stripped[sec_match.end():]):
-            if not re.search(r"\d{1,3}$", stripped[sec_match.end():]):
-                continue
+        if (
+            sec_match
+            and re.match(r"[A-Z一-鿿]", stripped[sec_match.end():])
+            and not re.search(r"\d{1,3}$", stripped[sec_match.end():])
+        ):
+            continue
         # Standalone line number as first line: "25\ntext..."
         if i == 0 and re.match(r"^\d{1,3}$", stripped):
             return True

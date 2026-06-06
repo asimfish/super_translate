@@ -337,7 +337,7 @@ async def upload_paper(
     except Exception:
         stored_path.unlink(missing_ok=True)
         logger.exception("Error writing uploaded file")
-        raise HTTPException(500, "Failed to save uploaded file")
+        raise HTTPException(500, "Failed to save uploaded file") from None
     if error:
         stored_path.unlink(missing_ok=True)
         raise HTTPException(400, error)
@@ -354,7 +354,7 @@ async def upload_paper(
     except Exception:
         stored_path.unlink(missing_ok=True)
         logger.exception("Error processing uploaded PDF")
-        raise HTTPException(500, "Failed to process uploaded PDF")
+        raise HTTPException(500, "Failed to process uploaded PDF") from None
 
     paper = Paper(
         title=title,
@@ -371,7 +371,7 @@ async def upload_paper(
         await db.rollback()
         stored_path.unlink(missing_ok=True)
         logger.exception("Failed to save paper record, cleaned up file")
-        raise HTTPException(500, "Failed to save paper record")
+        raise HTTPException(500, "Failed to save paper record") from None
     await db.refresh(paper)
 
     return _paper_to_response(paper, has_original=True)
