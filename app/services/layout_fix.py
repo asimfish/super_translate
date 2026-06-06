@@ -7,6 +7,7 @@ incorrect positions/widths. This module corrects them using PyMuPDF.
 import logging
 import re
 import statistics
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,7 +64,11 @@ def fix_translated_layout(
             if output_path == translated_path:
                 tmp_path = translated_path.with_suffix(".tmp.pdf")
                 doc.save(str(tmp_path), garbage=4, deflate=True)
-                tmp_path.replace(translated_path)
+                try:
+                    tmp_path.replace(translated_path)
+                except OSError:
+                    tmp_path.unlink(missing_ok=True)
+                    raise
             else:
                 doc.save(str(output_path), garbage=4, deflate=True)
             logger.info("Layout fix: corrected %d blocks in %s", total_fixed, translated_path)
@@ -286,10 +291,11 @@ def _analyze_page_layout(
 
     # Find most common width among "full-width" blocks
     full_widths = [w for w in width_values if w > 300]
-    if full_widths:
-        col_width = float(statistics.mode(full_widths))
-    else:
-        col_width = float(statistics.mode(width_values))
+    widths_to_use = full_widths if full_widths else width_values
+    try:
+        col_width = float(statistics.mode(widths_to_use))
+    except statistics.StatisticsError:
+        col_width = float(Counter(widths_to_use).most_common(1)[0][0])
 
     return (left_margin, col_width)
 
