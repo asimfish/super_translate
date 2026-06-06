@@ -49,8 +49,7 @@ def fix_translated_layout(
     translated_path = Path(translated_path)
     output_path = translated_path if output_path is None else Path(output_path)
 
-    doc = fitz.open(str(translated_path))
-    try:
+    with fitz.open(str(translated_path)) as doc:
         total_fixed = 0
 
         for page_idx in range(doc.page_count):
@@ -72,8 +71,6 @@ def fix_translated_layout(
             logger.debug("Layout fix: no corrections needed for %s", translated_path)
 
         return total_fixed > 0
-    finally:
-        doc.close()
 
 
 def _fix_page_layout(page: object) -> int:

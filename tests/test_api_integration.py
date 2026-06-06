@@ -287,7 +287,7 @@ class TestPaperUploadEndpoint:
 
     def test_upload_cleans_file_on_pdf_info_failure(self, mock_db, tmp_path):
         """Test that uploaded file is deleted if get_pdf_info raises."""
-        pdf_content = b"%PDF-1.4 test"
+        pdf_content = b"%PDF-1.4 test\n%%EOF"
         stored_path = tmp_path / "stored_test.pdf"
 
         with patch("app.api.papers.generate_stored_filename") as mock_gen, \
@@ -299,12 +299,43 @@ class TestPaperUploadEndpoint:
                 mock_settings.translations_path = tmp_path
                 mock_settings.max_upload_size = 100 * 1024 * 1024
                 mock_settings.upload_chunk_size = 1024 * 1024
-                c.post(
+                resp = c.post(
                     "/api/papers/upload",
                     files={"file": ("test.pdf", pdf_content, "application/pdf")},
                     data={"tags": ""},
                 )
         assert not stored_path.exists(), "Orphaned file should be cleaned up"
+        assert resp.status_code == 500
+        assert "corrupt PDF" not in resp.text, "Error must not leak internal details"
+
+    def test_upload_no_path_disclosure_on_write_error(self, mock_db, tmp_path):
+        """Internal errors during upload must not leak server paths."""
+        pdf_content = b"%PDF-1.4 test\n%%EOF"
+        orig_open = Path.open
+
+        def mock_open(self, *args, **kwargs):
+            if str(self).endswith(".pdf") and args and args[0] == "wb":
+                raise OSError("/data/papers/abc123 locked by another process")
+            return orig_open(self, *args, **kwargs)
+
+        with patch("app.api.papers.generate_stored_filename") as mock_gen, \
+             patch("app.api.papers.settings") as mock_settings, \
+             patch.object(Path, "open", mock_open), \
+             TestClient(app, raise_server_exceptions=False) as c:
+                mock_gen.return_value = "stored_test.pdf"
+                mock_settings.papers_path = tmp_path
+                mock_settings.translations_path = tmp_path
+                mock_settings.max_upload_size = 100 * 1024 * 1024
+                mock_settings.upload_chunk_size = 1024 * 1024
+                resp = c.post(
+                    "/api/papers/upload",
+                    files={"file": ("test.pdf", pdf_content, "application/pdf")},
+                    data={"tags": ""},
+                )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert "/data/papers" not in body.get("detail", "")
+        assert "locked" not in body.get("detail", "")
 
 
 class TestPaperDetailEndpoint:

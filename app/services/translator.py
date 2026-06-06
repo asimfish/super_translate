@@ -169,14 +169,12 @@ QUALITY_PRESETS = {
 
 def get_model() -> object:
     global _model
-    if _model is None:
-        with _model_lock:
-            if _model is None:
-                from pdf2zh.doclayout import OnnxModel
-                logger.info("Loading layout detection model...")
-                _model = OnnxModel.from_pretrained()
-                logger.info("Model loaded")
-            return _model
+    with _model_lock:
+        if _model is None:
+            from pdf2zh.doclayout import OnnxModel
+            logger.info("Loading layout detection model...")
+            _model = OnnxModel.from_pretrained()
+            logger.info("Model loaded")
     return _model
 
 
@@ -352,7 +350,7 @@ def _create_progress_callback(
                 if progress_callback:
                     progress_callback(pct)
         except Exception as e:
-            logger.debug("Progress callback error: %s", e)
+            logger.warning("Progress callback error: %s", e)
 
     return pdf2zh_callback
 

@@ -323,6 +323,10 @@ async def upload_paper(
                     is_first = False
                 last_chunk = chunk
                 f.write(chunk)
+        # Post-write size check (catches last-chunk overshoot)
+        if total > settings.max_upload_size:
+            max_mb = settings.max_upload_size // (1024 * 1024)
+            raise HTTPException(400, f"File too large (max {max_mb}MB)")
         # Validate PDF structure: check for %%EOF marker in last chunk
         if not is_first and b"%%EOF" not in last_chunk[-1024:]:
             raise HTTPException(400, "Invalid PDF file (missing %%EOF marker)")
@@ -330,9 +334,13 @@ async def upload_paper(
 
     try:
         total_size, first_chunk = await asyncio.to_thread(_write_chunks)
-    except Exception:
+    except HTTPException:
         stored_path.unlink(missing_ok=True)
         raise
+    except Exception:
+        stored_path.unlink(missing_ok=True)
+        logger.exception("Error writing uploaded file")
+        raise HTTPException(500, "Failed to save uploaded file")
 
     if first_chunk:
         stored_path.unlink(missing_ok=True)
@@ -343,9 +351,13 @@ async def upload_paper(
             asyncio.to_thread(get_pdf_info, stored_path),
             asyncio.to_thread(extract_title_from_pdf, stored_path),
         )
-    except Exception:
+    except HTTPException:
         stored_path.unlink(missing_ok=True)
         raise
+    except Exception:
+        stored_path.unlink(missing_ok=True)
+        logger.exception("Error processing uploaded PDF")
+        raise HTTPException(500, "Failed to process uploaded PDF")
 
     paper = Paper(
         title=title,
