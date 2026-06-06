@@ -41,16 +41,16 @@ async def _recover_stuck_translations() -> None:
     from sqlalchemy import select
 
     from app.core.database import async_session
-    from app.models.paper import Paper
+    from app.models.paper import Paper, TranslationStatus
 
     async with async_session() as db:
         result = await db.execute(
-            select(Paper).where(Paper.translation_status == "translating")
+            select(Paper).where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
         )
         stuck = result.scalars().all()
         if stuck:
             for paper in stuck:
-                paper.translation_status = "failed"
+                paper.translation_status = TranslationStatus.FAILED.value
                 paper.translation_error = "Translation was interrupted (server restart)"
             await db.commit()
             logger.info("Recovered %d stuck translation(s)", len(stuck))
