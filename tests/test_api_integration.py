@@ -553,27 +553,35 @@ class TestTranslationEndpoint:
     """Test translation endpoint."""
 
     def test_translate_paper_not_found(self, client, mock_db):
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_db.execute.return_value = mock_result
+        # First call: UPDATE returns rowcount=0 (no rows matched)
+        mock_update_result = MagicMock()
+        mock_update_result.rowcount = 0
+        # Second call: SELECT returns None (paper not found → 404)
+        mock_select_result = MagicMock()
+        mock_select_result.scalar_one_or_none.return_value = None
+        mock_db.execute.side_effect = [mock_update_result, mock_select_result]
 
         response = client.post("/api/papers/000000000000/translate")
         assert response.status_code == 404
 
     def test_translate_already_in_progress(self, client, mock_db, sample_paper):
         sample_paper.translation_status = "translating"
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = sample_paper
-        mock_db.execute.return_value = mock_result
+        # First call: UPDATE returns rowcount=0 (already translating)
+        mock_update_result = MagicMock()
+        mock_update_result.rowcount = 0
+        # Second call: SELECT returns the paper → 409
+        mock_select_result = MagicMock()
+        mock_select_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.side_effect = [mock_update_result, mock_select_result]
 
         response = client.post(f"/api/papers/{sample_paper.id}/translate")
         assert response.status_code == 409
 
     def test_translate_starts_successfully(self, client, mock_db, sample_paper):
         sample_paper.translation_status = "pending"
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = sample_paper
-        mock_db.execute.return_value = mock_result
+        mock_update_result = MagicMock()
+        mock_update_result.rowcount = 1
+        mock_db.execute.return_value = mock_update_result
 
         with patch("app.api.papers.BackgroundTasks.add_task"):
             response = client.post(f"/api/papers/{sample_paper.id}/translate")
@@ -582,9 +590,9 @@ class TestTranslationEndpoint:
 
     def test_translate_with_quality_param(self, client, mock_db, sample_paper):
         sample_paper.translation_status = "pending"
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = sample_paper
-        mock_db.execute.return_value = mock_result
+        mock_update_result = MagicMock()
+        mock_update_result.rowcount = 1
+        mock_db.execute.return_value = mock_update_result
 
         with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
             response = client.post(f"/api/papers/{sample_paper.id}/translate?quality=fast")

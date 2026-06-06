@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -454,18 +454,29 @@ async def start_translation(
     if quality not in valid_qualities:
         raise HTTPException(400, f"Invalid quality: {quality}")
 
-    paper = await _get_paper_or_404(paper_id, db)
-    if paper.translation_status == TranslationStatus.TRANSLATING.value:
+    # Atomic check-and-set: prevents two concurrent requests from both
+    # starting translation for the same paper (TOCTOU race condition).
+    result = await db.execute(
+        update(Paper)
+        .where(
+            Paper.id == paper_id,
+            Paper.translation_status != TranslationStatus.TRANSLATING.value,
+        )
+        .values(
+            translation_status=TranslationStatus.TRANSLATING.value,
+            translation_progress=0.0,
+            translation_error=None,
+        )
+    )
+    if result.rowcount == 0:
+        # Either paper doesn't exist or already translating
+        paper = await _get_paper_or_404(paper_id, db)  # raises 404 if missing
         raise HTTPException(409, "Translation already in progress")
-
-    paper.translation_status = TranslationStatus.TRANSLATING.value
-    paper.translation_progress = 0.0
-    paper.translation_error = None
     await db.commit()
 
     background_tasks.add_task(
         _run_translation,
-        paper.id,
+        paper_id,
         backend or settings.translation_backend,
         quality,
     )
