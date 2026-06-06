@@ -1826,6 +1826,35 @@ class TestInitDb:
 
         await test_engine.dispose()
 
+    async def test_init_db_creates_indexes(self):
+        """Test that init_db creates performance indexes on papers table."""
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy.pool import StaticPool
+
+        from app.core.database import init_db
+
+        test_engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+
+        with patch("app.core.database.engine", test_engine):
+            await init_db()
+
+        import sqlalchemy as sa
+        async with test_engine.connect() as conn:
+            result = await conn.run_sync(
+                lambda sync_conn: sync_conn.execute(
+                    sa.text("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'ix_%'")
+                ).fetchall()
+            )
+            index_names = {row[0] for row in result}
+            assert "ix_papers_status" in index_names
+            assert "ix_papers_created" in index_names
+
+        await test_engine.dispose()
+
 
 class TestCliFunction:
     """Test CLI entry point."""
