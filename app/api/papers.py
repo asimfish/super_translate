@@ -351,9 +351,6 @@ async def upload_paper(
             asyncio.to_thread(get_pdf_info, stored_path),
             asyncio.to_thread(extract_title_from_pdf, stored_path),
         )
-    except HTTPException:
-        stored_path.unlink(missing_ok=True)
-        raise
     except Exception:
         stored_path.unlink(missing_ok=True)
         logger.exception("Error processing uploaded PDF")
