@@ -685,6 +685,45 @@ class TestInsertTextWithFallback(unittest.TestCase):
         self.assertTrue(shape.commit.called)
 
 
+class TestFindChineseFontEdgeCases(unittest.TestCase):
+    """Test _find_chinese_font edge cases for font info with missing name index."""
+
+    def test_source_han_serif_without_name_index(self):
+        """SourceHanSerif found but font_info has only 4 elements (no name)."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = [(0, 0, 0, "SourceHanSerif-Regular")]
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "noto")
+
+    def test_other_chinese_font_without_name_index(self):
+        """Noto font found but font_info has only 4 elements (no name)."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = [(0, 0, 0, "NotoSansSC-Regular")]
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "NotoSansSC-Regular")
+
+    def test_simhei_font_detected(self):
+        """SimHei font is detected as Chinese font."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = [(0, 0, 0, "SimHei-Regular", "F4")]
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "F4")
+
+    def test_ming_font_detected(self):
+        """Ming font is detected as Chinese font."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = [(0, 0, 0, "MingLiU", "F5")]
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "F5")
+
+    def test_source_han_serif_full_name(self):
+        """'Source Han Serif' (with spaces) is detected."""
+        page = unittest.mock.MagicMock()
+        page.get_fonts.return_value = [(0, 0, 0, "Source Han Serif SC", "F6")]
+        from app.services.layout_fix import _find_chinese_font
+        self.assertEqual(_find_chinese_font(page), "F6")
+
+
 class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
     """Test fix_translated_layout edge cases."""
 

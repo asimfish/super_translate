@@ -1107,6 +1107,38 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
         self.assertIn("no output", result.error)
 
 
+class TestCreateProgressCallback(unittest.TestCase):
+    """Test _create_progress_callback error handling."""
+
+    def test_callback_exception_is_caught(self):
+        """Progress callback exceptions should be caught and logged."""
+        from app.services.translator import _create_progress_callback
+
+        def bad_callback(pct):
+            raise RuntimeError("callback boom")
+
+        pdf2zh_cb = _create_progress_callback(bad_callback)
+        # Should not raise despite bad_callback raising
+        pdf2zh_cb(0.5)
+
+    def test_callback_with_none_callback(self):
+        """When no progress_callback is provided, should not raise."""
+        from app.services.translator import _create_progress_callback
+
+        pdf2zh_cb = _create_progress_callback(None)
+        pdf2zh_cb(0.5)
+
+    def test_callback_clamps_progress(self):
+        """Progress values should be clamped to [0, 1]."""
+        from app.services.translator import _create_progress_callback
+
+        values = []
+        pdf2zh_cb = _create_progress_callback(lambda pct: values.append(pct))
+        pdf2zh_cb(-0.5)
+        pdf2zh_cb(1.5)
+        self.assertEqual(values, [0.0, 1.0])
+
+
 class TestGetModel(unittest.TestCase):
     """Test get_model function."""
 

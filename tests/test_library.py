@@ -294,6 +294,56 @@ class TestDeletePaperFiles:
             assert other_file.exists()
 
 
+class TestExtractTitleFromFirstPage(unittest.TestCase):
+    """Test _extract_title_from_first_page edge cases."""
+
+    def test_skips_non_text_blocks(self):
+        """Non-text blocks (type=1, images) should be skipped."""
+        from app.services.library import _extract_title_from_first_page
+
+        page = MagicMock()
+        page.get_text.return_value = {
+            "blocks": [
+                {"type": 1, "bbox": [0, 0, 100, 100]},  # image block
+                {
+                    "type": 0,
+                    "lines": [
+                        {"spans": [{"text": "Actual Title Text", "size": 16.0}]}
+                    ],
+                },
+            ]
+        }
+        result = _extract_title_from_first_page(page)
+        self.assertEqual(result, "Actual Title Text")
+
+    def test_returns_none_when_no_large_text(self):
+        """Returns None when no text has font size > 14."""
+        from app.services.library import _extract_title_from_first_page
+
+        page = MagicMock()
+        page.get_text.return_value = {
+            "blocks": [
+                {
+                    "type": 0,
+                    "lines": [
+                        {"spans": [{"text": "small text", "size": 10.0}]}
+                    ],
+                },
+            ]
+        }
+        result = _extract_title_from_first_page(page)
+        self.assertIsNone(result)
+
+    def test_returns_none_for_empty_page(self):
+        """Returns None for a page with no blocks."""
+        from app.services.library import _extract_title_from_first_page
+
+        page = MagicMock()
+        page.get_text.return_value = {"blocks": []}
+        result = _extract_title_from_first_page(page)
+        self.assertIsNone(result)
+
+
 class TestSafeDelete:
     """Test _safe_delete path traversal protection."""
 
