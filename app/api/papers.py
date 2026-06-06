@@ -676,7 +676,7 @@ def _create_progress_handler(
     _last_pct: list[float] = [0.0]
 
     def _on_progress(pct: float) -> None:
-        if pct - _last_pct[0] < 0.01 and pct < 1.0:
+        if pct - _last_pct[0] < 0.05 and pct < 1.0:
             return
         _last_pct[0] = pct
 

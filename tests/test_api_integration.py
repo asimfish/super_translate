@@ -1185,7 +1185,7 @@ class TestRunTranslation:
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
     def test_progress_callback_throttled(self, mock_settings, mock_translate, tmp_path):
-        """Test that progress callback throttles DB writes to 1% increments."""
+        """Test that progress callback throttles DB writes to 5% increments."""
         from app.api.papers import _run_translation
         from app.services.translator import TranslationResult
 
@@ -1245,11 +1245,11 @@ class TestRunTranslation:
 
         def fake_translate(input_path, output_dir, config, progress_callback=None):
             if progress_callback:
-                # Many small increments within 1% — only first should fire
-                for i in range(1, 10):
-                    progress_callback(i / 1000.0)  # 0.001, 0.002, ..., 0.009
-                # This crosses 1% threshold — should fire
-                progress_callback(0.015)
+                # Many small increments within 5% — all throttled
+                for i in range(1, 50):
+                    progress_callback(i / 1000.0)  # 0.001, 0.002, ..., 0.049
+                # This crosses 5% threshold — should fire
+                progress_callback(0.06)
                 # Final 100% — should always fire
                 progress_callback(1.0)
             return TranslationResult(mono_path=mono_path)
@@ -1259,8 +1259,8 @@ class TestRunTranslation:
         with patch("app.core.database.async_session", side_effect=session_factory):
             _run_translation("paper123", "google", "fast")
 
-        # Session created: 1 (load) + 2 (progress: 0.015, 1.0) + 1 (result) = 4
-        # The 9 calls from 0.001-0.009 are all within 1% of 0.0 → throttled
+        # Session created: 1 (load) + 2 (progress: 0.06, 1.0) + 1 (result) = 4
+        # The 49 calls from 0.001-0.049 are all within 5% of 0.0 → throttled
         assert session_call_count[0] == 4
         assert paper.translation_status == "completed"
 
