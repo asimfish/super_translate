@@ -1575,6 +1575,18 @@ class TestRunTranslation:
         # Should not have been modified
         assert paper.translation_status == "completed"
         db.commit.assert_not_called()
+
+    def test_reset_paper_status_handles_db_error(self):
+        """Test _reset_paper_status logs and suppresses DB errors."""
+        from app.api.papers import _reset_paper_status
+
+        with patch(
+            "app.core.database.async_session",
+            side_effect=RuntimeError("DB connection lost"),
+        ):
+            # Must not raise
+            _reset_paper_status("paper123", "some error")
+
     """Test custom validation error handling."""
 
     def test_value_error_returns_400(self, client, mock_db):
