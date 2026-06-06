@@ -1,5 +1,7 @@
 """Database setup with async SQLAlchemy."""
 
+from collections.abc import AsyncGenerator
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -35,7 +37,11 @@ async def init_db() -> None:
         )
 
 
-async def get_session() -> AsyncSession:
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """Get an async database session."""
     async with async_session() as session:
-        yield session
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise

@@ -1896,6 +1896,55 @@ class TestInitDb:
         await test_engine.dispose()
 
 
+class TestGetSession:
+    """Test get_session dependency rollback behavior."""
+
+    async def test_get_session_rollbacks_on_exception(self):
+        """Session should rollback if an exception occurs before commit."""
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+        from sqlalchemy.pool import StaticPool
+
+        from app.core.database import Base, get_session
+
+        test_engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        test_session_factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        # Patch both engine and async_session in the database module
+        with patch("app.core.database.async_session", test_session_factory):
+            gen = get_session()
+            session = await gen.asend(None)
+            # Add a paper but don't commit
+            from app.models.paper import Paper
+            session.add(Paper(
+                id="rollback_test",
+                title="Should Be Rolled Back",
+                original_filename="test.pdf",
+                stored_filename="test.pdf",
+                file_size=100,
+                page_count=1,
+            ))
+            # Simulate an exception — get_session should rollback
+            with pytest.raises(ValueError, match="simulated"):
+                await gen.athrow(ValueError("simulated"))
+
+        # Verify the record was rolled back (not committed)
+        async with test_engine.connect() as conn:
+            import sqlalchemy as sa
+            result = await conn.execute(
+                sa.text("SELECT COUNT(*) FROM papers WHERE id = 'rollback_test'")
+            )
+            assert result.scalar() == 0
+
+        await test_engine.dispose()
+
+
 class TestCliFunction:
     """Test CLI entry point."""
 
