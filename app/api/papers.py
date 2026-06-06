@@ -711,12 +711,10 @@ def _create_progress_handler(
         _last_pct[0] = pct
 
         async def _update():
-            from sqlalchemy import update as sa_update
-
             from app.core.database import async_session
             async with async_session() as p_db:
                 await p_db.execute(
-                    sa_update(Paper)
+                    update(Paper)
                     .where(
                         Paper.id == paper_id,
                         Paper.translation_status == TranslationStatus.TRANSLATING.value,
