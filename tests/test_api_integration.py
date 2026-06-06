@@ -1407,7 +1407,7 @@ class TestRunTranslation:
             )
             _update_paper_result(paper, result, Path("/data/translations/paper123"))
 
-        # Mono path is valid so translated_filename is set; dual path is outside so dual_filename is not
+        # Mono path valid → translated_filename set; dual path outside → dual_filename not set
         assert paper.translation_status == "completed"
         assert "translated_filename" in paper.__dict__
         assert "dual_filename" not in paper.__dict__

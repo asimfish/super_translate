@@ -564,7 +564,7 @@ async def _do_translate(
 ) -> None:
     """Execute translation in async context.
 
-    Uses two short DB sessions instead of one long one:
+    Uses short DB sessions to avoid holding connections during translation:
     1. Load paper + validate paths, then close session
     2. Run translation (no DB session held)
     3. Open new session to write results
