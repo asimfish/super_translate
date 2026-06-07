@@ -49,7 +49,7 @@ _MAX_ERROR_LEN = 200  # max error message length after sanitization
 _ASCII_CONTROL_MAX = 32  # ASCII control characters below this value (except \n\r\t)
 
 
-@dataclass
+@dataclass(frozen=True)
 class TextBlockInfo:
     """Extracted info for a single text block."""
     bbox: tuple[float, float, float, float]
