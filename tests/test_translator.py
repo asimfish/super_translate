@@ -48,7 +48,7 @@ class TestTranslationConfig(unittest.TestCase):
         self.assertEqual(config.model, "")
         self.assertEqual(config.quality, QualityPreset.BALANCED)
         self.assertEqual(config.max_retries, 2)
-        self.assertEqual(config.threads, 4)
+        self.assertEqual(config.threads, 8)
 
     def test_custom_values(self):
         config = TranslationConfig(
@@ -124,7 +124,7 @@ class TestQualityPresets(unittest.TestCase):
         self.assertFalse(preset["skip_subset_fonts"])
         self.assertIsNone(preset["prompt"])
         self.assertEqual(preset["fallback_backend"], "google")
-        self.assertEqual(preset["threads"], 8)
+        self.assertEqual(preset["threads"], 12)
 
     def test_balanced_preset_config(self):
         preset = QUALITY_PRESETS[QualityPreset.BALANCED]
@@ -132,7 +132,7 @@ class TestQualityPresets(unittest.TestCase):
         self.assertTrue(preset["skip_subset_fonts"])
         self.assertIsNotNone(preset["prompt"])
         self.assertEqual(preset["fallback_backend"], "google")
-        self.assertEqual(preset["threads"], 4)
+        self.assertEqual(preset["threads"], 8)
 
     def test_quality_preset_config(self):
         preset = QUALITY_PRESETS[QualityPreset.QUALITY]
@@ -140,7 +140,7 @@ class TestQualityPresets(unittest.TestCase):
         self.assertTrue(preset["skip_subset_fonts"])
         self.assertIsNotNone(preset["prompt"])
         self.assertEqual(preset["fallback_backend"], "google")
-        self.assertEqual(preset["threads"], 2)
+        self.assertEqual(preset["threads"], 4)
 
     def test_all_presets_have_required_keys(self):
         required_keys = [
@@ -493,7 +493,7 @@ class TestTranslatePdfSync(unittest.TestCase):
         mock_translate.return_value = None
         mock_fix.return_value = True
 
-        config = TranslationConfig(backend="google", quality=QualityPreset.FAST)
+        config = TranslationConfig(backend="google", quality=QualityPreset.BALANCED)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "output"

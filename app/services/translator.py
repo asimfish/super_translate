@@ -85,7 +85,7 @@ class TranslationConfig:
     model: str = ""
     quality: QualityPreset = QualityPreset.BALANCED
     max_retries: int = 2
-    threads: int = 4  # concurrent page translation threads
+    threads: int = 8  # concurrent page translation threads
 
 
 # Quality presets configuration
@@ -97,7 +97,8 @@ QUALITY_PRESETS = {
         "vfont": "",
         "vchar": "",
         "fallback_backend": "google",
-        "threads": 8,  # Google Translate can handle more concurrency
+        "threads": 12,  # Google Translate can handle high concurrency
+        "skip_layout_fix": True,  # Google Translate doesn't need layout correction
     },
     QualityPreset.BALANCED: {
         "compatible": True,
@@ -125,7 +126,7 @@ QUALITY_PRESETS = {
         "vfont": r"(CM[^R]|MS[MH]|EU[RS]|STIX|Lucida|Math|Symbol|Times.*Math|Cambria.*Math)",
         "vchar": r"[αβγδεζηθικλμνξπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩ∑∏∫∂∇∞≈≠≤≥±×÷√∝∈∉⊂⊃∪∩¬∧∨∃∀]",
         "fallback_backend": "google",
-        "threads": 4,  # DeepSeek needs rate limiting
+        "threads": 8,  # DeepSeek can handle more concurrent requests
     },
     QualityPreset.QUALITY: {
         "compatible": True,
@@ -166,7 +167,7 @@ QUALITY_PRESETS = {
             r"∑∏∫∂∇∞≈≠≤≥±×÷√∝∈∉⊂⊃∪∩¬∧∨∃∀⟨⟩⌈⌉⌊⌋‖]"
         ),
         "fallback_backend": "google",
-        "threads": 2,  # Quality mode uses more complex prompts, fewer concurrent
+        "threads": 4,  # Quality mode uses more complex prompts, moderate concurrency
     },
 }
 
@@ -331,7 +332,7 @@ def _translate_sync(
                 logger.error("All translation attempts failed for %s", input_path.name)
                 raise
 
-    return _collect_output(input_path, output_dir)
+    return _collect_output(input_path, output_dir, skip_layout_fix=preset.get("skip_layout_fix", False))
 
 
 def _create_progress_callback(
@@ -365,6 +366,8 @@ def _create_progress_callback(
 def _collect_output(
     input_path: Path,
     output_dir: Path,
+    *,
+    skip_layout_fix: bool = False,
 ) -> TranslationResult:
     """Find and validate translation output files."""
     stem = input_path.stem
@@ -387,14 +390,15 @@ def _collect_output(
             return TranslationResult(error="Translation produced no output files")
 
     # Post-process: fix text block layout issues from pdf2zh
-    try:
-        from app.services.layout_fix import fix_translated_layout
+    if not skip_layout_fix:
+        try:
+            from app.services.layout_fix import fix_translated_layout
 
-        if mono_path and mono_path.exists():
-            fix_translated_layout(mono_path)
-        if dual_path and dual_path.exists():
-            fix_translated_layout(dual_path)
-    except Exception as e:
-        logger.warning("Layout post-processing failed (non-fatal): %s", e)
+            if mono_path and mono_path.exists():
+                fix_translated_layout(mono_path)
+            if dual_path and dual_path.exists():
+                fix_translated_layout(dual_path)
+        except Exception as e:
+            logger.warning("Layout post-processing failed (non-fatal): %s", e)
 
     return TranslationResult(mono_path=mono_path, dual_path=dual_path)

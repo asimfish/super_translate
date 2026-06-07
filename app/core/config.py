@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     upload_chunk_size: int = 1024 * 1024  # 1MB
 
     # Translation concurrency
-    max_concurrent_translations: int = 2
+    max_concurrent_translations: int = 3
 
     # CORS (comma-separated origins, e.g. "http://localhost:3000,https://example.com")
     cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
