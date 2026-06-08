@@ -139,11 +139,16 @@ def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
     in the rendered text. This pass redacts and reinserts affected blocks
     at their original positions with cleaned text.
     """
+    # Check raw page text for control characters (not block text, which is already cleaned)
+    raw_page_text = page.get_text("text")
+    if not _CONTROL_CHAR_RE.search(raw_page_text) and "\xa0" not in raw_page_text:
+        return
+
     font_name = _find_chinese_font(page)
     dirty_blocks = []
 
     for block in blocks:
-        # Check if the raw page text at this bbox contains control chars
+        # Check raw text at this bbox (not the cleaned block text)
         rect = fitz.Rect(block.bbox)
         raw_text = page.get_text("text", clip=rect)
         if _CONTROL_CHAR_RE.search(raw_text) or "\xa0" in raw_text:
