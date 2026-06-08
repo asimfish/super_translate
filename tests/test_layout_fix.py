@@ -609,6 +609,91 @@ class TestFixTranslatedLayout(unittest.TestCase):
                 os.unlink(out_path)
 
 
+class TestCleanPageArtifacts(unittest.TestCase):
+    """Test _clean_page_artifacts function."""
+
+    def test_cleans_null_bytes_in_rendered_text(self):
+        """Blocks with null bytes in raw page text are redacted and reinserted."""
+        import fitz
+        from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+
+        # Insert normal text
+        shape = page.new_shape()
+        shape.insert_textbox(
+            fitz.Rect(91, 100, 504, 130),
+            "Normal body text block for testing.",
+            fontname="helv", fontsize=10, color=(0, 0, 0),
+        )
+        shape.commit()
+
+        # Insert text with null byte embedded (simulating pdf2zh artifact)
+        shape = page.new_shape()
+        shape.insert_textbox(
+            fitz.Rect(91, 140, 504, 170),
+            "Text with \x00 null byte artifact.",
+            fontname="helv", fontsize=10, color=(0, 0, 0),
+        )
+        shape.commit()
+
+        blocks = _extract_text_blocks(page)
+        if blocks:
+            _clean_page_artifacts(page, blocks)
+
+        # Verify null bytes are cleaned from the page text
+        cleaned_text = page.get_text()
+        self.assertNotIn("\x00", cleaned_text)
+        doc.close()
+
+    def test_noop_when_page_is_clean(self):
+        """Clean pages should not be modified."""
+        import fitz
+        from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        shape = page.new_shape()
+        shape.insert_textbox(
+            fitz.Rect(91, 100, 504, 130),
+            "Clean text without artifacts.",
+            fontname="helv", fontsize=10, color=(0, 0, 0),
+        )
+        shape.commit()
+
+        blocks = _extract_text_blocks(page)
+        before_text = page.get_text()
+        _clean_page_artifacts(page, blocks)
+        after_text = page.get_text()
+        # Text should be unchanged
+        self.assertEqual(before_text, after_text)
+        doc.close()
+
+    def test_cleans_non_breaking_spaces(self):
+        """Non-breaking spaces (\\xa0) are normalized to regular spaces."""
+        import fitz
+        from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        # Insert text with non-breaking space
+        shape = page.new_shape()
+        shape.insert_textbox(
+            fitz.Rect(91, 100, 504, 130),
+            "Text with\xa0non-breaking space.",
+            fontname="helv", fontsize=10, color=(0, 0, 0),
+        )
+        shape.commit()
+
+        blocks = _extract_text_blocks(page)
+        _clean_page_artifacts(page, blocks)
+
+        cleaned_text = page.get_text()
+        self.assertNotIn("\xa0", cleaned_text)
+        doc.close()
+
+
 class TestRedactBlocks(unittest.TestCase):
     """Test _redact_blocks edge cases."""
 
