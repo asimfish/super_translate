@@ -391,8 +391,8 @@ class TestExtractTextBlocks(unittest.TestCase):
         blocks = _extract_text_blocks(page)
         self.assertEqual(len(blocks), 0)
 
-    def test_skips_null_bytes(self):
-        """Blocks containing null bytes are skipped."""
+    def test_cleans_null_bytes(self):
+        """Blocks containing null bytes are cleaned, not skipped."""
         from app.services.layout_fix import _extract_text_blocks
         blocks_data = [
             {
@@ -403,7 +403,8 @@ class TestExtractTextBlocks(unittest.TestCase):
         ]
         page = self._make_page(blocks_data)
         blocks = _extract_text_blocks(page)
-        self.assertEqual(len(blocks), 0)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].text, "textcontent")
 
     def test_empty_page(self):
         """Page with no blocks returns empty list."""
@@ -453,15 +454,22 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
                 "lines": [{"spans": [{"text": "tiny", "size": 10.0}]}],
             },
         ]}
+        # get_text("text", clip=...) for artifact detection returns clean text
+        page.get_text.side_effect = lambda *a, **kw: (
+            "tiny" if a and a[0] == "text" else {"blocks": [
+                {"type": 0, "bbox": [10, 100, 50, 120],
+                 "lines": [{"spans": [{"text": "tiny", "size": 10.0}]}]},
+            ]}
+        )
         page.rect.height = 792
+        page.get_fonts.return_value = []
         result = _fix_page_layout(page)
         self.assertEqual(result, 0)
 
     def test_no_blocks_needing_fix_returns_zero(self):
         """Page with properly aligned blocks returns 0."""
         from app.services.layout_fix import _fix_page_layout
-        page = unittest.mock.MagicMock()
-        page.get_text.return_value = {"blocks": [
+        blocks = [
             {
                 "type": 0,
                 "bbox": [91, 100, 504, 120],
@@ -472,9 +480,16 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
                 "bbox": [91, 130, 504, 150],
                 "lines": [{"spans": [{"text": "b" * 50, "size": 10.0}]}],
             },
-        ]}
+        ]
+        page = unittest.mock.MagicMock()
+        page.get_text.return_value = {"blocks": blocks}
+        page.get_text.side_effect = lambda *a, **kw: (
+            ("a" * 50 + "\n" + "b" * 50) if a and a[0] == "text"
+            else {"blocks": blocks}
+        )
         page.rect.height = 792
         page.rect.width = 612
+        page.get_fonts.return_value = []
         result = _fix_page_layout(page)
         self.assertEqual(result, 0)
 

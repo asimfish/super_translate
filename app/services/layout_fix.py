@@ -108,6 +108,10 @@ def _fix_page_layout(page: object) -> int:
     if not blocks:
         return 0
 
+    # First pass: clean control character artifacts from all blocks
+    # (null bytes, SOH, etc. from pdf2zh font embedding)
+    _clean_page_artifacts(page, blocks)
+
     # Analyze page layout
     left_margin, col_width = _analyze_page_layout(blocks)
     if col_width < _MIN_COL_WIDTH:
@@ -123,6 +127,60 @@ def _fix_page_layout(page: object) -> int:
     # Redact and reinsert
     _redact_blocks(page, to_fix)
     return _reinsert_blocks(page, to_fix, left_margin, col_width)
+
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
+    """Clean control character artifacts from all text blocks on a page.
+
+    pdf2zh's font embedding can produce null bytes and other control chars
+    in the rendered text. This pass redacts and reinserts affected blocks
+    at their original positions with cleaned text.
+    """
+    font_name = _find_chinese_font(page)
+    dirty_blocks = []
+
+    for block in blocks:
+        # Check if the raw page text at this bbox contains control chars
+        rect = fitz.Rect(block.bbox)
+        raw_text = page.get_text("text", clip=rect)
+        if _CONTROL_CHAR_RE.search(raw_text) or "\xa0" in raw_text:
+            dirty_blocks.append(block)
+
+    if not dirty_blocks:
+        return
+
+    # Redact first
+    for block in dirty_blocks:
+        rect = fitz.Rect(block.bbox)
+        page.add_redact_annot(rect, fill=(1, 1, 1))
+    try:
+        kwargs = {}
+        if hasattr(fitz, "PDF_REDACT_IMAGE_NONE"):
+            kwargs["images"] = fitz.PDF_REDACT_IMAGE_NONE
+        if hasattr(fitz, "PDF_REDACT_LINE_ART_NONE"):
+            kwargs["graphics"] = fitz.PDF_REDACT_LINE_ART_NONE
+        page.apply_redactions(**kwargs)
+    except (TypeError, AttributeError):
+        page.apply_redactions()
+
+    # Then reinsert with cleaned text
+    for block in dirty_blocks:
+        text = block.text
+        text = _CONTROL_CHAR_RE.sub("", text)
+        text = text.replace("\xa0", " ")
+        text = text.strip()
+        if not text or len(text) < _MIN_TEXT_LEN:
+            continue
+
+        rect = fitz.Rect(block.bbox)
+        height = rect.height
+        if height < block.avg_font_size * 1.5:
+            rect = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + block.avg_font_size * 2.5)
+
+        _insert_text_with_fallback(page, rect, text, font_name, block.avg_font_size)
 
 
 def _redact_blocks(page: object, blocks: list[TextBlockInfo]) -> None:
@@ -258,8 +316,11 @@ def _extract_text_blocks(page: object) -> list[TextBlockInfo]:
         if not text or not font_sizes:
             continue
 
-        # Skip blocks with null bytes or binary content
-        if "\x00" in text or any(ord(c) < _ASCII_CONTROL_MAX and c not in "\n\r\t" for c in text):
+        # Clean control characters (font embedding artifacts from pdf2zh)
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+        text = text.replace("\xa0", " ")
+        text = text.strip()
+        if not text:
             continue
 
         avg_size = statistics.median(font_sizes)
@@ -425,7 +486,7 @@ def _has_embedded_line_numbers(text: str) -> bool:
 
 
 def _clean_text(text: str) -> str:
-    """Remove line number artifacts from translated text.
+    """Remove line number artifacts and control characters from translated text.
 
     Line numbers appear as:
     - Standalone lines: "24" or "24\n25\n26"
@@ -434,6 +495,12 @@ def _clean_text(text: str) -> str:
     - Leading section numbers like "1 引言"
     - English references like "Figure 3", "Table 2", "Chapter 5"
     """
+    # Remove control characters (null bytes, SOH, etc.) from font embedding artifacts
+    # Keep \n, \r, \t for text structure
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    # Normalize non-breaking spaces to regular spaces
+    text = text.replace("\xa0", " ")
+
     lines = text.split("\n")
     cleaned: list[str] = []
     for line in lines:
