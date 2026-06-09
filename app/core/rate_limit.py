@@ -38,7 +38,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.requests_per_hour = requests_per_hour
         self.window_seconds = window_seconds
         self.trust_proxy = trust_proxy
-        # {ip: [timestamp, ...]}
         self._minute_requests: dict[str, list[float]] = defaultdict(list)
         self._hour_requests: dict[str, list[float]] = defaultdict(list)
         self._last_cleanup = time.time()

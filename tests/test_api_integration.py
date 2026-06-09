@@ -646,8 +646,6 @@ class TestTranslationEndpoint:
         with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
             response = client.post(f"/api/papers/{sample_paper.id}/translate?quality=fast")
             assert response.status_code == 200
-            # Verify quality param was passed to background task
-            # call_args[0] = (paper_id, backend, quality)
             mock_task.assert_called_once()
             call_args = mock_task.call_args[0]
             assert call_args[3] == "fast"  # quality is 4th arg (after func, paper_id, backend)
