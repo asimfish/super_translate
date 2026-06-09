@@ -406,6 +406,20 @@ class TestExtractTextBlocks(unittest.TestCase):
         self.assertEqual(len(blocks), 1)
         self.assertEqual(blocks[0].text, "textcontent")
 
+    def test_skips_block_when_cleaning_leaves_empty_text(self):
+        """Blocks that are only control characters are skipped after cleaning."""
+        from app.services.layout_fix import _extract_text_blocks
+        blocks_data = [
+            {
+                "type": 0,
+                "bbox": [91, 100, 504, 120],
+                "lines": [{"spans": [{"text": "\x00\x01\x02", "size": 10.0}]}],
+            },
+        ]
+        page = self._make_page(blocks_data)
+        blocks = _extract_text_blocks(page)
+        self.assertEqual(len(blocks), 0)
+
     def test_empty_page(self):
         """Page with no blocks returns empty list."""
         from app.services.layout_fix import _extract_text_blocks
@@ -691,6 +705,28 @@ class TestCleanPageArtifacts(unittest.TestCase):
 
         cleaned_text = page.get_text()
         self.assertNotIn("\xa0", cleaned_text)
+        doc.close()
+
+    def test_skips_short_text_after_cleaning(self):
+        """Blocks where cleaning leaves very short text are skipped."""
+        import fitz
+        from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        # Insert text that is one char + null byte — cleaning leaves 1 char (< MIN_TEXT_LEN=2)
+        shape = page.new_shape()
+        shape.insert_textbox(
+            fitz.Rect(91, 100, 504, 130),
+            "A\x00",
+            fontname="helv", fontsize=10, color=(0, 0, 0),
+        )
+        shape.commit()
+
+        blocks = _extract_text_blocks(page)
+        # After extraction cleaning, block text is "A" (1 char)
+        # _clean_page_artifacts should skip reinsertion for this block
+        _clean_page_artifacts(page, blocks)
         doc.close()
 
 
