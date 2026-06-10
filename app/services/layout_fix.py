@@ -132,21 +132,33 @@ def _fix_page_layout(page: object) -> int:
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
-def _block_has_nbsp(page: object, block: TextBlockInfo) -> bool:
-    """Check if a block's spans contain non-breaking spaces (\\xa0)."""
+def _find_nbsp_bboxes(page: object) -> list[tuple[float, float, float, float]]:
+    """Find bboxes of all spans containing non-breaking spaces (\\xa0)."""
+    nbsp_bboxes = []
     page_dict = page.get_text("dict")
     for raw_block in page_dict.get("blocks", []):
         if raw_block.get("type") != 0:
             continue
-        bx0, by0, bx1, by1 = raw_block["bbox"]
-        # Check if this raw block overlaps with the target block
-        tbx0, tby0, tbx1, tby1 = block.bbox
-        if bx0 >= tbx1 or bx1 <= tbx0 or by0 >= tby1 or by1 <= tby0:
-            continue
         for raw_line in raw_block.get("lines", []):
             for span in raw_line.get("spans", []):
                 if "\xa0" in span.get("text", ""):
-                    return True
+                    nbsp_bboxes.append(tuple(raw_block["bbox"]))
+                    break
+            else:
+                continue
+            break
+    return nbsp_bboxes
+
+
+def _block_has_nbsp_bbox(
+    block: TextBlockInfo,
+    nbsp_bboxes: list[tuple[float, float, float, float]],
+) -> bool:
+    """Check if a block overlaps with any \\xa0-containing span bbox."""
+    tbx0, tby0, tbx1, tby1 = block.bbox
+    for bx0, by0, bx1, by1 in nbsp_bboxes:
+        if bx0 < tbx1 and bx1 > tbx0 and by0 < tby1 and by1 > tby0:
+            return True
     return False
 
 
@@ -161,22 +173,9 @@ def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
     raw_page_text = page.get_text("text")
     has_control = bool(_CONTROL_CHAR_RE.search(raw_page_text))
 
-    # Check dict extraction for \xa0 (text extraction normalizes it)
-    has_nbsp = False
-    if not has_control:
-        page_dict = page.get_text("dict")
-        for raw_block in page_dict.get("blocks", []):
-            if raw_block.get("type") != 0:
-                continue
-            for raw_line in raw_block.get("lines", []):
-                for span in raw_line.get("spans", []):
-                    if "\xa0" in span.get("text", ""):
-                        has_nbsp = True
-                        break
-                if has_nbsp:
-                    break
-            if has_nbsp:
-                break
+    # Find \xa0 bboxes from dict extraction (text extraction normalizes it)
+    nbsp_bboxes = _find_nbsp_bboxes(page)
+    has_nbsp = len(nbsp_bboxes) > 0
     if not has_control and not has_nbsp:
         return
 
@@ -195,7 +194,7 @@ def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
             dirty_blocks.append(block)
             continue
         # Check dict spans for \xa0 (normalized in text extraction)
-        if has_nbsp and _block_has_nbsp(page, block):
+        if has_nbsp and _block_has_nbsp_bbox(block, nbsp_bboxes):
             dirty_blocks.append(block)
 
     if not dirty_blocks:
@@ -572,20 +571,10 @@ _CHINESE_FONT_NAMES = frozenset(["Noto", "SimSun", "SimHei", "Ming", "Song"])
 
 
 def _find_chinese_font(page: object) -> str:
-    """Find a Chinese font already embedded in the page."""
-    fonts = page.get_fonts()
-    for font_info in fonts:
-        font_name = font_info[_FONT_INFO_TYPE_IDX] if len(font_info) > _FONT_INFO_TYPE_IDX else ""
-        # Check for Source Han Serif (pdf2zh's default Chinese font)
-        if "SourceHanSerif" in font_name or "Source Han Serif" in font_name:
-            if len(font_info) > _FONT_INFO_NAME_IDX:
-                return font_info[_FONT_INFO_NAME_IDX]
-            return "noto"
-        # Check for other common Chinese fonts
-        if any(name in font_name for name in _CHINESE_FONT_NAMES):
-            if len(font_info) > _FONT_INFO_NAME_IDX:
-                return font_info[_FONT_INFO_NAME_IDX]
-            return font_name
+    """Find a Chinese font for reinsertion.
 
-    # Fallback: use PyMuPDF's built-in Chinese font
+    Uses PyMuPDF's built-in 'china-ss' font which handles CJK text
+    without introducing non-breaking space artifacts (unlike the embedded
+    'noto' font from pdf2zh which maps spaces to \\xa0).
+    """
     return "china-ss"

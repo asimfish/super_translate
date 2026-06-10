@@ -254,38 +254,18 @@ class TestNeedsFix(unittest.TestCase):
 class TestFindChineseFont(unittest.TestCase):
     """Test Chinese font detection in pages."""
 
-    def test_source_han_serif(self):
-        """Detects SourceHanSerif font."""
-        page = unittest.mock.MagicMock()
-        page.get_fonts.return_value = [
-            (0, 0, 0, "SourceHanSerif-Regular", "F1"),
-        ]
+    def test_always_returns_china_ss(self):
+        """Always returns china-ss to avoid \\xa0 artifacts from embedded fonts."""
         from app.services.layout_fix import _find_chinese_font
-        self.assertEqual(_find_chinese_font(page), "F1")
-
-    def test_noto_font(self):
-        """Detects Noto font."""
         page = unittest.mock.MagicMock()
-        page.get_fonts.return_value = [
-            (0, 0, 0, "NotoSansSC-Regular", "F2"),
-        ]
-        from app.services.layout_fix import _find_chinese_font
-        self.assertEqual(_find_chinese_font(page), "F2")
-
-    def test_fallback_when_no_chinese_font(self):
-        """Falls back to china-ss when no Chinese font found."""
-        page = unittest.mock.MagicMock()
-        page.get_fonts.return_value = [
-            (0, 0, 0, "Helvetica", "F3"),
-        ]
-        from app.services.layout_fix import _find_chinese_font
+        page.get_fonts.return_value = [(0, 0, 0, "SourceHanSerif-Regular", "F1")]
         self.assertEqual(_find_chinese_font(page), "china-ss")
 
     def test_empty_font_list(self):
-        """Falls back when page has no fonts."""
+        """Returns china-ss when page has no fonts."""
+        from app.services.layout_fix import _find_chinese_font
         page = unittest.mock.MagicMock()
         page.get_fonts.return_value = []
-        from app.services.layout_fix import _find_chinese_font
         self.assertEqual(_find_chinese_font(page), "china-ss")
 
     def test_short_font_info(self):
@@ -824,40 +804,12 @@ class TestInsertTextWithFallback(unittest.TestCase):
 class TestFindChineseFontEdgeCases(unittest.TestCase):
     """Test _find_chinese_font edge cases for font info with missing name index."""
 
-    def test_source_han_serif_without_name_index(self):
-        """SourceHanSerif found but font_info has only 4 elements (no name)."""
-        page = unittest.mock.MagicMock()
-        page.get_fonts.return_value = [(0, 0, 0, "SourceHanSerif-Regular")]
+    def test_always_returns_china_ss_for_any_font(self):
+        """Returns china-ss regardless of embedded fonts."""
         from app.services.layout_fix import _find_chinese_font
-        self.assertEqual(_find_chinese_font(page), "noto")
-
-    def test_other_chinese_font_without_name_index(self):
-        """Noto font found but font_info has only 4 elements (no name)."""
-        page = unittest.mock.MagicMock()
-        page.get_fonts.return_value = [(0, 0, 0, "NotoSansSC-Regular")]
-        from app.services.layout_fix import _find_chinese_font
-        self.assertEqual(_find_chinese_font(page), "NotoSansSC-Regular")
-
-    def test_simhei_font_detected(self):
-        """SimHei font is detected as Chinese font."""
         page = unittest.mock.MagicMock()
         page.get_fonts.return_value = [(0, 0, 0, "SimHei-Regular", "F4")]
-        from app.services.layout_fix import _find_chinese_font
-        self.assertEqual(_find_chinese_font(page), "F4")
-
-    def test_ming_font_detected(self):
-        """Ming font is detected as Chinese font."""
-        page = unittest.mock.MagicMock()
-        page.get_fonts.return_value = [(0, 0, 0, "MingLiU", "F5")]
-        from app.services.layout_fix import _find_chinese_font
-        self.assertEqual(_find_chinese_font(page), "F5")
-
-    def test_source_han_serif_full_name(self):
-        """'Source Han Serif' (with spaces) is detected."""
-        page = unittest.mock.MagicMock()
-        page.get_fonts.return_value = [(0, 0, 0, "Source Han Serif SC", "F6")]
-        from app.services.layout_fix import _find_chinese_font
-        self.assertEqual(_find_chinese_font(page), "F6")
+        self.assertEqual(_find_chinese_font(page), "china-ss")
 
 
 class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
