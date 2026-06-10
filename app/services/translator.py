@@ -70,6 +70,8 @@ _model_lock = threading.Lock()
 
 
 class QualityPreset(str, Enum):
+    """Translation quality preset enum."""
+
     FAST = "fast"  # Google translate, no frills
     BALANCED = "balanced"  # DeepSeek, compatible mode
     QUALITY = "quality"  # DeepSeek, full options, custom prompt
@@ -77,6 +79,8 @@ class QualityPreset(str, Enum):
 
 @dataclass(frozen=True)
 class TranslationConfig:
+    """Translation configuration."""
+
     backend: str = "deepseek"
     lang_in: str = "en"
     lang_out: str = "zh"
@@ -185,6 +189,8 @@ def get_model() -> object:
 
 @dataclass(frozen=True)
 class TranslationResult:
+    """Translation result with output paths or error."""
+
     mono_path: Path | None = None
     dual_path: Path | None = None
     error: str | None = None

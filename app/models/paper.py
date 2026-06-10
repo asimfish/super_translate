@@ -11,6 +11,8 @@ from app.core.database import Base
 
 
 class TranslationStatus(str, PyEnum):
+    """Translation status enum."""
+
     PENDING = "pending"
     TRANSLATING = "translating"
     COMPLETED = "completed"
@@ -22,6 +24,8 @@ def generate_id() -> str:
 
 
 class Paper(Base):
+    """Paper database model."""
+
     __tablename__ = "papers"
     __table_args__ = (
         Index("ix_papers_status", "translation_status"),

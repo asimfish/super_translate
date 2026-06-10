@@ -7,6 +7,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    """Application configuration loaded from environment variables."""
+
     app_name: str = "Paper China"
     debug: bool = False
 
