@@ -709,6 +709,28 @@ class TestCleanPageArtifacts(unittest.TestCase):
         _clean_page_artifacts(page, blocks)
         doc.close()
 
+    def test_noop_when_no_dirty_blocks(self):
+        """Pages with no artifacts are not modified."""
+        import fitz
+        from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        shape = page.new_shape()
+        shape.insert_textbox(
+            fitz.Rect(91, 100, 504, 130),
+            "Clean text without any artifacts.",
+            fontname="helv", fontsize=10, color=(0, 0, 0),
+        )
+        shape.commit()
+
+        blocks = _extract_text_blocks(page)
+        before = page.get_text()
+        _clean_page_artifacts(page, blocks)
+        after = page.get_text()
+        self.assertEqual(before, after)
+        doc.close()
+
 
 class TestFindNbspBboxes(unittest.TestCase):
     """Test _find_nbsp_bboxes function."""
