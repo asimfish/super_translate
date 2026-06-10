@@ -51,7 +51,7 @@ async def _recover_stuck_translations() -> None:
             .values(
                 translation_status=TranslationStatus.FAILED.value,
                 translation_error="Translation was interrupted (server restart)",
-            )
+            ),
         )
         if result.rowcount > 0:
             try:
@@ -117,7 +117,7 @@ async def add_security_headers(request: Request, call_next: RequestResponseEndpo
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
+    request: Request, exc: RequestValidationError,
 ) -> JSONResponse:
     """Return 400 for value validation errors, 422 for missing fields."""
     errors = exc.errors()
@@ -174,7 +174,7 @@ async def stats() -> dict[str, int]:
         async with async_session() as db:
             total = await db.scalar(select(func.count(Paper.id)))
             completed = await db.scalar(
-                select(func.count(Paper.id)).where(Paper.translation_status == "completed")
+                select(func.count(Paper.id)).where(Paper.translation_status == "completed"),
             )
             result = {
                 "total_papers": total or 0,

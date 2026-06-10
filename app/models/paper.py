@@ -37,15 +37,15 @@ class Paper(Base):
     file_size: Mapped[int] = mapped_column(nullable=False, default=0)
     page_count: Mapped[int] = mapped_column(nullable=False, default=0)
     translation_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=TranslationStatus.PENDING.value
+        String(20), nullable=False, default=TranslationStatus.PENDING.value,
     )
     translation_progress: Mapped[float] = mapped_column(nullable=False, default=0.0)
     translation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        DateTime, nullable=False, server_default=func.now(),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now(),
     )

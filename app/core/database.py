@@ -30,10 +30,10 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         # create_all skips indexes on existing tables — ensure they exist
         await conn.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_papers_status ON papers (translation_status)")
+            text("CREATE INDEX IF NOT EXISTS ix_papers_status ON papers (translation_status)"),
         )
         await conn.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_papers_created ON papers (created_at)")
+            text("CREATE INDEX IF NOT EXISTS ix_papers_created ON papers (created_at)"),
         )
 
 

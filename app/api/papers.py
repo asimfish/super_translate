@@ -57,7 +57,7 @@ _PROGRESS_THROTTLE = 0.05
 
 
 def _write_upload_chunks(
-    file: UploadFile, stored_path: Path
+    file: UploadFile, stored_path: Path,
 ) -> tuple[int, bool, str]:
     """Write uploaded file chunks to disk with validation.
 
@@ -303,13 +303,13 @@ async def list_papers(
             _paper_to_response(
                 p,
                 has_original=_file_exists_safe(
-                    settings.papers_path, p.stored_filename, papers_base
+                    settings.papers_path, p.stored_filename, papers_base,
                 ),
                 has_translated=_file_exists_safe(
-                    settings.translations_path, p.translated_filename, trans_base
+                    settings.translations_path, p.translated_filename, trans_base,
                 ),
                 has_dual=_file_exists_safe(
-                    settings.translations_path, p.dual_filename, trans_base
+                    settings.translations_path, p.dual_filename, trans_base,
                 ),
             )
             for p in papers
@@ -349,7 +349,7 @@ async def upload_paper(
 
     try:
         _total_size, first_chunk, error = await asyncio.to_thread(
-            _write_upload_chunks, file, stored_path
+            _write_upload_chunks, file, stored_path,
         )
     except Exception:
         stored_path.unlink(missing_ok=True)
@@ -396,7 +396,7 @@ async def upload_paper(
 
 @router.get("/{paper_id}")
 async def get_paper(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
 ) -> PaperResponse:
     """Get a specific paper by ID.
 
@@ -424,7 +424,7 @@ async def get_paper(
 
 @router.delete("/{paper_id}")
 async def delete_paper(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict[str, bool]:
     """Delete a paper and its associated files.
 
@@ -489,7 +489,7 @@ async def start_translation(
             translation_status=TranslationStatus.TRANSLATING.value,
             translation_progress=0.0,
             translation_error=None,
-        )
+        ),
     )
     if result.rowcount == 0:
         # Either paper doesn't exist or already translating
@@ -583,7 +583,7 @@ def _reset_paper_status(paper_id: str, error_message: str) -> None:
                     .values(
                         translation_status=TranslationStatus.FAILED.value,
                         translation_error=error_message,
-                    )
+                    ),
                 )
                 await db.commit()
 
@@ -719,7 +719,7 @@ def _create_progress_handler(
                         Paper.id == paper_id,
                         Paper.translation_status == TranslationStatus.TRANSLATING.value,
                     )
-                    .values(translation_progress=pct)
+                    .values(translation_progress=pct),
                 )
                 await p_db.commit()
         with contextlib.suppress(Exception):
@@ -771,30 +771,30 @@ async def _serve_paper_file(
 
 @router.get("/{paper_id}/download/original")
 async def download_original(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """Download the original PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     return await _serve_paper_file(
-        paper, "stored_filename", settings.papers_path, paper.original_filename
+        paper, "stored_filename", settings.papers_path, paper.original_filename,
     )
 
 
 @router.get("/{paper_id}/download/translated")
 async def download_translated(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """Download the translated PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_zh.pdf"
     return await _serve_paper_file(
-        paper, "translated_filename", settings.translations_path, name
+        paper, "translated_filename", settings.translations_path, name,
     )
 
 
 @router.get("/{paper_id}/download/dual")
 async def download_dual(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """Download the dual-language PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
@@ -804,7 +804,7 @@ async def download_dual(
 
 @router.get("/{paper_id}/view/original")
 async def view_original(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """View the original PDF file in browser."""
     paper = await _get_paper_or_404(paper_id, db)
@@ -813,7 +813,7 @@ async def view_original(
 
 @router.get("/{paper_id}/view/translated")
 async def view_translated(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)]
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """View the translated PDF file in browser."""
     paper = await _get_paper_or_404(paper_id, db)

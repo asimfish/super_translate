@@ -489,7 +489,7 @@ def _is_line_number_text(text: str) -> bool:
     lines = stripped.split("\n")
     return bool(
         len(lines) >= _LINE_NUMBER_MIN
-        and all(LINE_NUMBER_RE.match(line.strip()) for line in lines)
+        and all(LINE_NUMBER_RE.match(line.strip()) for line in lines),
     )
 
 
