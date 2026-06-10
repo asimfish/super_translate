@@ -731,6 +731,38 @@ class TestCleanPageArtifacts(unittest.TestCase):
         self.assertEqual(before, after)
         doc.close()
 
+    def test_fallback_redaction_when_kwargs_unsupported(self):
+        """Falls back to apply_redactions() when kwargs are not supported."""
+        import fitz
+        from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        shape = page.new_shape()
+        shape.insert_textbox(
+            fitz.Rect(91, 100, 504, 130),
+            "Text with\x00null byte.",
+            fontname="helv", fontsize=10, color=(0, 0, 0),
+        )
+        shape.commit()
+
+        blocks = _extract_text_blocks(page)
+
+        # Mock apply_redactions to raise TypeError on first call (with kwargs)
+        original_apply = page.apply_redactions
+        call_count = [0]
+        def mock_apply(**kwargs):
+            call_count[0] += 1
+            if kwargs:
+                raise TypeError("unsupported kwargs")
+            original_apply()
+
+        page.apply_redactions = mock_apply
+        _clean_page_artifacts(page, blocks)
+        # Should have called apply_redactions twice: once with kwargs (failed), once without
+        self.assertEqual(call_count[0], 2)
+        doc.close()
+
 
 class TestFindNbspBboxes(unittest.TestCase):
     """Test _find_nbsp_bboxes function."""
