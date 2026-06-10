@@ -135,20 +135,27 @@ _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
     """Clean control character artifacts from all text blocks on a page.
 
-    pdf2zh's font embedding can produce null bytes and other control chars
-    in the rendered text. This pass redacts and reinserts affected blocks
-    at their original positions with cleaned text.
+    pdf2zh's font embedding can produce null bytes, control chars, and
+    non-breaking spaces in the rendered text. This pass redacts and reinserts
+    affected blocks at their original positions with cleaned text.
     """
-    # Check raw page text for control characters (not block text, which is already cleaned)
+    # Check raw page text for artifacts
     raw_page_text = page.get_text("text")
-    if not _CONTROL_CHAR_RE.search(raw_page_text) and "\xa0" not in raw_page_text:
+    has_control = bool(_CONTROL_CHAR_RE.search(raw_page_text))
+    has_nbsp = "\xa0" in raw_page_text
+    if not has_control and not has_nbsp:
         return
 
     font_name = _find_chinese_font(page)
     dirty_blocks = []
 
     for block in blocks:
-        # Check raw text at this bbox (not the cleaned block text)
+        # Detect dirty blocks: check if block text contains artifacts
+        # (block text from _extract_text_blocks preserves \xa0 and control chars)
+        if _CONTROL_CHAR_RE.search(block.text) or "\xa0" in block.text:
+            dirty_blocks.append(block)
+            continue
+        # Also check raw page text at this bbox for artifacts not in block text
         rect = fitz.Rect(block.bbox)
         raw_text = page.get_text("text", clip=rect)
         if _CONTROL_CHAR_RE.search(raw_text) or "\xa0" in raw_text:
@@ -176,6 +183,7 @@ def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
         text = block.text
         text = _CONTROL_CHAR_RE.sub("", text)
         text = text.replace("\xa0", " ")
+        text = re.sub(r"  +", " ", text)  # collapse multiple spaces
         text = text.strip()
         if not text or len(text) < _MIN_TEXT_LEN:
             continue
