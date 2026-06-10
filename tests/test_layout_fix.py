@@ -710,6 +710,62 @@ class TestCleanPageArtifacts(unittest.TestCase):
         doc.close()
 
 
+class TestFindNbspBboxes(unittest.TestCase):
+    """Test _find_nbsp_bboxes function."""
+
+    def test_returns_empty_for_clean_page(self):
+        """Clean page returns empty list."""
+        import fitz
+        from app.services.layout_fix import _find_nbsp_bboxes
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        shape = page.new_shape()
+        shape.insert_textbox(
+            fitz.Rect(91, 100, 504, 130),
+            "Clean text without artifacts.",
+            fontname="helv", fontsize=10, color=(0, 0, 0),
+        )
+        shape.commit()
+
+        result = _find_nbsp_bboxes(page)
+        self.assertEqual(result, [])
+        doc.close()
+
+
+class TestBlockHasNbspBbox(unittest.TestCase):
+    """Test _block_has_nbsp_bbox function."""
+
+    def test_returns_false_for_empty_bboxes(self):
+        """Empty bboxes list returns False."""
+        from app.services.layout_fix import _block_has_nbsp_bbox, TextBlockInfo
+        block = TextBlockInfo(
+            bbox=(91.0, 100.0, 504.0, 130.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        self.assertFalse(_block_has_nbsp_bbox(block, []))
+
+    def test_returns_true_for_overlapping_bbox(self):
+        """Overlapping bbox returns True."""
+        from app.services.layout_fix import _block_has_nbsp_bbox, TextBlockInfo
+        block = TextBlockInfo(
+            bbox=(91.0, 100.0, 504.0, 130.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        nbsp_bboxes = [(90.0, 99.0, 505.0, 131.0)]
+        self.assertTrue(_block_has_nbsp_bbox(block, nbsp_bboxes))
+
+    def test_returns_false_for_non_overlapping_bbox(self):
+        """Non-overlapping bbox returns False."""
+        from app.services.layout_fix import _block_has_nbsp_bbox, TextBlockInfo
+        block = TextBlockInfo(
+            bbox=(91.0, 100.0, 504.0, 130.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        nbsp_bboxes = [(600.0, 700.0, 700.0, 800.0)]
+        self.assertFalse(_block_has_nbsp_bbox(block, nbsp_bboxes))
+
+
 class TestRedactBlocks(unittest.TestCase):
     """Test _redact_blocks edge cases."""
 
