@@ -28,6 +28,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
         app,
+        *,
         requests_per_minute: int = 60,
         requests_per_hour: int = 500,
         window_seconds: int = 60,

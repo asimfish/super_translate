@@ -165,6 +165,7 @@ class PaperUpdateRequest(BaseModel):
 
 def _paper_to_response(
     paper: Paper,
+    *,
     has_original: bool = False,
     has_translated: bool = False,
     has_dual: bool = False,
@@ -839,4 +840,9 @@ async def update_paper(
     has_original = _file_exists_safe(settings.papers_path, paper.stored_filename)
     has_translated = _file_exists_safe(settings.translations_path, paper.translated_filename)
     has_dual = _file_exists_safe(settings.translations_path, paper.dual_filename)
-    return _paper_to_response(paper, has_original, has_translated, has_dual)
+    return _paper_to_response(
+        paper,
+        has_original=has_original,
+        has_translated=has_translated,
+        has_dual=has_dual,
+    )
