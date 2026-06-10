@@ -609,6 +609,7 @@ class TestCleanPageArtifacts(unittest.TestCase):
     def test_cleans_null_bytes_in_rendered_text(self):
         """Blocks with null bytes in raw page text are redacted and reinserted."""
         import fitz
+
         from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
 
         doc = fitz.open()
@@ -644,6 +645,7 @@ class TestCleanPageArtifacts(unittest.TestCase):
     def test_noop_when_page_is_clean(self):
         """Clean pages should not be modified."""
         import fitz
+
         from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
 
         doc = fitz.open()
@@ -667,6 +669,7 @@ class TestCleanPageArtifacts(unittest.TestCase):
     def test_cleans_non_breaking_spaces(self):
         """Non-breaking spaces (\\xa0) are normalized to regular spaces."""
         import fitz
+
         from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
 
         doc = fitz.open()
@@ -690,6 +693,7 @@ class TestCleanPageArtifacts(unittest.TestCase):
     def test_skips_short_text_after_cleaning(self):
         """Blocks where cleaning leaves very short text are skipped."""
         import fitz
+
         from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
 
         doc = fitz.open()
@@ -712,6 +716,7 @@ class TestCleanPageArtifacts(unittest.TestCase):
     def test_noop_when_no_dirty_blocks(self):
         """Pages with no artifacts are not modified."""
         import fitz
+
         from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
 
         doc = fitz.open()
@@ -734,6 +739,7 @@ class TestCleanPageArtifacts(unittest.TestCase):
     def test_fallback_redaction_when_kwargs_unsupported(self):
         """Falls back to apply_redactions() when kwargs are not supported."""
         import fitz
+
         from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
 
         doc = fitz.open()
@@ -770,6 +776,7 @@ class TestFindNbspBboxes(unittest.TestCase):
     def test_returns_empty_for_clean_page(self):
         """Clean page returns empty list."""
         import fitz
+
         from app.services.layout_fix import _find_nbsp_bboxes
 
         doc = fitz.open()
@@ -811,7 +818,7 @@ class TestBlockHasNbspBbox(unittest.TestCase):
 
     def test_returns_false_for_empty_bboxes(self):
         """Empty bboxes list returns False."""
-        from app.services.layout_fix import _block_has_nbsp_bbox, TextBlockInfo
+        from app.services.layout_fix import TextBlockInfo, _block_has_nbsp_bbox
         block = TextBlockInfo(
             bbox=(91.0, 100.0, 504.0, 130.0),
             text="test", avg_font_size=10.0, block_index=0,
@@ -820,7 +827,7 @@ class TestBlockHasNbspBbox(unittest.TestCase):
 
     def test_returns_true_for_overlapping_bbox(self):
         """Overlapping bbox returns True."""
-        from app.services.layout_fix import _block_has_nbsp_bbox, TextBlockInfo
+        from app.services.layout_fix import TextBlockInfo, _block_has_nbsp_bbox
         block = TextBlockInfo(
             bbox=(91.0, 100.0, 504.0, 130.0),
             text="test", avg_font_size=10.0, block_index=0,
@@ -830,7 +837,7 @@ class TestBlockHasNbspBbox(unittest.TestCase):
 
     def test_returns_false_for_non_overlapping_bbox(self):
         """Non-overlapping bbox returns False."""
-        from app.services.layout_fix import _block_has_nbsp_bbox, TextBlockInfo
+        from app.services.layout_fix import TextBlockInfo, _block_has_nbsp_bbox
         block = TextBlockInfo(
             bbox=(91.0, 100.0, 504.0, 130.0),
             text="test", avg_font_size=10.0, block_index=0,

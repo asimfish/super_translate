@@ -338,7 +338,8 @@ def _translate_sync(
                 logger.error("All translation attempts failed for %s", input_path.name)
                 raise
 
-    return _collect_output(input_path, output_dir, skip_layout_fix=preset.get("skip_layout_fix", False))
+    skip_layout = preset.get("skip_layout_fix", False)
+    return _collect_output(input_path, output_dir, skip_layout_fix=skip_layout)
 
 
 def _create_progress_callback(
