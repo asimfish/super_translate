@@ -132,6 +132,24 @@ def _fix_page_layout(page: object) -> int:
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
+def _block_has_nbsp(page: object, block: TextBlockInfo) -> bool:
+    """Check if a block's spans contain non-breaking spaces (\\xa0)."""
+    page_dict = page.get_text("dict")
+    for raw_block in page_dict.get("blocks", []):
+        if raw_block.get("type") != 0:
+            continue
+        bx0, by0, bx1, by1 = raw_block["bbox"]
+        # Check if this raw block overlaps with the target block
+        tbx0, tby0, tbx1, tby1 = block.bbox
+        if bx0 >= tbx1 or bx1 <= tbx0 or by0 >= tby1 or by1 <= tby0:
+            continue
+        for raw_line in raw_block.get("lines", []):
+            for span in raw_line.get("spans", []):
+                if "\xa0" in span.get("text", ""):
+                    return True
+    return False
+
+
 def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
     """Clean control character artifacts from all text blocks on a page.
 
@@ -139,10 +157,26 @@ def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
     non-breaking spaces in the rendered text. This pass redacts and reinserts
     affected blocks at their original positions with cleaned text.
     """
-    # Check raw page text for artifacts
+    # Check raw page text for control characters
     raw_page_text = page.get_text("text")
     has_control = bool(_CONTROL_CHAR_RE.search(raw_page_text))
-    has_nbsp = "\xa0" in raw_page_text
+
+    # Check dict extraction for \xa0 (text extraction normalizes it)
+    has_nbsp = False
+    if not has_control:
+        page_dict = page.get_text("dict")
+        for raw_block in page_dict.get("blocks", []):
+            if raw_block.get("type") != 0:
+                continue
+            for raw_line in raw_block.get("lines", []):
+                for span in raw_line.get("spans", []):
+                    if "\xa0" in span.get("text", ""):
+                        has_nbsp = True
+                        break
+                if has_nbsp:
+                    break
+            if has_nbsp:
+                break
     if not has_control and not has_nbsp:
         return
 
@@ -150,15 +184,18 @@ def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
     dirty_blocks = []
 
     for block in blocks:
-        # Detect dirty blocks: check if block text contains artifacts
-        # (block text from _extract_text_blocks preserves \xa0 and control chars)
-        if _CONTROL_CHAR_RE.search(block.text) or "\xa0" in block.text:
+        # Check block text for control chars
+        if _CONTROL_CHAR_RE.search(block.text):
             dirty_blocks.append(block)
             continue
-        # Also check raw page text at this bbox for artifacts not in block text
+        # Check raw page text at this bbox
         rect = fitz.Rect(block.bbox)
         raw_text = page.get_text("text", clip=rect)
-        if _CONTROL_CHAR_RE.search(raw_text) or "\xa0" in raw_text:
+        if _CONTROL_CHAR_RE.search(raw_text):
+            dirty_blocks.append(block)
+            continue
+        # Check dict spans for \xa0 (normalized in text extraction)
+        if has_nbsp and _block_has_nbsp(page, block):
             dirty_blocks.append(block)
 
     if not dirty_blocks:
