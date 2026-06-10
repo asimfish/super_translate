@@ -732,6 +732,25 @@ class TestFindNbspBboxes(unittest.TestCase):
         self.assertEqual(result, [])
         doc.close()
 
+    def test_skips_image_blocks(self):
+        """Image blocks (type != 0) are skipped."""
+        from app.services.layout_fix import _find_nbsp_bboxes
+
+        page = unittest.mock.MagicMock()
+        page.get_text.return_value = {
+            "blocks": [
+                {"type": 1, "bbox": [0, 0, 100, 100]},  # image block
+                {
+                    "type": 0,
+                    "bbox": [91, 100, 504, 130],
+                    "lines": [{"spans": [{"text": "text\xa0with\xa0nbsp", "size": 10.0}]}],
+                },
+            ]
+        }
+        result = _find_nbsp_bboxes(page)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], (91, 100, 504, 130))
+
 
 class TestBlockHasNbspBbox(unittest.TestCase):
     """Test _block_has_nbsp_bbox function."""
