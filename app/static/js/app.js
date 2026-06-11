@@ -31,6 +31,28 @@ const api = {
     if (!res.ok) throw new Error(await errorDetail(res, 'Upload failed'));
     return res.json();
   },
+  uploadPaperWithProgress(file, tags, onProgress) {
+    return new Promise((resolve, reject) => {
+      const form = new FormData();
+      form.append('file', file);
+      if (tags) form.append('tags', tags);
+      const xhr = new XMLHttpRequest();
+      xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      });
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText));
+        } else {
+          try { reject(new Error(JSON.parse(xhr.responseText).detail || 'Upload failed')); }
+          catch { reject(new Error('Upload failed')); }
+        }
+      });
+      xhr.addEventListener('error', () => reject(new Error('Network error')));
+      xhr.open('POST', '/api/papers/upload');
+      xhr.send(form);
+    });
+  },
   async getPaper(id) {
     const res = await fetch(`/api/papers/${id}`);
     if (!res.ok) throw new Error(await errorDetail(res, 'Paper not found'));
@@ -283,12 +305,13 @@ async function doUpload() {
 
   document.getElementById('upload-preview').classList.add('hidden');
   prog.classList.remove('hidden');
-  fill.style.width = '30%';
+  fill.style.width = '0%';
   status.textContent = '上传中...';
 
   try {
-    fill.style.width = '60%';
-    await api.uploadPaper(selectedFile, tags);
+    await api.uploadPaperWithProgress(selectedFile, tags, pct => {
+      fill.style.width = `${Math.round(pct * 100)}%`;
+    });
     fill.style.width = '100%';
     status.textContent = '上传成功！';
     setTimeout(() => showLibrary(), 800);
