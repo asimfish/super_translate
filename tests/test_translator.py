@@ -192,7 +192,14 @@ class TestQualityPresets(unittest.TestCase):
 
 
 class TestTranslatePdfSync(unittest.TestCase):
-    """Test translate_pdf_sync function."""
+    """Test translate_pdf_sync function (pdf2zh engine path)."""
+
+    def setUp(self):
+        # These tests exercise the pdf2zh pipeline; pin the engine so the
+        # default native engine does not reroute LLM backends.
+        patcher = patch("app.core.config.settings.translation_engine", "pdf2zh")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
@@ -1174,6 +1181,146 @@ class TestGetModel(unittest.TestCase):
             mock_cls.assert_called_once()
         finally:
             mod._model = original
+
+
+class TestUseNativeEngine(unittest.TestCase):
+    """Test _use_native_engine routing logic."""
+
+    def test_native_engine_for_deepseek(self):
+        from app.services.translator import TranslationConfig, _use_native_engine
+        config = TranslationConfig(backend="deepseek")
+        with patch("app.core.config.settings.translation_engine", "native"):
+            self.assertTrue(_use_native_engine(config))
+
+    def test_native_engine_for_openai(self):
+        from app.services.translator import TranslationConfig, _use_native_engine
+        config = TranslationConfig(backend="openai")
+        with patch("app.core.config.settings.translation_engine", "native"):
+            self.assertTrue(_use_native_engine(config))
+
+    def test_native_engine_disabled_for_google(self):
+        from app.services.translator import TranslationConfig, _use_native_engine
+        config = TranslationConfig(backend="google")
+        with patch("app.core.config.settings.translation_engine", "native"):
+            self.assertFalse(_use_native_engine(config))
+
+    def test_native_engine_disabled_when_engine_is_pdf2zh(self):
+        from app.services.translator import TranslationConfig, _use_native_engine
+        config = TranslationConfig(backend="deepseek")
+        with patch("app.core.config.settings.translation_engine", "pdf2zh"):
+            self.assertFalse(_use_native_engine(config))
+
+
+class TestTranslateSyncNative(unittest.TestCase):
+    """Test _translate_sync_native function."""
+
+    @patch("pdf_zh_translator.pdf_layout.translate_pdf")
+    @patch("pdf_zh_translator.translators.CachedTranslator")
+    @patch("pdf_zh_translator.translators.VendorTranslator")
+    def test_openai_backend_config(self, mock_vendor, mock_cached, mock_translate):
+        """OpenAI backend uses correct URL, key, and mode."""
+        import tempfile
+
+        from app.services.translator import TranslationConfig, _translate_sync_native
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            mono_path = tmp / "test-mono.pdf"
+            mono_path.write_bytes(b"pdf")
+            mock_translate.return_value = MagicMock(warnings=[])
+
+            config = TranslationConfig(backend="openai", api_key="test-key")
+            _translate_sync_native(tmp / "test.pdf", tmp, config)
+
+            call_kwargs = mock_vendor.call_args
+            mode = call_kwargs.kwargs.get("mode", call_kwargs[1].get("mode"))
+            self.assertEqual(mode, "openai-compatible")
+
+    @patch("pdf_zh_translator.pdf_layout.translate_pdf")
+    @patch("pdf_zh_translator.translators.CachedTranslator")
+    @patch("pdf_zh_translator.translators.VendorTranslator")
+    def test_deepseek_backend_config(self, mock_vendor, mock_cached, mock_translate):
+        """DeepSeek backend uses correct URL, key, and mode."""
+        import tempfile
+
+        from app.services.translator import TranslationConfig, _translate_sync_native
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            mono_path = tmp / "test-mono.pdf"
+            mono_path.write_bytes(b"pdf")
+            mock_translate.return_value = MagicMock(warnings=[])
+
+            config = TranslationConfig(backend="deepseek", api_key="test-key")
+            _translate_sync_native(tmp / "test.pdf", tmp, config)
+
+            call_kwargs = mock_vendor.call_args
+            self.assertEqual(call_kwargs.kwargs.get("mode", call_kwargs[1].get("mode")), "deepseek")
+
+    @patch("pdf_zh_translator.pdf_layout.translate_pdf")
+    @patch("pdf_zh_translator.translators.CachedTranslator")
+    @patch("pdf_zh_translator.translators.VendorTranslator")
+    def test_reports_warnings(self, mock_vendor, mock_cached, mock_translate):
+        """Warnings from translate_pdf are logged."""
+        import tempfile
+
+        from app.services.translator import TranslationConfig, _translate_sync_native
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            mono_path = tmp / "test-mono.pdf"
+            mono_path.write_bytes(b"pdf")
+            mock_translate.return_value = MagicMock(warnings=["test warning"])
+
+            config = TranslationConfig(backend="deepseek", api_key="k")
+            with self.assertLogs("app.services.translator", level="WARNING") as cm:
+                _translate_sync_native(tmp / "test.pdf", tmp, config)
+            self.assertTrue(any("test warning" in m for m in cm.output))
+
+    @patch("pdf_zh_translator.pdf_layout.translate_pdf")
+    @patch("pdf_zh_translator.translators.CachedTranslator")
+    @patch("pdf_zh_translator.translators.VendorTranslator")
+    def test_no_output_returns_error(self, mock_vendor, mock_cached, mock_translate):
+        """Returns error when no output file is produced."""
+        import tempfile
+
+        from app.services.translator import TranslationConfig, _translate_sync_native
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            mock_translate.return_value = MagicMock(warnings=[])
+
+            config = TranslationConfig(backend="deepseek", api_key="k", max_retries=0)
+            result = _translate_sync_native(tmp / "test.pdf", tmp, config)
+            self.assertIsNotNone(result.error)
+            self.assertIn("no output", result.error)
+
+    @patch("pdf_zh_translator.pdf_layout.translate_pdf")
+    @patch("pdf_zh_translator.translators.CachedTranslator")
+    @patch("pdf_zh_translator.translators.VendorTranslator")
+    def test_retry_on_failure(self, mock_vendor, mock_cached, mock_translate):
+        """Retries on failure up to max_retries."""
+        import tempfile
+
+        from app.services.translator import TranslationConfig, _translate_sync_native
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            mono_path = tmp / "test-mono.pdf"
+
+            call_count = [0]
+            def side_effect(**kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise Exception("API error")
+                mono_path.write_bytes(b"pdf")
+                return MagicMock(warnings=[])
+
+            mock_translate.side_effect = side_effect
+
+            config = TranslationConfig(backend="deepseek", api_key="k", max_retries=1)
+            result = _translate_sync_native(tmp / "test.pdf", tmp, config)
+            self.assertTrue(result.success)
 
 
 if __name__ == "__main__":
