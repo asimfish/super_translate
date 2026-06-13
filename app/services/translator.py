@@ -5,6 +5,8 @@ import os
 import re
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -284,6 +286,125 @@ def _build_pdf2zh_envs(
     return envs
 
 
+# Backends the native engine can drive (LLM APIs speaking the DeepSeek or
+# OpenAI chat protocol). Others (google/deepl/ollama) stay on pdf2zh.
+_NATIVE_ENGINE_BACKENDS = {"deepseek", "openai"}
+
+
+def _use_native_engine(config: TranslationConfig) -> bool:
+    from app.core.config import settings
+
+    return (
+        settings.translation_engine == "native"
+        and config.backend in _NATIVE_ENGINE_BACKENDS
+    )
+
+
+_TRANSLATION_TIMEOUT = 600  # 10 minutes max for the entire translation
+
+
+class _ProgressTranslator:
+    """Wrap a pdf_zh_translator Translator to report batch progress."""
+
+    def __init__(self, inner, progress_callback: Callable | None, group_size: int = 4):
+        self._inner = inner
+        self._callback = progress_callback
+        self._group_size = max(1, group_size)
+
+    def translate_batch(self, texts):
+        results = []
+        total = len(texts)
+        for start in range(0, total, self._group_size):
+            group = list(texts[start : start + self._group_size])
+            results.extend(self._inner.translate_batch(group))
+            if self._callback and total:
+                self._callback(min(1.0, (start + len(group)) / total))
+        return results
+
+
+def _translate_sync_native(
+    input_path: Path,
+    output_dir: Path,
+    config: TranslationConfig,
+    progress_callback: Callable | None = None,
+) -> TranslationResult:
+    """Synchronous translation via the in-house pdf_zh_translator engine.
+
+    Preserves original equation typesetting (incl. sub/superscripts), strips
+    gutter line numbers and prompt-injection lines, and reflows translated
+    paragraphs with CJK line-breaking rules.
+    """
+    from app.services.library import cleanup_output_dir
+    from pdf_zh_translator.pdf_layout import translate_pdf
+    from pdf_zh_translator.translators import CachedTranslator, VendorTranslator
+
+    if config.backend == "deepseek":
+        api_url = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com")
+        api_key = config.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+        mode = "deepseek"
+        model = config.model or "deepseek-v4-pro"
+    else:  # openai
+        api_url = config.base_url or "https://api.openai.com/v1"
+        api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
+        mode = "openai-compatible"
+        model = config.model or "gpt-4o-mini"
+
+    mono_path = output_dir / f"{input_path.stem}-mono.pdf"
+    cache_path = output_dir / f"{input_path.stem}.translation-cache.jsonl"
+
+    vendor = VendorTranslator(
+        api_url=api_url,
+        api_key=api_key,
+        mode=mode,
+        model=model,
+        source_lang=config.lang_in,
+        target_lang=config.lang_out,
+        progress=False,
+    )
+    translator = _ProgressTranslator(
+        CachedTranslator(vendor, cache_path), progress_callback
+    )
+
+    for attempt in range(config.max_retries + 1):
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(
+                    translate_pdf,
+                    input_pdf=input_path,
+                    output_pdf=mono_path,
+                    translator=translator,
+                )
+                report = future.result(timeout=_TRANSLATION_TIMEOUT)
+            for warning in report.warnings:
+                logger.warning("Native engine: %s", warning)
+            break
+        except FutureTimeout:
+            cleanup_output_dir(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger.error(
+                "Native translation timed out after %ds for %s",
+                _TRANSLATION_TIMEOUT, input_path.name,
+            )
+            raise TimeoutError(
+                f"Translation timed out after {_TRANSLATION_TIMEOUT}s"
+            )
+        except Exception as e:
+            cleanup_output_dir(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if attempt < config.max_retries:
+                logger.warning(
+                    "Native translation attempt %d failed: %s. Retrying...",
+                    attempt + 1, sanitize_error(e),
+                )
+            else:
+                logger.error("All native translation attempts failed for %s", input_path.name)
+                raise
+
+    if not mono_path.exists():
+        return TranslationResult(error="Translation produced no output files")
+    return TranslationResult(mono_path=mono_path, dual_path=None)
+
+
 def _translate_sync(
     input_path: Path,
     output_dir: Path,
@@ -291,6 +412,9 @@ def _translate_sync(
     progress_callback: Callable | None = None,
 ) -> TranslationResult:
     """Synchronous translation via pdf2zh with retry logic."""
+    if _use_native_engine(config):
+        return _translate_sync_native(input_path, output_dir, config, progress_callback)
+
     from pdf2zh import translate
 
     from app.services.library import cleanup_output_dir

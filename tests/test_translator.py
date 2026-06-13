@@ -1322,6 +1322,29 @@ class TestTranslateSyncNative(unittest.TestCase):
             result = _translate_sync_native(tmp / "test.pdf", tmp, config)
             self.assertTrue(result.success)
 
+    @patch("pdf_zh_translator.pdf_layout.translate_pdf")
+    @patch("pdf_zh_translator.translators.CachedTranslator")
+    @patch("pdf_zh_translator.translators.VendorTranslator")
+    @patch("app.services.translator._TRANSLATION_TIMEOUT", 1)
+    def test_timeout_raises_error(self, mock_vendor, mock_cached, mock_translate):
+        """Translation that exceeds timeout is killed and raises."""
+        import tempfile
+        import time
+
+        from app.services.translator import TranslationConfig, _translate_sync_native
+
+        def slow_translate(**kwargs):
+            time.sleep(5)
+            return MagicMock(warnings=[])
+
+        mock_translate.side_effect = slow_translate
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config = TranslationConfig(backend="deepseek", api_key="k", max_retries=0)
+            with self.assertRaises(TimeoutError):
+                _translate_sync_native(tmp / "test.pdf", tmp, config)
+
 
 if __name__ == "__main__":
     unittest.main()
