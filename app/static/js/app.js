@@ -6,6 +6,7 @@ let selectedFile = null;
 let searchTimer = null;
 let translationPollId = null;
 let pagination = { offset: 0, limit: 50, total: 0 };
+let currentLoadId = 0; // Track which paper is being loaded to prevent race conditions
 
 // === API ===
 async function errorDetail(res, fallback) {
@@ -341,12 +342,19 @@ if (typeof pdfjsLib !== 'undefined') {
 }
 
 async function openReader(paperId) {
+  // Cancel any ongoing load
+  const loadId = ++currentLoadId;
+
   try {
     currentPaper = await api.getPaper(paperId);
   } catch (e) {
     alert('无法加载论文');
     return;
   }
+
+  // If a newer load started, abort this one
+  if (loadId !== currentLoadId) return;
+
   showView('reader');
   document.getElementById('reader-title').textContent = currentPaper.title;
 
@@ -369,11 +377,13 @@ async function openReader(paperId) {
 
   // Load original PDF
   await loadPdfDocument('original', `/api/papers/${paperId}/view/original`);
+  if (loadId !== currentLoadId) return;
 
   if (currentPaper.has_translated) {
     placeholder.classList.add('hidden');
     document.getElementById('pdf-container-translated').classList.remove('hidden');
     await loadPdfDocument('translated', `/api/papers/${paperId}/view/translated`);
+    if (loadId !== currentLoadId) return;
     document.getElementById('btn-download-mono').classList.remove('hidden');
   } else {
     placeholder.classList.remove('hidden');
