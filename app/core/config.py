@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Translation concurrency
     max_concurrent_translations: int = 3
 
+    # Feishu/Lark notification webhook
+    feishu_webhook_url: str = ""
+
     # CORS (comma-separated origins, e.g. "http://localhost:3000,https://example.com")
     cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
 

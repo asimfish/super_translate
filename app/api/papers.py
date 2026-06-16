@@ -707,6 +707,17 @@ async def _do_translate(
             _append_log(paper_id, loop, f"翻译失败: {trans_result.error}")
         await db.commit()
 
+        # Send Feishu notification
+        if settings.feishu_webhook_url:
+            from app.services.notify import notify_translation_complete
+            notify_translation_complete(
+                settings.feishu_webhook_url,
+                paper.title,
+                paper_id,
+                trans_result.success,
+                trans_result.error,
+            )
+
 
 def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) -> None:
     """Append a log message to the paper's translation_log."""
