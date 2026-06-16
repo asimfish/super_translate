@@ -1742,6 +1742,37 @@ class TestRunTranslation:
         assert mock_db.execute.call_count >= 1
         assert mock_db.commit.call_count >= 1
 
+    def test_append_log_truncates_long_log(self):
+        """Test that _append_log truncates log to 2000 chars."""
+        from app.api.papers import _append_log
+
+        mock_db = AsyncMock()
+        # Simulate existing log that's already 2000 chars
+        mock_result = MagicMock()
+        mock_result.scalar.return_value = "x" * 2000
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session_mock = MagicMock(return_value=ctx)
+
+        loop = MagicMock()
+
+        def fake_run_coro(coro, _loop):
+            asyncio.run(coro)
+            return MagicMock()
+
+        with patch("app.core.database.async_session", session_mock), \
+             patch.object(asyncio, "run_coroutine_threadsafe", side_effect=fake_run_coro):
+            _append_log("paper123", loop, "new message")
+
+        # Verify the log was truncated
+        update_call = mock_db.execute.call_args_list[-1]
+        values = update_call[0][0].compile().params
+        assert len(values.get("translation_log", "")) <= 2000
+
 
 class TestSecurityHeaders:
     """Test that security headers are set on all responses."""
