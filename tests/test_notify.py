@@ -62,7 +62,9 @@ class TestNotifyTranslationComplete(unittest.TestCase):
 
     def test_failure_notification(self):
         with patch("app.services.notify.send_feishu_notification") as mock_send:
-            notify_translation_complete("https://hook.example.com", "My Paper", "abc123", False, "API error")
+            notify_translation_complete(
+                "https://hook.example.com", "My Paper", "abc123", False, "API error"
+            )
         mock_send.assert_called_once()
         args = mock_send.call_args[0]
         self.assertIn("翻译失败", args[1])
