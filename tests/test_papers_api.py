@@ -19,6 +19,7 @@ class TestPaperToResponse(unittest.TestCase):
         paper.translation_status = kwargs.get("translation_status", "pending")
         paper.translation_progress = kwargs.get("translation_progress", 0.0)
         paper.translation_error = kwargs.get("translation_error")
+        paper.translation_log = kwargs.get("translation_log", "")
         paper.tags = kwargs.get("tags", "")
         paper.notes = kwargs.get("notes", "")
         paper.created_at = kwargs.get("created_at")

@@ -102,6 +102,7 @@ class PaperResponse(BaseModel):
     translation_status: str
     translation_progress: float
     translation_error: str | None
+    translation_log: str = ""
     tags: str
     notes: str
     has_original: bool
@@ -180,6 +181,7 @@ def _paper_to_response(
         translation_status=paper.translation_status,
         translation_progress=max(0.0, min(1.0, paper.translation_progress)),
         translation_error=paper.translation_error,
+        translation_log=paper.translation_log or "",
         tags=paper.tags,
         notes=paper.notes,
         has_original=has_original,
@@ -668,6 +670,8 @@ async def _do_translate(
         "Starting translation for paper %s (backend=%s, quality=%s)",
         paper_id, config.backend, quality,
     )
+    _append_log(paper_id, loop, f"开始翻译 (引擎: {config.backend}, 质量: {quality})")
+    _append_log(paper_id, loop, f"共 {paper.page_count} 页, 文件大小: {paper.file_size // 1024}KB")
 
     # Phase 2: Run translation (no DB session held)
     on_progress = _create_progress_handler(paper_id, loop)
@@ -676,6 +680,7 @@ async def _do_translate(
         trans_result = translate_pdf_sync(input_path, output_dir, config, on_progress)
     except Exception as e:
         logger.exception("Translation crashed for paper %s", paper_id)
+        _append_log(paper_id, loop, f"翻译失败: {sanitize_error(e)}")
         async with async_session() as db:
             result = await db.execute(select(Paper).where(Paper.id == paper_id))
             paper = result.scalar_one_or_none()
@@ -696,7 +701,40 @@ async def _do_translate(
             return
 
         _update_paper_result(paper, trans_result, output_dir)
+        if trans_result.success:
+            _append_log(paper_id, loop, "翻译完成!")
+        else:
+            _append_log(paper_id, loop, f"翻译失败: {trans_result.error}")
         await db.commit()
+
+
+def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) -> None:
+    """Append a log message to the paper's translation_log."""
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    line = f"[{timestamp}] {message}"
+
+    async def _update():
+        from app.core.database import async_session
+        async with async_session() as p_db:
+            result = await p_db.execute(
+                select(Paper.translation_log).where(Paper.id == paper_id),
+            )
+            current_log = result.scalar() or ""
+            new_log = f"{current_log}\n{line}" if current_log else line
+            # Keep last 2000 chars to avoid unbounded growth
+            if len(new_log) > 2000:
+                new_log = new_log[-2000:]
+            await p_db.execute(
+                update(Paper)
+                .where(Paper.id == paper_id)
+                .values(translation_log=new_log),
+            )
+            await p_db.commit()
+
+    with contextlib.suppress(Exception):
+        asyncio.run_coroutine_threadsafe(_update(), loop)
 
 
 def _create_progress_handler(
@@ -710,6 +748,7 @@ def _create_progress_handler(
         if pct - _last_pct[0] < _PROGRESS_THROTTLE and pct < 1.0:
             return
         _last_pct[0] = pct
+        pct_display = int(pct * 100)
 
         async def _update():
             from app.core.database import async_session
@@ -725,6 +764,10 @@ def _create_progress_handler(
                 await p_db.commit()
         with contextlib.suppress(Exception):
             asyncio.run_coroutine_threadsafe(_update(), loop)
+
+        # Log milestone progress
+        if pct_display % 25 == 0 or pct >= 1.0:
+            _append_log(paper_id, loop, f"翻译进度: {pct_display}%")
 
     return _on_progress
 

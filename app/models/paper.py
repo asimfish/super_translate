@@ -45,6 +45,7 @@ class Paper(Base):
     )
     translation_progress: Mapped[float] = mapped_column(nullable=False, default=0.0)
     translation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    translation_log: Mapped[str] = mapped_column(Text, nullable=False, default="")
     tags: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(

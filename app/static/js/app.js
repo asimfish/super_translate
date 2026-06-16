@@ -636,11 +636,20 @@ function pollTranslationStatus(paperId) {
       fill.style.width = `${pct}%`;
       if (percentEl) percentEl.textContent = `${pct}%`;
 
+      // Display server-side translation log
+      if (paper.translation_log && logEl) {
+        const logLines = paper.translation_log.split('\n').filter(l => l.trim());
+        logEl.innerHTML = logLines.map(l => {
+          const cls = l.includes('失败') ? 'error' : l.includes('完成') ? 'success' : '';
+          return `<div class="log-entry ${cls}">${esc(l)}</div>`;
+        }).join('');
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
       if (paper.translation_status === 'completed') {
         clearInterval(translationPollId);
         translationPollId = null;
         statusEl.textContent = '翻译完成';
-        addTransLog('翻译完成！', 'success');
         setTimeout(() => {
           prog.classList.add('hidden');
           if (currentPaper && currentPaper.id === paperId) {
@@ -652,14 +661,10 @@ function pollTranslationStatus(paperId) {
         clearInterval(translationPollId);
         translationPollId = null;
         statusEl.textContent = '翻译失败';
-        addTransLog(`错误: ${paper.translation_error || '未知错误'}`, 'error');
         fill.style.background = 'var(--error)';
         loadPapers();
       } else {
         statusEl.textContent = '翻译中...';
-        if (pct > 0 && pct % 10 === 0) {
-          addTransLog(`进度 ${pct}%`);
-        }
       }
     } catch (e) {
       consecutiveErrors++;

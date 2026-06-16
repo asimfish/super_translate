@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     translations_dir: Path = Path("data/translations")
     db_path: Path = Path("data/paper_china.db")
 
+    # "native" uses the in-house pdf_zh_translator engine (equation-safe layout,
+    # gutter line-number removal, prompt-injection stripping); "pdf2zh" uses the
+    # third-party PDFMathTranslate pipeline. Native only supports LLM backends
+    # (deepseek/openai); other backends automatically fall back to pdf2zh.
+    translation_engine: str = "native"
     translation_backend: str = "deepseek"
     deepseek_api_key: SecretStr = SecretStr("")
     deepseek_model: str = "deepseek-v4-pro"
