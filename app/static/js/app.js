@@ -334,7 +334,21 @@ let pageWrappers = { original: [], translated: [] };
 let renderObservers = { original: null, translated: null };
 let scrollListeners = { original: null, translated: null };
 const RENDER_SCALE = 1.5;
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 3.0;
 const OVERSCAN_PX = 600; // render pages within this distance of viewport
+
+function getRenderScale(panel) {
+  const container = document.getElementById(`pdf-container-${panel}`);
+  if (!container) return RENDER_SCALE;
+  const containerWidth = container.clientWidth - 20; // padding
+  const metrics = pageMetrics[panel];
+  if (!metrics || metrics.length === 0) return RENDER_SCALE;
+  // Scale so the widest page fits the container
+  const maxPageWidth = Math.max(...metrics.map(m => m.width / RENDER_SCALE));
+  const fitScale = containerWidth / maxPageWidth;
+  return Math.max(MIN_SCALE, Math.min(MAX_SCALE, fitScale));
+}
 
 // Configure PDF.js worker
 if (typeof pdfjsLib !== 'undefined') {
@@ -415,18 +429,32 @@ async function loadPdfDocument(panel, url) {
 
     container.innerHTML = '';
 
-    // Phase 1: Measure all page dimensions quickly (needed for scrollbar sizing)
-    const metrics = [];
+    // Phase 1: Measure all page dimensions at base scale
+    const baseMetrics = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const viewport = page.getViewport({ scale: RENDER_SCALE });
-      const gap = 4; // matches the 4px gap in CSS
+      baseMetrics.push({ height: viewport.height, width: viewport.width, pageNum: i });
+    }
+
+    // Calculate adaptive scale to fit container width
+    const containerWidth = container.clientWidth - 20;
+    const maxPageWidth = Math.max(...baseMetrics.map(m => m.width));
+    const adaptiveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, containerWidth / maxPageWidth * RENDER_SCALE));
+
+    const metrics = [];
+    const gap = 4;
+    for (let i = 0; i < baseMetrics.length; i++) {
+      const scale = adaptiveScale / RENDER_SCALE;
+      const w = baseMetrics[i].width * scale;
+      const h = baseMetrics[i].height * scale;
       const top = metrics.length > 0
         ? metrics[metrics.length - 1].top + metrics[metrics.length - 1].height + gap
         : 0;
-      metrics.push({ top, height: viewport.height, width: viewport.width, pageNum: i });
+      metrics.push({ top, height: h, width: w, pageNum: baseMetrics[i].pageNum });
     }
     pageMetrics[panel] = metrics;
+    pageMetrics[panel]._adaptiveScale = adaptiveScale;
 
     // Phase 2: Create placeholder wrappers with reserved height
     const wrappers = [];
@@ -499,7 +527,8 @@ async function renderPage(panel, idx) {
 
   const pageNum = pageMetrics[panel][idx].pageNum;
   const page = await pdf.getPage(pageNum);
-  const viewport = page.getViewport({ scale: RENDER_SCALE });
+  const scale = pageMetrics[panel]._adaptiveScale || RENDER_SCALE;
+  const viewport = page.getViewport({ scale });
 
   const canvas = document.createElement('canvas');
   const dpr = window.devicePixelRatio || 1;
@@ -738,6 +767,8 @@ async function confirmDelete(id, title) {
 }
 
 // === Resizer ===
+let resizeTimer = null;
+
 function initResizer() {
   const resizer = document.getElementById('resizer');
   const left = document.getElementById('left-panel');
@@ -751,6 +782,9 @@ function initResizer() {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', () => {
       document.removeEventListener('mousemove', onMove);
+      // Re-render both panels after resize
+      reRenderPanel('original');
+      reRenderPanel('translated');
     }, { once: true });
   });
 
@@ -760,7 +794,53 @@ function initResizer() {
     const newLeftW = Math.max(200, Math.min(containerW - 200, startLeftW + dx));
     left.style.flex = `0 0 ${newLeftW}px`;
     right.style.flex = '1';
+
+    // Debounced re-render during drag
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      reRenderPanel('original');
+      reRenderPanel('translated');
+    }, 200);
   }
+}
+
+function reRenderPanel(panel) {
+  const pdf = pdfDocs[panel];
+  if (!pdf) return;
+  const container = document.getElementById(`pdf-container-${panel}`);
+  if (!container) return;
+
+  // Clear rendered pages and re-calculate scale
+  renderedPages[panel] = new Set();
+  const metrics = pageMetrics[panel];
+  if (!metrics || metrics.length === 0) return;
+
+  const containerWidth = container.clientWidth - 20;
+  const maxPageWidth = Math.max(...metrics.map(m => m.width / (pageMetrics[panel]._adaptiveScale || RENDER_SCALE) * RENDER_SCALE));
+  const adaptiveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, containerWidth / maxPageWidth * RENDER_SCALE));
+  pageMetrics[panel]._adaptiveScale = adaptiveScale;
+
+  // Update wrapper sizes
+  const gap = 4;
+  const wrappers = pageWrappers[panel];
+  for (let i = 0; i < metrics.length; i++) {
+    const scale = adaptiveScale / RENDER_SCALE;
+    const w = metrics[i].width * scale;
+    const h = metrics[i].height * scale;
+    metrics[i].width = w;
+    metrics[i].height = h;
+    if (wrappers[i]) {
+      wrappers[i].style.width = w + 'px';
+      wrappers[i].style.height = h + 'px';
+      wrappers[i].innerHTML = ''; // Clear canvas
+    }
+    if (i > 0) {
+      metrics[i].top = metrics[i - 1].top + metrics[i - 1].height + gap;
+    }
+  }
+
+  // Re-render visible pages
+  renderVisiblePages(panel, container);
 }
 
 // === Helpers ===
