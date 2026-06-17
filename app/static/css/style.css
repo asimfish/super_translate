@@ -225,8 +225,18 @@ body {
   box-shadow: 0 2px 8px rgba(0,0,0,0.4);
 }
 .resizer {
-  width: 6px; cursor: col-resize; background: var(--border);
+  width: 8px; cursor: col-resize; background: var(--border);
   transition: var(--transition); flex-shrink: 0;
+  position: relative;
+}
+.resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -4px;
+  right: -4px;
+  bottom: 0;
+  z-index: 1;
 }
 .resizer:hover { background: var(--accent); box-shadow: 0 0 4px rgba(74,158,255,0.3); }
 

@@ -776,13 +776,14 @@ function initResizer() {
   if (!resizer) return;
 
   let startX, startLeftW;
+
+  // Middle resizer (existing behavior)
   resizer.addEventListener('mousedown', e => {
     startX = e.clientX;
     startLeftW = left.getBoundingClientRect().width;
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', () => {
       document.removeEventListener('mousemove', onMove);
-      // Re-render both panels after resize
       reRenderPanel('original');
       reRenderPanel('translated');
     }, { once: true });
@@ -795,13 +796,20 @@ function initResizer() {
     left.style.flex = `0 0 ${newLeftW}px`;
     right.style.flex = '1';
 
-    // Debounced re-render during drag
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       reRenderPanel('original');
       reRenderPanel('translated');
     }, 200);
   }
+
+  // Double-click to reset to 50/50 split
+  resizer.addEventListener('dblclick', () => {
+    left.style.flex = '1';
+    right.style.flex = '1';
+    reRenderPanel('original');
+    reRenderPanel('translated');
+  });
 }
 
 function reRenderPanel(panel) {
