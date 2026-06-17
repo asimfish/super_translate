@@ -203,6 +203,11 @@ function renderPaperList() {
         <span>${formatDate(p.created_at)}</span>
       </div>
       <span class="status status-${sanitizeClass(p.translation_status)}">${statusLabel(p.translation_status)}</span>
+      ${p.translation_status === 'translating' ? `
+        <div class="progress-bar" style="margin-top:8px">
+          <div class="progress-fill" style="width:${Math.round(p.translation_progress * 100)}%"></div>
+        </div>
+      ` : ''}
       ${p.tags ? `<div class="meta" style="margin-top:6px">🏷 ${esc(p.tags)}</div>` : ''}
       <div class="actions" data-action="stop-propagation">
         ${p.translation_status === 'pending' || p.translation_status === 'failed' ?
