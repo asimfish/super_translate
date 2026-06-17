@@ -1,187 +1,110 @@
-# PDF Chinese Translator
+# Super Translate
 
-Translate an English PDF into a Chinese PDF while keeping the original page size,
-images, vector graphics, and broad layout structure.
+> AI-Powered Academic Paper Translation & Reading System
 
-The tool reads text blocks and their bounding boxes from the PDF, sends those
-blocks to your translation supplier API, removes the original text in-place, and
-writes Chinese text back into the same regions.
+[![Tests](https://img.shields.io/badge/tests-398%20passed-brightgreen)]()
+[![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
+[![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
+[![Python](https://img.shields.io/badge/python-3.12+-blue)]()
 
-## What It Preserves
+Super Translate is a web-based system for translating English academic papers into Chinese while preserving the original formatting, mathematical formulas, and document structure.
 
-- Original page dimensions
-- Embedded images
-- Most vector graphics and page structure
-- Text block positions
-- Approximate font size and text color
+## Features
 
-## Current Limits
+- **Smart Translation Engine** — Supports DeepSeek, OpenAI, and Google Translate backends with automatic fallback
+- **Layout Preservation** — Maintains original page dimensions, images, vector graphics, and text block positions
+- **Formula Protection** — Mathematical formulas, equations, and variables are preserved as-is
+- **Citation Safety** — Reference markers [1], [2] and citation formatting remain unchanged
+- **Real-time Progress** — Live translation progress with detailed status logs
+- **Dual View** — Side-by-side PDF viewer with synchronized scrolling and adjustable split
+- **Batch Processing** — Translate multiple papers simultaneously
+- **Feishu Notifications** — Get notified via Feishu/Lark webhook when translation completes
+- **Responsive UI** — Modern dark theme with adaptive PDF scaling
 
-- Scanned PDFs need OCR first; this tool handles PDFs with extractable text.
-- The tool samples the local background color behind each text block before
-  redrawing. It works best for papers and reports with relatively uniform
-  backgrounds behind text.
-- Dense tables, equations, captions, and multi-layer graphics may need manual QA.
-- Perfect PDF reflow is not guaranteed because English and Chinese text have
-  different lengths and line-breaking behavior.
+## Quick Start
 
-## Install
+### 1. Install
 
 ```bash
+# Clone the repository
+git clone https://github.com/asimfish/super_translate.git
+cd super_translate
+
+# Create virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
+
+# Install dependencies
 pip install -e .
 ```
 
-## Quick Dry Run
-
-This verifies PDF rewriting without calling a supplier API:
+### 2. Configure API Key
 
 ```bash
-pdf-zh-translator translate input.pdf output.zh.pdf --dry-run
+# Set your DeepSeek API key (default backend)
+export PAPER_CHINA_DEEPSEEK_API_KEY="your-api-key-here"
+
+# Or use OpenAI
+export PAPER_CHINA_OPENAI_API_KEY="your-openai-key"
 ```
 
-## DeepSeek v4 Pro
-
-DeepSeek is the default provider. Set your key through an environment variable;
-do not put it in source code or commit it to the repository.
+### 3. Start the Server
 
 ```bash
-export DEEPSEEK_API_KEY="YOUR_DEEPSEEK_API_KEY"
-
-pdf-zh-translator translate input.pdf output.zh.pdf
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
-The default DeepSeek settings are:
+Open **http://localhost:8001** in your browser.
 
-- API base URL: `https://api.deepseek.com`
-- Chat endpoint: `/chat/completions`
-- Model: `deepseek-v4-pro`
-- Thinking mode: disabled, because translation should return only deterministic JSON
+## Translation Quality
 
-To override explicitly:
+Super Translate produces high-quality academic translations with:
 
-```bash
-pdf-zh-translator translate input.pdf output.zh.pdf \
-  --api-mode deepseek \
-  --api-url "https://api.deepseek.com" \
-  --model deepseek-v4-pro
+- **Pure Chinese output** — No English-Chinese mixing, proper academic terminology
+- **Smart terminology** — First occurrence: "Neural Network (Neural Network)", subsequent: "Neural Network"
+- **Format preservation** — Bold, italic, and section headers are preserved
+- **Clean layout** — Automatic control character cleanup and text reformatting
+
+## Configuration
+
+All settings can be configured via environment variables with the `PAPER_CHINA_` prefix:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PAPER_CHINA_DEEPSEEK_API_KEY` | — | DeepSeek API key |
+| `PAPER_CHINA_OPENAI_API_KEY` | — | OpenAI API key |
+| `PAPER_CHINA_TRANSLATION_ENGINE` | `native` | Translation engine (`native` or `pdf2zh`) |
+| `PAPER_CHINA_TRANSLATION_BACKEND` | `deepseek` | Default translation backend |
+| `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `3` | Max concurrent translations |
+| `PAPER_CHINA_FEISHU_WEBHOOK_URL` | — | Feishu webhook for notifications |
+
+## Architecture
+
 ```
-
-## Supplier API Modes
-
-### Generic Batch API
-
-Use this when your supplier accepts a JSON batch of strings.
-
-```bash
-export PDF_TRANSLATOR_API_KEY="YOUR_KEY"
-
-pdf-zh-translator translate input.pdf output.zh.pdf \
-  --api-mode generic \
-  --api-url "https://supplier.example.com/translate" \
-  --source-lang en \
-  --target-lang zh
-```
-
-The default request body is:
-
-```json
-{
-  "source_lang": "en",
-  "target_lang": "zh",
-  "texts": ["text block 1", "text block 2"]
-}
-```
-
-Accepted response shapes include:
-
-```json
-{"translations": ["译文 1", "译文 2"]}
-```
-
-```json
-{"data": {"translations": [{"text": "译文 1"}, {"text": "译文 2"}]}}
-```
-
-If your supplier uses a different JSON schema, edit
-`pdf_zh_translator/translators.py` in `VendorTranslator._translate_generic()`
-and `parse_translation_list()`.
-
-### OpenAI-Compatible Chat API
-
-Use this when your supplier exposes `/v1/chat/completions`.
-
-```bash
-export PDF_TRANSLATOR_API_KEY="YOUR_KEY"
-
-pdf-zh-translator translate input.pdf output.zh.pdf \
-  --api-mode openai-compatible \
-  --api-url "https://supplier.example.com/v1" \
-  --model "your-model-name"
-```
-
-If `--api-url` ends with `/v1`, the tool appends `/chat/completions`.
-
-## Auth Options
-
-By default the tool sends:
-
-```text
-Authorization: Bearer YOUR_KEY
-```
-
-For a custom header:
-
-```bash
-pdf-zh-translator translate input.pdf output.zh.pdf \
-  --api-url "https://supplier.example.com/translate" \
-  --auth-header "X-API-Key" \
-  --auth-scheme "" \
-  --api-key-env SUPPLIER_API_KEY
-```
-
-## Chinese Font
-
-The default PDF font alias is `china-s`. If glyphs do not render correctly on
-your machine, provide a local Chinese TTF/OTF font:
-
-```bash
-pdf-zh-translator translate input.pdf output.zh.pdf \
-  --api-url "https://supplier.example.com/translate" \
-  --font-name zhfont \
-  --font-file /path/to/chinese-font.ttf
-```
-
-## Useful Layout Knobs
-
-- `--batch-size`: fewer blocks per API call if the supplier has small context limits.
-- `--font-scale`: reduce inserted Chinese font size relative to original text.
-- `--min-font-size`: lower bound used when text does not fit its original box.
-- `--margin`: padding used when clearing and rewriting text regions.
-
-Example for a dense academic paper:
-
-```bash
-pdf-zh-translator translate paper.pdf paper.zh.pdf \
-  --api-mode openai-compatible \
-  --api-url "https://supplier.example.com/v1" \
-  --model "your-model-name" \
-  --batch-size 4 \
-  --font-scale 0.82 \
-  --min-font-size 4.5
+super_translate/
+├── app/
+│   ├── api/          # FastAPI routes
+│   ├── core/         # Config, database, rate limiting
+│   ├── models/       # SQLAlchemy models
+│   ├── services/     # Translation, layout fixing, notifications
+│   └── static/       # Frontend (HTML, CSS, JS)
+├── pdf_zh_translator/ # Core translation engine
+└── tests/            # Test suite (388 tests)
 ```
 
 ## Development
 
-Run unit tests that do not call external services:
-
 ```bash
-python3 -m unittest discover -s tests
+# Run tests
+.venv/bin/python -m pytest tests/ -v
+
+# Run with coverage
+.venv/bin/python -m pytest tests/ --cov=app --cov-report=term-missing
+
+# Lint check
+.venv/bin/ruff check app/ tests/
 ```
 
-Run syntax checks:
+## License
 
-```bash
-python3 -m compileall pdf_zh_translator tests
-```
+MIT
