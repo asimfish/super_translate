@@ -493,6 +493,9 @@ async def start_translation(
             translation_status=TranslationStatus.TRANSLATING.value,
             translation_progress=0.0,
             translation_error=None,
+            translated_filename="",
+            dual_filename="",
+            translation_log="",
         ),
     )
     if result.rowcount == 0:
@@ -666,6 +669,9 @@ async def _do_translate(
             return
 
     output_dir = settings.translations_path / paper_id
+    # Clean up old translation files before starting re-translation
+    cleanup_output_dir(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     start_time = time.monotonic()
 
     logger.info(
