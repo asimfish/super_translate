@@ -1073,5 +1073,132 @@ class TestFixTranslatedLayoutTempFileError(unittest.TestCase):
                 os.unlink(tmp)
 
 
+class TestGetImageBboxes(unittest.TestCase):
+    """Test _get_image_bboxes function."""
+
+    def test_returns_empty_for_page_without_images(self):
+        """Page with no images returns empty list."""
+        import fitz
+
+        from app.services.layout_fix import _get_image_bboxes
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        result = _get_image_bboxes(page)
+        self.assertEqual(result, [])
+        doc.close()
+
+    def test_returns_bboxes_for_page_with_image(self):
+        """Page with an image returns its bounding box."""
+        from app.services.layout_fix import _get_image_bboxes
+
+        # Mock a page with images
+        page = unittest.mock.MagicMock()
+        page.get_images.return_value = [(1, 0, 0, 0, 0, 0, 0, "", "")]
+        mock_rect = unittest.mock.MagicMock()
+        mock_rect.is_empty = False
+        mock_rect.is_valid = True
+        mock_rect.x0 = 100.0
+        mock_rect.y0 = 100.0
+        mock_rect.x1 = 200.0
+        mock_rect.y1 = 200.0
+        page.get_image_bbox.return_value = mock_rect
+
+        result = _get_image_bboxes(page)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], (100.0, 100.0, 200.0, 200.0))
+
+    def test_handles_get_image_bbox_exception(self):
+        """Exceptions from get_image_bbox are silently skipped."""
+        from app.services.layout_fix import _get_image_bboxes
+
+        page = unittest.mock.MagicMock()
+        page.get_images.return_value = [(1, 0, 0, 0, 0, 0, 0, "", "")]
+        page.get_image_bbox.side_effect = ValueError("no image")
+        result = _get_image_bboxes(page)
+        self.assertEqual(result, [])
+
+
+class TestBlockOverlapsImage(unittest.TestCase):
+    """Test _block_overlaps_image function."""
+
+    def test_no_overlap_returns_false(self):
+        """Block that doesn't overlap image returns False."""
+        from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+        block = TextBlockInfo(
+            bbox=(100.0, 100.0, 200.0, 120.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        image_bboxes = [(300.0, 300.0, 400.0, 400.0)]
+        self.assertFalse(_block_overlaps_image(block, image_bboxes))
+
+    def test_full_overlap_returns_true(self):
+        """Block fully inside image returns True."""
+        from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+        block = TextBlockInfo(
+            bbox=(110.0, 110.0, 190.0, 190.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        image_bboxes = [(100.0, 100.0, 200.0, 200.0)]
+        self.assertTrue(_block_overlaps_image(block, image_bboxes))
+
+    def test_partial_overlap_below_threshold_returns_false(self):
+        """Block with <50% overlap returns False."""
+        from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+        # Block: 100x20 area = 2000
+        block = TextBlockInfo(
+            bbox=(100.0, 100.0, 200.0, 120.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        # Image overlaps only 10x20 = 200 (10% of block)
+        image_bboxes = [(190.0, 100.0, 250.0, 120.0)]
+        self.assertFalse(_block_overlaps_image(block, image_bboxes))
+
+    def test_partial_overlap_above_threshold_returns_true(self):
+        """Block with >50% overlap returns True."""
+        from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+        # Block: 100x20 area = 2000
+        block = TextBlockInfo(
+            bbox=(100.0, 100.0, 200.0, 120.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        # Image overlaps 60x20 = 1200 (60% of block)
+        image_bboxes = [(140.0, 100.0, 250.0, 120.0)]
+        self.assertTrue(_block_overlaps_image(block, image_bboxes))
+
+    def test_empty_image_bboxes_returns_false(self):
+        """No images means no overlap."""
+        from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+        block = TextBlockInfo(
+            bbox=(100.0, 100.0, 200.0, 120.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        self.assertFalse(_block_overlaps_image(block, []))
+
+    def test_zero_area_block_returns_false(self):
+        """Block with zero area returns False."""
+        from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+        block = TextBlockInfo(
+            bbox=(100.0, 100.0, 100.0, 100.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        image_bboxes = [(100.0, 100.0, 200.0, 200.0)]
+        self.assertFalse(_block_overlaps_image(block, image_bboxes))
+
+    def test_multiple_images_checks_all(self):
+        """Checks overlap against all images."""
+        from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+        block = TextBlockInfo(
+            bbox=(100.0, 100.0, 200.0, 120.0),
+            text="test", avg_font_size=10.0, block_index=0,
+        )
+        # First image doesn't overlap, second does
+        image_bboxes = [
+            (300.0, 300.0, 400.0, 400.0),
+            (100.0, 100.0, 200.0, 120.0),
+        ]
+        self.assertTrue(_block_overlaps_image(block, image_bboxes))
+
+
 if __name__ == "__main__":
     unittest.main()

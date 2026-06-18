@@ -102,6 +102,41 @@ def fix_translated_layout(
         return total_fixed > 0
 
 
+def _get_image_bboxes(page: object) -> list[tuple[float, float, float, float]]:
+    """Get bounding boxes of all images on the page."""
+    bboxes = []
+    for img in page.get_images():
+        try:
+            rect = page.get_image_bbox(img)
+            if rect and rect.is_empty is False and rect.is_valid:
+                bboxes.append((rect.x0, rect.y0, rect.x1, rect.y1))
+        except Exception:
+            continue
+    return bboxes
+
+
+def _block_overlaps_image(
+    block: TextBlockInfo,
+    image_bboxes: list[tuple[float, float, float, float]],
+) -> bool:
+    """Check if a text block significantly overlaps with an image region."""
+    bx0, by0, bx1, by1 = block.bbox
+    block_area = max(0, bx1 - bx0) * max(0, by1 - by0)
+    if block_area <= 0:
+        return False
+    for ix0, iy0, ix1, iy1 in image_bboxes:
+        # Calculate overlap
+        ox0 = max(bx0, ix0)
+        oy0 = max(by0, iy0)
+        ox1 = min(bx1, ix1)
+        oy1 = min(by1, iy1)
+        overlap_area = max(0, ox1 - ox0) * max(0, oy1 - oy0)
+        # If >50% of block area overlaps with image, skip it
+        if overlap_area > block_area * 0.5:
+            return True
+    return False
+
+
 def _fix_page_layout(page: object) -> int:
     """Fix text blocks on a single page. Returns number of blocks fixed."""
     blocks = _extract_text_blocks(page)
@@ -117,9 +152,16 @@ def _fix_page_layout(page: object) -> int:
     if col_width < _MIN_COL_WIDTH:
         return 0  # Can't determine layout, skip
 
-    # Find blocks that need fixing
+    # Get image regions to avoid corrupting text near figures
+    image_bboxes = _get_image_bboxes(page)
+
+    # Find blocks that need fixing (skip those overlapping with images)
     page_height = page.rect.height
-    to_fix = [b for b in blocks if _needs_fix(b, left_margin, col_width, page_height)]
+    to_fix = [
+        b for b in blocks
+        if _needs_fix(b, left_margin, col_width, page_height)
+        and not _block_overlaps_image(b, image_bboxes)
+    ]
 
     if not to_fix:
         return 0
