@@ -789,7 +789,8 @@ class TestFindNbspBboxes(unittest.TestCase):
         )
         shape.commit()
 
-        result = _find_nbsp_bboxes(page)
+        page_dict = page.get_text("dict")
+        result = _find_nbsp_bboxes(page_dict)
         self.assertEqual(result, [])
         doc.close()
 
@@ -797,8 +798,7 @@ class TestFindNbspBboxes(unittest.TestCase):
         """Image blocks (type != 0) are skipped."""
         from app.services.layout_fix import _find_nbsp_bboxes
 
-        page = unittest.mock.MagicMock()
-        page.get_text.return_value = {
+        page_dict = {
             "blocks": [
                 {"type": 1, "bbox": [0, 0, 100, 100]},  # image block
                 {
@@ -808,7 +808,7 @@ class TestFindNbspBboxes(unittest.TestCase):
                 },
             ]
         }
-        result = _find_nbsp_bboxes(page)
+        result = _find_nbsp_bboxes(page_dict)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0], (91, 100, 504, 130))
 

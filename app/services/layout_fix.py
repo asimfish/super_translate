@@ -139,13 +139,15 @@ def _block_overlaps_image(
 
 def _fix_page_layout(page: object) -> int:
     """Fix text blocks on a single page. Returns number of blocks fixed."""
-    blocks = _extract_text_blocks(page)
+    # Extract page dict once — reused by _extract_text_blocks and _find_nbsp_bboxes
+    page_dict = page.get_text("dict")
+    blocks = _extract_text_blocks(page, page_dict)
     if not blocks:
         return 0
 
     # First pass: clean control character artifacts from all blocks
     # (null bytes, SOH, etc. from pdf2zh font embedding)
-    _clean_page_artifacts(page, blocks)
+    _clean_page_artifacts(page, blocks, page_dict)
 
     # Analyze page layout
     left_margin, col_width = _analyze_page_layout(blocks)
@@ -174,10 +176,13 @@ def _fix_page_layout(page: object) -> int:
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
-def _find_nbsp_bboxes(page: object) -> list[tuple[float, float, float, float]]:
-    """Find bboxes of all spans containing non-breaking spaces (\\xa0)."""
+def _find_nbsp_bboxes(page_dict: dict) -> list[tuple[float, float, float, float]]:
+    """Find bboxes of all spans containing non-breaking spaces (\\xa0).
+
+    Args:
+        page_dict: Result of page.get_text("dict") — avoids duplicate extraction.
+    """
     nbsp_bboxes = []
-    page_dict = page.get_text("dict")
     for raw_block in page_dict.get("blocks", []):
         if raw_block.get("type") != 0:
             continue
@@ -204,19 +209,30 @@ def _block_has_nbsp_bbox(
     return False
 
 
-def _clean_page_artifacts(page: object, blocks: list[TextBlockInfo]) -> None:
+def _clean_page_artifacts(
+    page: object,
+    blocks: list[TextBlockInfo],
+    page_dict: dict | None = None,
+) -> None:
     """Clean control character artifacts from all text blocks on a page.
 
     pdf2zh's font embedding can produce null bytes, control chars, and
     non-breaking spaces in the rendered text. This pass redacts and reinserts
     affected blocks at their original positions with cleaned text.
+
+    Args:
+        page: PyMuPDF page object.
+        blocks: Extracted text blocks.
+        page_dict: Optional pre-extracted dict from page.get_text("dict").
     """
     # Check raw page text for control characters
     raw_page_text = page.get_text("text")
     has_control = bool(_CONTROL_CHAR_RE.search(raw_page_text))
 
     # Find \xa0 bboxes from dict extraction (text extraction normalizes it)
-    nbsp_bboxes = _find_nbsp_bboxes(page)
+    if page_dict is None:
+        page_dict = page.get_text("dict")
+    nbsp_bboxes = _find_nbsp_bboxes(page_dict)
     has_nbsp = len(nbsp_bboxes) > 0
     if not has_control and not has_nbsp:
         return
@@ -409,10 +425,19 @@ def _insert_text_with_fallback(
     return True
 
 
-def _extract_text_blocks(page: object) -> list[TextBlockInfo]:
-    """Extract text blocks with font size info from a page."""
+def _extract_text_blocks(
+    page: object, page_dict: dict | None = None,
+) -> list[TextBlockInfo]:
+    """Extract text blocks with font size info from a page.
+
+    Args:
+        page: PyMuPDF page object.
+        page_dict: Optional pre-extracted dict from page.get_text("dict").
+                   If None, extracts it (adds one extra call per page).
+    """
     blocks: list[TextBlockInfo] = []
-    page_dict = page.get_text("dict")
+    if page_dict is None:
+        page_dict = page.get_text("dict")
 
     for idx, raw_block in enumerate(page_dict.get("blocks", [])):
         if raw_block.get("type") != 0:
