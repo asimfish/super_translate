@@ -364,17 +364,27 @@ async function openReader(paperId) {
   // Cancel any ongoing load
   const loadId = ++currentLoadId;
 
+  // Show loading state immediately
+  showView('reader');
+  document.getElementById('reader-title').textContent = '加载中...';
+  for (const panel of ['original', 'translated']) {
+    const container = document.getElementById(`pdf-container-${panel}`);
+    if (container) {
+      container.innerHTML = '<div style="color:#aaa;padding:40px;text-align:center;">加载中...</div>';
+    }
+  }
+
   try {
     currentPaper = await api.getPaper(paperId);
   } catch (e) {
     alert('无法加载论文');
+    showLibrary();
     return;
   }
 
   // If a newer load started, abort this one
   if (loadId !== currentLoadId) return;
 
-  showView('reader');
   document.getElementById('reader-title').textContent = currentPaper.title;
 
   const placeholder = document.getElementById('translate-placeholder');
@@ -952,6 +962,37 @@ document.addEventListener('change', (e) => {
   const action = e.target.dataset.action;
   if (action && actionHandlers[action]) {
     actionHandlers[action](e);
+  }
+});
+
+// === Keyboard Shortcuts ===
+document.addEventListener('keydown', (e) => {
+  // Escape: go back to library from upload/reader views
+  if (e.key === 'Escape') {
+    const uploadView = document.getElementById('upload-view');
+    const readerView = document.getElementById('reader-view');
+    if (uploadView?.classList.contains('active') || readerView?.classList.contains('active')) {
+      showLibrary();
+      e.preventDefault();
+    }
+  }
+
+  // Ctrl/Cmd + U: open upload view
+  if ((e.ctrlKey || e.metaKey) && e.key === 'u') {
+    const readerView = document.getElementById('reader-view');
+    if (!readerView?.classList.contains('active')) {
+      showUpload();
+      e.preventDefault();
+    }
+  }
+
+  // Ctrl/Cmd + Enter: start translation (in reader view)
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    const readerView = document.getElementById('reader-view');
+    if (readerView?.classList.contains('active') && currentPaper) {
+      startTranslate();
+      e.preventDefault();
+    }
   }
 });
 
