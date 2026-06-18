@@ -658,6 +658,10 @@ async function startTranslate() {
 }
 
 async function quickTranslate(paperId) {
+  // Set currentPaper for title display in progress panel
+  if (!currentPaper || currentPaper.id !== paperId) {
+    currentPaper = papers.find(p => p.id === paperId) || null;
+  }
   doTranslateDirect(paperId, '', 'balanced');
 }
 
@@ -686,7 +690,13 @@ function pollTranslationStatus(paperId) {
   const statusEl = document.getElementById('trans-status');
   const percentEl = document.getElementById('trans-percent');
   const logEl = document.getElementById('trans-log');
+  const titleEl = document.getElementById('trans-title');
   prog.classList.remove('hidden');
+
+  // Show paper title in progress panel
+  if (titleEl && currentPaper) {
+    titleEl.textContent = currentPaper.title;
+  }
   if (logEl) logEl.innerHTML = '';
   addTransLog('开始翻译...');
 
