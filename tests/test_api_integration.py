@@ -1457,6 +1457,57 @@ class TestRunTranslation:
         assert paper.translation_status == "failed"
         assert not partial_dir.exists()
 
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_cancellation_resets_to_pending(
+        self, mock_settings, mock_translate, tmp_path
+    ):
+        """Test that cancelling a translation resets paper to pending status."""
+        from app.api.papers import (
+            _cancel_lock,
+            _cancelled_papers,
+            _run_translation,
+        )
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translation_status = "translating"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+
+        # Add paper to cancelled set before translation starts
+        with _cancel_lock:
+            _cancelled_papers.add("paper123")
+
+        def fake_translate(input_path, output_dir, config, progress_callback=None):
+            # Simulate progress callback triggering cancellation check
+            if progress_callback:
+                progress_callback(0.1)
+            return MagicMock()  # Should not reach here
+
+        mock_translate.side_effect = fake_translate
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("paper123", "deepseek", "balanced")
+
+        assert paper.translation_status == "pending"
+        assert paper.translation_progress == 0.0
+        assert paper.translation_error is None
+
+        # Cleanup
+        with _cancel_lock:
+            _cancelled_papers.discard("paper123")
+
     def test_update_paper_result_warns_on_outside_path(self):
         """Test _update_paper_result logs warning for paths outside translations dir."""
         from unittest.mock import MagicMock, patch
