@@ -437,6 +437,25 @@ async function openReader(paperId) {
     placeholder.classList.remove('hidden');
     document.getElementById('pdf-container-translated').classList.add('hidden');
     document.getElementById('btn-download-mono').classList.add('hidden');
+
+    // Show error details and retry button for failed translations
+    const placeholderIcon = placeholder.querySelector('.placeholder-icon');
+    const placeholderText = placeholder.querySelector('p');
+    if (currentPaper.translation_status === 'failed') {
+      if (placeholderIcon) placeholderIcon.textContent = '⚠️';
+      if (placeholderText) {
+        placeholderText.textContent = currentPaper.translation_error
+          ? `翻译失败: ${currentPaper.translation_error}`
+          : '翻译失败';
+        placeholderText.style.color = 'var(--error)';
+      }
+    } else {
+      if (placeholderIcon) placeholderIcon.textContent = '🌐';
+      if (placeholderText) {
+        placeholderText.textContent = '点击"翻译"按钮生成中文译文';
+        placeholderText.style.color = '';
+      }
+    }
   }
 
   currentPaper.has_dual
