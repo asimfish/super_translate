@@ -716,6 +716,7 @@ async def _do_translate(
                 paper_id,
                 trans_result.success,
                 trans_result.error,
+                base_url=settings.base_url,
             )
 
 

@@ -67,6 +67,7 @@ def notify_translation_complete(
     paper_id: str,
     success: bool,
     error: str | None = None,
+    base_url: str = "http://localhost:8001",
 ) -> None:
     """Send translation completion notification.
 
@@ -76,17 +77,19 @@ def notify_translation_complete(
         paper_id: Paper ID
         success: Whether translation succeeded
         error: Error message if translation failed
+        base_url: Base URL for notification links
     """
     if not webhook_url:
         return
 
+    link = f"{base_url.rstrip('/')}"
     if success:
         title = "翻译完成"
         message = (
             f"**论文**: {paper_title}\n"
             f"**状态**: 翻译成功\n"
             f"**ID**: {paper_id}\n\n"
-            f"[查看翻译结果](http://localhost:8001)"
+            f"[查看翻译结果]({link})"
         )
     else:
         title = "翻译失败"
@@ -95,7 +98,7 @@ def notify_translation_complete(
             f"**状态**: 翻译失败\n"
             f"**错误**: {error or '未知错误'}\n"
             f"**ID**: {paper_id}\n\n"
-            f"[查看详情](http://localhost:8001)"
+            f"[查看详情]({link})"
         )
 
     send_feishu_notification(webhook_url, title, message)

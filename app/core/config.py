@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
 
-    app_name: str = "Paper China"
+    app_name: str = "Super Translate"
     debug: bool = False
 
     base_dir: Path = Path(__file__).resolve().parent.parent.parent
@@ -45,6 +45,9 @@ class Settings(BaseSettings):
 
     # Feishu/Lark notification webhook
     feishu_webhook_url: str = ""
+
+    # Base URL for notification links (e.g., "http://localhost:8001")
+    base_url: str = "http://localhost:8001"
 
     # CORS (comma-separated origins, e.g. "http://localhost:3000,https://example.com")
     cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
