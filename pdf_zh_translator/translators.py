@@ -12,10 +12,10 @@ The default adapter intentionally supports two common supplier contracts:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
-import hashlib
 import sys
 import time
 import urllib.error
@@ -97,6 +97,53 @@ class CachedTranslator(Translator):
                     self.cache[key] = translation
 
 
+class CacheOnlyTranslator(Translator):
+    """Render strictly from a pre-filled cache (e.g. translations produced
+    directly by an LLM assistant). Never calls a supplier API.
+
+    On cache misses it writes the missing source blocks to
+    ``<cache>.missing.jsonl`` and aborts, so the caller can fill the cache
+    and re-run.
+    """
+
+    def __init__(self, cache_file: Path) -> None:
+        self.cache_file = Path(cache_file)
+        self.cache: Dict[str, str] = {}
+        if self.cache_file.exists():
+            with self.cache_file.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    key = record.get("key")
+                    translation = record.get("translation")
+                    if isinstance(key, str) and isinstance(translation, str):
+                        self.cache[key] = translation
+
+    def translate_batch(self, texts: Sequence[str]) -> List[str]:
+        missing = [text for text in texts if cache_key(text) not in self.cache]
+        if missing:
+            missing_file = self.cache_file.with_name(self.cache_file.name + ".missing.jsonl")
+            with missing_file.open("w", encoding="utf-8") as handle:
+                for text in missing:
+                    record = {
+                        "key": cache_key(text),
+                        "source": text,
+                    }
+                    handle.write(
+                        json.dumps(record, ensure_ascii=False) + "\n"
+                    )
+            raise TranslationError(
+                "cache-only mode: %d/%d blocks missing from cache. Missing blocks dumped to %s"
+                % (len(missing), len(texts), missing_file)
+            )
+        return [self.cache[cache_key(text)] for text in texts]
+
+
 @dataclass
 class VendorTranslator(Translator):
     api_url: str
@@ -118,7 +165,9 @@ class VendorTranslator(Translator):
 
     def translate_batch(self, texts: Sequence[str]) -> List[str]:
         results: List[str] = []
-        chunks = list(chunked_by_size([text for text in texts], self.batch_size, self.max_batch_chars))
+        chunks = list(chunked_by_size(
+            list(texts), self.batch_size, self.max_batch_chars
+        ))
         total_chunks = len(chunks)
         translated_count = 0
         for chunk_index, chunk in enumerate(chunks, start=1):
@@ -241,7 +290,12 @@ class VendorTranslator(Translator):
                 if not isinstance(parsed, dict):
                     raise TranslationError("Supplier response must be a JSON object")
                 return parsed
-            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                TimeoutError,
+                json.JSONDecodeError,
+            ) as exc:
                 last_error = exc
                 if attempt >= self.retries:
                     break
@@ -252,6 +306,13 @@ class VendorTranslator(Translator):
 def build_translator_from_args(args: Any) -> Translator:
     if getattr(args, "dry_run", False):
         return EchoTranslator()
+
+    if args.api_mode == "cache-only":
+        if not args.cache_file:
+            raise TranslationError(
+                "cache-only mode requires --cache-file."
+            )
+        return CacheOnlyTranslator(Path(args.cache_file))
 
     if args.api_mode == "deepseek":
         api_url = args.api_url or os.getenv("DEEPSEEK_API_URL") or "https://api.deepseek.com"
@@ -268,7 +329,9 @@ def build_translator_from_args(args: Any) -> Translator:
     if not api_key:
         api_key = os.getenv("PDF_TRANSLATOR_API_KEY")
     if args.api_mode == "deepseek" and not api_key:
-        raise TranslationError("Missing DeepSeek API key. Set DEEPSEEK_API_KEY or pass --api-key-env.")
+        raise TranslationError(
+            "Missing DeepSeek API key. Set DEEPSEEK_API_KEY."
+        )
 
     translator: Translator = VendorTranslator(
         api_url=api_url,
@@ -346,20 +409,52 @@ def extract_openai_message(data: Dict[str, Any]) -> str:
     raise TranslationError("OpenAI-compatible response has no message content")
 
 
+_TRANSLATION_RULES = (
+    "你是顶级学术论文翻译专家，擅长计算机科学、机器学习、数学等领域。\n\n"
+    "【核心铁律】翻译必须是纯中文，严禁中英混杂！\n"
+    '错误示范："我们使用了 attention mechanism 来 improve 性能"\n'
+    '正确示范："本文采用注意力机制以提升性能"\n\n'
+    "翻译规则：\n"
+    "1. 【纯中文输出】每个句子必须是完整中文，不得夹杂英文单词或短语\n"
+    "   专有名词首次出现时格式为：中文术语（English Term），之后只用中文\n"
+    '   例如：首次"神经网络（Neural Network）"，之后"神经网络"\n'
+    "2. 【学术用语】必须使用学术论文标准表达：\n"
+    '   "本文提出"（非"我们建议"）、"达到"（非"搞定"）\n'
+    '   "显著的"（非"重要的"）、"利用"（非"借助"）\n'
+    '   "新颖的"（非"新的"）、"最先进的"（非"最新的"）\n'
+    '   "此外"（非"另外"）、"因此"（非"所以"）、"然而"（非"但是"）\n'
+    "3. 【公式保护】数学公式、方程、变量名原样保留（如 $x^2$、$\\alpha$、E=mc²）\n"
+    "4. 【引用保护】引用标记 [1]、[2] 保持不变\n"
+    "5. 【符号保护】数学符号 ∈、∀、∃、∑、∫ 等保持不变\n"
+    '6. 【被动语态】英文被动翻译为中文无主句或"本文"作主语\n'
+    "7. 【图表】Figure 1→图1，Table 2→表2\n"
+    "8. 【长句拆分】英文长句拆分为多个中文短句\n"
+)
+
+
 def translation_array_prompt() -> str:
     return (
-        "Translate each item in the JSON array from English to Simplified Chinese. "
-        "Preserve numbers, citations, equations, URLs, product names, and line breaks where possible. "
-        "Do not add commentary. Return only a valid JSON array of strings with the same length and order."
+        _TRANSLATION_RULES
+        + "\nTranslate each item in the JSON array "
+        "from English to Simplified Chinese. "
+        "Preserve numbers, citations, equations, URLs, "
+        "product names, and line breaks where possible. "
+        "Do not add commentary. Return only a valid "
+        "JSON array of strings with the same length and order."
     )
 
 
 def translation_object_prompt() -> str:
     return (
-        "Translate each item in the input JSON array from English to Simplified Chinese. "
-        "Preserve numbers, citations, equations, URLs, product names, and line breaks where possible. "
-        'Return only a valid json object in exactly this shape: {"translations":["译文1","译文2"]}. '
-        "The translations array must have the same length and order as the input array."
+        _TRANSLATION_RULES
+        + "\nTranslate each item in the input JSON array "
+        "from English to Simplified Chinese. "
+        "Preserve numbers, citations, equations, URLs, "
+        "product names, and line breaks where possible. "
+        'Return only a valid json object in this shape: '
+        '{"translations":["译文1","译文2"]}. '
+        "The translations array must have the same "
+        "length and order as the input array."
     )
 
 
@@ -419,7 +514,11 @@ def chunked(items: Sequence[str], size: int) -> Iterable[Sequence[str]]:
         yield items[index : index + size]
 
 
-def chunked_by_size(items: Sequence[str], max_items: int, max_chars: int) -> Iterable[Sequence[str]]:
+def chunked_by_size(
+    items: Sequence[str],
+    max_items: int,
+    max_chars: int,
+) -> Iterable[Sequence[str]]:
     if max_items <= 0:
         raise TranslationError("batch_size must be greater than 0")
     if max_chars <= 0:

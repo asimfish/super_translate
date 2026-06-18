@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-
 Color = Tuple[float, float, float]
 BBox = Tuple[float, float, float, float]
 
@@ -61,7 +60,7 @@ PARAGRAPH_SIZE_TOLERANCE = 1.5
 # Minimum horizontal overlap ratio (of the narrower block) required to merge.
 PARAGRAPH_MIN_X_OVERLAP = 0.5
 
-MATH_SYMBOLS = set("=+\u2212\u00b1\u00d7\u00f7*/^_|\\<>~\u221e\u221a\u2202\u2207\u2211\u220f\u222b\u2208\u2209\u2282\u2286\u2283\u2287\u222a\u2229\u2227\u2228\u00ac\u2200\u2203\u2248\u2243\u2245\u2260\u2264\u2265\u226a\u226b\u221d\u2192\u2190\u2194\u21d2\u21d0\u21d4\u27e8\u27e9\u2032\u2033\u22a4\u22a5\u2225\u2295\u2297\u2299")
+MATH_SYMBOLS = set("=+\u2212\u00b1\u00d7\u00f7*/^_|\\<>~\u221e\u221a\u2202\u2207\u2211\u220f\u222b\u2208\u2209\u2282\u2286\u2283\u2287\u222a\u2229\u2227\u2228\u00ac\u2200\u2203\u2248\u2243\u2245\u2260\u2264\u2265\u226a\u226b\u221d\u2192\u2190\u2194\u21d2\u21d0\u21d4\u27e8\u27e9\u2032\u2033\u22a4\u22a5\u2225\u2295\u2297\u2299")  # noqa: E501
 
 # --- Inline math protection -------------------------------------------------
 # Spans set in math fonts (and superscripts / inline math tokens) are wrapped
@@ -95,7 +94,7 @@ MATH_TRIGGER = (
     "\U0001d400-\U0001d7ff"       # mathematical alphanumerics
 )
 MATH_TOKEN_RE = re.compile(r"\S*[%s]\S*" % MATH_TRIGGER)
-SUPERSCRIPT_MAP = str.maketrans("0123456789+-=()n", "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u207a\u207b\u207c\u207d\u207e\u207f")
+SUPERSCRIPT_MAP = str.maketrans("0123456789+-=()n", "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u207a\u207b\u207c\u207d\u207e\u207f")  # noqa: E501
 
 # Bold bit in PyMuPDF span flags.
 FLAG_BOLD = 16
@@ -218,7 +217,9 @@ def translate_pdf(
     units, gutter_rects, skipped = prepare_translation_units(document)
 
     if not units:
-        warnings.append("No extractable English text was found. Scanned PDFs need OCR before translation.")
+        warnings.append(
+            "No extractable English text was found. Scanned PDFs need OCR."
+        )
         page_count = document.page_count
         document.save(str(output_pdf), garbage=4, deflate=True)
         document.close()
@@ -673,10 +674,23 @@ def parse_block_lines(raw_block: dict) -> Tuple[Optional[_RawBlockRec], List[BBo
             if not text:
                 continue
             group_spans = [span for _, span in group]
-            boxes = [tuple(float(x) for x in span["bbox"]) for span in group_spans if "bbox" in span]
-            bbox = union_bbox(boxes) if boxes else tuple(float(x) for x in raw_line.get("bbox", (0, 0, 0, 0)))
+            boxes = [
+                tuple(float(x) for x in span["bbox"])
+                for span in group_spans if "bbox" in span
+            ]
+            if boxes:
+                bbox = union_bbox(boxes)
+            else:
+                bbox = tuple(
+                    float(x) for x in raw_line.get("bbox", (0, 0, 0, 0))
+                )
             lines.append(
-                _LineRec(text=text, bbox=bbox, spans=group_spans, is_cell=len(group) < len(fragments))
+                _LineRec(
+                    text=text,
+                    bbox=bbox,
+                    spans=group_spans,
+                    is_cell=len(group) < len(fragments),
+                )
             )
 
     if not lines:
@@ -700,7 +714,13 @@ def split_line_cells(
     for fragment in fragments:
         bbox = fragment[1].get("bbox")
         start = float(bbox[0]) if bbox else None
-        if current and previous_end is not None and start is not None and start - previous_end > threshold:
+        gap = (
+            current
+            and previous_end is not None
+            and start is not None
+            and start - previous_end > threshold
+        )
+        if gap:
             groups.append(current)
             current = []
         current.append(fragment)
@@ -712,7 +732,7 @@ def split_line_cells(
 
 
 # Big-operator / oddball glyphs that only occur inside display equations.
-_BIG_OPERATOR_CHARS = set("\u2211\u220f\u222b\u221a\u222c\u222d\u22c0\u22c1\u22c2\u22c3\u2a01\u2a02\u2a04\u2a06")
+_BIG_OPERATOR_CHARS = set("\u2211\u220f\u222b\u221a\u222c\u222d\u22c0\u22c1\u22c2\u22c3\u2a01\u2a02\u2a04\u2a06")  # noqa: E501
 _ENGLISH_WORD_RE = re.compile(r"[a-z]{3,}")
 # Limits for a small block to be absorbed into a neighbouring equation zone.
 EQUATION_NEIGHBOR_MAX_CHARS = 60
@@ -1083,11 +1103,19 @@ def restore_text(translated: str, mapping: Dict[int, str]) -> Tuple[str, List[in
 
 
 CJK_CHAR_RE = r"\u2e80-\u9fff\uf900-\ufaff\u3000-\u303f"
-_SPACE_BEFORE_FULLWIDTH_RE = re.compile(r"\s+([\u3001\u3002\uff0c\uff1b\uff1a\uff1f\uff01\uff09\u300b\u300d\u3011\u2019\u201d])")
+_SPACE_BEFORE_FULLWIDTH_RE = re.compile(  # noqa: E501
+    r"\s+([\u3001\u3002\uff0c\uff1b\uff1a\uff1f\uff01\uff09\u300b\u300d\u3011\u2019\u201d])"
+)
 _SPACE_AFTER_FULLWIDTH_RE = re.compile(r"([\uff08\u300a\u300c\u3010\u2018\u201c])\s+")
-_CJK_THEN_LATIN_RE = re.compile(r"([%s])([A-Za-z0-9$(\[\u2200-\u22ff\u0370-\u03ff])" % CJK_CHAR_RE)
-_LATIN_THEN_CJK_RE = re.compile(r"([A-Za-z0-9%%)\]\u2200-\u22ff\u0370-\u03ff])([%s])" % CJK_CHAR_RE)
-_FULLWIDTH_PUNCT = "\u3001\u3002\uff0c\uff1b\uff1a\uff1f\uff01\uff08\uff09\u300a\u300b\u300c\u300d\u3010\u3011"
+_CJK_THEN_LATIN_RE = re.compile(
+    r"([%s])([A-Za-z0-9$(\[\u2200-\u22ff\u0370-\u03ff])" % CJK_CHAR_RE
+)
+_LATIN_THEN_CJK_RE = re.compile(
+    r"([A-Za-z0-9%%)\]\u2200-\u22ff\u0370-\u03ff])([%s])" % CJK_CHAR_RE
+)
+_FULLWIDTH_PUNCT = (  # noqa: E501
+    "\u3001\u3002\uff0c\uff1b\uff1a\uff1f\uff01\uff08\uff09\u300a\u300b\u300c\u300d\u3010\u3011"
+)
 
 
 def clean_translation(text: str) -> str:
@@ -1314,7 +1342,12 @@ def token_width(token: _Token, fonts: Sequence[Tuple[object, str]], size: float)
     return sum(char_width(char, fonts, size) for char in token.text)
 
 
-def split_long_word(token: _Token, fonts: Sequence[Tuple[object, str]], size: float, max_width: float) -> List[_Token]:
+def split_long_word(
+    token: _Token,
+    fonts: Sequence[Tuple[object, str]],
+    size: float,
+    max_width: float,
+) -> List[_Token]:
     """Hard-split a word wider than the line (URLs, hashes)."""
     pieces: List[_Token] = []
     chunk: List[str] = []
