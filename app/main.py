@@ -67,11 +67,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ensure_dirs()
     await init_db()
     await _recover_stuck_translations()
-    logger.info("Paper China started at http://localhost:8000")
+    logger.info("Super Translate started at http://localhost:8000")
     yield
 
 
-app = FastAPI(title="Paper China", version=__version__, lifespan=lifespan)
+app = FastAPI(title="Super Translate", version=__version__, lifespan=lifespan)
 
 # CORS
 app.add_middleware(
@@ -143,7 +143,7 @@ async def index() -> HTMLResponse:
     html_path = static_dir / "index.html"
     if html_path.exists():
         return html_path.read_text(encoding="utf-8")
-    return "<h1>Paper China</h1><p>Static files not found.</p>"
+    return "<h1>Super Translate</h1><p>Static files not found.</p>"
 
 
 @app.get("/health")
@@ -192,7 +192,7 @@ def cli() -> None:
 
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Paper China - AI Paper Translation System")
+    parser = argparse.ArgumentParser(description="Super Translate - AI Paper Translation System")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--open", action="store_true", help="Open browser on start")
