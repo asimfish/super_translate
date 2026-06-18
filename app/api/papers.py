@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
@@ -665,6 +666,7 @@ async def _do_translate(
             return
 
     output_dir = settings.translations_path / paper_id
+    start_time = time.monotonic()
 
     logger.info(
         "Starting translation for paper %s (backend=%s, quality=%s)",
@@ -679,8 +681,9 @@ async def _do_translate(
     try:
         trans_result = translate_pdf_sync(input_path, output_dir, config, on_progress)
     except Exception as e:
+        elapsed = time.monotonic() - start_time
         logger.exception("Translation crashed for paper %s", paper_id)
-        _append_log(paper_id, loop, f"翻译失败: {sanitize_error(e)}")
+        _append_log(paper_id, loop, f"翻译失败: {sanitize_error(e)} (耗时 {elapsed:.0f}秒)")
         async with async_session() as db:
             result = await db.execute(select(Paper).where(Paper.id == paper_id))
             paper = result.scalar_one_or_none()
@@ -690,6 +693,8 @@ async def _do_translate(
                 await db.commit()
         cleanup_output_dir(output_dir)
         return
+
+    elapsed = time.monotonic() - start_time
 
     # Phase 3: Write results (short session)
     async with async_session() as db:
@@ -702,9 +707,9 @@ async def _do_translate(
 
         _update_paper_result(paper, trans_result, output_dir)
         if trans_result.success:
-            _append_log(paper_id, loop, "翻译完成!")
+            _append_log(paper_id, loop, f"翻译完成! 耗时 {elapsed:.0f}秒")
         else:
-            _append_log(paper_id, loop, f"翻译失败: {trans_result.error}")
+            _append_log(paper_id, loop, f"翻译失败: {trans_result.error} (耗时 {elapsed:.0f}秒)")
         await db.commit()
 
         # Send Feishu notification
