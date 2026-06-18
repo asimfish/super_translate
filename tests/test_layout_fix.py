@@ -924,17 +924,63 @@ class TestInsertTextWithFallback(unittest.TestCase):
 
     def test_fallback_when_all_sizes_fail(self):
         """When all font sizes return negative, falls back to minimum size."""
+        import fitz
+
         from app.services.layout_fix import _insert_text_with_fallback
         page = unittest.mock.MagicMock()
         shape = unittest.mock.MagicMock()
         shape.insert_textbox.return_value = -1  # all sizes fail
         page.new_shape.return_value = shape
 
-        rect = unittest.mock.MagicMock()
+        rect = fitz.Rect(91, 100, 504, 120)
         result = _insert_text_with_fallback(page, rect, "test text", "helv", 10.0)
         self.assertTrue(result)
         # Should have called commit at least once (for the fallback)
         self.assertTrue(shape.commit.called)
+
+
+class TestEstimateTextHeight(unittest.TestCase):
+    """Test _estimate_text_height function."""
+
+    def test_single_line_ascii(self):
+        """Short ASCII text on one line."""
+        from app.services.layout_fix import _estimate_text_height
+        # "hello" = 5 chars * 5pt width = 25pt, rect_width=400 → 1 line
+        h = _estimate_text_height("hello", 10.0, 400.0)
+        self.assertAlmostEqual(h, 15.0, delta=1)  # 1 line * 1.5 * 10
+
+    def test_single_line_cjk(self):
+        """Short CJK text on one line."""
+        from app.services.layout_fix import _estimate_text_height
+        # "你好" = 2 chars * 10pt width = 20pt, rect_width=400 → 1 line
+        h = _estimate_text_height("你好", 10.0, 400.0)
+        self.assertAlmostEqual(h, 15.0, delta=1)
+
+    def test_multi_line_newlines(self):
+        """Text with newlines creates multiple lines."""
+        from app.services.layout_fix import _estimate_text_height
+        h = _estimate_text_height("line1\nline2\nline3", 10.0, 400.0)
+        self.assertAlmostEqual(h, 45.0, delta=1)  # 3 lines * 15
+
+    def test_long_text_wraps(self):
+        """Long text that exceeds rect width wraps to multiple lines."""
+        from app.services.layout_fix import _estimate_text_height
+        # 80 CJK chars * 10pt = 800pt, rect_width=200 → 4 lines
+        text = "你" * 80
+        h = _estimate_text_height(text, 10.0, 200.0)
+        self.assertGreater(h, 45.0)  # at least 3 lines
+
+    def test_zero_width_returns_fallback(self):
+        """Zero rect width returns fallback height."""
+        from app.services.layout_fix import _estimate_text_height
+        h = _estimate_text_height("test", 10.0, 0)
+        self.assertEqual(h, 20.0)  # font_size * 2
+
+    def test_zero_font_size_returns_zero(self):
+        """Zero font size returns 0."""
+        from app.services.layout_fix import _estimate_text_height
+        h = _estimate_text_height("test", 0, 400.0)
+        self.assertEqual(h, 0)
 
 
 class TestFindChineseFontEdgeCases(unittest.TestCase):

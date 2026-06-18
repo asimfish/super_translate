@@ -342,6 +342,30 @@ def _reinsert_blocks(
     return fixed_count
 
 
+def _estimate_text_height(text: str, font_size: float, rect_width: float) -> float:
+    """Estimate the height needed for text in a given width.
+
+    Uses a simple heuristic: CJK chars are ~font_size wide, ASCII ~0.5*font_size.
+    Lines are spaced at 1.5x font_size (DEFAULT_LEADING).
+    """
+    if rect_width <= 0 or font_size <= 0:
+        return font_size * 2
+    leading = font_size * 1.5
+    lines = text.split("\n")
+    total_height = 0
+    for line in lines:
+        # Estimate char width: CJK ~1.0 * font_size, ASCII ~0.5 * font_size
+        line_width = 0
+        for ch in line:
+            if ord(ch) > 0x2E7F:  # CJK range
+                line_width += font_size
+            else:
+                line_width += font_size * 0.5
+        num_lines = max(1, int(line_width / rect_width) + 1)
+        total_height += num_lines * leading
+    return total_height
+
+
 def _insert_text_with_fallback(
     page: object,
     rect: object,
@@ -350,6 +374,11 @@ def _insert_text_with_fallback(
     avg_font_size: float,
 ) -> bool:
     """Insert text into rect, trying decreasing font sizes. Returns True if inserted."""
+    # Expand rect height if text is likely to overflow
+    est_height = _estimate_text_height(text, avg_font_size, rect.width)
+    if est_height > rect.height:
+        rect = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + est_height)
+
     size = max(9.0, min(avg_font_size, 12.0))
     while size >= _MIN_INSERT_FONT:
         shape = page.new_shape()
