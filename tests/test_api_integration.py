@@ -673,6 +673,50 @@ class TestTranslationEndpoint:
         assert "Invalid quality" in response.json()["detail"]
 
 
+class TestCancelEndpoint:
+    """Test cancel translation endpoint."""
+
+    def test_cancel_not_found(self, client, mock_db):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        response = client.post("/api/papers/000000000000/cancel")
+        assert response.status_code == 404
+
+    def test_cancel_not_translating(self, client, mock_db, sample_paper):
+        sample_paper.translation_status = "pending"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.post(f"/api/papers/{sample_paper.id}/cancel")
+        assert response.status_code == 409
+        assert "not currently being translated" in response.json()["detail"]
+
+    def test_cancel_success(self, client, mock_db, sample_paper):
+        from app.api.papers import _cancel_lock, _cancelled_papers
+
+        sample_paper.translation_status = "translating"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        # Clear any previous state
+        with _cancel_lock:
+            _cancelled_papers.discard(sample_paper.id)
+
+        response = client.post(f"/api/papers/{sample_paper.id}/cancel")
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+        assert response.json()["status"] == "cancelling"
+
+        # Verify paper was added to cancelled set
+        with _cancel_lock:
+            assert sample_paper.id in _cancelled_papers
+            _cancelled_papers.discard(sample_paper.id)
+
+
 class TestDownloadEndpoints:
     """Test download endpoints."""
 
