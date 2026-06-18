@@ -150,7 +150,7 @@ async function batchTranslate() {
 
   const pending = papers.filter(p => p.translation_status === 'pending' || p.translation_status === 'failed');
   if (pending.length === 0) {
-    alert('没有待翻译的论文');
+    toastWarning('没有待翻译的论文');
     return;
   }
 
@@ -171,7 +171,7 @@ async function batchTranslate() {
       }
     }
 
-    alert(`已提交 ${success} 篇翻译任务${failed > 0 ? `，${failed} 篇提交失败` : ''}。翻译在后台进行中，请稍后刷新查看结果。`);
+    toastSuccess(`已提交 ${success} 篇翻译任务${failed > 0 ? `，${failed} 篇提交失败` : ''}。翻译在后台进行中。`);
     loadPapers();
   } finally {
     batchTranslating = false;
@@ -273,15 +273,15 @@ function handleFileSelect(input) {
 
 function selectFile(file) {
   if (!file.name.toLowerCase().endsWith('.pdf')) {
-    alert('请选择 PDF 文件');
+    toastWarning('请选择 PDF 文件');
     return;
   }
   if (file.size > 100 * 1024 * 1024) {
-    alert('文件过大（最大 100MB）');
+    toastWarning('文件过大（最大 100MB）');
     return;
   }
   if (file.size === 0) {
-    alert('文件为空');
+    toastWarning('文件为空');
     return;
   }
   selectedFile = file;
@@ -320,10 +320,12 @@ async function doUpload() {
     });
     fill.style.width = '100%';
     status.textContent = '上传成功！';
+    toastSuccess('论文上传成功');
     setTimeout(() => showLibrary(), 800);
   } catch (e) {
     status.textContent = `上传失败: ${e.message}`;
     fill.style.background = 'var(--error)';
+    toastError(`上传失败: ${e.message}`);
   } finally {
     uploading = false;
   }
@@ -377,7 +379,7 @@ async function openReader(paperId) {
   try {
     currentPaper = await api.getPaper(paperId);
   } catch (e) {
-    alert('无法加载论文');
+    toastError('无法加载论文');
     showLibrary();
     return;
   }
@@ -649,7 +651,7 @@ async function doTranslateDirect(paperId, backend, quality) {
     await api.translatePaper(paperId, backend, quality);
     pollTranslationStatus(paperId);
   } catch (e) {
-    alert(e.message);
+    toastError(e.message);
   } finally {
     translating = false;
   }
@@ -779,10 +781,11 @@ async function confirmDelete(id, title) {
   if (!confirm(`确定删除 "${title}"？`)) return;
   try {
     await api.deletePaper(id);
+    toastSuccess('论文已删除');
     loadPapers();
     if (currentPaper && currentPaper.id === id) showLibrary();
   } catch (e) {
-    alert('删除失败');
+    toastError('删除失败');
   }
 }
 
@@ -901,6 +904,33 @@ function statusLabel(s) {
   const map = { pending: '待翻译', translating: '翻译中', completed: '已完成', failed: '失败' };
   return map[s] || esc(s);
 }
+
+// === Toast Notifications ===
+function showToast(message, type = 'info', duration = 3000) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  // Auto remove after duration
+  setTimeout(() => {
+    toast.classList.add('toast-out');
+    toast.addEventListener('animationend', () => toast.remove());
+  }, duration);
+}
+
+function toastSuccess(msg) { showToast(msg, 'success'); }
+function toastError(msg) { showToast(msg, 'error', 5000); }
+function toastWarning(msg) { showToast(msg, 'warning', 4000); }
+function toastInfo(msg) { showToast(msg, 'info'); }
 
 // === Event Delegation ===
 const actionHandlers = {
