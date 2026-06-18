@@ -512,7 +512,7 @@ def _analyze_page_layout(
         x0_weighted[x0_rounded] = x0_weighted.get(x0_rounded, 0) + text_len
         width_values.append(round(width, 0))
 
-    if not x0_weighted:
+    if not x0_weighted or not width_values:
         return (0, 0)
 
     # Find x0 with most text content (dominant left margin)
