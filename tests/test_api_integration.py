@@ -1,4 +1,4 @@
-"""Integration tests for Paper China API endpoints."""
+"""Integration tests for Super Translate API endpoints."""
 
 import asyncio
 from pathlib import Path
@@ -101,7 +101,7 @@ class TestIndexEndpoint:
     def test_index_returns_html(self, client):
         response = client.get("/")
         assert response.status_code == 200
-        assert "Paper China" in response.text
+        assert "Super Translate" in response.text
 
     def test_index_fallback_when_static_missing(self, client):
         with patch("pathlib.Path.exists", return_value=False):

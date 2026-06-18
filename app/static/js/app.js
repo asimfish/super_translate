@@ -456,10 +456,15 @@ async function loadPdfDocument(panel, url) {
       const top = metrics.length > 0
         ? metrics[metrics.length - 1].top + metrics[metrics.length - 1].height + gap
         : 0;
-      metrics.push({ top, height: h, width: w, pageNum: baseMetrics[i].pageNum });
+      metrics.push({
+        top, height: h, width: w,
+        baseWidth: baseMetrics[i].width, baseHeight: baseMetrics[i].height,
+        pageNum: baseMetrics[i].pageNum,
+      });
     }
     pageMetrics[panel] = metrics;
     pageMetrics[panel]._adaptiveScale = adaptiveScale;
+    pageMetrics[panel]._baseScale = RENDER_SCALE;
 
     // Phase 2: Create placeholder wrappers with reserved height
     const wrappers = [];
@@ -828,27 +833,27 @@ function reRenderPanel(panel) {
   const metrics = pageMetrics[panel];
   if (!metrics || metrics.length === 0) return;
 
+  // Use base dimensions (at RENDER_SCALE) to avoid compounding mutations
+  const baseScale = metrics._baseScale || RENDER_SCALE;
   const containerWidth = container.clientWidth - 20;
-  const maxPageWidth = Math.max(...metrics.map(m => m.width / (pageMetrics[panel]._adaptiveScale || RENDER_SCALE) * RENDER_SCALE));
-  const adaptiveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, containerWidth / maxPageWidth * RENDER_SCALE));
+  const maxPageWidth = Math.max(...metrics.map(m => m.baseWidth));
+  const adaptiveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, containerWidth / maxPageWidth));
   pageMetrics[panel]._adaptiveScale = adaptiveScale;
 
-  // Update wrapper sizes
+  // Update wrapper sizes from base dimensions
   const gap = 4;
   const wrappers = pageWrappers[panel];
+  const scaleRatio = adaptiveScale / baseScale;
   for (let i = 0; i < metrics.length; i++) {
-    const scale = adaptiveScale / RENDER_SCALE;
-    const w = metrics[i].width * scale;
-    const h = metrics[i].height * scale;
+    const w = metrics[i].baseWidth * scaleRatio;
+    const h = metrics[i].baseHeight * scaleRatio;
     metrics[i].width = w;
     metrics[i].height = h;
+    metrics[i].top = i === 0 ? 0 : metrics[i - 1].top + metrics[i - 1].height + gap;
     if (wrappers[i]) {
       wrappers[i].style.width = w + 'px';
       wrappers[i].style.height = h + 'px';
       wrappers[i].innerHTML = ''; // Clear canvas
-    }
-    if (i > 0) {
-      metrics[i].top = metrics[i - 1].top + metrics[i - 1].height + gap;
     }
   }
 
