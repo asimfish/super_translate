@@ -117,6 +117,14 @@ function showUpload() {
 async function loadPapers() {
   const search = document.getElementById('search-input').value;
   const status = document.getElementById('status-filter').value;
+  const skeleton = document.getElementById('loading-skeleton');
+  const paperList = document.getElementById('paper-list');
+
+  // Show skeleton on first load
+  if (skeleton && paperList && paperList.children.length === 0) {
+    skeleton.classList.remove('hidden');
+  }
+
   try {
     const data = await api.listPapers(search, status, pagination.offset, pagination.limit);
     papers = data.papers;
@@ -128,6 +136,9 @@ async function loadPapers() {
     console.error('Failed to load papers:', e);
     const container = document.getElementById('paper-list');
     if (container) container.innerHTML = '<div class="empty-state"><p style="color:var(--error)">加载失败</p><button class="btn btn-primary" onclick="loadPapers()">重试</button></div>';
+  } finally {
+    // Hide skeleton after data loads
+    if (skeleton) skeleton.classList.add('hidden');
   }
 }
 

@@ -41,6 +41,11 @@
           <button class="btn btn-outline btn-sm" data-action="batch-translate">批量翻译</button>
         </div>
       </div>
+      <div id="loading-skeleton" class="paper-grid">
+        <div class="paper-card skeleton-card"><div class="skeleton-line" style="width:80%"></div><div class="skeleton-line" style="width:60%"></div><div class="skeleton-line" style="width:40%"></div></div>
+        <div class="paper-card skeleton-card"><div class="skeleton-line" style="width:70%"></div><div class="skeleton-line" style="width:50%"></div><div class="skeleton-line" style="width:30%"></div></div>
+        <div class="paper-card skeleton-card"><div class="skeleton-line" style="width:90%"></div><div class="skeleton-line" style="width:45%"></div><div class="skeleton-line" style="width:35%"></div></div>
+      </div>
       <div id="paper-list" class="paper-grid"></div>
       <div id="pagination"></div>
       <div id="empty-state" class="empty-state hidden">
@@ -130,7 +135,7 @@
   </main>
 </div>
 
-<script src="/static/js/pdf.min.js"></script>
-<script src="/static/js/app.js"></script>
+<script src="/static/js/pdf.min.js" defer></script>
+<script src="/static/js/app.js" defer></script>
 </body>
 </html>
