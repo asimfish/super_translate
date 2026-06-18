@@ -208,6 +208,12 @@ function renderPaperList() {
           <div class="progress-fill" style="width:${Math.round(p.translation_progress * 100)}%"></div>
         </div>
       ` : ''}
+      ${p.translation_status === 'completed' ? `
+        <div class="meta" style="margin-top:4px;color:var(--success)">✓ 翻译完成 ${formatDate(p.updated_at)}</div>
+      ` : ''}
+      ${p.translation_status === 'failed' && p.translation_error ? `
+        <div class="meta" style="margin-top:4px;color:var(--error);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.translation_error)}">⚠ ${esc(p.translation_error)}</div>
+      ` : ''}
       ${p.tags ? `<div class="meta" style="margin-top:6px">🏷 ${esc(p.tags)}</div>` : ''}
       <div class="actions" data-action="stop-propagation">
         ${p.translation_status === 'pending' || p.translation_status === 'failed' ?
