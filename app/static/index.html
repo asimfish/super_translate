@@ -130,7 +130,10 @@
           <span id="trans-percent">0%</span>
         </div>
         <div class="progress-bar"><div class="progress-fill" id="trans-progress-fill"></div></div>
-        <div id="trans-log" class="trans-log"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+          <div id="trans-log" class="trans-log" style="flex:1;margin-top:0"></div>
+          <button class="btn btn-sm btn-danger" id="btn-cancel-translate" data-action="cancel-translate" style="margin-left:8px;white-space:nowrap">取消</button>
+        </div>
       </div>
     </div>
   </main>

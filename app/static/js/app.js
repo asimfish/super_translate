@@ -67,6 +67,11 @@ const api = {
     if (!res.ok) throw new Error(await errorDetail(res, 'Translation failed'));
     return res.json();
   },
+  async cancelTranslation(id) {
+    const res = await fetch(`/api/papers/${id}/cancel`, { method: 'POST' });
+    if (!res.ok) throw new Error(await errorDetail(res, 'Cancel failed'));
+    return res.json();
+  },
   async deletePaper(id) {
     const res = await fetch(`/api/papers/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error(await errorDetail(res, 'Delete failed'));
@@ -667,6 +672,16 @@ function toggleSyncScroll() {
   }
 }
 
+async function cancelTranslation() {
+  if (!currentPaper) return;
+  try {
+    await api.cancelTranslation(currentPaper.id);
+    toastInfo('翻译取消请求已发送');
+  } catch (e) {
+    toastError(e.message);
+  }
+}
+
 // === Translation ===
 let translating = false;
 
@@ -986,6 +1001,7 @@ const actionHandlers = {
   'do-upload': doUpload,
   'cancel-upload': cancelUpload,
   'start-translate': startTranslate,
+  'cancel-translate': cancelTranslation,
   'toggle-sync-scroll': toggleSyncScroll,
   'download-translated': downloadTranslated,
   'download-dual': downloadDual,

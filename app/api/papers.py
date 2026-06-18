@@ -42,6 +42,14 @@ _quality_map = {
     "balanced": QualityPreset.BALANCED,
     "quality": QualityPreset.QUALITY,
 }
+# Set of paper IDs with pending cancellation requests
+_cancelled_papers: set[str] = set()
+_cancel_lock = threading.Lock()
+
+
+class TranslationCancelledError(Exception):
+    """Raised when translation is cancelled by user."""
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/papers", tags=["papers"])
@@ -514,6 +522,22 @@ async def start_translation(
     return {"ok": True, "status": "translating"}
 
 
+@router.post("/{paper_id}/cancel")
+async def cancel_translation(
+    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, bool | str]:
+    """Request cancellation of an in-progress translation.
+
+    The translation will stop at the next progress callback.
+    """
+    paper = await _get_paper_or_404(paper_id, db)
+    if paper.translation_status != TranslationStatus.TRANSLATING.value:
+        raise HTTPException(409, "Paper is not currently being translated")
+    with _cancel_lock:
+        _cancelled_papers.add(paper_id)
+    return {"ok": True, "status": "cancelling"}
+
+
 _BACKEND_API_KEY_ATTRS = {
     "deepseek": "deepseek_api_key",
     "openai": "openai_api_key",
@@ -686,6 +710,20 @@ async def _do_translate(
 
     try:
         trans_result = translate_pdf_sync(input_path, output_dir, config, on_progress)
+    except TranslationCancelledError:
+        elapsed = time.monotonic() - start_time
+        logger.info("Translation cancelled for paper %s", paper_id)
+        _append_log(paper_id, loop, f"翻译已取消 (耗时 {elapsed:.0f}秒)")
+        async with async_session() as db:
+            result = await db.execute(select(Paper).where(Paper.id == paper_id))
+            paper = result.scalar_one_or_none()
+            if paper:
+                paper.translation_status = TranslationStatus.PENDING.value
+                paper.translation_progress = 0.0
+                paper.translation_error = None
+                await db.commit()
+        cleanup_output_dir(output_dir)
+        return
     except Exception as e:
         elapsed = time.monotonic() - start_time
         logger.exception("Translation crashed for paper %s", paper_id)
@@ -768,6 +806,12 @@ def _create_progress_handler(
     _last_pct: list[float] = [0.0]
 
     def _on_progress(pct: float) -> None:
+        # Check for cancellation at every progress callback
+        with _cancel_lock:
+            if paper_id in _cancelled_papers:
+                _cancelled_papers.discard(paper_id)
+                raise TranslationCancelledError("Translation cancelled by user")
+
         if pct - _last_pct[0] < _PROGRESS_THROTTLE and pct < 1.0:
             return
         _last_pct[0] = pct
