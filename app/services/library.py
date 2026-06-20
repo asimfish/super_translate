@@ -89,9 +89,9 @@ def _find_large_text_in_line(line: dict) -> str | None:
     return None
 
 
-
 async def delete_paper_files(paper: Paper) -> None:
     """Delete all files associated with a paper."""
+
     def _delete_files() -> None:
         _safe_delete(settings.papers_path, paper.stored_filename)
         if paper.translated_filename:

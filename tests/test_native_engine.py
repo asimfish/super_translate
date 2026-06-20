@@ -97,10 +97,13 @@ class TranslateSyncNativeTests(unittest.TestCase):
             output_dir = tmp_path / "out"
             output_dir.mkdir()
 
-            with patch(
-                "pdf_zh_translator.pdf_layout.translate_pdf",
-                side_effect=RuntimeError("boom"),
-            ), self.assertRaises(RuntimeError):
+            with (
+                patch(
+                    "pdf_zh_translator.pdf_layout.translate_pdf",
+                    side_effect=RuntimeError("boom"),
+                ),
+                self.assertRaises(RuntimeError),
+            ):
                 _translate_sync_native(input_pdf, output_dir, config)
 
 

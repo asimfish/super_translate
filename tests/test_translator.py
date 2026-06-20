@@ -177,6 +177,7 @@ class TestQualityPresets(unittest.TestCase):
 
     def test_balanced_vfont_matches_math_fonts(self):
         import re
+
         pattern = QUALITY_PRESETS[QualityPreset.BALANCED]["vfont"]
         self.assertTrue(re.search(pattern, "CMMI10"))  # Computer Modern Math Italic
         self.assertTrue(re.search(pattern, "CMSY10"))  # Computer Modern Symbols
@@ -185,6 +186,7 @@ class TestQualityPresets(unittest.TestCase):
 
     def test_quality_vchar_matches_greek(self):
         import re
+
         pattern = QUALITY_PRESETS[QualityPreset.QUALITY]["vchar"]
         self.assertTrue(re.search(pattern, "α"))
         self.assertTrue(re.search(pattern, "∑"))
@@ -214,15 +216,17 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.FAST,
         )
 
-        with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                result = translate_pdf_sync(
-                    Path("/tmp/input.pdf"),
-                    Path("/tmp/output"),
-                    config,
-                )
-                # Should succeed (no error)
-                self.assertIsNone(result.error)
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.glob", return_value=[]),
+        ):
+            result = translate_pdf_sync(
+                Path("/tmp/input.pdf"),
+                Path("/tmp/output"),
+                config,
+            )
+            # Should succeed (no error)
+            self.assertIsNone(result.error)
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
@@ -237,15 +241,17 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                result = translate_pdf_sync(
-                    Path("/tmp/input.pdf"),
-                    Path("/tmp/output"),
-                    config,
-                )
-                # Should succeed with fallback
-                self.assertIsNone(result.error)
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.glob", return_value=[]),
+        ):
+            result = translate_pdf_sync(
+                Path("/tmp/input.pdf"),
+                Path("/tmp/output"),
+                config,
+            )
+            # Should succeed with fallback
+            self.assertIsNone(result.error)
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
@@ -298,20 +304,23 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                result = translate_pdf_sync(
-                    Path("/tmp/input.pdf"),
-                    Path("/tmp/output"),
-                    config,
-                )
-                self.assertIsNone(result.error)
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.glob", return_value=[]),
+        ):
+            result = translate_pdf_sync(
+                Path("/tmp/input.pdf"),
+                Path("/tmp/output"),
+                config,
+            )
+            self.assertIsNone(result.error)
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
     def test_openai_uses_env_var_key(self, mock_get_model, mock_translate):
         """Test that OpenAI reads API key from env when config has none."""
         import os
+
         mock_get_model.return_value = MagicMock()
         captured_envs = {}
 
@@ -324,9 +333,11 @@ class TestTranslatePdfSync(unittest.TestCase):
         try:
             config = TranslationConfig(backend="openai", api_key="", quality=QualityPreset.BALANCED)
 
-            with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                    translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
+            with (
+                patch("pathlib.Path.exists", return_value=True),
+                patch("pathlib.Path.glob", return_value=[]),
+            ):
+                translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
             self.assertEqual(captured_envs.get("OPENAI_API_KEY"), "env-key-123")
         finally:
@@ -352,9 +363,11 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.glob", return_value=[]),
+        ):
+            translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
         self.assertEqual(captured_envs.get("DEEPSEEK_API_KEY"), "test-key-123")
         self.assertEqual(captured_envs.get("DEEPSEEK_MODEL"), "deepseek-v4")
@@ -379,9 +392,11 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.glob", return_value=[]),
+        ):
+            translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
         self.assertEqual(captured_envs.get("OPENAI_API_KEY"), "sk-test")
         self.assertEqual(captured_envs.get("OPENAI_BASE_URL"), "https://custom.openai.com/v1")
@@ -406,9 +421,11 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.glob", return_value=[]),
+        ):
+            translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
         self.assertEqual(captured_envs.get("DEEPSEEK_API_KEY"), "ds-key")
         self.assertEqual(captured_envs.get("DEEPSEEK_MODEL"), "deepseek-v4-pro")
@@ -434,21 +451,24 @@ class TestTranslatePdfSync(unittest.TestCase):
             max_retries=2,
         )
 
-        with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                result = translate_pdf_sync(
-                    Path("/tmp/input.pdf"),
-                    Path("/tmp/output"),
-                    config,
-                )
-                self.assertIsNone(result.error)
-                self.assertEqual(call_count[0], 2)
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.glob", return_value=[]),
+        ):
+            result = translate_pdf_sync(
+                Path("/tmp/input.pdf"),
+                Path("/tmp/output"),
+                config,
+            )
+            self.assertIsNone(result.error)
+            self.assertEqual(call_count[0], 2)
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
     def test_retry_cleans_up_partial_files(self, mock_get_model, mock_translate):
         """Test that partial output files are deleted on retry failure."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         call_count = [0]
         output_dir_ref = [None]
@@ -496,6 +516,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_layout_fix_called_on_output(self, mock_get_model, mock_translate, mock_fix):
         """Test that layout fix is applied to translated output files."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
         mock_fix.return_value = True
@@ -525,6 +546,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_layout_fix_failure_is_non_fatal(self, mock_get_model, mock_translate, mock_fix):
         """Test that layout fix failure doesn't break translation."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
         mock_fix.side_effect = Exception("Font not found")
@@ -558,23 +580,26 @@ class TestTranslatePdfSync(unittest.TestCase):
             max_retries=1,
         )
 
-        with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                result = translate_pdf_sync(
-                    Path("/tmp/input.pdf"),
-                    Path("/tmp/output"),
-                    config,
-                )
-                self.assertIsNotNone(result.error)
-                self.assertIn("Persistent API error", result.error)
-                # Should have been called 2 times (initial + 1 retry)
-                self.assertEqual(mock_translate.call_count, 2)
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.glob", return_value=[]),
+        ):
+            result = translate_pdf_sync(
+                Path("/tmp/input.pdf"),
+                Path("/tmp/output"),
+                config,
+            )
+            self.assertIsNotNone(result.error)
+            self.assertIn("Persistent API error", result.error)
+            # Should have been called 2 times (initial + 1 retry)
+            self.assertEqual(mock_translate.call_count, 2)
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
     def test_finds_mono_dual_output_files(self, mock_get_model, mock_translate):
         """Test that translated/dual output files are correctly found."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
 
@@ -600,6 +625,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_finds_alternative_output_names(self, mock_get_model, mock_translate):
         """Test fallback when expected file names don't match."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
 
@@ -625,6 +651,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_fallback_to_any_pdf_when_no_mono_dual(self, mock_get_model, mock_translate):
         """Test fallback to any PDF when no mono/dual files found."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
 
@@ -648,6 +675,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_no_output_files_returns_error(self, mock_get_model, mock_translate):
         """Test error when pdf2zh produces no output files."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
 
@@ -670,6 +698,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_callback_with_two_args(self, mock_get_model, mock_translate):
         """Test pdf2zh callback with (current, total) arguments."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
 
@@ -699,6 +728,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_callback_with_one_arg(self, mock_get_model, mock_translate):
         """Test pdf2zh callback with single (percentage) argument."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
 
@@ -727,6 +757,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_callback_with_no_args_is_noop(self, mock_get_model, mock_translate):
         """Test pdf2zh callback with no arguments returns early."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
 
@@ -754,6 +785,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_callback_with_tqdm_object(self, mock_get_model, mock_translate):
         """Test pdf2zh callback extracts progress from tqdm object."""
         import tempfile
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
 
@@ -792,6 +824,7 @@ class TestTranslatePdfSync(unittest.TestCase):
     def test_os_environ_not_mutated(self, mock_get_model, mock_translate):
         """Test that os.environ is NOT mutated during translation."""
         import os
+
         mock_get_model.return_value = MagicMock()
         mock_translate.return_value = None
 
@@ -804,9 +837,11 @@ class TestTranslatePdfSync(unittest.TestCase):
             quality=QualityPreset.BALANCED,
         )
 
-        with patch("pathlib.Path.exists", return_value=True), \
-     patch("pathlib.Path.glob", return_value=[]):
-                translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.glob", return_value=[]),
+        ):
+            translate_pdf_sync(Path("/tmp/input.pdf"), Path("/tmp/output"), config)
 
         # os.environ should NOT contain the temp key
         self.assertIsNone(os.environ.get("DEEPSEEK_API_KEY"))
@@ -817,6 +852,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_unix_paths(self):
         from app.services.translator import sanitize_error
+
         err = FileNotFoundError("/Users/admin/project/data/papers/test.pdf not found")
         result = sanitize_error(err)
         self.assertNotIn("/Users/admin", result)
@@ -824,24 +860,28 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_windows_paths(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Error at C:\\Users\\admin\\file.txt")
         result = sanitize_error(err)
         self.assertNotIn("C:\\Users", result)
 
     def test_truncates_long_messages(self):
         from app.services.translator import sanitize_error
+
         err = Exception("x" * 500)
         result = sanitize_error(err)
         self.assertLessEqual(len(result), 210)  # 200 + "..."
 
     def test_preserves_short_messages(self):
         from app.services.translator import sanitize_error
+
         err = ValueError("Invalid format")
         result = sanitize_error(err)
         self.assertIn("Invalid format", result)
 
     def test_handles_api_errors(self):
         from app.services.translator import sanitize_error
+
         err = Exception("DeepSeek API error: 401 Unauthorized")
         result = sanitize_error(err)
         self.assertIn("401", result)
@@ -849,6 +889,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_ip_addresses(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Timeout connecting to 192.168.1.100:3306")
         result = sanitize_error(err)
         self.assertNotIn("192.168.1.100", result)
@@ -857,6 +898,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_hostnames_with_ports(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Connection to api.deepseek.com:443 failed")
         result = sanitize_error(err)
         self.assertNotIn("api.deepseek.com", result)
@@ -864,6 +906,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_ipv6_bracketed(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Connection to [::1]:8080 failed")
         result = sanitize_error(err)
         self.assertNotIn("[::1]", result)
@@ -872,6 +915,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_ipv6_bare(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Connection to 2001:db8::1:443 failed")
         result = sanitize_error(err)
         self.assertNotIn("2001:db8::1", result)
@@ -879,6 +923,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_localhost_with_port(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Connection refused at localhost:8080")
         result = sanitize_error(err)
         self.assertNotIn("localhost:8080", result)
@@ -886,6 +931,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_bearer_token(self):
         from app.services.translator import sanitize_error
+
         err = Exception("HTTP 401: Authorization: Bearer sk-abc123def456ghi789jkl012mno345")
         result = sanitize_error(err)
         self.assertNotIn("sk-abc123def456ghi789jkl012mno345", result)
@@ -893,6 +939,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_sk_prefixed_key(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Invalid API key sk-proj-abc123def456ghi789jkl012mno345pqr678")
         result = sanitize_error(err)
         self.assertNotIn("sk-proj-", result)
@@ -900,6 +947,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_api_key_query_param(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Request failed: api_key=sk-secret123abc456def789")
         result = sanitize_error(err)
         self.assertNotIn("sk-secret123abc456def789", result)
@@ -907,6 +955,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_env_var_api_key(self):
         from app.services.translator import sanitize_error
+
         err = Exception("DEEPSEEK_API_KEY=sk-abc123def456ghi789jkl012mno345pqr678stu901")
         result = sanitize_error(err)
         self.assertNotIn("sk-abc123def456ghi789", result)
@@ -914,6 +963,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_openai_key_in_error(self):
         from app.services.translator import sanitize_error
+
         err = Exception("OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012")
         result = sanitize_error(err)
         self.assertNotIn("sk-proj-abc123", result)
@@ -921,6 +971,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_bearer_short_token(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Auth failed: Bearer abc123xyz")
         result = sanitize_error(err)
         self.assertNotIn("abc123xyz", result)
@@ -928,6 +979,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_aws_access_key(self):
         from app.services.translator import sanitize_error
+
         err = Exception("AWS error with key AKIAIOSFODNN7EXAMPLE")
         result = sanitize_error(err)
         self.assertNotIn("AKIAIOSFODNN7EXAMPLE", result)
@@ -935,6 +987,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_github_token(self):
         from app.services.translator import sanitize_error
+
         err = Exception("GitHub auth failed: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef12")
         result = sanitize_error(err)
         self.assertNotIn("ghp_ABCDEF", result)
@@ -942,6 +995,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_jwt_token(self):
         from app.services.translator import sanitize_error
+
         jwt = (
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
             ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"
@@ -954,6 +1008,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_connection_string(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Connection failed: mongodb://admin:secret123@db.example.com:27017/mydb")
         result = sanitize_error(err)
         self.assertNotIn("secret123", result)
@@ -961,6 +1016,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_postgresql_connection_string(self):
         from app.services.translator import sanitize_error
+
         err = Exception("DSN: postgresql://user:pass@localhost:5432/dbname")
         result = sanitize_error(err)
         self.assertNotIn("pass@", result)
@@ -968,6 +1024,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_removes_private_key_header(self):
         from app.services.translator import sanitize_error
+
         err = Exception("Failed to load -----BEGIN RSA PRIVATE KEY-----")
         result = sanitize_error(err)
         self.assertNotIn("BEGIN RSA", result)
@@ -975,6 +1032,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_early_truncation_for_redos_prevention(self):
         from app.services.translator import sanitize_error
+
         # A message longer than 500 chars should be truncated before regex processing
         long_msg = "A" * 600
         err = Exception(long_msg)
@@ -984,6 +1042,7 @@ class TestSanitizeError(unittest.TestCase):
 
     def test_final_truncation_at_200_chars(self):
         from app.services.translator import sanitize_error
+
         # A message between 200 and 500 chars should be truncated at final stage
         msg = "B" * 300
         err = Exception(msg)
@@ -997,11 +1056,13 @@ class TestResolveService(unittest.TestCase):
 
     def test_google_passthrough(self):
         from app.services.translator import _resolve_service
+
         config = TranslationConfig(backend="google")
         self.assertEqual(_resolve_service(config, "google"), "google")
 
     def test_deepseek_with_key(self):
         from app.services.translator import _resolve_service
+
         config = TranslationConfig(backend="deepseek", api_key="test-key")
         self.assertEqual(_resolve_service(config, "google"), "deepseek")
 
@@ -1009,6 +1070,7 @@ class TestResolveService(unittest.TestCase):
         import os
 
         from app.services.translator import _resolve_service
+
         os.environ.pop("DEEPSEEK_API_KEY", None)
         config = TranslationConfig(backend="deepseek", api_key="")
         self.assertEqual(_resolve_service(config, "google"), "google")
@@ -1017,12 +1079,14 @@ class TestResolveService(unittest.TestCase):
         import os
 
         from app.services.translator import _resolve_service
+
         os.environ.pop("OPENAI_API_KEY", None)
         config = TranslationConfig(backend="openai", api_key="")
         self.assertEqual(_resolve_service(config, "deepl"), "deepl")
 
     def test_unknown_backend_defaults_google(self):
         from app.services.translator import _resolve_service
+
         config = TranslationConfig(backend="unknown")
         self.assertEqual(_resolve_service(config, "google"), "google")
 
@@ -1030,6 +1094,7 @@ class TestResolveService(unittest.TestCase):
         import os
 
         from app.services.translator import _resolve_service
+
         os.environ.pop("DEEPL_API_KEY", None)
         config = TranslationConfig(backend="deepl", api_key="")
         self.assertEqual(_resolve_service(config, "google"), "google")
@@ -1040,6 +1105,7 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
 
     def test_deepseek_all_fields(self):
         from app.services.translator import _build_pdf2zh_envs
+
         config = TranslationConfig(backend="deepseek", api_key="key", model="ds-v4")
         env = _build_pdf2zh_envs("deepseek", config)
         self.assertEqual(env["DEEPSEEK_API_KEY"], "key")
@@ -1047,9 +1113,12 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
 
     def test_openai_all_fields(self):
         from app.services.translator import _build_pdf2zh_envs
+
         config = TranslationConfig(
-            backend="openai", api_key="sk-test",
-            base_url="https://api.openai.com/v1", model="gpt-4o",
+            backend="openai",
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1",
+            model="gpt-4o",
         )
         env = _build_pdf2zh_envs("openai", config)
         self.assertEqual(env["OPENAI_API_KEY"], "sk-test")
@@ -1058,11 +1127,13 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
 
     def test_google_returns_empty(self):
         from app.services.translator import _build_pdf2zh_envs
+
         config = TranslationConfig(backend="google")
         self.assertEqual(_build_pdf2zh_envs("google", config), {})
 
     def test_deepseek_no_optional_fields(self):
         from app.services.translator import _build_pdf2zh_envs
+
         config = TranslationConfig(backend="deepseek", api_key="key")
         env = _build_pdf2zh_envs("deepseek", config)
         self.assertEqual(env, {"DEEPSEEK_API_KEY": "key"})
@@ -1071,12 +1142,14 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
         import os
 
         from app.services.translator import _build_pdf2zh_envs
+
         os.environ.pop("DEEPSEEK_API_KEY", None)
         config = TranslationConfig(backend="deepseek", api_key="")
         self.assertEqual(_build_pdf2zh_envs("deepseek", config), {})
 
     def test_deepl_with_config_key(self):
         from app.services.translator import _build_pdf2zh_envs
+
         config = TranslationConfig(backend="deepl", api_key="dl-key")
         env = _build_pdf2zh_envs("deepl", config)
         self.assertEqual(env, {"DEEPL_API_KEY": "dl-key"})
@@ -1085,6 +1158,7 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
         import os
 
         from app.services.translator import _build_pdf2zh_envs
+
         os.environ["DEEPL_API_KEY"] = "env-key"
         config = TranslationConfig(backend="deepl", api_key="")
         env = _build_pdf2zh_envs("deepl", config)
@@ -1093,6 +1167,7 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
 
     def test_ollama_with_base_url(self):
         from app.services.translator import _build_pdf2zh_envs
+
         config = TranslationConfig(backend="ollama", base_url="http://localhost:11434")
         env = _build_pdf2zh_envs("ollama", config)
         self.assertEqual(env, {"OLLAMA_HOST": "http://localhost:11434"})
@@ -1101,6 +1176,7 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
         import os
 
         from app.services.translator import _build_pdf2zh_envs
+
         os.environ["OLLAMA_HOST"] = "http://remote:11434"
         config = TranslationConfig(backend="ollama", base_url="")
         env = _build_pdf2zh_envs("ollama", config)
@@ -1109,6 +1185,7 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
 
     def test_no_output_files_returns_error(self):
         from app.services.translator import TranslationResult
+
         result = TranslationResult(error="Translation produced no output files")
         self.assertFalse(result.success)
         self.assertIn("no output", result.error)
@@ -1188,24 +1265,28 @@ class TestUseNativeEngine(unittest.TestCase):
 
     def test_native_engine_for_deepseek(self):
         from app.services.translator import TranslationConfig, _use_native_engine
+
         config = TranslationConfig(backend="deepseek")
         with patch("app.core.config.settings.translation_engine", "native"):
             self.assertTrue(_use_native_engine(config))
 
     def test_native_engine_for_openai(self):
         from app.services.translator import TranslationConfig, _use_native_engine
+
         config = TranslationConfig(backend="openai")
         with patch("app.core.config.settings.translation_engine", "native"):
             self.assertTrue(_use_native_engine(config))
 
     def test_native_engine_disabled_for_google(self):
         from app.services.translator import TranslationConfig, _use_native_engine
+
         config = TranslationConfig(backend="google")
         with patch("app.core.config.settings.translation_engine", "native"):
             self.assertFalse(_use_native_engine(config))
 
     def test_native_engine_disabled_when_engine_is_pdf2zh(self):
         from app.services.translator import TranslationConfig, _use_native_engine
+
         config = TranslationConfig(backend="deepseek")
         with patch("app.core.config.settings.translation_engine", "pdf2zh"):
             self.assertFalse(_use_native_engine(config))
@@ -1309,6 +1390,7 @@ class TestTranslateSyncNative(unittest.TestCase):
             mono_path = tmp / "test-mono.pdf"
 
             call_count = [0]
+
             def side_effect(**kwargs):
                 call_count[0] += 1
                 if call_count[0] == 1:

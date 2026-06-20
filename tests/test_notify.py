@@ -34,6 +34,7 @@ class TestSendFeishuNotification(unittest.TestCase):
 
     def test_url_error_returns_false(self):
         from urllib.error import URLError
+
         with patch("app.services.notify.urlopen", side_effect=URLError("fail")):
             result = send_feishu_notification("https://hook.example.com", "Test", "Hello")
         self.assertFalse(result)

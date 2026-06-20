@@ -279,11 +279,12 @@ class TestPaperUploadEndpoint:
             b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
         )
 
-        with patch("app.api.papers.generate_stored_filename") as mock_gen, \
-             patch("app.api.papers.settings") as mock_settings, \
-             patch("app.api.papers.get_pdf_info") as mock_info, \
-             patch("app.api.papers.extract_title_from_pdf") as mock_title:
-
+        with (
+            patch("app.api.papers.generate_stored_filename") as mock_gen,
+            patch("app.api.papers.settings") as mock_settings,
+            patch("app.api.papers.get_pdf_info") as mock_info,
+            patch("app.api.papers.extract_title_from_pdf") as mock_title,
+        ):
             mock_gen.return_value = "stored_test.pdf"
             mock_settings.papers_path = tmp_path
             mock_settings.translations_path = tmp_path
@@ -326,20 +327,22 @@ class TestPaperUploadEndpoint:
         pdf_content = b"%PDF-1.4 test\n%%EOF"
         stored_path = tmp_path / "stored_test.pdf"
 
-        with patch("app.api.papers.generate_stored_filename") as mock_gen, \
-             patch("app.api.papers.settings") as mock_settings, \
-             patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")), \
-             TestClient(app, raise_server_exceptions=False) as c:
-                mock_gen.return_value = "stored_test.pdf"
-                mock_settings.papers_path = tmp_path
-                mock_settings.translations_path = tmp_path
-                mock_settings.max_upload_size = 100 * 1024 * 1024
-                mock_settings.upload_chunk_size = 1024 * 1024
-                resp = c.post(
-                    "/api/papers/upload",
-                    files={"file": ("test.pdf", pdf_content, "application/pdf")},
-                    data={"tags": ""},
-                )
+        with (
+            patch("app.api.papers.generate_stored_filename") as mock_gen,
+            patch("app.api.papers.settings") as mock_settings,
+            patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")),
+            TestClient(app, raise_server_exceptions=False) as c,
+        ):
+            mock_gen.return_value = "stored_test.pdf"
+            mock_settings.papers_path = tmp_path
+            mock_settings.translations_path = tmp_path
+            mock_settings.max_upload_size = 100 * 1024 * 1024
+            mock_settings.upload_chunk_size = 1024 * 1024
+            resp = c.post(
+                "/api/papers/upload",
+                files={"file": ("test.pdf", pdf_content, "application/pdf")},
+                data={"tags": ""},
+            )
         assert not stored_path.exists(), "Orphaned file should be cleaned up"
         assert resp.status_code == 500
         assert "corrupt PDF" not in resp.text, "Error must not leak internal details"
@@ -352,21 +355,23 @@ class TestPaperUploadEndpoint:
         # Make db.commit() raise to simulate DB failure
         mock_db.commit = AsyncMock(side_effect=Exception("disk full"))
 
-        with patch("app.api.papers.generate_stored_filename") as mock_gen, \
-             patch("app.api.papers.settings") as mock_settings, \
-             patch("app.api.papers.get_pdf_info", return_value=((1, 100), "Test")), \
-             patch("app.api.papers.extract_title_from_pdf", return_value="Test"), \
-             TestClient(app, raise_server_exceptions=False) as c:
-                mock_gen.return_value = "stored_test.pdf"
-                mock_settings.papers_path = tmp_path
-                mock_settings.translations_path = tmp_path
-                mock_settings.max_upload_size = 100 * 1024 * 1024
-                mock_settings.upload_chunk_size = 1024 * 1024
-                resp = c.post(
-                    "/api/papers/upload",
-                    files={"file": ("test.pdf", pdf_content, "application/pdf")},
-                    data={"tags": ""},
-                )
+        with (
+            patch("app.api.papers.generate_stored_filename") as mock_gen,
+            patch("app.api.papers.settings") as mock_settings,
+            patch("app.api.papers.get_pdf_info", return_value=((1, 100), "Test")),
+            patch("app.api.papers.extract_title_from_pdf", return_value="Test"),
+            TestClient(app, raise_server_exceptions=False) as c,
+        ):
+            mock_gen.return_value = "stored_test.pdf"
+            mock_settings.papers_path = tmp_path
+            mock_settings.translations_path = tmp_path
+            mock_settings.max_upload_size = 100 * 1024 * 1024
+            mock_settings.upload_chunk_size = 1024 * 1024
+            resp = c.post(
+                "/api/papers/upload",
+                files={"file": ("test.pdf", pdf_content, "application/pdf")},
+                data={"tags": ""},
+            )
         assert not stored_path.exists(), "Orphaned file should be cleaned up on commit failure"
         assert resp.status_code == 500
 
@@ -380,20 +385,22 @@ class TestPaperUploadEndpoint:
                 raise OSError("/data/papers/abc123 locked by another process")
             return orig_open(self, *args, **kwargs)
 
-        with patch("app.api.papers.generate_stored_filename") as mock_gen, \
-             patch("app.api.papers.settings") as mock_settings, \
-             patch.object(Path, "open", mock_open), \
-             TestClient(app, raise_server_exceptions=False) as c:
-                mock_gen.return_value = "stored_test.pdf"
-                mock_settings.papers_path = tmp_path
-                mock_settings.translations_path = tmp_path
-                mock_settings.max_upload_size = 100 * 1024 * 1024
-                mock_settings.upload_chunk_size = 1024 * 1024
-                resp = c.post(
-                    "/api/papers/upload",
-                    files={"file": ("test.pdf", pdf_content, "application/pdf")},
-                    data={"tags": ""},
-                )
+        with (
+            patch("app.api.papers.generate_stored_filename") as mock_gen,
+            patch("app.api.papers.settings") as mock_settings,
+            patch.object(Path, "open", mock_open),
+            TestClient(app, raise_server_exceptions=False) as c,
+        ):
+            mock_gen.return_value = "stored_test.pdf"
+            mock_settings.papers_path = tmp_path
+            mock_settings.translations_path = tmp_path
+            mock_settings.max_upload_size = 100 * 1024 * 1024
+            mock_settings.upload_chunk_size = 1024 * 1024
+            resp = c.post(
+                "/api/papers/upload",
+                files={"file": ("test.pdf", pdf_content, "application/pdf")},
+                data={"tags": ""},
+            )
         assert resp.status_code == 500
         body = resp.json()
         assert "/data/papers" not in body.get("detail", "")
@@ -749,6 +756,7 @@ class TestDownloadEndpoints:
     def test_download_original_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful original PDF download."""
         from unittest.mock import patch as _patch
+
         sample_paper.stored_filename = "test.pdf"
         (tmp_path / "test.pdf").write_bytes(b"%PDF-1.4 fake content")
 
@@ -765,6 +773,7 @@ class TestDownloadEndpoints:
     def test_view_original_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful original PDF view."""
         from unittest.mock import patch as _patch
+
         sample_paper.stored_filename = "test.pdf"
         (tmp_path / "test.pdf").write_bytes(b"%PDF-1.4 fake content")
 
@@ -780,6 +789,7 @@ class TestDownloadEndpoints:
     def test_view_translated_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful translated PDF view."""
         from unittest.mock import patch as _patch
+
         sample_paper.translated_filename = "paper123/mono.pdf"
         (tmp_path / "paper123").mkdir()
         (tmp_path / "paper123" / "mono.pdf").write_bytes(b"%PDF-1.4 translated")
@@ -796,6 +806,7 @@ class TestDownloadEndpoints:
     def test_download_translated_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful translated PDF download."""
         from unittest.mock import patch as _patch
+
         sample_paper.translated_filename = "paper123/mono.pdf"
         sample_paper.original_filename = "paper.pdf"
         (tmp_path / "paper123").mkdir()
@@ -814,6 +825,7 @@ class TestDownloadEndpoints:
     def test_download_dual_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful dual PDF download."""
         from unittest.mock import patch as _patch
+
         sample_paper.dual_filename = "paper123/dual.pdf"
         sample_paper.original_filename = "paper.pdf"
         (tmp_path / "paper123").mkdir()
@@ -851,6 +863,7 @@ class TestStatsEndpoint:
     def test_stats_caching(self, client):
         """Stats should be cached and not hit DB on repeated calls."""
         import app.main as main_module
+
         # Reset cache
         main_module._stats_cache = None
         main_module._stats_cache_time = 0.0
@@ -986,19 +999,23 @@ class TestHelpers:
 
     def test_file_exists_safe_valid(self, tmp_path):
         from app.api.papers import _file_exists_safe
+
         (tmp_path / "test.pdf").write_bytes(b"content")
         assert _file_exists_safe(tmp_path, "test.pdf") is True
 
     def test_file_exists_safe_missing(self, tmp_path):
         from app.api.papers import _file_exists_safe
+
         assert _file_exists_safe(tmp_path, "nonexistent.pdf") is False
 
     def test_file_exists_safe_none(self, tmp_path):
         from app.api.papers import _file_exists_safe
+
         assert _file_exists_safe(tmp_path, None) is False
 
     def test_file_exists_safe_traversal(self, tmp_path):
         from app.api.papers import _file_exists_safe
+
         # Should reject path traversal even if file exists
         (tmp_path.parent / "secret.pdf").write_bytes(b"secret")
         assert _file_exists_safe(tmp_path, "../secret.pdf") is False
@@ -1006,6 +1023,7 @@ class TestHelpers:
     def test_file_exists_safe_with_precomputed_base(self, tmp_path):
 
         from app.api.papers import _file_exists_safe
+
         (tmp_path / "test.pdf").write_bytes(b"content")
         resolved = tmp_path.resolve()
         # Precomputed base should work the same
@@ -1015,6 +1033,7 @@ class TestHelpers:
 
     def test_get_paper_file_valid(self, tmp_path):
         from app.api.papers import _get_paper_file
+
         (tmp_path / "test.pdf").write_bytes(b"content")
         paper = MagicMock()
         paper.stored_filename = "test.pdf"
@@ -1023,6 +1042,7 @@ class TestHelpers:
 
     def test_get_paper_file_missing_attr(self, tmp_path):
         from app.api.papers import _get_paper_file
+
         paper = MagicMock()
         paper.stored_filename = None
         with pytest.raises(HTTPException) as exc_info:
@@ -1031,6 +1051,7 @@ class TestHelpers:
 
     def test_get_paper_file_traversal(self, tmp_path):
         from app.api.papers import _get_paper_file
+
         paper = MagicMock()
         paper.stored_filename = "../../etc/passwd"
         with pytest.raises(HTTPException) as exc_info:
@@ -1039,27 +1060,33 @@ class TestHelpers:
 
     def test_escape_like_percent(self):
         from app.api.papers import _escape_like
+
         assert _escape_like("100%") == "100\\%"
 
     def test_escape_like_underscore(self):
         from app.api.papers import _escape_like
+
         assert _escape_like("some_thing") == "some\\_thing"
 
     def test_escape_like_backslash(self):
         from app.api.papers import _escape_like
+
         assert _escape_like("path\\file") == "path\\\\file"
 
     def test_escape_like_combined(self):
         from app.api.papers import _escape_like
+
         assert _escape_like("%test_value\\") == "\\%test\\_value\\\\"
 
     def test_escape_like_no_special_chars(self):
         from app.api.papers import _escape_like
+
         assert _escape_like("normal search") == "normal search"
 
     def test_resolve_backend_config_google(self):
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
+
         config = _resolve_backend_config("google", QualityPreset.BALANCED)
         assert config.backend == "google"
         assert config.api_key == ""
@@ -1067,6 +1094,7 @@ class TestHelpers:
     def test_resolve_backend_config_fast_forces_google(self):
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
+
         config = _resolve_backend_config("deepseek", QualityPreset.FAST)
         assert config.backend == "google"
         assert config.api_key == ""
@@ -1076,6 +1104,7 @@ class TestHelpers:
 
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
+
         with patch("app.api.papers.settings") as mock_settings:
             mock_settings.deepseek_api_key = SecretStr("test-key")
             mock_settings.deepseek_model = "deepseek-v4"
@@ -1089,6 +1118,7 @@ class TestHelpers:
 
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
+
         with patch("app.api.papers.settings") as mock_settings:
             mock_settings.openai_api_key = SecretStr("oa-key")
             mock_settings.openai_base_url = "https://api.openai.com/v1"
@@ -1104,6 +1134,7 @@ class TestHelpers:
 
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
+
         with patch("app.api.papers.settings") as mock_settings:
             mock_settings.deepl_api_key = SecretStr("dl-test-key")
             config = _resolve_backend_config("deepl", QualityPreset.BALANCED)
@@ -1113,6 +1144,7 @@ class TestHelpers:
     def test_resolve_backend_config_ollama(self):
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
+
         with patch("app.api.papers.settings") as mock_settings:
             mock_settings.ollama_host = "http://localhost:11434"
             config = _resolve_backend_config("ollama", QualityPreset.BALANCED)
@@ -1124,8 +1156,11 @@ class TestHelpers:
 
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
-        with patch("app.api.papers.settings") as mock_settings, \
-             patch.dict("os.environ", {}, clear=True):
+
+        with (
+            patch("app.api.papers.settings") as mock_settings,
+            patch.dict("os.environ", {}, clear=True),
+        ):
             mock_settings.deepseek_api_key = SecretStr("")
             with pytest.raises(HTTPException) as exc_info:
                 _resolve_backend_config("deepseek", QualityPreset.BALANCED)
@@ -1137,6 +1172,7 @@ class TestHelpers:
 
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
+
         with patch("app.api.papers.settings") as mock_settings:
             mock_settings.deepseek_api_key = SecretStr("")
             config = _resolve_backend_config("deepseek", QualityPreset.FAST)
@@ -1459,9 +1495,7 @@ class TestRunTranslation:
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
-    def test_cancellation_resets_to_pending(
-        self, mock_settings, mock_translate, tmp_path
-    ):
+    def test_cancellation_resets_to_pending(self, mock_settings, mock_translate, tmp_path):
         """Test that cancelling a translation resets paper to pending status."""
         from app.api.papers import (
             _cancel_lock,
@@ -1619,7 +1653,8 @@ class TestRunTranslation:
         paper.translation_status = "translating"
 
         with patch.object(
-            papers_mod, "_resolve_backend_config",
+            papers_mod,
+            "_resolve_backend_config",
             side_effect=Exception("Config error"),
         ):
             reset_db = AsyncMock()
@@ -1829,8 +1864,10 @@ class TestRunTranslation:
 
         handler = _create_progress_handler("paper123", loop)
 
-        with patch("app.core.database.async_session", session_mock), \
-             patch.object(asyncio, "run_coroutine_threadsafe", side_effect=fake_run_coro):
+        with (
+            patch("app.core.database.async_session", session_mock),
+            patch.object(asyncio, "run_coroutine_threadsafe", side_effect=fake_run_coro),
+        ):
             handler(0.5)
 
         # execute called for: progress update + log read + log write
@@ -1859,8 +1896,10 @@ class TestRunTranslation:
             asyncio.run(coro)
             return MagicMock()
 
-        with patch("app.core.database.async_session", session_mock), \
-             patch.object(asyncio, "run_coroutine_threadsafe", side_effect=fake_run_coro):
+        with (
+            patch("app.core.database.async_session", session_mock),
+            patch.object(asyncio, "run_coroutine_threadsafe", side_effect=fake_run_coro),
+        ):
             _append_log("paper123", loop, "new message")
 
         # Verify the log was truncated
@@ -2057,6 +2096,7 @@ class TestInitDb:
 
         # Verify tables were created
         import sqlalchemy as sa
+
         async with test_engine.connect() as conn:
             result = await conn.run_sync(
                 lambda sync_conn: sync_conn.execute(
@@ -2085,12 +2125,12 @@ class TestInitDb:
             await init_db()
 
         import sqlalchemy as sa
+
         async with test_engine.connect() as conn:
             result = await conn.run_sync(
                 lambda sync_conn: sync_conn.execute(
                     sa.text(
-                        "SELECT name FROM sqlite_master"
-                        " WHERE type='index' AND name LIKE 'ix_%'"
+                        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'ix_%'"
                     )
                 ).fetchall()
             )
@@ -2129,14 +2169,17 @@ class TestGetSession:
             session = await gen.asend(None)
             # Add a paper but don't commit
             from app.models.paper import Paper
-            session.add(Paper(
-                id="rollback_test",
-                title="Should Be Rolled Back",
-                original_filename="test.pdf",
-                stored_filename="test.pdf",
-                file_size=100,
-                page_count=1,
-            ))
+
+            session.add(
+                Paper(
+                    id="rollback_test",
+                    title="Should Be Rolled Back",
+                    original_filename="test.pdf",
+                    stored_filename="test.pdf",
+                    file_size=100,
+                    page_count=1,
+                )
+            )
             # Simulate an exception — get_session should rollback
             with pytest.raises(ValueError, match="simulated"):
                 await gen.athrow(ValueError("simulated"))
@@ -2144,6 +2187,7 @@ class TestGetSession:
         # Verify the record was rolled back (not committed)
         async with test_engine.connect() as conn:
             import sqlalchemy as sa
+
             result = await conn.execute(
                 sa.text("SELECT COUNT(*) FROM papers WHERE id = 'rollback_test'")
             )
@@ -2159,6 +2203,7 @@ class TestCliFunction:
     def test_cli_default_args(self, mock_run):
         """Test CLI with default arguments."""
         from app.main import cli
+
         with patch("sys.argv", ["paper-china"]):
             cli()
         mock_run.assert_called_once()
@@ -2170,6 +2215,7 @@ class TestCliFunction:
     def test_cli_custom_port(self, mock_run):
         """Test CLI with custom port."""
         from app.main import cli
+
         with patch("sys.argv", ["paper-china", "--port", "9000"]):
             cli()
         assert mock_run.call_args[1]["port"] == 9000
@@ -2178,17 +2224,21 @@ class TestCliFunction:
     def test_cli_non_localhost_warns(self, mock_run):
         """Test that binding to non-localhost triggers a warning."""
         from app.main import cli
-        with patch("sys.argv", ["paper-china", "--host", "0.0.0.0"]), \
-             patch("app.main.logger") as mock_logger:
-                cli()
-                mock_logger.warning.assert_called_once()
-                assert "no authentication" in mock_logger.warning.call_args[0][0].lower()
+
+        with (
+            patch("sys.argv", ["paper-china", "--host", "0.0.0.0"]),
+            patch("app.main.logger") as mock_logger,
+        ):
+            cli()
+            mock_logger.warning.assert_called_once()
+            assert "no authentication" in mock_logger.warning.call_args[0][0].lower()
 
     @patch("app.main.webbrowser.open")
     @patch("uvicorn.run")
     def test_cli_open_browser(self, mock_run, mock_open):
         """Test --open flag opens browser."""
         from app.main import cli
+
         with patch("sys.argv", ["paper-china", "--open"]):
             cli()
         mock_open.assert_called_once_with("http://127.0.0.1:8000")

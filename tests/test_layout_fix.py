@@ -16,8 +16,10 @@ from app.services.layout_fix import (
 def _tb(bbox, text="text", font_size=10.0, idx=0):
     """Shorthand for creating TextBlockInfo in tests."""
     return TextBlockInfo(
-        bbox=bbox, text=text,
-        avg_font_size=font_size, block_index=idx,
+        bbox=bbox,
+        text=text,
+        avg_font_size=font_size,
+        block_index=idx,
     )
 
 
@@ -208,9 +210,7 @@ class TestNeedsFix(unittest.TestCase):
 
     def test_narrow_block_needs_fix(self):
         # Very narrow block with substantial text (width=23)
-        block = self._make_block(
-            (91, 100, 114, 120), text="This is a paragraph of text"
-        )
+        block = self._make_block((91, 100, 114, 120), text="This is a paragraph of text")
         self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
 
     def test_line_number_needs_fix(self):
@@ -257,6 +257,7 @@ class TestFindChineseFont(unittest.TestCase):
     def test_always_returns_china_ss(self):
         """Always returns china-ss to avoid \\xa0 artifacts from embedded fonts."""
         from app.services.layout_fix import _find_chinese_font
+
         page = unittest.mock.MagicMock()
         page.get_fonts.return_value = [(0, 0, 0, "SourceHanSerif-Regular", "F1")]
         self.assertEqual(_find_chinese_font(page), "china-ss")
@@ -264,6 +265,7 @@ class TestFindChineseFont(unittest.TestCase):
     def test_empty_font_list(self):
         """Returns china-ss when page has no fonts."""
         from app.services.layout_fix import _find_chinese_font
+
         page = unittest.mock.MagicMock()
         page.get_fonts.return_value = []
         self.assertEqual(_find_chinese_font(page), "china-ss")
@@ -273,6 +275,7 @@ class TestFindChineseFont(unittest.TestCase):
         page = unittest.mock.MagicMock()
         page.get_fonts.return_value = [(0, 0, 0)]
         from app.services.layout_fix import _find_chinese_font
+
         self.assertEqual(_find_chinese_font(page), "china-ss")
 
 
@@ -344,6 +347,7 @@ class TestExtractTextBlocks(unittest.TestCase):
     def test_skips_image_blocks(self):
         """Non-text blocks (type=1) are skipped."""
         from app.services.layout_fix import _extract_text_blocks
+
         blocks_data = [
             {"type": 1, "bbox": [0, 0, 100, 100]},  # image
             {
@@ -360,6 +364,7 @@ class TestExtractTextBlocks(unittest.TestCase):
     def test_skips_empty_text_blocks(self):
         """Blocks with no text content are skipped."""
         from app.services.layout_fix import _extract_text_blocks
+
         blocks_data = [
             {
                 "type": 0,
@@ -374,6 +379,7 @@ class TestExtractTextBlocks(unittest.TestCase):
     def test_cleans_null_bytes(self):
         """Blocks containing null bytes are cleaned, not skipped."""
         from app.services.layout_fix import _extract_text_blocks
+
         blocks_data = [
             {
                 "type": 0,
@@ -389,6 +395,7 @@ class TestExtractTextBlocks(unittest.TestCase):
     def test_skips_block_when_cleaning_leaves_empty_text(self):
         """Blocks that are only control characters are skipped after cleaning."""
         from app.services.layout_fix import _extract_text_blocks
+
         blocks_data = [
             {
                 "type": 0,
@@ -403,6 +410,7 @@ class TestExtractTextBlocks(unittest.TestCase):
     def test_empty_page(self):
         """Page with no blocks returns empty list."""
         from app.services.layout_fix import _extract_text_blocks
+
         page = self._make_page([])
         blocks = _extract_text_blocks(page)
         self.assertEqual(len(blocks), 0)
@@ -410,6 +418,7 @@ class TestExtractTextBlocks(unittest.TestCase):
     def test_joins_multiline_text(self):
         """Multiple lines are joined with newline."""
         from app.services.layout_fix import _extract_text_blocks
+
         blocks_data = [
             {
                 "type": 0,
@@ -432,6 +441,7 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
     def test_empty_page_returns_zero(self):
         """Page with no text blocks returns 0 fixed."""
         from app.services.layout_fix import _fix_page_layout
+
         page = unittest.mock.MagicMock()
         page.get_text.return_value = {"blocks": []}
         result = _fix_page_layout(page)
@@ -440,20 +450,30 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
     def test_small_column_width_returns_zero(self):
         """Page with very narrow layout returns 0 (can't determine layout)."""
         from app.services.layout_fix import _fix_page_layout
+
         page = unittest.mock.MagicMock()
-        page.get_text.return_value = {"blocks": [
-            {
-                "type": 0,
-                "bbox": [10, 100, 50, 120],
-                "lines": [{"spans": [{"text": "tiny", "size": 10.0}]}],
-            },
-        ]}
+        page.get_text.return_value = {
+            "blocks": [
+                {
+                    "type": 0,
+                    "bbox": [10, 100, 50, 120],
+                    "lines": [{"spans": [{"text": "tiny", "size": 10.0}]}],
+                },
+            ]
+        }
         # get_text("text", clip=...) for artifact detection returns clean text
         page.get_text.side_effect = lambda *a, **kw: (
-            "tiny" if a and a[0] == "text" else {"blocks": [
-                {"type": 0, "bbox": [10, 100, 50, 120],
-                 "lines": [{"spans": [{"text": "tiny", "size": 10.0}]}]},
-            ]}
+            "tiny"
+            if a and a[0] == "text"
+            else {
+                "blocks": [
+                    {
+                        "type": 0,
+                        "bbox": [10, 100, 50, 120],
+                        "lines": [{"spans": [{"text": "tiny", "size": 10.0}]}],
+                    },
+                ]
+            }
         )
         page.rect.height = 792
         page.get_fonts.return_value = []
@@ -463,6 +483,7 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
     def test_no_blocks_needing_fix_returns_zero(self):
         """Page with properly aligned blocks returns 0."""
         from app.services.layout_fix import _fix_page_layout
+
         blocks = [
             {
                 "type": 0,
@@ -478,8 +499,7 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
         page = unittest.mock.MagicMock()
         page.get_text.return_value = {"blocks": blocks}
         page.get_text.side_effect = lambda *a, **kw: (
-            ("a" * 50 + "\n" + "b" * 50) if a and a[0] == "text"
-            else {"blocks": blocks}
+            ("a" * 50 + "\n" + "b" * 50) if a and a[0] == "text" else {"blocks": blocks}
         )
         page.rect.height = 792
         page.rect.width = 612
@@ -497,6 +517,7 @@ class TestFixTranslatedLayout(unittest.TestCase):
         blocks: list of (x0, y0, x1, y1, text, fontsize)
         """
         import fitz
+
         doc = fitz.open()
         page = doc.new_page(width=612, height=792)
         for x0, y0, x1, y1, text, size in blocks:
@@ -540,8 +561,11 @@ class TestFixTranslatedLayout(unittest.TestCase):
             rect = fitz.Rect(200, 300, 504, 330)
             shape = page.new_shape()
             shape.insert_textbox(
-                rect, "Misaligned text that should be fixed.",
-                fontname="helv", fontsize=10, color=(0, 0, 0),
+                rect,
+                "Misaligned text that should be fixed.",
+                fontname="helv",
+                fontsize=10,
+                color=(0, 0, 0),
             )
             shape.commit()
             doc.save(path)
@@ -564,11 +588,14 @@ class TestFixTranslatedLayout(unittest.TestCase):
 
         try:
             # Create PDF with all blocks at correct position
-            self._create_test_pdf(path, [
-                (91, 100, 504, 120, "All blocks are at the correct left margin", 10),
-                (91, 130, 504, 150, "Every block has proper width for the column", 10),
-                (91, 180, 504, 200, "No fixes should be needed for this page", 10),
-            ])
+            self._create_test_pdf(
+                path,
+                [
+                    (91, 100, 504, 120, "All blocks are at the correct left margin", 10),
+                    (91, 130, 504, 150, "Every block has proper width for the column", 10),
+                    (91, 180, 504, 200, "No fixes should be needed for this page", 10),
+                ],
+            )
 
             result = fix_translated_layout(path)
             # May or may not fix depending on exact analysis, but should not crash
@@ -588,10 +615,13 @@ class TestFixTranslatedLayout(unittest.TestCase):
         out_path = in_path + ".fixed.pdf"
 
         try:
-            self._create_test_pdf(in_path, [
-                (91, 100, 504, 120, "Test content for output path", 10),
-                (91, 130, 504, 150, "More content to make it a valid page", 10),
-            ])
+            self._create_test_pdf(
+                in_path,
+                [
+                    (91, 100, 504, 120, "Test content for output path", 10),
+                    (91, 130, 504, 150, "More content to make it a valid page", 10),
+                ],
+            )
 
             result = fix_translated_layout(in_path, output_path=out_path)
             self.assertIsInstance(result, bool)
@@ -620,7 +650,9 @@ class TestCleanPageArtifacts(unittest.TestCase):
         shape.insert_textbox(
             fitz.Rect(91, 100, 504, 130),
             "Normal body text block for testing.",
-            fontname="helv", fontsize=10, color=(0, 0, 0),
+            fontname="helv",
+            fontsize=10,
+            color=(0, 0, 0),
         )
         shape.commit()
 
@@ -629,7 +661,9 @@ class TestCleanPageArtifacts(unittest.TestCase):
         shape.insert_textbox(
             fitz.Rect(91, 140, 504, 170),
             "Text with \x00 null byte artifact.",
-            fontname="helv", fontsize=10, color=(0, 0, 0),
+            fontname="helv",
+            fontsize=10,
+            color=(0, 0, 0),
         )
         shape.commit()
 
@@ -654,7 +688,9 @@ class TestCleanPageArtifacts(unittest.TestCase):
         shape.insert_textbox(
             fitz.Rect(91, 100, 504, 130),
             "Clean text without artifacts.",
-            fontname="helv", fontsize=10, color=(0, 0, 0),
+            fontname="helv",
+            fontsize=10,
+            color=(0, 0, 0),
         )
         shape.commit()
 
@@ -679,7 +715,9 @@ class TestCleanPageArtifacts(unittest.TestCase):
         shape.insert_textbox(
             fitz.Rect(91, 100, 504, 130),
             "Text with\xa0non-breaking space.",
-            fontname="helv", fontsize=10, color=(0, 0, 0),
+            fontname="helv",
+            fontsize=10,
+            color=(0, 0, 0),
         )
         shape.commit()
 
@@ -703,7 +741,9 @@ class TestCleanPageArtifacts(unittest.TestCase):
         shape.insert_textbox(
             fitz.Rect(91, 100, 504, 130),
             "A\x00",
-            fontname="helv", fontsize=10, color=(0, 0, 0),
+            fontname="helv",
+            fontsize=10,
+            color=(0, 0, 0),
         )
         shape.commit()
 
@@ -725,7 +765,9 @@ class TestCleanPageArtifacts(unittest.TestCase):
         shape.insert_textbox(
             fitz.Rect(91, 100, 504, 130),
             "Clean text without any artifacts.",
-            fontname="helv", fontsize=10, color=(0, 0, 0),
+            fontname="helv",
+            fontsize=10,
+            color=(0, 0, 0),
         )
         shape.commit()
 
@@ -748,7 +790,9 @@ class TestCleanPageArtifacts(unittest.TestCase):
         shape.insert_textbox(
             fitz.Rect(91, 100, 504, 130),
             "Text with\x00null byte.",
-            fontname="helv", fontsize=10, color=(0, 0, 0),
+            fontname="helv",
+            fontsize=10,
+            color=(0, 0, 0),
         )
         shape.commit()
 
@@ -757,6 +801,7 @@ class TestCleanPageArtifacts(unittest.TestCase):
         # Mock apply_redactions to raise TypeError on first call (with kwargs)
         original_apply = page.apply_redactions
         call_count = [0]
+
         def mock_apply(**kwargs):
             call_count[0] += 1
             if kwargs:
@@ -785,7 +830,9 @@ class TestFindNbspBboxes(unittest.TestCase):
         shape.insert_textbox(
             fitz.Rect(91, 100, 504, 130),
             "Clean text without artifacts.",
-            fontname="helv", fontsize=10, color=(0, 0, 0),
+            fontname="helv",
+            fontsize=10,
+            color=(0, 0, 0),
         )
         shape.commit()
 
@@ -819,18 +866,24 @@ class TestBlockHasNbspBbox(unittest.TestCase):
     def test_returns_false_for_empty_bboxes(self):
         """Empty bboxes list returns False."""
         from app.services.layout_fix import TextBlockInfo, _block_has_nbsp_bbox
+
         block = TextBlockInfo(
             bbox=(91.0, 100.0, 504.0, 130.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         self.assertFalse(_block_has_nbsp_bbox(block, []))
 
     def test_returns_true_for_overlapping_bbox(self):
         """Overlapping bbox returns True."""
         from app.services.layout_fix import TextBlockInfo, _block_has_nbsp_bbox
+
         block = TextBlockInfo(
             bbox=(91.0, 100.0, 504.0, 130.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         nbsp_bboxes = [(90.0, 99.0, 505.0, 131.0)]
         self.assertTrue(_block_has_nbsp_bbox(block, nbsp_bboxes))
@@ -838,9 +891,12 @@ class TestBlockHasNbspBbox(unittest.TestCase):
     def test_returns_false_for_non_overlapping_bbox(self):
         """Non-overlapping bbox returns False."""
         from app.services.layout_fix import TextBlockInfo, _block_has_nbsp_bbox
+
         block = TextBlockInfo(
             bbox=(91.0, 100.0, 504.0, 130.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         nbsp_bboxes = [(600.0, 700.0, 700.0, 800.0)]
         self.assertFalse(_block_has_nbsp_bbox(block, nbsp_bboxes))
@@ -852,6 +908,7 @@ class TestRedactBlocks(unittest.TestCase):
     def test_skips_empty_text_blocks(self):
         """Blocks with empty text after strip are skipped."""
         from app.services.layout_fix import _redact_blocks
+
         page = unittest.mock.MagicMock()
         blocks = [
             _tb((91, 100, 504, 120), text="  "),
@@ -864,6 +921,7 @@ class TestRedactBlocks(unittest.TestCase):
     def test_fallback_when_kwargs_unsupported(self):
         """Falls back to apply_redactions() when kwargs are not supported."""
         from app.services.layout_fix import _redact_blocks
+
         page = unittest.mock.MagicMock()
         page.apply_redactions.side_effect = [TypeError("unsupported"), None]
         blocks = [_tb((91, 100, 504, 120), text="text")]
@@ -878,6 +936,7 @@ class TestReinsertBlocks(unittest.TestCase):
     def test_skips_short_cleaned_text(self):
         """Blocks where _clean_text produces < 2 chars are skipped."""
         from app.services.layout_fix import _reinsert_blocks
+
         page = unittest.mock.MagicMock()
         page.rect.width = 612
         page.get_fonts.return_value = []
@@ -889,6 +948,7 @@ class TestReinsertBlocks(unittest.TestCase):
     def test_skips_very_short_small_font(self):
         """Very short text (<=3 chars) with small font (<8) is skipped."""
         from app.services.layout_fix import _reinsert_blocks
+
         page = unittest.mock.MagicMock()
         page.rect.width = 612
         page.get_fonts.return_value = []
@@ -899,6 +959,7 @@ class TestReinsertBlocks(unittest.TestCase):
     def test_skips_right_margin_blocks(self):
         """Blocks in the right margin area (x0 > 70% of page width, narrow) are skipped."""
         from app.services.layout_fix import _reinsert_blocks
+
         page = unittest.mock.MagicMock()
         page.rect.width = 612
         page.get_fonts.return_value = []
@@ -910,6 +971,7 @@ class TestReinsertBlocks(unittest.TestCase):
     def test_skips_short_fragment_at_correct_x(self):
         """Short fragments already at correct x position with narrow width are skipped."""
         from app.services.layout_fix import _reinsert_blocks
+
         page = unittest.mock.MagicMock()
         page.rect.width = 612
         page.get_fonts.return_value = []
@@ -927,6 +989,7 @@ class TestInsertTextWithFallback(unittest.TestCase):
         import fitz
 
         from app.services.layout_fix import _insert_text_with_fallback
+
         page = unittest.mock.MagicMock()
         shape = unittest.mock.MagicMock()
         shape.insert_textbox.return_value = -1  # all sizes fail
@@ -945,6 +1008,7 @@ class TestEstimateTextHeight(unittest.TestCase):
     def test_single_line_ascii(self):
         """Short ASCII text on one line."""
         from app.services.layout_fix import _estimate_text_height
+
         # "hello" = 5 chars * 5pt width = 25pt, rect_width=400 → 1 line
         h = _estimate_text_height("hello", 10.0, 400.0)
         self.assertAlmostEqual(h, 15.0, delta=1)  # 1 line * 1.5 * 10
@@ -952,6 +1016,7 @@ class TestEstimateTextHeight(unittest.TestCase):
     def test_single_line_cjk(self):
         """Short CJK text on one line."""
         from app.services.layout_fix import _estimate_text_height
+
         # "你好" = 2 chars * 10pt width = 20pt, rect_width=400 → 1 line
         h = _estimate_text_height("你好", 10.0, 400.0)
         self.assertAlmostEqual(h, 15.0, delta=1)
@@ -959,12 +1024,14 @@ class TestEstimateTextHeight(unittest.TestCase):
     def test_multi_line_newlines(self):
         """Text with newlines creates multiple lines."""
         from app.services.layout_fix import _estimate_text_height
+
         h = _estimate_text_height("line1\nline2\nline3", 10.0, 400.0)
         self.assertAlmostEqual(h, 45.0, delta=1)  # 3 lines * 15
 
     def test_long_text_wraps(self):
         """Long text that exceeds rect width wraps to multiple lines."""
         from app.services.layout_fix import _estimate_text_height
+
         # 80 CJK chars * 10pt = 800pt, rect_width=200 → 4 lines
         text = "你" * 80
         h = _estimate_text_height(text, 10.0, 200.0)
@@ -973,12 +1040,14 @@ class TestEstimateTextHeight(unittest.TestCase):
     def test_zero_width_returns_fallback(self):
         """Zero rect width returns fallback height."""
         from app.services.layout_fix import _estimate_text_height
+
         h = _estimate_text_height("test", 10.0, 0)
         self.assertEqual(h, 20.0)  # font_size * 2
 
     def test_zero_font_size_returns_zero(self):
         """Zero font size returns 0."""
         from app.services.layout_fix import _estimate_text_height
+
         h = _estimate_text_height("test", 0, 400.0)
         self.assertEqual(h, 0)
 
@@ -989,6 +1058,7 @@ class TestFindChineseFontEdgeCases(unittest.TestCase):
     def test_always_returns_china_ss_for_any_font(self):
         """Returns china-ss regardless of embedded fonts."""
         from app.services.layout_fix import _find_chinese_font
+
         page = unittest.mock.MagicMock()
         page.get_fonts.return_value = [(0, 0, 0, "SimHei-Regular", "F4")]
         self.assertEqual(_find_chinese_font(page), "china-ss")
@@ -1015,10 +1085,13 @@ class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
             doc.save(path)
             doc.close()
 
-            with unittest.mock.patch(
-                "app.services.layout_fix._fix_page_layout",
-                side_effect=RuntimeError("test error"),
-            ), self.assertRaises(RuntimeError):
+            with (
+                unittest.mock.patch(
+                    "app.services.layout_fix._fix_page_layout",
+                    side_effect=RuntimeError("test error"),
+                ),
+                self.assertRaises(RuntimeError),
+            ):
                 fix_translated_layout(path)
         finally:
             os.unlink(path)
@@ -1043,15 +1116,21 @@ class TestFixTranslatedLayoutEdgeCases(unittest.TestCase):
                 rect = fitz.Rect(91, 100 + i * 40, 504, 130 + i * 40)
                 shape = page.new_shape()
                 shape.insert_textbox(
-                    rect, f"Normal body text block {i} for detection.",
-                    fontname="helv", fontsize=10, color=(0, 0, 0),
+                    rect,
+                    f"Normal body text block {i} for detection.",
+                    fontname="helv",
+                    fontsize=10,
+                    color=(0, 0, 0),
                 )
                 shape.commit()
             rect = fitz.Rect(200, 350, 504, 380)
             shape = page.new_shape()
             shape.insert_textbox(
-                rect, "Misaligned text that should be fixed.",
-                fontname="helv", fontsize=10, color=(0, 0, 0),
+                rect,
+                "Misaligned text that should be fixed.",
+                fontname="helv",
+                fontsize=10,
+                color=(0, 0, 0),
             )
             shape.commit()
             doc.save(in_path)
@@ -1088,15 +1167,21 @@ class TestFixTranslatedLayoutTempFileError(unittest.TestCase):
                 rect = fitz.Rect(91, 100 + i * 40, 504, 130 + i * 40)
                 shape = page.new_shape()
                 shape.insert_textbox(
-                    rect, f"Normal body text block {i} for detection.",
-                    fontname="helv", fontsize=10, color=(0, 0, 0),
+                    rect,
+                    f"Normal body text block {i} for detection.",
+                    fontname="helv",
+                    fontsize=10,
+                    color=(0, 0, 0),
                 )
                 shape.commit()
             rect = fitz.Rect(200, 350, 504, 380)
             shape = page.new_shape()
             shape.insert_textbox(
-                rect, "Misaligned text that should be fixed.",
-                fontname="helv", fontsize=10, color=(0, 0, 0),
+                rect,
+                "Misaligned text that should be fixed.",
+                fontname="helv",
+                fontsize=10,
+                color=(0, 0, 0),
             )
             shape.commit()
             doc.save(path)
@@ -1171,9 +1256,12 @@ class TestBlockOverlapsImage(unittest.TestCase):
     def test_no_overlap_returns_false(self):
         """Block that doesn't overlap image returns False."""
         from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+
         block = TextBlockInfo(
             bbox=(100.0, 100.0, 200.0, 120.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         image_bboxes = [(300.0, 300.0, 400.0, 400.0)]
         self.assertFalse(_block_overlaps_image(block, image_bboxes))
@@ -1181,9 +1269,12 @@ class TestBlockOverlapsImage(unittest.TestCase):
     def test_full_overlap_returns_true(self):
         """Block fully inside image returns True."""
         from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+
         block = TextBlockInfo(
             bbox=(110.0, 110.0, 190.0, 190.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         image_bboxes = [(100.0, 100.0, 200.0, 200.0)]
         self.assertTrue(_block_overlaps_image(block, image_bboxes))
@@ -1191,10 +1282,13 @@ class TestBlockOverlapsImage(unittest.TestCase):
     def test_partial_overlap_below_threshold_returns_false(self):
         """Block with <50% overlap returns False."""
         from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+
         # Block: 100x20 area = 2000
         block = TextBlockInfo(
             bbox=(100.0, 100.0, 200.0, 120.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         # Image overlaps only 10x20 = 200 (10% of block)
         image_bboxes = [(190.0, 100.0, 250.0, 120.0)]
@@ -1203,10 +1297,13 @@ class TestBlockOverlapsImage(unittest.TestCase):
     def test_partial_overlap_above_threshold_returns_true(self):
         """Block with >50% overlap returns True."""
         from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+
         # Block: 100x20 area = 2000
         block = TextBlockInfo(
             bbox=(100.0, 100.0, 200.0, 120.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         # Image overlaps 60x20 = 1200 (60% of block)
         image_bboxes = [(140.0, 100.0, 250.0, 120.0)]
@@ -1215,18 +1312,24 @@ class TestBlockOverlapsImage(unittest.TestCase):
     def test_empty_image_bboxes_returns_false(self):
         """No images means no overlap."""
         from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+
         block = TextBlockInfo(
             bbox=(100.0, 100.0, 200.0, 120.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         self.assertFalse(_block_overlaps_image(block, []))
 
     def test_zero_area_block_returns_false(self):
         """Block with zero area returns False."""
         from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+
         block = TextBlockInfo(
             bbox=(100.0, 100.0, 100.0, 100.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         image_bboxes = [(100.0, 100.0, 200.0, 200.0)]
         self.assertFalse(_block_overlaps_image(block, image_bboxes))
@@ -1234,9 +1337,12 @@ class TestBlockOverlapsImage(unittest.TestCase):
     def test_multiple_images_checks_all(self):
         """Checks overlap against all images."""
         from app.services.layout_fix import TextBlockInfo, _block_overlaps_image
+
         block = TextBlockInfo(
             bbox=(100.0, 100.0, 200.0, 120.0),
-            text="test", avg_font_size=10.0, block_index=0,
+            text="test",
+            avg_font_size=10.0,
+            block_index=0,
         )
         # First image doesn't overlap, second does
         image_bboxes = [

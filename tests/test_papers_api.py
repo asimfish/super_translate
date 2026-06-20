@@ -45,6 +45,7 @@ class TestPaperToResponse(unittest.TestCase):
 
     def test_with_datetime(self):
         from datetime import datetime
+
         paper = self._make_paper(
             created_at=datetime(2026, 1, 15, 10, 30),
             updated_at=datetime(2026, 1, 16, 14, 0),
@@ -65,12 +66,14 @@ class TestGenerateId(unittest.TestCase):
 
     def test_returns_12_char_hex(self):
         from app.models.paper import generate_id
+
         id_str = generate_id()
         self.assertEqual(len(id_str), 12)
-        self.assertTrue(all(c in '0123456789abcdef' for c in id_str))
+        self.assertTrue(all(c in "0123456789abcdef" for c in id_str))
 
     def test_unique_ids(self):
         from app.models.paper import generate_id
+
         ids = {generate_id() for _ in range(100)}
         self.assertEqual(len(ids), 100)
 

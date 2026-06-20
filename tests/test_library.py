@@ -113,6 +113,7 @@ class TestExtractTitleFromPdf(unittest.TestCase):
     def test_extracts_title_from_metadata(self):
         """Should extract title from PDF metadata when available."""
         import fitz
+
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             path = Path(f.name)
 
@@ -129,6 +130,7 @@ class TestExtractTitleFromPdf(unittest.TestCase):
     def test_extracts_title_from_first_page_text(self):
         """Should extract title from large text on first page."""
         import fitz
+
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             path = Path(f.name)
 
@@ -147,6 +149,7 @@ class TestExtractTitleFromPdf(unittest.TestCase):
     def test_fallback_when_no_large_text(self):
         """Should fall back to filename when page has only small text."""
         import fitz
+
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             path = Path(f.name)
 
@@ -307,9 +310,7 @@ class TestExtractTitleFromFirstPage(unittest.TestCase):
                 {"type": 1, "bbox": [0, 0, 100, 100]},  # image block
                 {
                     "type": 0,
-                    "lines": [
-                        {"spans": [{"text": "Actual Title Text", "size": 16.0}]}
-                    ],
+                    "lines": [{"spans": [{"text": "Actual Title Text", "size": 16.0}]}],
                 },
             ]
         }
@@ -325,9 +326,7 @@ class TestExtractTitleFromFirstPage(unittest.TestCase):
             "blocks": [
                 {
                     "type": 0,
-                    "lines": [
-                        {"spans": [{"text": "small text", "size": 10.0}]}
-                    ],
+                    "lines": [{"spans": [{"text": "small text", "size": 10.0}]}],
                 },
             ]
         }

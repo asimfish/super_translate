@@ -109,6 +109,7 @@ class TestHourlyLimit:
 
     def test_blocks_when_hourly_limit_exceeded(self):
         import time
+
         app = FastAPI()
         middleware = RateLimitMiddleware(app, requests_per_minute=100, requests_per_hour=5)
         now = time.time()
@@ -120,6 +121,7 @@ class TestHourlyLimit:
 
     def test_allows_under_hourly_limit(self):
         import time
+
         app = FastAPI()
         middleware = RateLimitMiddleware(app, requests_per_minute=100, requests_per_hour=10)
         now = time.time()
@@ -146,6 +148,7 @@ class TestCleanup:
 
     def test_cleanup_removes_expired_entries(self):
         import time
+
         app = FastAPI()
         middleware = RateLimitMiddleware(app)
         now = time.time()
@@ -160,6 +163,7 @@ class TestCleanup:
 
     def test_cleanup_keeps_recent_entries(self):
         import time
+
         app = FastAPI()
         middleware = RateLimitMiddleware(app)
         now = time.time()
@@ -173,6 +177,7 @@ class TestCleanup:
 
     def test_cleanup_skips_if_recent(self):
         import time
+
         app = FastAPI()
         middleware = RateLimitMiddleware(app)
         now = time.time()

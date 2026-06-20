@@ -54,6 +54,7 @@ _ASCII_CONTROL_MAX = 32  # ASCII control characters below this value (except \n\
 @dataclass(frozen=True)
 class TextBlockInfo:
     """Extracted info for a single text block."""
+
     bbox: tuple[float, float, float, float]
     text: str
     avg_font_size: float
@@ -162,7 +163,8 @@ def _fix_page_layout(page: object) -> int:
     # Find blocks that need fixing (skip those overlapping with images)
     page_height = page.rect.height
     to_fix = [
-        b for b in blocks
+        b
+        for b in blocks
         if _needs_fix(b, left_margin, col_width, page_height)
         and not _block_overlaps_image(b, image_bboxes)
     ]
@@ -340,9 +342,11 @@ def _reinsert_blocks(
 
         # Skip short fragments that are already at correct x position
         block_width = block.bbox[2] - x0
-        if (abs(x0 - left_margin) <= X0_TOLERANCE
-                and len(text) < _SHORT_TEXT_LEN
-                and block_width < MIN_BLOCK_WIDTH):
+        if (
+            abs(x0 - left_margin) <= X0_TOLERANCE
+            and len(text) < _SHORT_TEXT_LEN
+            and block_width < MIN_BLOCK_WIDTH
+        ):
             continue
 
         # Calculate correct rect
@@ -428,7 +432,8 @@ def _insert_text_with_fallback(
 
 
 def _extract_text_blocks(
-    page: object, page_dict: dict | None = None,
+    page: object,
+    page_dict: dict | None = None,
 ) -> list[TextBlockInfo]:
     """Extract text blocks with font size info from a page.
 
@@ -471,12 +476,14 @@ def _extract_text_blocks(
             continue
 
         avg_size = statistics.median(font_sizes)
-        blocks.append(TextBlockInfo(
-            bbox=tuple(float(x) for x in raw_block["bbox"]),
-            text=text,
-            avg_font_size=avg_size,
-            block_index=idx,
-        ))
+        blocks.append(
+            TextBlockInfo(
+                bbox=tuple(float(x) for x in raw_block["bbox"]),
+                text=text,
+                avg_font_size=avg_size,
+                block_index=idx,
+            )
+        )
 
     return blocks
 
@@ -616,8 +623,8 @@ def _has_embedded_line_numbers(text: str) -> bool:
         sec_match = re.match(r"^\d{1,3}\s+", stripped)
         if (
             sec_match
-            and re.match(r"[A-Z一-鿿]", stripped[sec_match.end():])
-            and not re.search(r"\d{1,3}$", stripped[sec_match.end():])
+            and re.match(r"[A-Z一-鿿]", stripped[sec_match.end() :])
+            and not re.search(r"\d{1,3}$", stripped[sec_match.end() :])
         ):
             continue
         # Standalone line number as first line: "25\ntext..."

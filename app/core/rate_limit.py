@@ -73,17 +73,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Clean minute requests
         for ip in list(self._minute_requests.keys()):
-            self._minute_requests[ip] = [
-                t for t in self._minute_requests[ip] if t > cutoff_minute
-            ]
+            self._minute_requests[ip] = [t for t in self._minute_requests[ip] if t > cutoff_minute]
             if not self._minute_requests[ip]:
                 del self._minute_requests[ip]
 
         # Clean hour requests
         for ip in list(self._hour_requests.keys()):
-            self._hour_requests[ip] = [
-                t for t in self._hour_requests[ip] if t > cutoff_hour
-            ]
+            self._hour_requests[ip] = [t for t in self._hour_requests[ip] if t > cutoff_hour]
             if not self._hour_requests[ip]:
                 del self._hour_requests[ip]
 

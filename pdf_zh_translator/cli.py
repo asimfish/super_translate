@@ -48,13 +48,10 @@ def run_export(args: argparse.Namespace) -> int:
                 "page": block.page_index + 1,
                 "source": protected,
             }
-            handle.write(
-                json.dumps(record, ensure_ascii=False) + "\n"
-            )
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     total = len(units)
     print(
-        "Exported %d translatable blocks (%d skipped) -> %s"
-        % (total, skipped, args.blocks_jsonl)
+        "Exported %d translatable blocks (%d skipped) -> %s" % (total, skipped, args.blocks_jsonl)
     )
     return 0
 

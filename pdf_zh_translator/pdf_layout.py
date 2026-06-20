@@ -60,7 +60,9 @@ PARAGRAPH_SIZE_TOLERANCE = 1.5
 # Minimum horizontal overlap ratio (of the narrower block) required to merge.
 PARAGRAPH_MIN_X_OVERLAP = 0.5
 
-MATH_SYMBOLS = set("=+\u2212\u00b1\u00d7\u00f7*/^_|\\<>~\u221e\u221a\u2202\u2207\u2211\u220f\u222b\u2208\u2209\u2282\u2286\u2283\u2287\u222a\u2229\u2227\u2228\u00ac\u2200\u2203\u2248\u2243\u2245\u2260\u2264\u2265\u226a\u226b\u221d\u2192\u2190\u2194\u21d2\u21d0\u21d4\u27e8\u27e9\u2032\u2033\u22a4\u22a5\u2225\u2295\u2297\u2299")  # noqa: E501
+MATH_SYMBOLS = set(
+    "=+\u2212\u00b1\u00d7\u00f7*/^_|\\<>~\u221e\u221a\u2202\u2207\u2211\u220f\u222b\u2208\u2209\u2282\u2286\u2283\u2287\u222a\u2229\u2227\u2228\u00ac\u2200\u2203\u2248\u2243\u2245\u2260\u2264\u2265\u226a\u226b\u221d\u2192\u2190\u2194\u21d2\u21d0\u21d4\u27e8\u27e9\u2032\u2033\u22a4\u22a5\u2225\u2295\u2297\u2299"
+)  # noqa: E501
 
 # --- Inline math protection -------------------------------------------------
 # Spans set in math fonts (and superscripts / inline math tokens) are wrapped
@@ -89,12 +91,15 @@ MATH_TRIGGER = (
     "\u2208\u2209\u2282\u2286\u2283\u2287\u222a\u2229\u2227\u2228\u00ac\u2200\u2203"
     "\u2248\u2243\u2245\u2260\u2264\u2265\u226a\u226b\u221d\u2212"
     "\u0370-\u03ff\u1f00-\u1fff"  # Greek
-    "\u2070-\u209f"               # unicode super/subscripts
+    "\u2070-\u209f"  # unicode super/subscripts
     "\u2190-\u22ff\u27c0-\u27e5\u27e8-\u27ef\u2a00-\u2aff"  # arrows + math operators
-    "\U0001d400-\U0001d7ff"       # mathematical alphanumerics
+    "\U0001d400-\U0001d7ff"  # mathematical alphanumerics
 )
 MATH_TOKEN_RE = re.compile(r"\S*[%s]\S*" % MATH_TRIGGER)
-SUPERSCRIPT_MAP = str.maketrans("0123456789+-=()n", "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u207a\u207b\u207c\u207d\u207e\u207f")  # noqa: E501
+SUPERSCRIPT_MAP = str.maketrans(
+    "0123456789+-=()n",
+    "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u207a\u207b\u207c\u207d\u207e\u207f",
+)  # noqa: E501
 
 # Bold bit in PyMuPDF span flags.
 FLAG_BOLD = 16
@@ -217,9 +222,7 @@ def translate_pdf(
     units, gutter_rects, skipped = prepare_translation_units(document)
 
     if not units:
-        warnings.append(
-            "No extractable English text was found. Scanned PDFs need OCR."
-        )
+        warnings.append("No extractable English text was found. Scanned PDFs need OCR.")
         page_count = document.page_count
         document.save(str(output_pdf), garbage=4, deflate=True)
         document.close()
@@ -246,9 +249,7 @@ def translate_pdf(
         # Register after redactions: apply_redactions rebuilds page resources
         # and would drop a font registered beforehand.
         register_font_pack(page, font_pack)
-        centered_flags = detect_centered_blocks(
-            [block for block, _ in page_items], page.rect.width
-        )
+        centered_flags = detect_centered_blocks([block for block, _ in page_items], page.rect.width)
         for (block, translated_text), centered in zip(page_items, centered_flags):
             inserted = insert_translated_text(
                 page=page,
@@ -482,9 +483,7 @@ def prepare_translation_units(
     """
     raw_blocks, gutter_rects = collect_text_blocks(document)
     blocks = merge_paragraph_blocks(raw_blocks)
-    page_heights = {
-        index: document[index].rect.height for index in range(document.page_count)
-    }
+    page_heights = {index: document[index].rect.height for index in range(document.page_count)}
     bibliography = mark_bibliography_blocks(blocks, page_heights)
     units: List[TranslationUnit] = []
     skipped = 0
@@ -528,11 +527,7 @@ def mark_bibliography_blocks(
             heading_size = block.font_size
             flags.append(False)  # the heading itself is translated
             continue
-        if (
-            in_references
-            and block.bold
-            and block.font_size >= max(heading_size * 0.92, 10.5)
-        ):
+        if in_references and block.bold and block.font_size >= max(heading_size * 0.92, 10.5):
             in_references = False  # next section (appendix) starts
         page_height = page_heights.get(block.page_index, 0.0)
         is_footer = page_height > 0 and block.bbox[1] >= page_height * 0.92
@@ -565,15 +560,13 @@ def collect_text_blocks(document: object) -> Tuple[List[TextBlock], Dict[int, Li
         for record, is_equation in zip(records, equation_flags):
             if record_is_algorithm(record):
                 continue
-            blocks.extend(
-                segments_from_record(page_index, record, equation_record=is_equation)
-            )
+            blocks.extend(segments_from_record(page_index, record, equation_record=is_equation))
     return blocks, gutter_rects
 
 
 @dataclass
 class _LineRec:
-    text: str          # sentinel-annotated line text
+    text: str  # sentinel-annotated line text
     bbox: BBox
     spans: List[dict]  # kept spans (gutter/empty spans removed)
     is_cell: bool = False  # piece of a physical line split at column gaps
@@ -675,15 +668,12 @@ def parse_block_lines(raw_block: dict) -> Tuple[Optional[_RawBlockRec], List[BBo
                 continue
             group_spans = [span for _, span in group]
             boxes = [
-                tuple(float(x) for x in span["bbox"])
-                for span in group_spans if "bbox" in span
+                tuple(float(x) for x in span["bbox"]) for span in group_spans if "bbox" in span
             ]
             if boxes:
                 bbox = union_bbox(boxes)
             else:
-                bbox = tuple(
-                    float(x) for x in raw_line.get("bbox", (0, 0, 0, 0))
-                )
+                bbox = tuple(float(x) for x in raw_line.get("bbox", (0, 0, 0, 0)))
             lines.append(
                 _LineRec(
                     text=text,
@@ -732,7 +722,9 @@ def split_line_cells(
 
 
 # Big-operator / oddball glyphs that only occur inside display equations.
-_BIG_OPERATOR_CHARS = set("\u2211\u220f\u222b\u221a\u222c\u222d\u22c0\u22c1\u22c2\u22c3\u2a01\u2a02\u2a04\u2a06")  # noqa: E501
+_BIG_OPERATOR_CHARS = set(
+    "\u2211\u220f\u222b\u221a\u222c\u222d\u22c0\u22c1\u22c2\u22c3\u2a01\u2a02\u2a04\u2a06"
+)  # noqa: E501
 _ENGLISH_WORD_RE = re.compile(r"[a-z]{3,}")
 # Limits for a small block to be absorbed into a neighbouring equation zone.
 EQUATION_NEIGHBOR_MAX_CHARS = 60
@@ -846,9 +838,7 @@ def record_is_table(record: _RawBlockRec) -> bool:
         for other in range(max(0, index - 8), index):
             other_bbox = lines[other].bbox
             overlap = min(current_bbox[3], other_bbox[3]) - max(current_bbox[1], other_bbox[1])
-            min_height = min(
-                current_bbox[3] - current_bbox[1], other_bbox[3] - other_bbox[1]
-            )
+            min_height = min(current_bbox[3] - current_bbox[1], other_bbox[3] - other_bbox[1])
             if min_height > 0 and overlap >= 0.5 * min_height:
                 overlapping_rows += 1
                 break
@@ -871,9 +861,7 @@ def line_is_prose(line: _LineRec) -> bool:
     a short connective like 'the forward equation is' that PyMuPDF glued onto
     the equation block) must still be translated."""
     bare = strip_sentinels(line.text)
-    words = [
-        word for word in _PROSE_WORD_RE.findall(bare) if word.lower() not in _MATH_WORDS
-    ]
+    words = [word for word in _PROSE_WORD_RE.findall(bare) if word.lower() not in _MATH_WORDS]
     if len(words) < 3:
         return False
     compact = "".join(bare.split())
@@ -1107,12 +1095,8 @@ _SPACE_BEFORE_FULLWIDTH_RE = re.compile(  # noqa: E501
     r"\s+([\u3001\u3002\uff0c\uff1b\uff1a\uff1f\uff01\uff09\u300b\u300d\u3011\u2019\u201d])"
 )
 _SPACE_AFTER_FULLWIDTH_RE = re.compile(r"([\uff08\u300a\u300c\u3010\u2018\u201c])\s+")
-_CJK_THEN_LATIN_RE = re.compile(
-    r"([%s])([A-Za-z0-9$(\[\u2200-\u22ff\u0370-\u03ff])" % CJK_CHAR_RE
-)
-_LATIN_THEN_CJK_RE = re.compile(
-    r"([A-Za-z0-9%%)\]\u2200-\u22ff\u0370-\u03ff])([%s])" % CJK_CHAR_RE
-)
+_CJK_THEN_LATIN_RE = re.compile(r"([%s])([A-Za-z0-9$(\[\u2200-\u22ff\u0370-\u03ff])" % CJK_CHAR_RE)
+_LATIN_THEN_CJK_RE = re.compile(r"([A-Za-z0-9%%)\]\u2200-\u22ff\u0370-\u03ff])([%s])" % CJK_CHAR_RE)
 _FULLWIDTH_PUNCT = (  # noqa: E501
     "\u3001\u3002\uff0c\uff1b\uff1a\uff1f\uff01\uff08\uff09\u300a\u300b\u300c\u300d\u3010\u3011"
 )
@@ -1260,12 +1244,10 @@ def detect_centered_blocks(blocks: Sequence[TextBlock], page_width: float) -> Li
     # Column left edge: median x0 of body-like blocks (footers/page numbers
     # sit outside the column and would skew a plain minimum).
     body_lefts = [
-        block.bbox[0]
-        for block in blocks
-        if block.source_lines >= 2 or len(block.text) > 60
+        block.bbox[0] for block in blocks if block.source_lines >= 2 or len(block.text) > 60
     ]
-    column_left = statistics.median(body_lefts) if body_lefts else min(
-        block.bbox[0] for block in blocks
+    column_left = (
+        statistics.median(body_lefts) if body_lefts else min(block.bbox[0] for block in blocks)
     )
     tolerance = max(6.0, page_width * 0.012)
     flags: List[bool] = []

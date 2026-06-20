@@ -69,6 +69,7 @@ def sanitize_error(error: Exception) -> str:
         msg = msg[:_MAX_FINAL_ERROR_LEN] + "..."
     return msg
 
+
 _model = None
 _model_lock = threading.Lock()
 
@@ -191,6 +192,7 @@ def get_model() -> object:
     with _model_lock:
         if _model is None:
             from pdf2zh.doclayout import OnnxModel
+
             logger.info("Loading layout detection model...")
             _model = OnnxModel.from_pretrained()
             logger.info("Model loaded")
@@ -208,7 +210,6 @@ class TranslationResult:
     @property
     def success(self) -> bool:
         return self.error is None and self.mono_path is not None
-
 
 
 def translate_pdf_sync(
@@ -261,7 +262,8 @@ _SERVICE_ENV_MAP: dict[str, tuple[str, str, str | None, str | None]] = {
 
 
 def _build_pdf2zh_envs(
-    service: str, config: TranslationConfig,
+    service: str,
+    config: TranslationConfig,
 ) -> dict[str, str | None]:
     """Build envs dict for pdf2zh's translate() envs parameter.
 
@@ -302,10 +304,7 @@ _NATIVE_ENGINE_BACKENDS = {"deepseek", "openai"}
 def _use_native_engine(config: TranslationConfig) -> bool:
     from app.core.config import settings
 
-    return (
-        settings.translation_engine == "native"
-        and config.backend in _NATIVE_ENGINE_BACKENDS
-    )
+    return settings.translation_engine == "native" and config.backend in _NATIVE_ENGINE_BACKENDS
 
 
 _TRANSLATION_TIMEOUT = 600  # 10 minutes max for the entire translation
@@ -369,9 +368,7 @@ def _translate_sync_native(
         target_lang=config.lang_out,
         progress=False,
     )
-    translator = _ProgressTranslator(
-        CachedTranslator(vendor, cache_path), progress_callback
-    )
+    translator = _ProgressTranslator(CachedTranslator(vendor, cache_path), progress_callback)
 
     for attempt in range(config.max_retries + 1):
         try:
@@ -391,18 +388,18 @@ def _translate_sync_native(
             output_dir.mkdir(parents=True, exist_ok=True)
             logger.error(
                 "Native translation timed out after %ds for %s",
-                _TRANSLATION_TIMEOUT, input_path.name,
+                _TRANSLATION_TIMEOUT,
+                input_path.name,
             )
-            raise TimeoutError(
-                f"Translation timed out after {_TRANSLATION_TIMEOUT}s"
-            )
+            raise TimeoutError(f"Translation timed out after {_TRANSLATION_TIMEOUT}s")
         except Exception as e:
             cleanup_output_dir(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
             if attempt < config.max_retries:
                 logger.warning(
                     "Native translation attempt %d failed: %s. Retrying...",
-                    attempt + 1, sanitize_error(e),
+                    attempt + 1,
+                    sanitize_error(e),
                 )
             else:
                 logger.error("All native translation attempts failed for %s", input_path.name)
@@ -464,7 +461,8 @@ def _translate_sync(
             if attempt < config.max_retries:
                 logger.warning(
                     "Translation attempt %d failed: %s. Retrying...",
-                    attempt + 1, sanitize_error(e),
+                    attempt + 1,
+                    sanitize_error(e),
                 )
             else:
                 logger.error("All translation attempts failed for %s", input_path.name)
@@ -478,6 +476,7 @@ def _create_progress_callback(
     progress_callback: Callable | None,
 ) -> Callable:
     """Create a pdf2zh-compatible progress callback."""
+
     def pdf2zh_callback(*args: object) -> None:
         try:
             pct = None

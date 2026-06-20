@@ -45,6 +45,7 @@ def send_feishu_notification(
 
     try:
         import json
+
         data = json.dumps(payload).encode("utf-8")
         req = Request(
             webhook_url,

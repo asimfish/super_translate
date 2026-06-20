@@ -68,7 +68,8 @@ _PROGRESS_THROTTLE = 0.05
 
 
 def _write_upload_chunks(
-    file: UploadFile, stored_path: Path,
+    file: UploadFile,
+    stored_path: Path,
 ) -> tuple[int, bool, str]:
     """Write uploaded file chunks to disk with validation.
 
@@ -85,7 +86,7 @@ def _write_upload_chunks(
             if total > settings.max_upload_size:
                 return 0, True, f"File too large (max {max_mb}MB)"
             if is_first:
-                if not chunk[:5].startswith(b'%PDF'):
+                if not chunk[:5].startswith(b"%PDF"):
                     return 0, True, "Invalid PDF file (missing PDF header)"
                 is_first = False
             last_chunk = chunk
@@ -317,13 +318,19 @@ async def list_papers(
             _paper_to_response(
                 p,
                 has_original=_file_exists_safe(
-                    settings.papers_path, p.stored_filename, papers_base,
+                    settings.papers_path,
+                    p.stored_filename,
+                    papers_base,
                 ),
                 has_translated=_file_exists_safe(
-                    settings.translations_path, p.translated_filename, trans_base,
+                    settings.translations_path,
+                    p.translated_filename,
+                    trans_base,
                 ),
                 has_dual=_file_exists_safe(
-                    settings.translations_path, p.dual_filename, trans_base,
+                    settings.translations_path,
+                    p.dual_filename,
+                    trans_base,
                 ),
             )
             for p in papers
@@ -363,7 +370,9 @@ async def upload_paper(
 
     try:
         _total_size, first_chunk, error = await asyncio.to_thread(
-            _write_upload_chunks, file, stored_path,
+            _write_upload_chunks,
+            file,
+            stored_path,
         )
     except Exception:
         stored_path.unlink(missing_ok=True)
@@ -410,7 +419,8 @@ async def upload_paper(
 
 @router.get("/{paper_id}")
 async def get_paper(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> PaperResponse:
     """Get a specific paper by ID.
 
@@ -438,7 +448,8 @@ async def get_paper(
 
 @router.delete("/{paper_id}")
 async def delete_paper(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict[str, bool]:
     """Delete a paper and its associated files.
 
@@ -526,7 +537,8 @@ async def start_translation(
 
 @router.post("/{paper_id}/cancel")
 async def cancel_translation(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict[str, bool | str]:
     """Request cancellation of an in-progress translation.
 
@@ -584,8 +596,7 @@ def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> Tran
         if not api_key and not has_env_key:
             raise HTTPException(
                 400,
-                f"Backend '{backend}' requires an API key. "
-                f"Set {prefixed_key} in your .env file.",
+                f"Backend '{backend}' requires an API key. Set {prefixed_key} in your .env file.",
             )
 
     return TranslationConfig(
@@ -702,7 +713,9 @@ async def _do_translate(
 
     logger.info(
         "Starting translation for paper %s (backend=%s, quality=%s)",
-        paper_id, config.backend, quality,
+        paper_id,
+        config.backend,
+        quality,
     )
     _append_log(paper_id, loop, f"开始翻译 (引擎: {config.backend}, 质量: {quality})")
     _append_log(paper_id, loop, f"共 {paper.page_count} 页, 文件大小: {paper.file_size // 1024}KB")
@@ -761,6 +774,7 @@ async def _do_translate(
         # Send Feishu notification
         if settings.feishu_webhook_url:
             from app.services.notify import notify_translation_complete
+
             notify_translation_complete(
                 settings.feishu_webhook_url,
                 paper.title,
@@ -780,6 +794,7 @@ def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) ->
 
     async def _update():
         from app.core.database import async_session
+
         async with async_session() as p_db:
             result = await p_db.execute(
                 select(Paper.translation_log).where(Paper.id == paper_id),
@@ -790,9 +805,7 @@ def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) ->
             if len(new_log) > 2000:
                 new_log = new_log[-2000:]
             await p_db.execute(
-                update(Paper)
-                .where(Paper.id == paper_id)
-                .values(translation_log=new_log),
+                update(Paper).where(Paper.id == paper_id).values(translation_log=new_log),
             )
             await p_db.commit()
 
@@ -821,6 +834,7 @@ def _create_progress_handler(
 
         async def _update():
             from app.core.database import async_session
+
             async with async_session() as p_db:
                 await p_db.execute(
                     update(Paper)
@@ -831,6 +845,7 @@ def _create_progress_handler(
                     .values(translation_progress=pct),
                 )
                 await p_db.commit()
+
         with contextlib.suppress(Exception):
             asyncio.run_coroutine_threadsafe(_update(), loop)
 
@@ -884,30 +899,39 @@ async def _serve_paper_file(
 
 @router.get("/{paper_id}/download/original")
 async def download_original(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """Download the original PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     return await _serve_paper_file(
-        paper, "stored_filename", settings.papers_path, paper.original_filename,
+        paper,
+        "stored_filename",
+        settings.papers_path,
+        paper.original_filename,
     )
 
 
 @router.get("/{paper_id}/download/translated")
 async def download_translated(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """Download the translated PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
     name = f"{Path(paper.original_filename).stem}_zh.pdf"
     return await _serve_paper_file(
-        paper, "translated_filename", settings.translations_path, name,
+        paper,
+        "translated_filename",
+        settings.translations_path,
+        name,
     )
 
 
 @router.get("/{paper_id}/download/dual")
 async def download_dual(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """Download the dual-language PDF file."""
     paper = await _get_paper_or_404(paper_id, db)
@@ -917,7 +941,8 @@ async def download_dual(
 
 @router.get("/{paper_id}/view/original")
 async def view_original(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """View the original PDF file in browser."""
     paper = await _get_paper_or_404(paper_id, db)
@@ -926,7 +951,8 @@ async def view_original(
 
 @router.get("/{paper_id}/view/translated")
 async def view_translated(
-    paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """View the translated PDF file in browser."""
     paper = await _get_paper_or_404(paper_id, db)

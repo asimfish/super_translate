@@ -134,9 +134,7 @@ class CacheOnlyTranslator(Translator):
                         "key": cache_key(text),
                         "source": text,
                     }
-                    handle.write(
-                        json.dumps(record, ensure_ascii=False) + "\n"
-                    )
+                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             raise TranslationError(
                 "cache-only mode: %d/%d blocks missing from cache. Missing blocks dumped to %s"
                 % (len(missing), len(texts), missing_file)
@@ -165,9 +163,7 @@ class VendorTranslator(Translator):
 
     def translate_batch(self, texts: Sequence[str]) -> List[str]:
         results: List[str] = []
-        chunks = list(chunked_by_size(
-            list(texts), self.batch_size, self.max_batch_chars
-        ))
+        chunks = list(chunked_by_size(list(texts), self.batch_size, self.max_batch_chars))
         total_chunks = len(chunks)
         translated_count = 0
         for chunk_index, chunk in enumerate(chunks, start=1):
@@ -299,7 +295,7 @@ class VendorTranslator(Translator):
                 last_error = exc
                 if attempt >= self.retries:
                     break
-                time.sleep(0.8 * (2 ** attempt))
+                time.sleep(0.8 * (2**attempt))
         raise TranslationError("Translation API request failed: %s" % last_error)
 
 
@@ -309,9 +305,7 @@ def build_translator_from_args(args: Any) -> Translator:
 
     if args.api_mode == "cache-only":
         if not args.cache_file:
-            raise TranslationError(
-                "cache-only mode requires --cache-file."
-            )
+            raise TranslationError("cache-only mode requires --cache-file.")
         return CacheOnlyTranslator(Path(args.cache_file))
 
     if args.api_mode == "deepseek":
@@ -329,9 +323,7 @@ def build_translator_from_args(args: Any) -> Translator:
     if not api_key:
         api_key = os.getenv("PDF_TRANSLATOR_API_KEY")
     if args.api_mode == "deepseek" and not api_key:
-        raise TranslationError(
-            "Missing DeepSeek API key. Set DEEPSEEK_API_KEY."
-        )
+        raise TranslationError("Missing DeepSeek API key. Set DEEPSEEK_API_KEY.")
 
     translator: Translator = VendorTranslator(
         api_url=api_url,
@@ -434,8 +426,7 @@ _TRANSLATION_RULES = (
 
 def translation_array_prompt() -> str:
     return (
-        _TRANSLATION_RULES
-        + "\nTranslate each item in the JSON array "
+        _TRANSLATION_RULES + "\nTranslate each item in the JSON array "
         "from English to Simplified Chinese. "
         "Preserve numbers, citations, equations, URLs, "
         "product names, and line breaks where possible. "
@@ -446,12 +437,11 @@ def translation_array_prompt() -> str:
 
 def translation_object_prompt() -> str:
     return (
-        _TRANSLATION_RULES
-        + "\nTranslate each item in the input JSON array "
+        _TRANSLATION_RULES + "\nTranslate each item in the input JSON array "
         "from English to Simplified Chinese. "
         "Preserve numbers, citations, equations, URLs, "
         "product names, and line breaks where possible. "
-        'Return only a valid json object in this shape: '
+        "Return only a valid json object in this shape: "
         '{"translations":["译文1","译文2"]}. '
         "The translations array must have the same "
         "length and order as the input array."

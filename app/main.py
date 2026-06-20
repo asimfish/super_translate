@@ -117,7 +117,8 @@ async def add_security_headers(request: Request, call_next: RequestResponseEndpo
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
-    request: Request, exc: RequestValidationError,
+    request: Request,
+    exc: RequestValidationError,
 ) -> JSONResponse:
     """Return 400 for value validation errors, 422 for missing fields."""
     errors = exc.errors()
