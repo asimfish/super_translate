@@ -1,5 +1,7 @@
 """Notification service for translation completion alerts."""
 
+from __future__ import annotations
+
 import logging
 from urllib.error import URLError
 from urllib.request import Request, urlopen

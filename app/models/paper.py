@@ -1,5 +1,7 @@
 """Paper database model."""
 
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
 from enum import Enum as PyEnum

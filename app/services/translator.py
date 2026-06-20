@@ -1,5 +1,7 @@
 """Translation service using pdf2zh with progress tracking and quality presets."""
 
+from __future__ import annotations
+
 import logging
 import os
 import re
