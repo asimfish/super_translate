@@ -59,10 +59,39 @@ PARAGRAPH_GAP_FACTOR = 0.65
 PARAGRAPH_SIZE_TOLERANCE = 1.5
 # Minimum horizontal overlap ratio (of the narrower block) required to merge.
 PARAGRAPH_MIN_X_OVERLAP = 0.5
+# Graphic/table regions are kept untouched in conservative translation mode.
+GRAPHIC_REGION_PADDING = 12.0
+GRAPHIC_REGION_CLUSTER_GAP = 8.0
+GRAPHIC_REGION_MIN_AREA = 250.0
+GRAPHIC_REGION_MIN_SIDE = 8.0
+GRAPHIC_BLOCK_OVERLAP_RATIO = 0.20
+MATH_HEAVY_RATIO = 0.18
+MATH_SHORT_BLOCK_RATIO = 0.05
 
 MATH_SYMBOLS = set(
     "=+\u2212\u00b1\u00d7\u00f7*/^_|\\<>~\u221e\u221a\u2202\u2207\u2211\u220f\u222b\u2208\u2209\u2282\u2286\u2283\u2287\u222a\u2229\u2227\u2228\u00ac\u2200\u2203\u2248\u2243\u2245\u2260\u2264\u2265\u226a\u226b\u221d\u2192\u2190\u2194\u21d2\u21d0\u21d4\u27e8\u27e9\u2032\u2033\u22a4\u22a5\u2225\u2295\u2297\u2299"
 )  # noqa: E501
+
+# --- Structure-aware classification ------------------------------------------
+# Caption patterns: "Figure 1", "Fig. 2:", "Table 3.", "图1", "表2"
+_CAPTION_RE = re.compile(
+    r"^(?:Figure|Fig\.|Table|图|表)\s*\d", re.IGNORECASE,
+)
+# Heading patterns: "1 Introduction", "2.1 Background", "A. Appendix"
+_HEADING_RE = re.compile(
+    r"^(?:\d+(?:\.\d+)*\.?\s|[A-Z]\.\s)",
+)
+# Section number pattern for heading detection
+_SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s")
+# Footer patterns: page numbers, headers
+_FOOTER_MAX_Y_OFFSET = 50.0  # from bottom of page
+_FOOTER_PAGE_NUM_RE = re.compile(r"^\d{1,3}$")
+# Figure label max length (axis labels, short annotations)
+_FIGURE_LABEL_MAX_LEN = 15
+# Image zone extension to include nearby captions
+_IMAGE_ZONE_CAPTION_GAP = 20.0  # points below image to look for captions
+# Column detection
+_COLUMN_CLUSTER_GAP = 150.0  # minimum x0 separation for two-column layout
 
 # --- Inline math protection -------------------------------------------------
 # Spans set in math fonts (and superscripts / inline math tokens) are wrapped
@@ -155,10 +184,22 @@ class TextBlock:
     font_size: float
     color: Color
     bold: bool = False
+    starts_bold: bool = False
     source_lines: int = 1
     # Table cells: render on one line, anchored at the original x, never
     # merged into paragraphs and never centred.
     nowrap: bool = False
+    no_merge: bool = False
+    # Normally the insertion bbox is also the redaction bbox. Formula-tail
+    # prose such as "where sigma is ..." can be inserted into the following
+    # prose line while only redacting the English prose spans, leaving the
+    # adjacent formula untouched.
+    redact_bboxes: Optional[List[BBox]] = None
+    # Structure-aware classification
+    # title, heading, caption, equation, table, algorithm, bibliography, footer, figure_label
+    block_type: str = "body"
+    should_translate: bool = True
+    preserve_position: bool = False  # Keep original bbox exactly (captions, figure labels)
 
 
 @dataclass
@@ -209,6 +250,8 @@ def translate_pdf(
     min_font_size: float = 5.0,
     font_scale: float = 0.92,
     margin: float = 0.8,
+    preserve_graphics_text: bool = False,
+    skip_overflow: bool = False,
 ) -> TranslationReport:
     try:
         import fitz
@@ -219,7 +262,10 @@ def translate_pdf(
     font_pack = build_font_pack(font_file, warnings)
 
     document = fitz.open(str(input_pdf))
-    units, gutter_rects, skipped = prepare_translation_units(document)
+    units, gutter_rects, skipped = prepare_translation_units(
+        document,
+        preserve_graphics_text=preserve_graphics_text,
+    )
 
     if not units:
         warnings.append("No extractable English text was found. Scanned PDFs need OCR.")
@@ -228,6 +274,9 @@ def translate_pdf(
         document.close()
         return TranslationReport(input_pdf, output_pdf, page_count, 0, skipped, warnings)
 
+    # Set block types for context-aware translation prompts
+    if hasattr(translator, "block_types"):
+        translator.block_types = [block.block_type for block, _, _ in units]
     translations = translator.translate_batch([protected for _, protected, _ in units])
     by_page: Dict[int, List[Tuple[TextBlock, str]]] = {}
     for (block, _, mapping), translated_text in zip(units, translations):
@@ -240,17 +289,43 @@ def translate_pdf(
         by_page.setdefault(block.page_index, []).append((block, clean_translation(restored)))
 
     for page_index in range(document.page_count):
-        page_items = by_page.get(page_index, [])
+        candidate_items = by_page.get(page_index, [])
         page_gutter = gutter_rects.get(page_index, [])
-        if not page_items and not page_gutter:
+        if not candidate_items and not page_gutter:
             continue
         page = document[page_index]
+        centered_flags = detect_centered_blocks(
+            [block for block, _ in candidate_items], page.rect.width
+        )
+        page_items: List[Tuple[TextBlock, str]] = []
+        item_centered_flags: List[bool] = []
+        for (block, translated_text), centered in zip(candidate_items, centered_flags):
+            # Preserve position for captions and figure labels — don't center
+            if block.preserve_position:
+                centered = False
+            requested_size = max(min_font_size, block.font_size * font_scale)
+            if skip_overflow and not translated_text_fits(
+                block=block,
+                text=translated_text,
+                font_pack=font_pack,
+                font_size=requested_size,
+                min_font_size=min_font_size,
+                margin=margin,
+                centered=centered,
+            ):
+                warnings.append(
+                    "Page %d: kept original text to avoid overlap in bbox %s"
+                    % (page_index + 1, compact_bbox(block.bbox))
+                )
+                continue
+            page_items.append((block, translated_text))
+            item_centered_flags.append(centered)
+
         redact_original_text(page, [block for block, _ in page_items], margin, page_gutter)
         # Register after redactions: apply_redactions rebuilds page resources
         # and would drop a font registered beforehand.
         register_font_pack(page, font_pack)
-        centered_flags = detect_centered_blocks([block for block, _ in page_items], page.rect.width)
-        for (block, translated_text), centered in zip(page_items, centered_flags):
+        for (block, translated_text), centered in zip(page_items, item_centered_flags):
             inserted = insert_translated_text(
                 page=page,
                 block=block,
@@ -475,20 +550,42 @@ TranslationUnit = Tuple[TextBlock, str, Dict[int, str]]
 
 def prepare_translation_units(
     document: object,
+    preserve_graphics_text: bool = False,
 ) -> Tuple[List[TranslationUnit], Dict[int, List[BBox]], int]:
     """Shared extraction pipeline for both `translate` and `export`.
 
     Returns (units, gutter_rects, skipped) where each unit carries the block,
     its placeholder-protected text, and the restore mapping.
+
+    Phase 1: Structure analysis — classify blocks by semantic type before translation.
     """
     raw_blocks, gutter_rects = collect_text_blocks(document)
-    blocks = merge_paragraph_blocks(raw_blocks)
-    page_heights = {index: document[index].rect.height for index in range(document.page_count)}
-    bibliography = mark_bibliography_blocks(blocks, page_heights)
+    graphic_regions = collect_graphic_regions(document) if preserve_graphics_text else {}
+    blocks = merge_paragraph_blocks(
+        raw_blocks,
+        graphic_regions_by_page=graphic_regions if preserve_graphics_text else None,
+    )
+
+    # --- Phase 1: Structure-aware classification ---
+    _bibliography_seen.clear()
+    for page_index in range(document.page_count):
+        page = document[page_index]
+        page_height = page.rect.height
+        image_zones = detect_image_zones(page)
+        page_blocks = [b for b in blocks if b.page_index == page_index]
+        classify_blocks(page_blocks, page_index, page_height, image_zones)
+
     units: List[TranslationUnit] = []
     skipped = 0
-    for block, in_bibliography in zip(blocks, bibliography):
-        if in_bibliography:
+    for block in blocks:
+        # Use structure-aware classification
+        if not block.should_translate:
+            skipped += 1
+            continue
+        if preserve_graphics_text and should_preserve_original_block(
+            block,
+            graphic_regions.get(block.page_index, []),
+        ):
             skipped += 1
             continue
         plain = strip_sentinels(block.text)
@@ -535,6 +632,147 @@ def mark_bibliography_blocks(
     return flags
 
 
+def collect_graphic_regions(document: object) -> Dict[int, List[BBox]]:
+    """Find page regions that contain figures, vector diagrams, tables, or images."""
+    regions: Dict[int, List[BBox]] = {}
+    for page_index in range(document.page_count):
+        page_regions = graphic_regions_for_page(document[page_index])
+        if page_regions:
+            regions[page_index] = page_regions
+    return regions
+
+
+def graphic_regions_for_page(page: object) -> List[BBox]:
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError("PyMuPDF is required. Install with: pip install -e .") from exc
+
+    page_rect = page.rect
+    candidates: List[BBox] = []
+    for raw_block in page.get_text("dict").get("blocks", []):
+        if raw_block.get("type") == 0 or "bbox" not in raw_block:
+            continue
+        bbox = tuple(float(value) for value in raw_block["bbox"])
+        if bbox_is_graphic_candidate(bbox, page_rect):
+            candidates.append(bbox)
+
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        drawings = []
+    for drawing in drawings:
+        rect = drawing.get("rect")
+        if not isinstance(rect, fitz.Rect):
+            continue
+        bbox = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+        if bbox_is_graphic_candidate(bbox, page_rect):
+            candidates.append(bbox)
+
+    merged = merge_nearby_bboxes(candidates, GRAPHIC_REGION_CLUSTER_GAP)
+    output: List[BBox] = []
+    for bbox in merged:
+        if bbox_area(bbox) < GRAPHIC_REGION_MIN_AREA:
+            continue
+        output.append(expand_bbox_to_page(bbox, GRAPHIC_REGION_PADDING, page_rect))
+    return output
+
+
+def bbox_is_graphic_candidate(bbox: BBox, page_rect: object) -> bool:
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    if width < GRAPHIC_REGION_MIN_SIDE or height < GRAPHIC_REGION_MIN_SIDE:
+        return False
+    if bbox_area(bbox) < GRAPHIC_REGION_MIN_AREA:
+        return False
+    page_area = max(float(page_rect.width) * float(page_rect.height), 1.0)
+    return bbox_area(bbox) <= page_area * 0.85
+
+
+def merge_nearby_bboxes(bboxes: Sequence[BBox], gap: float) -> List[BBox]:
+    merged = list(bboxes)
+    changed = True
+    while changed:
+        changed = False
+        next_round: List[BBox] = []
+        while merged:
+            current = merged.pop(0)
+            index = 0
+            while index < len(merged):
+                if bboxes_intersect(expand_bbox(current, gap), merged[index]):
+                    current = union_bbox([current, merged.pop(index)])
+                    changed = True
+                else:
+                    index += 1
+            next_round.append(current)
+        merged = next_round
+    return merged
+
+
+def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[BBox]) -> bool:
+    """Conservative-mode filter: keep figure/table internals and formulas untouched."""
+    plain = " ".join(strip_sentinels(block.text).split())
+    if not plain:
+        return True
+    if block_overlaps_graphic_region(block.bbox, graphic_regions):
+        return True
+    if math_heavy_block(block):
+        return True
+    if short_graphic_label_block(block, plain):
+        return True
+    return False
+
+
+def block_overlaps_graphic_region(bbox: BBox, regions: Sequence[BBox]) -> bool:
+    area = max(bbox_area(bbox), 1.0)
+    center_x = (bbox[0] + bbox[2]) / 2.0
+    center_y = (bbox[1] + bbox[3]) / 2.0
+    for region in regions:
+        if bbox_contains_point(region, center_x, center_y):
+            return True
+        if bbox_intersection_area(bbox, region) / area >= GRAPHIC_BLOCK_OVERLAP_RATIO:
+            return True
+    return False
+
+
+def bbox_crosses_graphic_region(bbox: BBox, regions: Sequence[BBox]) -> bool:
+    return any(bboxes_intersect(bbox, region) for region in regions)
+
+
+def math_heavy_block(block: TextBlock) -> bool:
+    bare = strip_sentinels(block.text)
+    compact = "".join(bare.split())
+    if not compact:
+        return False
+    if substantial_prose_word_count(bare) >= 5:
+        return False
+    if looks_like_math(bare):
+        return True
+    math_chars = sentinel_char_count(block.text)
+    if not math_chars:
+        return False
+    ratio = math_chars / len(compact)
+    if ratio >= MATH_HEAVY_RATIO:
+        return True
+    return block.source_lines <= 2 and ratio >= MATH_SHORT_BLOCK_RATIO
+
+
+def short_graphic_label_block(block: TextBlock, plain: str) -> bool:
+    words = _PROSE_WORD_RE.findall(plain)
+    return (
+        block.font_size <= 8.5
+        and block.source_lines <= 2
+        and len(plain) <= 80
+        and len(words) <= 6
+    )
+
+
+def substantial_prose_word_count(text: str) -> int:
+    return sum(
+        1 for word in _PROSE_WORD_RE.findall(text) if word.lower() not in _MATH_WORDS
+    )
+
+
 def collect_text_blocks(document: object) -> Tuple[List[TextBlock], Dict[int, List[BBox]]]:
     """Extract text blocks and the bboxes of stripped gutter line numbers.
 
@@ -562,6 +800,183 @@ def collect_text_blocks(document: object) -> Tuple[List[TextBlock], Dict[int, Li
                 continue
             blocks.extend(segments_from_record(page_index, record, equation_record=is_equation))
     return blocks, gutter_rects
+
+
+def detect_image_zones(page: object) -> List[BBox]:
+    """Detect image regions and extend them to include nearby captions.
+
+    Returns a list of bboxes representing figure+caption zones.
+    """
+    zones: List[BBox] = []
+    for img in page.get_images():
+        try:
+            rect = page.get_image_bbox(img)
+            if rect and rect.is_empty is False and rect.is_valid:
+                # Extend zone downward to include nearby captions
+                pad = _IMAGE_ZONE_CAPTION_GAP
+                zones.append((
+                    rect.x0 - pad,
+                    rect.y0,
+                    rect.x1 + pad,
+                    rect.y1 + pad * 3,
+                ))
+        except Exception:
+            continue
+    return zones
+
+
+def detect_columns(blocks: List[TextBlock]) -> List[Tuple[float, float]]:
+    """Detect single/two-column layout from block x0 positions.
+
+    Returns list of (left_margin, col_width) tuples, sorted by left_margin.
+    """
+    import statistics as _stats
+
+    x0_weighted: Dict[float, float] = {}
+    x0_to_widths: Dict[float, List[float]] = {}
+
+    for block in blocks:
+        if block.block_type in ("equation", "algorithm", "footer"):
+            continue
+        x0, y0, x1, y1 = block.bbox
+        width = x1 - x0
+        if width < 30:
+            continue
+        text_len = len(block.text.strip())
+        x0_rounded = round(x0, 0)
+        x0_weighted[x0_rounded] = x0_weighted.get(x0_rounded, 0) + text_len
+        x0_to_widths.setdefault(x0_rounded, []).append(round(width, 0))
+
+    if not x0_weighted:
+        return []
+
+    sorted_x0s = sorted(x0_weighted, key=x0_weighted.get, reverse=True)
+    primary_x0 = sorted_x0s[0]
+
+    # Look for a second column > _COLUMN_CLUSTER_GAP away
+    for x0 in sorted_x0s[1:]:
+        if abs(x0 - primary_x0) > _COLUMN_CLUSTER_GAP:
+            columns = []
+            for x in [primary_x0, x0]:
+                widths = x0_to_widths[x]
+                full_widths = [w for w in widths if w > 300]
+                widths_to_use = full_widths or widths
+                col_w = float(_stats.mode(widths_to_use))
+                columns.append((float(x), col_w))
+            columns.sort(key=lambda c: c[0])
+            return columns
+
+    # Single column
+    all_widths = [w for ws in x0_to_widths.values() for w in ws]
+    full_widths = [w for w in all_widths if w > 300]
+    widths_to_use = full_widths or all_widths
+    col_width = float(_stats.mode(widths_to_use))
+    return [(float(primary_x0), col_width)]
+
+
+def _block_in_zone(bbox: BBox, zone: BBox) -> bool:
+    """Check if a block's bbox overlaps significantly with a zone."""
+    bx0, by0, bx1, by1 = bbox
+    zx0, zy0, zx1, zy1 = zone
+    ox0 = max(bx0, zx0)
+    oy0 = max(by0, zy0)
+    ox1 = min(bx1, zx1)
+    oy1 = min(by1, zy1)
+    overlap_area = max(0, ox1 - ox0) * max(0, oy1 - oy0)
+    block_area = max(1, (bx1 - bx0) * (by1 - by0))
+    return overlap_area / block_area > 0.3
+
+
+def classify_blocks(
+    blocks: List[TextBlock],
+    page_index: int,
+    page_height: float,
+    image_zones: List[BBox],
+) -> None:
+    """Classify blocks by semantic type. Modifies blocks in-place.
+
+    Priority order:
+    1. Equation zone → equation (should_translate=False)
+    2. Algorithm → algorithm (should_translate=False)
+    3. Inside image zone + short label → figure_label (should_translate=False)
+    4. Caption pattern → caption (preserve_position=True)
+    5. Bold + numbered + short → heading
+    6. Bibliography → bibliography (should_translate=False)
+    7. Footer → footer (should_translate=False)
+    8. Otherwise → body
+    """
+    for block in blocks:
+        text = block.text.strip()
+        x0, y0, x1, y1 = block.bbox
+
+        # Already classified as equation by native engine
+        if getattr(block, "_equation_zone", False):
+            block.block_type = "equation"
+            block.should_translate = False
+            continue
+
+        # Inside image zone
+        in_image = any(_block_in_zone(block.bbox, z) for z in image_zones)
+        if in_image:
+            if len(text) <= _FIGURE_LABEL_MAX_LEN and not _CAPTION_RE.match(text):
+                block.block_type = "figure_label"
+                block.should_translate = False
+                block.preserve_position = True
+                continue
+            # Caption inside image zone — still translate but preserve position
+            if _CAPTION_RE.match(text):
+                block.block_type = "caption"
+                block.preserve_position = True
+                continue
+
+        # Caption pattern (Figure N, Table N, etc.)
+        if _CAPTION_RE.match(text):
+            block.block_type = "caption"
+            block.preserve_position = True
+            continue
+
+        # Heading: bold + numbered + short
+        if block.bold and len(text) < 100 and _HEADING_RE.match(text):
+            block.block_type = "heading"
+            continue
+
+        # Bibliography: after "References" heading
+        if _is_bibliography_context(block, blocks):
+            block.block_type = "bibliography"
+            block.should_translate = False
+            continue
+
+        # Footer: near bottom of page or page number
+        if y0 > page_height - _FOOTER_MAX_Y_OFFSET:
+            if _FOOTER_PAGE_NUM_RE.match(text) or len(text) < 30:
+                block.block_type = "footer"
+                block.should_translate = False
+                continue
+
+        # Default
+        block.block_type = "body"
+        block.should_translate = True
+
+
+# Track whether we've seen a "References" heading per page
+_bibliography_seen: Dict[int, bool] = {}
+
+
+def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> bool:
+    """Check if block is in the bibliography section."""
+    text = block.text.strip().lower()
+    # Check if this block IS the references heading
+    if re.match(r"^(references|bibliography|参考文献)\s*$", text, re.IGNORECASE):
+        _bibliography_seen[block.page_index] = True
+        return False  # The heading itself is translatable
+    # Check if we've seen references heading on a previous page or earlier on this page
+    if _bibliography_seen.get(block.page_index, False):
+        return True
+    # Check previous pages
+    for pi in range(block.page_index):
+        if _bibliography_seen.get(pi, False):
+            return True
+    return False
 
 
 @dataclass
@@ -628,14 +1043,19 @@ def parse_block_lines(raw_block: dict) -> Tuple[Optional[_RawBlockRec], List[BBo
     for raw_line in raw_block.get("lines", []):
         spans = raw_line.get("spans", [])
         line_max_size = 0.0
-        for span in spans:
+        non_empty_span_indexes: List[int] = []
+        for span_index, span in enumerate(spans):
             if normalize_span_text(span.get("text", "")).strip():
+                non_empty_span_indexes.append(span_index)
                 line_max_size = max(line_max_size, float(span.get("size", 0.0)))
+        last_non_empty_span = non_empty_span_indexes[-1] if non_empty_span_indexes else -1
 
         fragments: List[Tuple[str, dict]] = []
-        for span in spans:
+        for span_index, span in enumerate(spans):
             span_text = normalize_span_text(span.get("text", ""))
             if not span_text.strip():
+                if fragments and span_index < last_non_empty_span:
+                    fragments.append((span_text, span))
                 continue
             span_size = float(span.get("size", line_max_size))
             if is_line_number_span(
@@ -854,6 +1274,9 @@ _MATH_WORDS = frozenset(
     "softmax argmax argmin var cov std relu prox sgn span rank dim mod".split()
 )
 _PROSE_WORD_RE = re.compile(r"[A-Za-z]{3,}")
+_SHORT_PROSE_WORDS = frozenset(
+    "a an and are as at be by for if in is it of on or the to was were when where with".split()
+)
 
 
 def line_is_prose(line: _LineRec) -> bool:
@@ -870,6 +1293,119 @@ def line_is_prose(line: _LineRec) -> bool:
     return sentinel_char_count(line.text) / len(compact) < 0.35
 
 
+def line_continues_inline_formula_tail(line: _LineRec, current: "_SegmentAccumulator") -> bool:
+    """True for same-baseline formula fragments that finish a prose sentence."""
+    if not current.bboxes:
+        return False
+    previous = current.bboxes[-1]
+    overlap = min(previous[3], line.bbox[3]) - max(previous[1], line.bbox[1])
+    min_height = min(previous[3] - previous[1], line.bbox[3] - line.bbox[1])
+    if min_height <= 0 or overlap < min_height * 0.35:
+        return False
+    bare = strip_sentinels(line.text)
+    if len(bare) > 120:
+        return False
+    if not re.search(r"[A-Za-z]|[),.;:]", bare):
+        return False
+    return not EQUATION_NUMBER_RE.fullmatch("".join(bare.split()))
+
+
+def segments_from_formula_tail_prose(
+    page_index: int, record: _RawBlockRec
+) -> Optional[List[TextBlock]]:
+    """Split prose that starts after an inline fraction without redacting it.
+
+    Some PDFs typeset ``lambda = 1/(2 sigma^2) where sigma^2 is ...`` as
+    overlapping physical lines. That can look like a table to the extractor,
+    and the ``where`` clause may otherwise be preserved as formula material.
+    We translate the clause in the following prose line's rectangle while only
+    redacting the English clause spans, leaving the fraction itself intact.
+    """
+    lines = record.lines
+    if len(lines) < 4:
+        return None
+
+    prose_lefts = [
+        line.bbox[0]
+        for line in lines
+        if line_is_prose(line) and (line.bbox[2] - line.bbox[0]) >= 80.0
+    ]
+    if not prose_lefts:
+        return None
+    body_left = min(prose_lefts)
+
+    for where_index, line in enumerate(lines[:-1]):
+        line_text_lower = line.text.lower()
+        cue_offset = line_text_lower.find("where")
+        if cue_offset < 0:
+            continue
+        # Normal prose lines starting at the paragraph left should translate as
+        # ordinary text. This path is only for right-side formula tails.
+        if line.bbox[0] <= body_left + 80.0:
+            continue
+
+        prose_start = None
+        for candidate in range(where_index + 1, len(lines)):
+            candidate_line = lines[candidate]
+            if line_is_prose(candidate_line) and candidate_line.bbox[0] <= body_left + 30.0:
+                prose_start = candidate
+                break
+        if prose_start is None:
+            continue
+
+        segments: List[TextBlock] = []
+        prefix = _SegmentAccumulator()
+        for prefix_line in lines[:where_index]:
+            if prefix_line.bbox[0] <= body_left + 60.0:
+                _accumulate_line(prefix, prefix_line)
+        prefix_block = prefix.flush(page_index)
+        if prefix_block is not None:
+            segments.append(prefix_block)
+
+        clause_parts = [line.text[cue_offset:]]
+        clause_parts.extend(tail_line.text for tail_line in lines[where_index + 1 :])
+        clause_text = normalize_formula_tail_clause(join_lines(clause_parts))
+        if not clause_text:
+            return None
+
+        insertion = _SegmentAccumulator()
+        for prose_line in lines[prose_start:]:
+            _accumulate_line(insertion, prose_line)
+        clause_block = insertion.flush(page_index)
+        if clause_block is None:
+            return None
+
+        redact_bboxes: List[BBox] = []
+        cue_bbox = line_tail_bbox_from_cue(line, "where")
+        if cue_bbox is not None:
+            redact_bboxes.append(cue_bbox)
+        redact_bboxes.extend(tail_line.bbox for tail_line in lines[where_index + 1 :])
+        clause_block.text = clause_text
+        clause_block.redact_bboxes = redact_bboxes
+        clause_block.no_merge = True
+        segments.append(clause_block)
+        return segments
+
+    return None
+
+
+def normalize_formula_tail_clause(text: str) -> str:
+    text = " ".join(text.split())
+    return re.sub(r"\b(where|when|if)(?=\S)", r"\1 ", text, flags=re.IGNORECASE)
+
+
+def line_tail_bbox_from_cue(line: _LineRec, cue: str) -> Optional[BBox]:
+    bboxes: List[BBox] = []
+    collecting = False
+    for span in line.spans:
+        span_text = normalize_span_text(span.get("text", ""))
+        if not collecting and cue in span_text.lower():
+            collecting = True
+        if collecting and "bbox" in span:
+            bboxes.append(tuple(float(value) for value in span["bbox"]))
+    return union_bbox(bboxes) if bboxes else None
+
+
 def segments_from_record(
     page_index: int, record: _RawBlockRec, equation_record: bool = False
 ) -> List[TextBlock]:
@@ -878,6 +1414,10 @@ def segments_from_record(
     For equation zones only full prose lines are extracted (the formula
     typesetting is preserved); for normal blocks a residual display-equation
     line still splits the segment and keeps its original rendering."""
+    formula_tail_segments = segments_from_formula_tail_prose(page_index, record)
+    if formula_tail_segments is not None:
+        return formula_tail_segments
+
     segments: List[TextBlock] = []
     if not equation_record and record_is_table(record):
         for line in record.lines:
@@ -890,17 +1430,27 @@ def segments_from_record(
         return segments
 
     current = _SegmentAccumulator()
+    current_has_inline_tail = False
 
     def flush_current() -> None:
-        nonlocal current
+        nonlocal current, current_has_inline_tail
         block = current.flush(page_index)
         if block is not None:
+            if current_has_inline_tail:
+                # Same redaction area, but prevents paragraph merging across a
+                # reconstructed inline-equation sentence.
+                block.redact_bboxes = [block.bbox]
             segments.append(block)
         current = _SegmentAccumulator()
+        current_has_inline_tail = False
 
     for line in record.lines:
         if equation_record:
             if not line_is_prose(line):
+                if line_continues_inline_formula_tail(line, current):
+                    _accumulate_line(current, line)
+                    current_has_inline_tail = True
+                    continue
                 flush_current()
                 continue
         elif is_display_equation_line(line.text):
@@ -932,8 +1482,12 @@ def _accumulate_line(accumulator: "_SegmentAccumulator", line: _LineRec) -> None
         if "color" in span:
             accumulator.colors.append(int_to_rgb(span["color"]))
         span_chars = len(normalize_span_text(span.get("text", "")).strip())
+        span_bold = bool(int(span.get("flags", 0)) & FLAG_BOLD)
+        if span_chars and not accumulator.seen_text:
+            accumulator.starts_bold = span_bold
+            accumulator.seen_text = True
         accumulator.total_chars += span_chars
-        if int(span.get("flags", 0)) & FLAG_BOLD:
+        if span_bold:
             accumulator.bold_chars += span_chars
 
 
@@ -945,6 +1499,8 @@ class _SegmentAccumulator:
     colors: List[Color] = field(default_factory=list)
     bold_chars: int = 0
     total_chars: int = 0
+    starts_bold: bool = False
+    seen_text: bool = False
 
     def flush(self, page_index: int) -> Optional[TextBlock]:
         text = join_lines(self.lines)
@@ -958,6 +1514,7 @@ class _SegmentAccumulator:
             font_size=median_or_default(self.font_sizes, 9.0),
             color=dominant_color(self.colors),
             bold=bold,
+            starts_bold=self.starts_bold,
             source_lines=len(self.lines),
         )
 
@@ -1007,14 +1564,20 @@ def is_math_span(
     a subscript glyph, and those are normal prose."""
     if MATH_FONT_RE.search(font or ""):
         return True
+    stripped = text.strip()
     if flags & 1:  # superscript bit
+        if (
+            stripped.lower() in _SHORT_PROSE_WORDS
+            and size > 0
+            and line_max_size > 0
+            and size >= line_max_size * 0.85
+        ):
+            return False
         if size <= 0 or line_max_size <= 0 or size < line_max_size * 0.85:
             return True
-        stripped = text.strip()
         if len(stripped) <= 3:
             return True
         return False
-    stripped = text.strip()
     if (flags & 2) and len(stripped) <= 2 and stripped.isalpha():
         return True
     return False
@@ -1105,6 +1668,8 @@ _FULLWIDTH_PUNCT = (  # noqa: E501
 def clean_translation(text: str) -> str:
     """Normalise spacing of inserted Chinese text (盘古之白 + punctuation)."""
     cleaned = re.sub(r"[ \t]{2,}", " ", text)
+    cleaned = cleaned.replace(").）", "）")
+    cleaned = cleaned.replace(").，", "），")
     cleaned = _SPACE_BEFORE_FULLWIDTH_RE.sub(r"\1", cleaned)
     cleaned = _SPACE_AFTER_FULLWIDTH_RE.sub(r"\1", cleaned)
     # Thin breathing space between CJK and Latin/digits/math, both directions.
@@ -1148,7 +1713,10 @@ def join_lines(lines: Sequence[str]) -> str:
     return output.strip()
 
 
-def merge_paragraph_blocks(blocks: Sequence[TextBlock]) -> List[TextBlock]:
+def merge_paragraph_blocks(
+    blocks: Sequence[TextBlock],
+    graphic_regions_by_page: Optional[Dict[int, List[BBox]]] = None,
+) -> List[TextBlock]:
     """Merge consecutive blocks that geometrically belong to one paragraph.
 
     Blocks arrive in document (reading) order. Two neighbours merge when they
@@ -1158,15 +1726,26 @@ def merge_paragraph_blocks(blocks: Sequence[TextBlock]) -> List[TextBlock]:
     merged: List[TextBlock] = []
     for block in blocks:
         previous = merged[-1] if merged else None
-        if previous is not None and can_merge_blocks(previous, block):
+        regions = (
+            graphic_regions_by_page.get(block.page_index, []) if graphic_regions_by_page else []
+        )
+        if previous is not None and can_merge_blocks(previous, block, regions):
             merged[-1] = merge_two_blocks(previous, block)
         else:
             merged.append(block)
     return merged
 
 
-def can_merge_blocks(prev: TextBlock, nxt: TextBlock) -> bool:
+def can_merge_blocks(
+    prev: TextBlock,
+    nxt: TextBlock,
+    graphic_regions: Sequence[BBox] = (),
+) -> bool:
     if prev.nowrap or nxt.nowrap:
+        return False
+    if prev.no_merge or nxt.no_merge:
+        return False
+    if sentence_final_text(prev.text) and nxt.starts_bold:
         return False
     if prev.page_index != nxt.page_index:
         return False
@@ -1180,7 +1759,16 @@ def can_merge_blocks(prev: TextBlock, nxt: TextBlock) -> bool:
     narrower = min(prev.bbox[2] - prev.bbox[0], nxt.bbox[2] - nxt.bbox[0])
     if narrower <= 0 or overlap / narrower < PARAGRAPH_MIN_X_OVERLAP:
         return False
+    if graphic_regions and bbox_crosses_graphic_region(
+        union_bbox([prev.bbox, nxt.bbox]),
+        graphic_regions,
+    ):
+        return False
     return True
+
+
+def sentence_final_text(text: str) -> bool:
+    return strip_sentinels(text).rstrip().endswith((".", "?", "!", "。", "？", "！"))
 
 
 def merge_two_blocks(prev: TextBlock, nxt: TextBlock) -> TextBlock:
@@ -1191,6 +1779,7 @@ def merge_two_blocks(prev: TextBlock, nxt: TextBlock) -> TextBlock:
         font_size=prev.font_size,
         color=prev.color,
         bold=prev.bold and nxt.bold,
+        starts_bold=prev.starts_bold,
         source_lines=prev.source_lines + nxt.source_lines,
     )
 
@@ -1208,9 +1797,10 @@ def redact_original_text(
 
     background = render_background(page)
     for block in blocks:
-        rect = expand_rect(fitz.Rect(block.bbox), margin)
-        fill = sample_background_color(background, block.bbox, margin)
-        page.add_redact_annot(rect, fill=fill)
+        for bbox in block.redact_bboxes or [block.bbox]:
+            rect = expand_rect(fitz.Rect(bbox), margin)
+            fill = sample_background_color(background, bbox, margin)
+            page.add_redact_annot(rect, fill=fill)
     for bbox in extra_rects:
         rect = expand_rect(fitz.Rect(bbox), margin)
         fill = sample_background_color(background, bbox, margin)
@@ -1434,6 +2024,45 @@ def stretchable_gaps(line: Sequence[_Token]) -> List[int]:
         elif left.kind == "cjk" or right.kind == "cjk":
             gaps.append(index)
     return gaps
+
+
+def translated_text_fits(
+    block: TextBlock,
+    text: str,
+    font_pack: FontPack,
+    font_size: float,
+    min_font_size: float,
+    margin: float,
+    centered: bool = False,
+) -> bool:
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError("PyMuPDF is required. Install with: pip install -e .") from exc
+
+    rect = shrink_rect(fitz.Rect(block.bbox), margin)
+    if rect.width <= 1 or rect.height <= 1:
+        return False
+    fonts = font_pack.fonts_for(block.bold)
+    tokens = tokenize_text(text)
+    if not tokens:
+        return True
+
+    if block.nowrap:
+        width = sum(token_width(token, fonts, font_size) for token in tokens)
+        if width <= rect.width or width <= 0:
+            return True
+        scaled_size = font_size * rect.width / width
+        return scaled_size >= min_font_size * 0.8
+
+    size = font_size
+    while size >= min_font_size - 1e-6:
+        lines = break_lines(tokens, fonts, size, rect.width, prefer_space_break=centered)
+        for leading in (DEFAULT_LEADING, 1.26, 1.15):
+            if line_block_height(lines, size, leading) <= rect.height + size * 0.4:
+                return True
+        size -= 0.25
+    return False
 
 
 def insert_translated_text(
@@ -1682,6 +2311,45 @@ def union_bbox(bboxes: Iterable[BBox]) -> BBox:
         min(box[1] for box in boxes),
         max(box[2] for box in boxes),
         max(box[3] for box in boxes),
+    )
+
+
+def bbox_area(bbox: BBox) -> float:
+    return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+
+
+def bbox_intersection_area(first: BBox, second: BBox) -> float:
+    x0 = max(first[0], second[0])
+    y0 = max(first[1], second[1])
+    x1 = min(first[2], second[2])
+    y1 = min(first[3], second[3])
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+
+def bboxes_intersect(first: BBox, second: BBox) -> bool:
+    return (
+        min(first[2], second[2]) > max(first[0], second[0])
+        and min(first[3], second[3]) > max(first[1], second[1])
+    )
+
+
+def bbox_contains_point(bbox: BBox, x: float, y: float) -> bool:
+    return bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]
+
+
+def expand_bbox(bbox: BBox, amount: float) -> BBox:
+    if amount <= 0:
+        return bbox
+    return (bbox[0] - amount, bbox[1] - amount, bbox[2] + amount, bbox[3] + amount)
+
+
+def expand_bbox_to_page(bbox: BBox, amount: float, page_rect: object) -> BBox:
+    expanded = expand_bbox(bbox, amount)
+    return (
+        max(float(page_rect.x0), expanded[0]),
+        max(float(page_rect.y0), expanded[1]),
+        min(float(page_rect.x1), expanded[2]),
+        min(float(page_rect.y1), expanded[3]),
     )
 
 

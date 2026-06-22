@@ -63,19 +63,24 @@ class CachedTranslator(Translator):
                 missing.append(text)
 
         if missing:
-            translations = self.wrapped.translate_batch(missing)
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
-            with self.cache_file.open("a", encoding="utf-8") as handle:
-                for source, translation in zip(missing, translations):
-                    key = cache_key(source)
-                    self.cache[key] = translation
-                    handle.write(
-                        json.dumps(
-                            {"key": key, "source": source, "translation": translation},
-                            ensure_ascii=False,
+            batch_size = int(getattr(self.wrapped, "batch_size", len(missing)))
+            max_chars = int(
+                getattr(self.wrapped, "max_batch_chars", sum(len(text) for text in missing) or 1)
+            )
+            for chunk in chunked_by_size(missing, batch_size, max_chars):
+                translations = self.wrapped.translate_batch(chunk)
+                with self.cache_file.open("a", encoding="utf-8") as handle:
+                    for source, translation in zip(chunk, translations):
+                        key = cache_key(source)
+                        self.cache[key] = translation
+                        handle.write(
+                            json.dumps(
+                                {"key": key, "source": source, "translation": translation},
+                                ensure_ascii=False,
+                            )
+                            + "\n"
                         )
-                        + "\n"
-                    )
 
         return [self.cache[cache_key(text)] for text in texts]
 
@@ -160,6 +165,8 @@ class VendorTranslator(Translator):
     deepseek_thinking: str = "disabled"
     reasoning_effort: str = "high"
     progress: bool = True
+    # Structure-aware: block types for context-aware prompts
+    block_types: Optional[List[str]] = None
 
     def translate_batch(self, texts: Sequence[str]) -> List[str]:
         results: List[str] = []
@@ -232,10 +239,11 @@ class VendorTranslator(Translator):
         return parse_translation_list(data)
 
     def _translate_openai_compatible(self, texts: Sequence[str]) -> List[str]:
+        prompt = translation_array_prompt_with_types(self.block_types)
         payload = {
             "model": self.model or "gpt-4o-mini",
             "messages": [
-                {"role": "system", "content": translation_array_prompt()},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": json.dumps(list(texts), ensure_ascii=False)},
             ],
             "temperature": 0,
@@ -246,10 +254,11 @@ class VendorTranslator(Translator):
         return parse_json_string_list(content)
 
     def _translate_deepseek(self, texts: Sequence[str]) -> List[str]:
+        prompt = translation_array_prompt_with_types(self.block_types)
         payload: Dict[str, Any] = {
             "model": self.model or "deepseek-v4-pro",
             "messages": [
-                {"role": "system", "content": translation_object_prompt()},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": json.dumps(list(texts), ensure_ascii=False)},
             ],
             "temperature": 0,
@@ -430,6 +439,44 @@ _TRANSLATION_RULES = (
 def translation_array_prompt() -> str:
     return (
         _TRANSLATION_RULES + "\nTranslate each item in the JSON array "
+        "from English to Simplified Chinese. "
+        "Preserve numbers, citations, equations, URLs, "
+        "product names, placeholders like ⟦0⟧, and line breaks where possible. "
+        "Every placeholder token must be copied exactly once in its original position. "
+        "Do not add commentary. Return only a valid "
+        "JSON array of strings with the same length and order."
+    )
+
+
+# Structure-aware type hints for block classification
+_BLOCK_TYPE_HINTS: dict[str, str] = {
+    "title": "【注意】这是论文标题，翻译要简洁准确，保留原标题的学术风格。",
+    "heading": "【注意】这是章节标题，翻译为中文，保留编号格式（如 1、2.1、A.）。",
+    "caption": "【注意】这是图注或表注。Figure N→图N，Table N→表N。保留描述准确性，保持简洁。",
+    "body": "",  # standard prompt, no extra hint
+}
+
+
+def translation_array_prompt_with_types(block_types: list[str] | None = None) -> str:
+    """Build translation prompt with block-type-specific hints.
+
+    When block_types is provided, adds context about what each text block is
+    (title, heading, caption, body) so the LLM can translate appropriately.
+    """
+    base = _TRANSLATION_RULES
+
+    if block_types:
+        unique_types = set(block_types)
+        hints = []
+        for bt in unique_types:
+            hint = _BLOCK_TYPE_HINTS.get(bt, "")
+            if hint:
+                hints.append(hint)
+        if hints:
+            base += "\n\n" + "\n".join(hints)
+
+    return (
+        base + "\nTranslate each item in the JSON array "
         "from English to Simplified Chinese. "
         "Preserve numbers, citations, equations, URLs, "
         "product names, placeholders like ⟦0⟧, and line breaks where possible. "
