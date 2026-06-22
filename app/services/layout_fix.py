@@ -428,7 +428,8 @@ def _insert_text_with_fallback(
     if est_height > rect.height:
         rect = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + est_height)
 
-    size = max(9.0, min(avg_font_size, 12.0))
+    # Start at original font size, fall back to smaller sizes on overflow
+    size = max(_MIN_INSERT_FONT, avg_font_size)
     while size >= _MIN_INSERT_FONT:
         shape = page.new_shape()
         result = shape.insert_textbox(
