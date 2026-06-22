@@ -755,6 +755,9 @@ function pollTranslationStatus(paperId) {
   const titleEl = document.getElementById('trans-title');
   prog.classList.remove('hidden');
 
+  // Start elapsed time timer
+  const startTime = Date.now();
+
   // Show paper title in progress panel
   if (titleEl && currentPaper) {
     titleEl.textContent = currentPaper.title;
@@ -796,10 +799,13 @@ function pollTranslationStatus(paperId) {
         logEl.scrollTop = logEl.scrollHeight;
       }
 
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m${elapsed % 60}s`;
+
       if (paper.translation_status === 'completed') {
         clearInterval(translationPollId);
         translationPollId = null;
-        statusEl.textContent = '翻译完成';
+        statusEl.textContent = `翻译完成 (${elapsedStr})`;
         setTimeout(() => {
           prog.classList.add('hidden');
           if (currentPaper && currentPaper.id === paperId) {
@@ -810,11 +816,11 @@ function pollTranslationStatus(paperId) {
       } else if (paper.translation_status === 'failed') {
         clearInterval(translationPollId);
         translationPollId = null;
-        statusEl.textContent = '翻译失败';
+        statusEl.textContent = `翻译失败 (${elapsedStr})`;
         fill.style.background = 'var(--error)';
         loadPapers();
       } else {
-        statusEl.textContent = '翻译中...';
+        statusEl.textContent = `翻译中... ${elapsedStr}`;
       }
     } catch (e) {
       consecutiveErrors++;
