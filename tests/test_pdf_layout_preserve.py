@@ -262,5 +262,134 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         self.assertTrue(any("body sentence" in source for source in preserved_sources))
 
 
+class TestClassifyBlocks(unittest.TestCase):
+    """Test block classification into semantic types."""
+
+    def _make_block(self, text, bbox=(100, 100, 400, 120), bold=False, page=0):
+        return TextBlock(
+            page_index=page,
+            bbox=bbox,
+            text=text,
+            font_size=11.0,
+            color=(0, 0, 0),
+            bold=bold,
+        )
+
+    def test_caption_detection(self):
+        """Figure/Table captions are classified correctly."""
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block("Figure 1: Overview of the system architecture.")
+        classify_blocks([block], 0, 792, [])
+        self.assertEqual(block.block_type, "caption")
+        self.assertTrue(block.preserve_position)
+        self.assertTrue(block.should_translate)
+
+    def test_chinese_caption_detection(self):
+        """Chinese captions are detected."""
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block("图1 系统架构总览")
+        classify_blocks([block], 0, 792, [])
+        self.assertEqual(block.block_type, "caption")
+
+    def test_heading_detection(self):
+        """Bold numbered text is classified as heading."""
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block("1 Introduction", bold=True)
+        classify_blocks([block], 0, 792, [])
+        self.assertEqual(block.block_type, "heading")
+
+    def test_heading_requires_bold(self):
+        """Non-bold numbered text is not a heading."""
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block("1 Introduction", bold=False)
+        classify_blocks([block], 0, 792, [])
+        self.assertEqual(block.block_type, "body")
+
+    def test_footer_detection(self):
+        """Text near page bottom is classified as footer."""
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block("15", bbox=(250, 750, 280, 765))
+        classify_blocks([block], 0, 792, [])
+        self.assertEqual(block.block_type, "footer")
+        self.assertFalse(block.should_translate)
+
+    def test_figure_label_in_image_zone(self):
+        """Short text inside image zone is classified as figure_label."""
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block("Time", bbox=(150, 200, 180, 215))
+        image_zones = [(100, 150, 300, 300)]  # covers the block
+        classify_blocks([block], 0, 792, image_zones)
+        self.assertEqual(block.block_type, "figure_label")
+        self.assertFalse(block.should_translate)
+        self.assertTrue(block.preserve_position)
+
+    def test_body_text_default(self):
+        """Regular text is classified as body."""
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block("This is a regular paragraph of body text.")
+        classify_blocks([block], 0, 792, [])
+        self.assertEqual(block.block_type, "body")
+        self.assertTrue(block.should_translate)
+
+
+class TestDetectColumns(unittest.TestCase):
+    """Test column layout detection."""
+
+    def test_single_column(self):
+        """Blocks at same x0 detect single column."""
+        from pdf_zh_translator.pdf_layout import detect_columns
+
+        blocks = [
+            TextBlock(0, (91, 100, 504, 120), "a" * 50, 11.0, (0, 0, 0)),
+            TextBlock(0, (91, 130, 504, 150), "b" * 50, 11.0, (0, 0, 0)),
+        ]
+        columns = detect_columns(blocks)
+        self.assertEqual(len(columns), 1)
+        self.assertAlmostEqual(columns[0][0], 91.0)
+
+    def test_two_columns(self):
+        """Blocks at x0=54 and x0=337 detect two columns."""
+        from pdf_zh_translator.pdf_layout import detect_columns
+
+        blocks = [
+            TextBlock(0, (54, 100, 282, 120), "a" * 50, 11.0, (0, 0, 0)),
+            TextBlock(0, (54, 130, 282, 150), "b" * 50, 11.0, (0, 0, 0)),
+            TextBlock(0, (337, 100, 565, 120), "c" * 50, 11.0, (0, 0, 0)),
+            TextBlock(0, (337, 130, 565, 150), "d" * 50, 11.0, (0, 0, 0)),
+        ]
+        columns = detect_columns(blocks)
+        self.assertEqual(len(columns), 2)
+
+    def test_empty_blocks(self):
+        """Empty block list returns empty columns."""
+        from pdf_zh_translator.pdf_layout import detect_columns
+
+        self.assertEqual(detect_columns([]), [])
+
+
+class TestBlockInZone(unittest.TestCase):
+    """Test block-in-zone overlap detection."""
+
+    def test_full_overlap(self):
+        from pdf_zh_translator.pdf_layout import _block_in_zone
+        self.assertTrue(_block_in_zone((100, 100, 200, 200), (50, 50, 250, 250)))
+
+    def test_no_overlap(self):
+        from pdf_zh_translator.pdf_layout import _block_in_zone
+        self.assertFalse(_block_in_zone((100, 100, 200, 200), (300, 300, 400, 400)))
+
+    def test_partial_overlap_below_threshold(self):
+        from pdf_zh_translator.pdf_layout import _block_in_zone
+        # Only ~10% overlap
+        self.assertFalse(_block_in_zone((100, 100, 200, 200), (190, 100, 300, 200)))
+
+
 if __name__ == "__main__":
     unittest.main()
