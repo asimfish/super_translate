@@ -889,13 +889,17 @@ function initResizer() {
 
   let startX, startLeftW;
 
-  // Middle resizer (existing behavior)
   resizer.addEventListener('mousedown', e => {
+    e.preventDefault();
     startX = e.clientX;
     startLeftW = left.getBoundingClientRect().width;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', () => {
       document.removeEventListener('mousemove', onMove);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
       reRenderPanel('original');
       reRenderPanel('translated');
     }, { once: true });
