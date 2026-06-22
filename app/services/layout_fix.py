@@ -49,6 +49,8 @@ _FONT_INFO_NAME_IDX = 4  # font info tuple index for font name string
 _MAX_SANITIZE_LEN = 500  # max error message length for sanitization
 _MAX_ERROR_LEN = 200  # max error message length after sanitization
 _ASCII_CONTROL_MAX = 32  # ASCII control characters below this value (except \n\r\t)
+# Minimum separation between x0 clusters to detect two-column layout
+_COLUMN_CLUSTER_GAP = 150.0
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,25 @@ class TextBlockInfo:
     text: str
     avg_font_size: float
     block_index: int
+
+
+@dataclass(frozen=True)
+class ColumnInfo:
+    """Layout information for a single text column."""
+
+    left_margin: float
+    col_width: float
+
+
+def _find_nearest_column(
+    block: TextBlockInfo,
+    columns: list[ColumnInfo],
+) -> ColumnInfo | None:
+    """Find the column whose left margin is closest to the block's x0."""
+    if not columns:
+        return None
+    x0 = block.bbox[0]
+    return min(columns, key=lambda c: abs(x0 - c.left_margin))
 
 
 def fix_translated_layout(
@@ -152,9 +173,9 @@ def _fix_page_layout(page: object) -> int:
     # (null bytes, SOH, etc. from pdf2zh font embedding)
     _clean_page_artifacts(page, blocks, page_dict)
 
-    # Analyze page layout
-    left_margin, col_width = _analyze_page_layout(blocks)
-    if col_width < _MIN_COL_WIDTH:
+    # Analyze page layout (detects single or two-column)
+    columns = _analyze_page_layout(blocks)
+    if not columns or columns[0].col_width < _MIN_COL_WIDTH:
         return 0  # Can't determine layout, skip
 
     # Get image regions to avoid corrupting text near figures
@@ -165,8 +186,7 @@ def _fix_page_layout(page: object) -> int:
     to_fix = [
         b
         for b in blocks
-        if _needs_fix(b, left_margin, col_width, page_height)
-        and not _block_overlaps_image(b, image_bboxes)
+        if _needs_fix(b, columns, page_height) and not _block_overlaps_image(b, image_bboxes)
     ]
 
     if not to_fix:
@@ -174,7 +194,7 @@ def _fix_page_layout(page: object) -> int:
 
     # Redact and reinsert
     _redact_blocks(page, to_fix)
-    return _reinsert_blocks(page, to_fix, left_margin, col_width)
+    return _reinsert_blocks(page, to_fix, columns)
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -318,8 +338,7 @@ def _redact_blocks(page: object, blocks: list[TextBlockInfo]) -> None:
 def _reinsert_blocks(
     page: object,
     blocks: list[TextBlockInfo],
-    left_margin: float,
-    col_width: float,
+    columns: list[ColumnInfo],
 ) -> int:
     """Reinsert cleaned text blocks at correct positions. Returns count of blocks reinserted."""
     fixed_count = 0
@@ -339,6 +358,13 @@ def _reinsert_blocks(
         page_width = page.rect.width
         if x0 > page_width * _RIGHT_MARGIN_RATIO and (block.bbox[2] - x0) < MIN_BLOCK_WIDTH:
             continue
+
+        # Find the nearest column for this block
+        col = _find_nearest_column(block, columns)
+        if col is None:
+            continue
+        left_margin = col.left_margin
+        col_width = col.col_width
 
         # Skip short fragments that are already at correct x position
         block_width = block.bbox[2] - x0
@@ -490,15 +516,17 @@ def _extract_text_blocks(
 
 def _analyze_page_layout(
     blocks: list[TextBlockInfo],
-) -> tuple[float, float]:
-    """Analyze text blocks to find dominant left margin and column width.
+) -> list[ColumnInfo]:
+    """Analyze text blocks to find column layout.
 
-    Returns (left_margin, column_width).
+    Detects single-column and two-column layouts by clustering x0 positions.
+    Two-column is detected when the top two x0 clusters are separated by
+    more than _COLUMN_CLUSTER_GAP points.
+
+    Returns a list of ColumnInfo (one per detected column), sorted by left_margin.
     """
-    # Collect x0 and width from blocks that look like body text,
-    # weighted by text length (longer blocks are more likely body text)
     x0_weighted: dict[float, float] = {}
-    width_values: list[float] = []
+    x0_to_widths: dict[float, list[float]] = {}
 
     for block in blocks:
         x0, y0, x1, y1 = block.bbox
@@ -519,26 +547,39 @@ def _analyze_page_layout(
         text_len = len(block.text.strip())
         x0_rounded = round(x0, 0)
         x0_weighted[x0_rounded] = x0_weighted.get(x0_rounded, 0) + text_len
-        width_values.append(round(width, 0))
+        x0_to_widths.setdefault(x0_rounded, []).append(round(width, 0))
 
-    if not x0_weighted or not width_values:
-        return (0, 0)
+    if not x0_weighted:
+        return []
 
-    # Find x0 with most text content (dominant left margin)
-    left_margin = max(x0_weighted, key=x0_weighted.get)
+    # Sort x0 values by total text weight (descending)
+    sorted_x0s = sorted(x0_weighted, key=x0_weighted.get, reverse=True)
+    primary_x0 = sorted_x0s[0]
 
-    # Find most common width among "full-width" blocks
-    full_widths = [w for w in width_values if w > _FULL_WIDTH_THRESHOLD]
-    widths_to_use = full_widths or width_values
+    # Look for a second column > _COLUMN_CLUSTER_GAP away
+    for x0 in sorted_x0s[1:]:
+        if abs(x0 - primary_x0) > _COLUMN_CLUSTER_GAP:
+            columns = []
+            for x in [primary_x0, x0]:
+                widths = x0_to_widths[x]
+                full_widths = [w for w in widths if w > _FULL_WIDTH_THRESHOLD]
+                widths_to_use = full_widths or widths
+                col_w = float(statistics.mode(widths_to_use))
+                columns.append(ColumnInfo(left_margin=float(x), col_width=col_w))
+            columns.sort(key=lambda c: c.left_margin)
+            return columns
+
+    # Single column
+    all_widths = [w for ws in x0_to_widths.values() for w in ws]
+    full_widths = [w for w in all_widths if w > _FULL_WIDTH_THRESHOLD]
+    widths_to_use = full_widths or all_widths
     col_width = float(statistics.mode(widths_to_use))
-
-    return (left_margin, col_width)
+    return [ColumnInfo(left_margin=float(primary_x0), col_width=col_width)]
 
 
 def _needs_fix(
     block: TextBlockInfo,
-    left_margin: float,
-    col_width: float,
+    columns: list[ColumnInfo],
     page_height: float = 792.0,
 ) -> bool:
     """Check if a text block needs position/width correction."""
@@ -571,6 +612,14 @@ def _needs_fix(
     # Skip blocks with tiny font (likely footnotes/line numbers)
     if block.avg_font_size < BODY_TEXT_MIN_SIZE:
         return True
+
+    # Find the nearest column for this block
+    col = _find_nearest_column(block, columns)
+    if col is None:
+        return True  # No column info, conservative: fix it
+
+    left_margin = col.left_margin
+    col_width = col.col_width
 
     # Fix blocks with wrong left margin AND too narrow
     # (section headers at x=108 with reasonable width are OK)

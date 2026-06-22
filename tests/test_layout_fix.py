@@ -4,9 +4,11 @@ import unittest
 import unittest.mock
 
 from app.services.layout_fix import (
+    ColumnInfo,
     TextBlockInfo,
     _analyze_page_layout,
     _clean_text,
+    _find_nearest_column,
     _has_embedded_line_numbers,
     _is_line_number_text,
     _needs_fix,
@@ -134,22 +136,23 @@ class TestAnalyzePageLayout(unittest.TestCase):
             _tb((91, 160, 504, 180), "text3"),
             _tb((108, 190, 300, 210), "narrow"),
         ]
-        left_margin, col_width = _analyze_page_layout(blocks)
-        self.assertAlmostEqual(left_margin, 91.0)
-        self.assertAlmostEqual(col_width, 413.0)
+        columns = _analyze_page_layout(blocks)
+        self.assertEqual(len(columns), 1)
+        self.assertAlmostEqual(columns[0].left_margin, 91.0)
+        self.assertAlmostEqual(columns[0].col_width, 413.0)
 
     def test_skips_small_blocks(self):
         blocks = [
             _tb((91, 100, 504, 120), "text"),
             _tb((50, 100, 60, 105), "tiny", font_size=5),
         ]
-        left_margin, _col_width = _analyze_page_layout(blocks)
-        self.assertAlmostEqual(left_margin, 91.0)
+        columns = _analyze_page_layout(blocks)
+        self.assertEqual(len(columns), 1)
+        self.assertAlmostEqual(columns[0].left_margin, 91.0)
 
     def test_empty_blocks(self):
-        left_margin, col_width = _analyze_page_layout([])
-        self.assertAlmostEqual(left_margin, 0.0)
-        self.assertAlmostEqual(col_width, 0.0)
+        columns = _analyze_page_layout([])
+        self.assertEqual(columns, [])
 
     def test_skips_tiny_font_blocks(self):
         """Blocks with font size < BODY_TEXT_MIN_SIZE are skipped."""
@@ -157,8 +160,9 @@ class TestAnalyzePageLayout(unittest.TestCase):
             _tb((91, 100, 504, 120), "body text"),
             _tb((50, 100, 504, 120), "footnote", font_size=5),
         ]
-        left_margin, _col_width = _analyze_page_layout(blocks)
-        self.assertAlmostEqual(left_margin, 91.0)
+        columns = _analyze_page_layout(blocks)
+        self.assertEqual(len(columns), 1)
+        self.assertAlmostEqual(columns[0].left_margin, 91.0)
 
     def test_skips_line_number_text(self):
         """Blocks containing just line numbers are skipped."""
@@ -166,8 +170,9 @@ class TestAnalyzePageLayout(unittest.TestCase):
             _tb((91, 100, 504, 120), "body text"),
             _tb((50, 100, 400, 120), "24\n25\n26"),
         ]
-        left_margin, _col_width = _analyze_page_layout(blocks)
-        self.assertAlmostEqual(left_margin, 91.0)
+        columns = _analyze_page_layout(blocks)
+        self.assertEqual(len(columns), 1)
+        self.assertAlmostEqual(columns[0].left_margin, 91.0)
 
     def test_weights_by_text_length(self):
         """Longer blocks have more influence on dominant left margin."""
@@ -176,9 +181,9 @@ class TestAnalyzePageLayout(unittest.TestCase):
             _tb((91, 130, 504, 200), "a" * 200),
             _tb((100, 210, 504, 230), "b" * 200),
         ]
-        left_margin, _col_width = _analyze_page_layout(blocks)
-        # Both x=91 and x=100 have same text length, but x=91 appears first
-        self.assertIn(left_margin, [91.0, 100.0])
+        columns = _analyze_page_layout(blocks)
+        self.assertEqual(len(columns), 1)
+        self.assertIn(columns[0].left_margin, [91.0, 100.0])
 
     def test_returns_first_mode_on_distinct_widths(self):
         """When all widths are distinct, statistics.mode returns the first."""
@@ -187,13 +192,16 @@ class TestAnalyzePageLayout(unittest.TestCase):
             _tb((91, 130, 450, 150), "text2"),  # width=359
             _tb((91, 160, 500, 180), "text3"),  # width=409
         ]
-        left_margin, col_width = _analyze_page_layout(blocks)
-        self.assertAlmostEqual(left_margin, 91.0)
-        self.assertAlmostEqual(col_width, 309.0)  # first encountered
+        columns = _analyze_page_layout(blocks)
+        self.assertEqual(len(columns), 1)
+        self.assertAlmostEqual(columns[0].left_margin, 91.0)
+        self.assertAlmostEqual(columns[0].col_width, 309.0)  # first encountered
 
 
 class TestNeedsFix(unittest.TestCase):
     """Test block fix detection."""
+
+    _COL = [ColumnInfo(91.0, 413.0)]
 
     def _make_block(self, bbox, text="text", font_size=10.0):
         return _tb(bbox, text, font_size)
@@ -201,54 +209,54 @@ class TestNeedsFix(unittest.TestCase):
     def test_normal_block_no_fix(self):
         # Normal block at correct position with full width
         block = self._make_block((91, 100, 504, 120))
-        self.assertFalse(_needs_fix(block, left_margin=91, col_width=413))
+        self.assertFalse(_needs_fix(block, self._COL))
 
     def test_misaligned_block_needs_fix(self):
         # Block at wrong x position
         block = self._make_block((150, 100, 300, 120))
-        self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
+        self.assertTrue(_needs_fix(block, self._COL))
 
     def test_narrow_block_needs_fix(self):
         # Very narrow block with substantial text (width=23)
         block = self._make_block((91, 100, 114, 120), text="This is a paragraph of text")
-        self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
+        self.assertTrue(_needs_fix(block, self._COL))
 
     def test_line_number_needs_fix(self):
         block = self._make_block((50, 100, 60, 120), text="24")
-        self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
+        self.assertTrue(_needs_fix(block, self._COL))
 
     def test_header_footer_skipped(self):
         # Block in top margin (header)
         block = self._make_block((91, 20, 504, 40))
-        self.assertFalse(_needs_fix(block, left_margin=91, col_width=413, page_height=792))
+        self.assertFalse(_needs_fix(block, self._COL, page_height=792))
 
         # Block in bottom margin (footer)
         block = self._make_block((91, 760, 504, 780))
-        self.assertFalse(_needs_fix(block, left_margin=91, col_width=413, page_height=792))
+        self.assertFalse(_needs_fix(block, self._COL, page_height=792))
 
     def test_small_font_needs_fix(self):
         block = self._make_block((91, 100, 504, 120), font_size=5.0)
-        self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
+        self.assertTrue(_needs_fix(block, self._COL))
 
     def test_very_small_block_skipped(self):
         """Blocks with height < 3 or width < 10 are skipped (images/decorations)."""
         block = self._make_block((91, 100, 95, 101))  # width=4, height=1
-        self.assertFalse(_needs_fix(block, left_margin=91, col_width=413))
+        self.assertFalse(_needs_fix(block, self._COL))
 
     def test_embedded_line_numbers_needs_fix(self):
         """Blocks with embedded line numbers should be fixed."""
         block = self._make_block((91, 100, 504, 120), text="这是正文内容24")
-        self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
+        self.assertTrue(_needs_fix(block, self._COL))
 
     def test_short_text_narrow_width_skipped(self):
         """Short text in narrow blocks is likely figure labels — skip."""
         block = self._make_block((91, 100, 160, 120), text="Time")  # len=4, width=69
-        self.assertFalse(_needs_fix(block, left_margin=91, col_width=413))
+        self.assertFalse(_needs_fix(block, self._COL))
 
     def test_short_text_wide_width_needs_fix(self):
         """Short text in wide blocks is still checked for margin offset."""
         block = self._make_block((150, 100, 504, 120), text="Time")  # len=4, width=354
-        self.assertTrue(_needs_fix(block, left_margin=91, col_width=413))
+        self.assertTrue(_needs_fix(block, self._COL))
 
 
 class TestFindChineseFont(unittest.TestCase):
@@ -933,6 +941,8 @@ class TestRedactBlocks(unittest.TestCase):
 class TestReinsertBlocks(unittest.TestCase):
     """Test _reinsert_blocks filtering edge cases."""
 
+    _COL = [ColumnInfo(91.0, 413.0)]
+
     def test_skips_short_cleaned_text(self):
         """Blocks where _clean_text produces < 2 chars are skipped."""
         from app.services.layout_fix import _reinsert_blocks
@@ -942,7 +952,7 @@ class TestReinsertBlocks(unittest.TestCase):
         page.get_fonts.return_value = []
         # Single CJK char + trailing number → cleaned to 1 char
         blocks = [_tb((91, 100, 504, 120), text="你", font_size=10)]
-        result = _reinsert_blocks(page, blocks, left_margin=91, col_width=413)
+        result = _reinsert_blocks(page, blocks, self._COL)
         self.assertEqual(result, 0)
 
     def test_skips_very_short_small_font(self):
@@ -953,7 +963,7 @@ class TestReinsertBlocks(unittest.TestCase):
         page.rect.width = 612
         page.get_fonts.return_value = []
         blocks = [_tb((91, 100, 504, 120), text="ab", font_size=7)]
-        result = _reinsert_blocks(page, blocks, left_margin=91, col_width=413)
+        result = _reinsert_blocks(page, blocks, self._COL)
         self.assertEqual(result, 0)
 
     def test_skips_right_margin_blocks(self):
@@ -965,7 +975,7 @@ class TestReinsertBlocks(unittest.TestCase):
         page.get_fonts.return_value = []
         # x0=440 > 612*0.7=428.4, width=45 < 80
         blocks = [_tb((440, 100, 485, 120), text="label text", font_size=10)]
-        result = _reinsert_blocks(page, blocks, left_margin=91, col_width=413)
+        result = _reinsert_blocks(page, blocks, self._COL)
         self.assertEqual(result, 0)
 
     def test_skips_short_fragment_at_correct_x(self):
@@ -977,7 +987,7 @@ class TestReinsertBlocks(unittest.TestCase):
         page.get_fonts.return_value = []
         # x0=91 matches left_margin, len(text)=9 < 10, width=50 < 80
         blocks = [_tb((91, 100, 141, 120), text="short txt", font_size=10)]
-        result = _reinsert_blocks(page, blocks, left_margin=91, col_width=413)
+        result = _reinsert_blocks(page, blocks, self._COL)
         self.assertEqual(result, 0)
 
 
@@ -1350,6 +1360,103 @@ class TestBlockOverlapsImage(unittest.TestCase):
             (100.0, 100.0, 200.0, 120.0),
         ]
         self.assertTrue(_block_overlaps_image(block, image_bboxes))
+
+
+class TestFindNearestColumn(unittest.TestCase):
+    """Test _find_nearest_column helper."""
+
+    def test_returns_nearest_column(self):
+        block = _tb((300, 100, 500, 120))
+        columns = [ColumnInfo(54.0, 228.0), ColumnInfo(337.0, 228.0)]
+        result = _find_nearest_column(block, columns)
+        self.assertAlmostEqual(result.left_margin, 337.0)
+
+    def test_returns_left_column_for_left_block(self):
+        block = _tb((60, 100, 280, 120))
+        columns = [ColumnInfo(54.0, 228.0), ColumnInfo(337.0, 228.0)]
+        result = _find_nearest_column(block, columns)
+        self.assertAlmostEqual(result.left_margin, 54.0)
+
+    def test_returns_none_for_empty_columns(self):
+        block = _tb((100, 100, 300, 120))
+        result = _find_nearest_column(block, [])
+        self.assertIsNone(result)
+
+    def test_single_column(self):
+        block = _tb((91, 100, 504, 120))
+        columns = [ColumnInfo(91.0, 413.0)]
+        result = _find_nearest_column(block, columns)
+        self.assertAlmostEqual(result.left_margin, 91.0)
+
+
+class TestTwoColumnLayout(unittest.TestCase):
+    """Test two-column layout detection and per-column fixing."""
+
+    def test_detects_two_columns(self):
+        """Blocks at x0=54 and x0=337 should detect two columns."""
+        blocks = [
+            _tb((54, 100, 282, 120), "a" * 50),
+            _tb((54, 130, 282, 150), "b" * 50),
+            _tb((54, 160, 282, 180), "c" * 50),
+            _tb((337, 100, 565, 120), "d" * 50),
+            _tb((337, 130, 565, 150), "e" * 50),
+            _tb((337, 160, 565, 180), "f" * 50),
+        ]
+        columns = _analyze_page_layout(blocks)
+        self.assertEqual(len(columns), 2)
+        self.assertAlmostEqual(columns[0].left_margin, 54.0)
+        self.assertAlmostEqual(columns[1].left_margin, 337.0)
+
+    def test_single_column_not_misdetected(self):
+        """Blocks at x0=91 should detect single column."""
+        blocks = [
+            _tb((91, 100, 504, 120), "a" * 50),
+            _tb((91, 130, 504, 150), "b" * 50),
+            _tb((91, 160, 504, 180), "c" * 50),
+        ]
+        columns = _analyze_page_layout(blocks)
+        self.assertEqual(len(columns), 1)
+        self.assertAlmostEqual(columns[0].left_margin, 91.0)
+
+    def test_two_column_needs_fix_uses_correct_margin(self):
+        """In two-column layout, blocks checked against their column's margin."""
+        columns = [ColumnInfo(54.0, 228.0), ColumnInfo(337.0, 228.0)]
+
+        # Block in right column at correct position → no fix
+        block = _tb((337, 100, 565, 120), text="d" * 50)
+        self.assertFalse(_needs_fix(block, columns))
+
+        # Block in right column at wrong position → needs fix
+        block = _tb((380, 100, 565, 120), text="d" * 50)
+        self.assertTrue(_needs_fix(block, columns))
+
+        # Block in left column at correct position → no fix
+        block = _tb((54, 100, 282, 120), text="a" * 50)
+        self.assertFalse(_needs_fix(block, columns))
+
+        # Block in left column at wrong position → needs fix
+        block = _tb((100, 100, 282, 120), text="a" * 50)
+        self.assertTrue(_needs_fix(block, columns))
+
+    def test_two_column_reinsert_uses_correct_margin(self):
+        """In two-column layout, blocks reinserted at their column's margin."""
+        from app.services.layout_fix import _reinsert_blocks
+
+        columns = [ColumnInfo(54.0, 228.0), ColumnInfo(337.0, 228.0)]
+        page = unittest.mock.MagicMock()
+        page.rect.width = 612
+        page.get_fonts.return_value = []
+        # Mock insert_textbox to return positive (success)
+        page.new_shape.return_value.insert_textbox.return_value = 1
+
+        # Block near right column should be reinserted at x0=337
+        blocks = [_tb((380, 100, 565, 120), text="right column text", font_size=10)]
+        _reinsert_blocks(page, blocks, columns)
+        # Check that insert_textbox was called with rect starting at ~337
+        shape = page.new_shape.return_value
+        self.assertTrue(shape.insert_textbox.called)
+        rect = shape.insert_textbox.call_args[0][0]
+        self.assertAlmostEqual(rect.x0, 337.0, delta=1)
 
 
 if __name__ == "__main__":
