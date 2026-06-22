@@ -1124,6 +1124,15 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
     }
   }
+
+  // Ctrl/Cmd + Shift + S: toggle sync scroll (in reader view)
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+    const readerView = document.getElementById('reader-view');
+    if (readerView?.classList.contains('active')) {
+      toggleSyncScroll();
+      e.preventDefault();
+    }
+  }
 });
 
 // === Init ===
