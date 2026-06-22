@@ -1458,6 +1458,22 @@ class TestTwoColumnLayout(unittest.TestCase):
         rect = shape.insert_textbox.call_args[0][0]
         self.assertAlmostEqual(rect.x0, 337.0, delta=1)
 
+    def test_needs_fix_returns_true_for_empty_columns(self):
+        """When columns list is empty, block conservatively needs fix."""
+        block = _tb((91, 100, 504, 120), text="some text")
+        self.assertTrue(_needs_fix(block, []))
+
+    def test_reinsert_skips_block_when_columns_empty(self):
+        """When columns list is empty, block is skipped (no column to assign)."""
+        from app.services.layout_fix import _reinsert_blocks
+
+        page = unittest.mock.MagicMock()
+        page.rect.width = 612
+        page.get_fonts.return_value = []
+        blocks = [_tb((91, 100, 504, 120), text="some text", font_size=10)]
+        result = _reinsert_blocks(page, blocks, [])
+        self.assertEqual(result, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
