@@ -357,6 +357,7 @@ def _translate_sync_native(
         model = config.model or "gpt-4o-mini"
 
     mono_path = output_dir / f"{input_path.stem}-mono.pdf"
+    dual_path = output_dir / f"{input_path.stem}-dual.pdf"
     cache_path = output_dir / f"{input_path.stem}.translation-cache.jsonl"
 
     vendor = VendorTranslator(
@@ -407,7 +408,17 @@ def _translate_sync_native(
 
     if not mono_path.exists():
         return TranslationResult(error="Translation produced no output files")
-    return TranslationResult(mono_path=mono_path, dual_path=None)
+
+    # Generate dual-language PDF (interleaved original + translated pages)
+    try:
+        from pdf_zh_translator.pdf_layout import create_dual_pdf
+
+        create_dual_pdf(input_path, mono_path, dual_path)
+    except Exception as e:
+        logger.warning("Failed to create dual PDF: %s", e)
+        dual_path = None
+
+    return TranslationResult(mono_path=mono_path, dual_path=dual_path if dual_path and dual_path.exists() else None)
 
 
 def _translate_sync(

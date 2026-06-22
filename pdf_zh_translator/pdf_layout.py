@@ -350,6 +350,34 @@ def translate_pdf(
     return TranslationReport(input_pdf, output_pdf, page_count, len(units), skipped, warnings)
 
 
+def create_dual_pdf(
+    original_pdf: Path,
+    translated_pdf: Path,
+    output_pdf: Path,
+) -> None:
+    """Create a dual-language PDF by interleaving original and translated pages.
+
+    For each page: original page, then translated page. This allows side-by-side
+    viewing in PDF readers that support page pairs.
+    """
+    import fitz
+
+    orig_doc = fitz.open(str(original_pdf))
+    trans_doc = fitz.open(str(translated_pdf))
+    dual_doc = fitz.open()
+
+    for i in range(orig_doc.page_count):
+        dual_doc.insert_pdf(orig_doc, from_page=i, to_page=i)
+        if i < trans_doc.page_count:
+            dual_doc.insert_pdf(trans_doc, from_page=i, to_page=i)
+
+    output_pdf.parent.mkdir(parents=True, exist_ok=True)
+    dual_doc.save(str(output_pdf), garbage=4, deflate=True)
+    dual_doc.close()
+    trans_doc.close()
+    orig_doc.close()
+
+
 def _normalize_font_name(name: str) -> str:
     """Match display names ('Hiragino Sans GB W6') against PostScript base
     names ('HiraginoSansGB-W6')."""
