@@ -7,6 +7,7 @@ incorrect positions/widths. This module corrects them using PyMuPDF.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import statistics
 from dataclasses import dataclass
@@ -409,7 +410,7 @@ def _estimate_text_height(text: str, font_size: float, rect_width: float) -> flo
                 line_width += font_size
             else:
                 line_width += font_size * 0.5
-        num_lines = max(1, int(line_width / rect_width) + 1)
+        num_lines = max(1, math.ceil(line_width / rect_width)) if rect_width > 0 else 1
         total_height += num_lines * leading
     return total_height
 
