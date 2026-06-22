@@ -418,7 +418,8 @@ def _translate_sync_native(
         logger.warning("Failed to create dual PDF: %s", e)
         dual_path = None
 
-    return TranslationResult(mono_path=mono_path, dual_path=dual_path if dual_path and dual_path.exists() else None)
+    has_dual = dual_path is not None and dual_path.exists()
+    return TranslationResult(mono_path=mono_path, dual_path=dual_path if has_dual else None)
 
 
 def _translate_sync(
