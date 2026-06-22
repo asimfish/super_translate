@@ -423,10 +423,12 @@ def _insert_text_with_fallback(
     avg_font_size: float,
 ) -> bool:
     """Insert text into rect, trying decreasing font sizes. Returns True if inserted."""
-    # Expand rect height if text is likely to overflow
+    # Expand rect height if text is likely to overflow, capped at page height
     est_height = _estimate_text_height(text, avg_font_size, rect.width)
+    max_height = page.rect.height - rect.y0
     if est_height > rect.height:
-        rect = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + est_height)
+        new_height = min(est_height, max_height)
+        rect = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + new_height)
 
     # Start at original font size, fall back to smaller sizes on overflow
     size = max(_MIN_INSERT_FONT, avg_font_size)
