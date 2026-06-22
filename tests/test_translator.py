@@ -1428,5 +1428,25 @@ class TestTranslateSyncNative(unittest.TestCase):
                 _translate_sync_native(tmp / "test.pdf", tmp, config)
 
 
+class TestTranslateSyncRouting(unittest.TestCase):
+    """Test _translate_sync routes to correct engine."""
+
+    @patch("app.services.translator._translate_sync_native")
+    @patch("app.services.translator._use_native_engine", return_value=True)
+    def test_routes_to_native_engine(self, mock_use_native, mock_native):
+        """When native engine is enabled, _translate_sync delegates to _translate_sync_native."""
+        import tempfile
+
+        from app.services.translator import TranslationConfig, _translate_sync
+
+        mock_native.return_value = MagicMock(error=None)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config = TranslationConfig(backend="deepseek", api_key="k")
+            _translate_sync(tmp / "test.pdf", tmp, config)
+            mock_native.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
