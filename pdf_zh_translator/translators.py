@@ -418,9 +418,12 @@ _TRANSLATION_RULES = (
     "3. 【公式保护】数学公式、方程、变量名原样保留（如 $x^2$、$\\alpha$、E=mc²）\n"
     "4. 【引用保护】引用标记 [1]、[2] 保持不变\n"
     "5. 【符号保护】数学符号 ∈、∀、∃、∑、∫ 等保持不变\n"
-    '6. 【被动语态】英文被动翻译为中文无主句或"本文"作主语\n'
-    "7. 【图表】Figure 1→图1，Table 2→表2\n"
-    "8. 【长句拆分】英文长句拆分为多个中文短句\n"
+    "6. 【占位符保护】形如 ⟦0⟧、⟦12⟧ 的占位符代表公式或代码片段，"
+    "必须逐字原样保留在原位置；不得删除、翻译、改写、合并或移到句末\n"
+    "   输出前逐项检查：输入中的每一个 ⟦n⟧ 在对应译文中必须出现且只出现一次\n"
+    '7. 【被动语态】英文被动翻译为中文无主句或"本文"作主语\n'
+    "8. 【图表】Figure 1→图1，Table 2→表2\n"
+    "9. 【长句拆分】英文长句拆分为多个中文短句\n"
 )
 
 
@@ -429,7 +432,8 @@ def translation_array_prompt() -> str:
         _TRANSLATION_RULES + "\nTranslate each item in the JSON array "
         "from English to Simplified Chinese. "
         "Preserve numbers, citations, equations, URLs, "
-        "product names, and line breaks where possible. "
+        "product names, placeholders like ⟦0⟧, and line breaks where possible. "
+        "Every placeholder token must be copied exactly once in its original position. "
         "Do not add commentary. Return only a valid "
         "JSON array of strings with the same length and order."
     )
@@ -440,7 +444,8 @@ def translation_object_prompt() -> str:
         _TRANSLATION_RULES + "\nTranslate each item in the input JSON array "
         "from English to Simplified Chinese. "
         "Preserve numbers, citations, equations, URLs, "
-        "product names, and line breaks where possible. "
+        "product names, placeholders like ⟦0⟧, and line breaks where possible. "
+        "Every placeholder token must be copied exactly once in its original position. "
         "Return only a valid json object in this shape: "
         '{"translations":["译文1","译文2"]}. '
         "The translations array must have the same "
