@@ -22,6 +22,10 @@ MIN_COL_WIDTH_RATIO = 0.6  # blocks narrower than 60% of column width need fixin
 X0_TOLERANCE = 40.0  # points of deviation from dominant left margin
 MIN_BLOCK_WIDTH = 80.0  # blocks narrower than this are always fixed
 LINE_NUMBER_RE = re.compile(r"^[\d\s]{1,3}$")
+# Figure/table captions: "Figure 1", "Fig. 2", "Table 3", "图1", "表2"
+_CAPTION_RE = re.compile(
+    r"^(?:Figure|Fig\.|Table|图|表)\s*\d", re.IGNORECASE,
+)
 BODY_TEXT_MIN_SIZE = 7.0  # ignore blocks with font size below this (line numbers, footnotes)
 PAGE_MARGIN_TOP = 60.0  # ignore blocks in top margin (headers)
 PAGE_MARGIN_BOTTOM = 50.0  # ignore blocks in bottom margin (footers)
@@ -606,6 +610,10 @@ def _needs_fix(
     # Fix blocks that contain embedded line numbers
     if _has_embedded_line_numbers(block.text):
         return True
+
+    # Skip figure/table captions — repositioning them causes overlap
+    if _CAPTION_RE.match(block.text.strip()):
+        return False
 
     # Skip short text that's likely figure labels or annotations
     # (e.g., "Time", "Opportunity", "Blur and Occlusion")
