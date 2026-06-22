@@ -644,7 +644,7 @@ function setupSmoothScrollSync(panel) {
     if (!syncScrollEnabled || scrollSyncing) return;
     if (!pdfDocs[otherPanel]) return;
 
-    if (scrollRafId) return; // already scheduled
+    if (scrollRafId) return;
     scrollRafId = requestAnimationFrame(() => {
       scrollRafId = null;
 
@@ -657,17 +657,13 @@ function setupSmoothScrollSync(panel) {
       const otherMaxScroll = otherContainer.scrollHeight - otherContainer.clientHeight;
       otherContainer.scrollTop = scrollPct * otherMaxScroll;
 
-      // Trigger lazy render for the other panel too
-      renderVisiblePages(otherPanel, otherContainer);
-
-      // Update page info using cached metrics (no getBoundingClientRect)
       updatePageInfo(panel, scrollTop);
       updatePageInfo(otherPanel, otherContainer.scrollTop);
 
       requestAnimationFrame(() => { scrollSyncing = false; });
     });
   };
-  container.addEventListener('scroll', listener);
+  container.addEventListener('scroll', listener, { passive: true });
   scrollListeners[panel] = listener;
 }
 
