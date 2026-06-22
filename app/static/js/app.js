@@ -174,18 +174,14 @@ async function batchTranslate() {
 
   batchTranslating = true;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
-  let success = 0;
-  let failed = 0;
 
   try {
-    for (const paper of pending) {
-      try {
-        await api.translatePaper(paper.id, '', quality);
-        success++;
-      } catch (e) {
-        failed++;
-      }
-    }
+    // Submit all translations in parallel (server runs them in background)
+    const results = await Promise.allSettled(
+      pending.map(p => api.translatePaper(p.id, '', quality))
+    );
+    const success = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.length - success;
 
     toastSuccess(`已提交 ${success} 篇翻译任务${failed > 0 ? `，${failed} 篇提交失败` : ''}。翻译在后台进行中。`);
     loadPapers();
