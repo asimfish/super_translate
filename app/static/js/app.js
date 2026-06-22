@@ -2,7 +2,7 @@
 
 let papers = [];
 let currentPaper = null;
-let selectedFile = null;
+let selectedFiles = [];
 let searchTimer = null;
 let translationPollId = null;
 let pagination = { offset: 0, limit: 50, total: 0 };
@@ -111,7 +111,7 @@ function showLibrary() {
 
 function showUpload() {
   showView('upload');
-  selectedFile = null;
+  selectedFiles = [];
   document.getElementById('upload-preview').classList.add('hidden');
   document.getElementById('upload-progress').classList.add('hidden');
   document.getElementById('drop-zone').classList.remove('hidden');
@@ -282,48 +282,65 @@ function initDropZone() {
   zone.addEventListener('drop', e => {
     e.preventDefault();
     zone.classList.remove('dragover');
-    const file = e.dataTransfer.files[0];
-    if (file && file.name.toLowerCase().endsWith('.pdf')) {
-      selectFile(file);
-    }
+    const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    if (files.length > 0) addFiles(files);
   });
 }
 
 function handleFileSelect(input) {
-  if (input.files[0]) selectFile(input.files[0]);
+  const files = Array.from(input.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (files.length > 0) addFiles(files);
+  input.value = '';
 }
 
-function selectFile(file) {
-  if (!file.name.toLowerCase().endsWith('.pdf')) {
-    toastWarning('请选择 PDF 文件');
-    return;
+function addFiles(files) {
+  const maxSize = 100 * 1024 * 1024;
+  for (const f of files) {
+    if (f.size > maxSize) { toastWarning(`${f.name} 过大（最大 100MB）`); continue; }
+    if (f.size === 0) { toastWarning(`${f.name} 为空`); continue; }
+    if (!selectedFiles.some(s => s.name === f.name && s.size === f.size)) {
+      selectedFiles.push(f);
+    }
   }
-  if (file.size > 100 * 1024 * 1024) {
-    toastWarning('文件过大（最大 100MB）');
-    return;
-  }
-  if (file.size === 0) {
-    toastWarning('文件为空');
-    return;
-  }
-  selectedFile = file;
+  if (selectedFiles.length === 0) return;
   document.getElementById('drop-zone').classList.add('hidden');
   document.getElementById('upload-preview').classList.remove('hidden');
-  document.getElementById('file-name').textContent = file.name;
-  document.getElementById('file-size').textContent = formatSize(file.size);
+  renderFileList();
+}
+
+function renderFileList() {
+  const container = document.getElementById('file-list');
+  container.innerHTML = selectedFiles.map((f, i) => `
+    <div class="file-item">
+      <span class="file-item-name">${esc(f.name)}</span>
+      <span class="file-item-size">${formatSize(f.size)}</span>
+      <button class="file-item-remove" data-action="remove-file" data-index="${i}" title="移除">&times;</button>
+    </div>
+  `).join('');
+  const btn = document.getElementById('btn-do-upload');
+  btn.textContent = selectedFiles.length > 1 ? `上传 ${selectedFiles.length} 篇` : '上传';
+}
+
+function removeFile(index) {
+  selectedFiles.splice(index, 1);
+  if (selectedFiles.length === 0) {
+    cancelUpload();
+  } else {
+    renderFileList();
+  }
 }
 
 function cancelUpload() {
-  selectedFile = null;
+  selectedFiles = [];
   document.getElementById('drop-zone').classList.remove('hidden');
   document.getElementById('upload-preview').classList.add('hidden');
-  document.getElementById('file-input').value = '';
+  document.getElementById('upload-progress').classList.add('hidden');
 }
 
 let uploading = false;
 
 async function doUpload() {
-  if (!selectedFile || uploading) return;
+  if (selectedFiles.length === 0 || uploading) return;
   uploading = true;
 
   const tags = document.getElementById('upload-tags').value;
@@ -333,24 +350,35 @@ async function doUpload() {
 
   document.getElementById('upload-preview').classList.add('hidden');
   prog.classList.remove('hidden');
-  fill.style.width = '0%';
-  status.textContent = '上传中...';
 
-  try {
-    await api.uploadPaperWithProgress(selectedFile, tags, pct => {
-      fill.style.width = `${Math.round(pct * 100)}%`;
-    });
-    fill.style.width = '100%';
-    status.textContent = '上传成功！';
-    toastSuccess('论文上传成功');
-    setTimeout(() => showLibrary(), 800);
-  } catch (e) {
-    status.textContent = `上传失败: ${e.message}`;
-    fill.style.background = 'var(--error)';
-    toastError(`上传失败: ${e.message}`);
-  } finally {
-    uploading = false;
+  let success = 0;
+  let failed = 0;
+  const total = selectedFiles.length;
+
+  for (let i = 0; i < total; i++) {
+    const file = selectedFiles[i];
+    fill.style.width = '0%';
+    fill.style.background = '';
+    status.textContent = `上传中 (${i + 1}/${total}): ${file.name}`;
+
+    try {
+      await api.uploadPaperWithProgress(file, tags, pct => {
+        fill.style.width = `${Math.round(pct * 100)}%`;
+      });
+      success++;
+    } catch (e) {
+      failed++;
+      toastError(`${file.name} 上传失败: ${e.message}`);
+    }
   }
+
+  fill.style.width = '100%';
+  fill.style.background = failed > 0 ? 'var(--warning)' : 'var(--success)';
+  status.textContent = `完成！${success} 篇成功${failed > 0 ? `，${failed} 篇失败` : ''}`;
+  toastSuccess(`上传完成：${success} 篇成功${failed > 0 ? `，${failed} 篇失败` : ''}`);
+  selectedFiles = [];
+  setTimeout(() => showLibrary(), 1000);
+  uploading = false;
 }
 
 // === Reader (PDF.js with Virtual Scrolling) ===
@@ -1032,6 +1060,10 @@ const actionHandlers = {
   'go-to-page': (e) => {
     const page = parseInt(e.target.dataset.page, 10);
     if (page > 0) goToPage(page);
+  },
+  'remove-file': (e) => {
+    const index = parseInt(e.target.dataset.index, 10);
+    if (!isNaN(index)) removeFile(index);
   },
 };
 

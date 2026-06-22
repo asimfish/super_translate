@@ -66,17 +66,14 @@
           <p>拖拽 PDF 文件到这里，或</p>
           <label class="btn btn-outline">
             选择文件
-            <input type="file" id="file-input" accept=".pdf" hidden data-action="handle-file-select">
+            <input type="file" id="file-input" accept=".pdf" multiple hidden data-action="handle-file-select">
           </label>
         </div>
         <div id="upload-preview" class="upload-preview hidden">
-          <div class="file-info">
-            <span id="file-name"></span>
-            <span id="file-size"></span>
-          </div>
+          <div id="file-list" class="file-list"></div>
           <div class="upload-actions">
             <input type="text" id="upload-tags" placeholder="标签（可选，逗号分隔）" aria-label="标签">
-            <button class="btn btn-primary" data-action="do-upload">上传</button>
+            <button class="btn btn-primary" id="btn-do-upload" data-action="do-upload">上传</button>
             <button class="btn btn-outline" data-action="cancel-upload">取消</button>
           </div>
         </div>
