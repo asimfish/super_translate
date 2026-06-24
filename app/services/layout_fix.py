@@ -194,6 +194,30 @@ def _fix_page_layout(page: object) -> int:
         if _needs_fix(b, columns, page_height) and not _block_overlaps_image(b, image_bboxes)
     ]
 
+    # Also flag full-width blocks that overlap with caption blocks
+    # These need to be reinserted at the correct column width to avoid overlap
+    if len(columns) >= 2:
+        caption_bboxes = [
+            b.bbox for b in blocks
+            if _CAPTION_RE.match(b.text.strip())
+        ]
+        for b in blocks:
+            if b in to_fix:
+                continue
+            if _block_overlaps_image(b, image_bboxes):
+                continue
+            block_width = b.bbox[2] - b.bbox[0]
+            # Check if block spans multiple columns (width > single column width)
+            max_col_width = max(c.col_width for c in columns)
+            if block_width > max_col_width * 1.2:
+                # Check if it overlaps with any caption
+                for cap_bbox in caption_bboxes:
+                    h_overlap = max(0, min(b.bbox[2], cap_bbox[2]) - max(b.bbox[0], cap_bbox[0]))
+                    v_overlap = max(0, min(b.bbox[3], cap_bbox[3]) - max(b.bbox[1], cap_bbox[1]))
+                    if h_overlap > 50 and v_overlap > 0:
+                        to_fix.append(b)
+                        break
+
     if not to_fix:
         return 0
 
