@@ -199,7 +199,7 @@ def _fix_page_layout(page: object) -> int:
 
     # Redact and reinsert
     _redact_blocks(page, to_fix)
-    return _reinsert_blocks(page, to_fix, columns)
+    return _reinsert_blocks(page, to_fix, columns, all_blocks=blocks)
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -344,13 +344,20 @@ def _reinsert_blocks(
     page: object,
     blocks: list[TextBlockInfo],
     columns: list[ColumnInfo],
+    all_blocks: list[TextBlockInfo] | None = None,
 ) -> int:
     """Reinsert cleaned text blocks at correct positions. Returns count of blocks reinserted."""
     fixed_count = 0
     font_name = _find_chinese_font(page)
 
-    # Collect bboxes of blocks being fixed to check for overlaps
+    # Collect bboxes of ALL blocks on the page (including captions, figure labels)
+    # to prevent reinserted text from overlapping with non-fixed blocks
     fixed_bboxes = [b.bbox for b in blocks]
+    protected_bboxes = []
+    if all_blocks:
+        for b in all_blocks:
+            if b.bbox not in fixed_bboxes:
+                protected_bboxes.append(b.bbox)
 
     for block in blocks:
         text = _clean_text(block.text)
@@ -391,9 +398,10 @@ def _reinsert_blocks(
             y1 = y0 + block.avg_font_size * 2.5
         correct_rect = fitz.Rect(left_margin, y0, left_margin + col_width, y1)
 
-        # Check if this rect would overlap with another fixed block's original position
+        # Check if this rect would overlap with another block
         skip = False
-        for other_bbox in fixed_bboxes:
+        all_bboxes = fixed_bboxes + protected_bboxes
+        for other_bbox in all_bboxes:
             if other_bbox == block.bbox:
                 continue
             ox0, oy0, ox1, oy1 = other_bbox
