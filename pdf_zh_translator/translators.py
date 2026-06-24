@@ -239,7 +239,7 @@ class VendorTranslator(Translator):
         return parse_translation_list(data)
 
     def _translate_openai_compatible(self, texts: Sequence[str]) -> List[str]:
-        prompt = translation_array_prompt_with_types(self.block_types)
+        prompt = translation_array_prompt_with_types(self.block_types, list(texts))
         payload = {
             "model": self.model or "gpt-4o-mini",
             "messages": [
@@ -254,7 +254,7 @@ class VendorTranslator(Translator):
         return parse_json_string_list(content)
 
     def _translate_deepseek(self, texts: Sequence[str]) -> List[str]:
-        prompt = translation_array_prompt_with_types(self.block_types)
+        prompt = translation_array_prompt_with_types(self.block_types, list(texts))
         payload: Dict[str, Any] = {
             "model": self.model or "deepseek-v4-pro",
             "messages": [
@@ -457,11 +457,15 @@ _BLOCK_TYPE_HINTS: dict[str, str] = {
 }
 
 
-def translation_array_prompt_with_types(block_types: list[str] | None = None) -> str:
-    """Build translation prompt with block-type-specific hints.
+def translation_array_prompt_with_types(
+    block_types: list[str] | None = None,
+    texts: list[str] | None = None,
+) -> str:
+    """Build translation prompt with block-type-specific hints and terminology.
 
     When block_types is provided, adds context about what each text block is
     (title, heading, caption, body) so the LLM can translate appropriately.
+    When texts is provided, includes relevant terminology from the corpus.
     """
     base = _TRANSLATION_RULES
 
@@ -474,6 +478,18 @@ def translation_array_prompt_with_types(block_types: list[str] | None = None) ->
                 hints.append(hint)
         if hints:
             base += "\n\n" + "\n".join(hints)
+
+    # Add relevant terminology from corpus
+    if texts:
+        try:
+            from pdf_zh_translator.corpus import build_terminology_prompt, get_relevant_terms
+
+            terms = get_relevant_terms(texts)
+            term_prompt = build_terminology_prompt(terms)
+            if term_prompt:
+                base += "\n\n" + term_prompt
+        except Exception:
+            pass  # Corpus is optional; don't fail translation if it's missing
 
     return (
         base + "\nTranslate each item in the JSON array "
