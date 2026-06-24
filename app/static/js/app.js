@@ -633,7 +633,7 @@ async function renderPage(panel, idx) {
   wrapper.appendChild(canvas);
 }
 
-// Scroll sync with rAF throttling
+// Scroll sync with page-based alignment
 let scrollRafId = null;
 
 function setupSmoothScrollSync(panel) {
@@ -649,13 +649,32 @@ function setupSmoothScrollSync(panel) {
       scrollRafId = null;
 
       const scrollTop = container.scrollTop;
-      const maxScroll = container.scrollHeight - container.clientHeight;
-      const scrollPct = maxScroll > 0 ? scrollTop / maxScroll : 0;
+      const metrics = pageMetrics[panel];
+      const otherMetrics = pageMetrics[otherPanel];
+      if (!metrics || !otherMetrics || metrics.length === 0 || otherMetrics.length === 0) return;
+
+      // Find which page is currently visible (top of viewport)
+      let currentPageIdx = 0;
+      for (let i = metrics.length - 1; i >= 0; i--) {
+        if (metrics[i].top <= scrollTop + 20) {
+          currentPageIdx = i;
+          break;
+        }
+      }
+
+      // Calculate fractional position within the current page
+      const pageTop = metrics[currentPageIdx].top;
+      const pageHeight = metrics[currentPageIdx].height;
+      const fraction = pageHeight > 0 ? Math.max(0, Math.min(1, (scrollTop - pageTop) / pageHeight)) : 0;
+
+      // Map to corresponding page in the other panel
+      const otherIdx = Math.min(currentPageIdx, otherMetrics.length - 1);
+      const otherPageTop = otherMetrics[otherIdx].top;
+      const otherPageHeight = otherMetrics[otherIdx].height;
 
       scrollSyncing = true;
       const otherContainer = document.getElementById(`pdf-container-${otherPanel}`);
-      const otherMaxScroll = otherContainer.scrollHeight - otherContainer.clientHeight;
-      otherContainer.scrollTop = scrollPct * otherMaxScroll;
+      otherContainer.scrollTop = otherPageTop + fraction * otherPageHeight;
 
       updatePageInfo(panel, scrollTop);
       updatePageInfo(otherPanel, otherContainer.scrollTop);

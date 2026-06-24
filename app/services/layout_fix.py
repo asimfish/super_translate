@@ -349,6 +349,9 @@ def _reinsert_blocks(
     fixed_count = 0
     font_name = _find_chinese_font(page)
 
+    # Collect bboxes of blocks being fixed to check for overlaps
+    fixed_bboxes = [b.bbox for b in blocks]
+
     for block in blocks:
         text = _clean_text(block.text)
         if not text or len(text) < _MIN_TEXT_LEN:
@@ -387,6 +390,23 @@ def _reinsert_blocks(
         if height < block.avg_font_size * 1.5:
             y1 = y0 + block.avg_font_size * 2.5
         correct_rect = fitz.Rect(left_margin, y0, left_margin + col_width, y1)
+
+        # Check if this rect would overlap with another fixed block's original position
+        skip = False
+        for other_bbox in fixed_bboxes:
+            if other_bbox == block.bbox:
+                continue
+            ox0, oy0, ox1, oy1 = other_bbox
+            # Check horizontal overlap
+            h_overlap = max(0, min(correct_rect.x1, ox1) - max(correct_rect.x0, ox0))
+            # Check vertical overlap
+            v_overlap = max(0, min(correct_rect.y1, oy1) - max(correct_rect.y0, oy0))
+            if h_overlap > 0 and v_overlap > block.avg_font_size * 2:
+                # Significant overlap with another block — skip to avoid collision
+                skip = True
+                break
+        if skip:
+            continue
 
         # Try to insert with appropriate font size
         if _insert_text_with_fallback(page, correct_rect, text, font_name, block.avg_font_size):

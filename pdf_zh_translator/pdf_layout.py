@@ -378,6 +378,87 @@ def create_dual_pdf(
     orig_doc.close()
 
 
+def verify_translation(
+    original_pdf: Path,
+    translated_pdf: Path,
+) -> List[str]:
+    """Verify translated PDF quality. Returns list of issues found.
+
+    Checks:
+    1. Untranslated English paragraphs (likely missed by translator)
+    2. Overlapping text blocks
+    3. Empty pages (translation produced no output)
+    """
+    import fitz
+
+    issues: List[str] = []
+    try:
+        orig_doc = fitz.open(str(original_pdf))
+        trans_doc = fitz.open(str(translated_pdf))
+    except Exception as e:
+        return [f"Failed to open PDFs for verification: {e}"]
+
+    for page_idx in range(min(orig_doc.page_count, trans_doc.page_count)):
+        orig_page = orig_doc[page_idx]
+        trans_page = trans_doc[page_idx]
+
+        # Check for untranslated English paragraphs
+        orig_blocks = orig_page.get_text("dict").get("blocks", [])
+        trans_blocks = trans_page.get_text("dict").get("blocks", [])
+
+        # Count English-only text blocks in translated PDF
+        untranslated = 0
+        for block in trans_blocks:
+            if block.get("type") != 0:
+                continue
+            text = ""
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    text += span.get("text", "")
+            text = text.strip()
+            if len(text) > 30:
+                # Check if text is mostly ASCII (likely untranslated English)
+                ascii_chars = sum(1 for c in text if ord(c) < 128)
+                if ascii_chars / len(text) > 0.8:
+                    untranslated += 1
+
+        if untranslated > 2:
+            issues.append(
+                f"Page {page_idx + 1}: {untranslated} blocks appear to be untranslated English"
+            )
+
+        # Check for overlapping text blocks in translated PDF
+        text_bboxes = []
+        for block in trans_blocks:
+            if block.get("type") != 0:
+                continue
+            bbox = block.get("bbox")
+            if bbox:
+                text_bboxes.append(bbox)
+
+        for i in range(len(text_bboxes)):
+            for j in range(i + 1, len(text_bboxes)):
+                x0a, y0a, x1a, y1a = text_bboxes[i]
+                x0b, y0b, x1b, y1b = text_bboxes[j]
+                h_overlap = max(0, min(x1a, x1b) - max(x0a, x0b))
+                v_overlap = max(0, min(y1a, y1b) - max(y0a, y0b))
+                if h_overlap > 10 and v_overlap > 10:
+                    issues.append(
+                        f"Page {page_idx + 1}: text blocks overlap at "
+                        f"y={max(y0a, y0b):.0f}"
+                    )
+
+        # Check for empty translated page
+        trans_text = trans_page.get_text("text").strip()
+        orig_text = orig_page.get_text("text").strip()
+        if len(orig_text) > 100 and len(trans_text) < 20:
+            issues.append(f"Page {page_idx + 1}: translated page appears empty")
+
+    trans_doc.close()
+    orig_doc.close()
+    return issues
+
+
 def _normalize_font_name(name: str) -> str:
     """Match display names ('Hiragino Sans GB W6') against PostScript base
     names ('HiraginoSansGB-W6')."""
@@ -596,6 +677,7 @@ def prepare_translation_units(
 
     # --- Phase 1: Structure-aware classification ---
     _bibliography_seen.clear()
+    _bibliography_ended = False
     for page_index in range(document.page_count):
         page = document[page_index]
         page_height = page.rect.height
@@ -988,15 +1070,35 @@ def classify_blocks(
 
 # Track whether we've seen a "References" heading per page
 _bibliography_seen: Dict[int, bool] = {}
+_bibliography_heading_size: float = 0.0
+_bibliography_ended: bool = False
 
 
 def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> bool:
-    """Check if block is in the bibliography section."""
+    """Check if block is in the bibliography section.
+
+    Bibliography starts after a "References" heading and ends at the next
+    bold section heading (appendices, supplementary material).
+    """
+    global _bibliography_heading_size, _bibliography_ended
     text = block.text.strip().lower()
+
     # Check if this block IS the references heading
     if re.match(r"^(references|bibliography|参考文献)\s*$", text, re.IGNORECASE):
         _bibliography_seen[block.page_index] = True
+        _bibliography_heading_size = block.font_size
+        _bibliography_ended = False
         return False  # The heading itself is translatable
+
+    # Check if a bold section heading ends the bibliography range
+    # (e.g., "Appendix", "Supplementary Material")
+    if _bibliography_seen and block.bold and block.font_size >= max(_bibliography_heading_size * 0.92, 10.5):
+        if _SECTION_NUM_RE.match(block.text.strip()) or len(block.text.strip()) < 60:
+            _bibliography_ended = True
+
+    if _bibliography_ended:
+        return False
+
     # Check if we've seen references heading on a previous page or earlier on this page
     if _bibliography_seen.get(block.page_index, False):
         return True

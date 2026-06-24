@@ -418,6 +418,17 @@ def _translate_sync_native(
         logger.warning("Failed to create dual PDF: %s", e)
         dual_path = None
 
+    # Post-translation verification
+    try:
+        from pdf_zh_translator.pdf_layout import verify_translation
+
+        issues = verify_translation(input_path, mono_path)
+        if issues:
+            for issue in issues:
+                logger.warning("Translation quality: %s", issue)
+    except Exception as e:
+        logger.debug("Translation verification skipped: %s", e)
+
     has_dual = dual_path is not None and dual_path.exists()
     return TranslationResult(mono_path=mono_path, dual_path=dual_path if has_dual else None)
 
