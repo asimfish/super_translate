@@ -1,7 +1,9 @@
+import argparse
 import tempfile
 import unittest
 from pathlib import Path
 
+from pdf_zh_translator.cli import build_parser
 from pdf_zh_translator.translators import (
     CacheOnlyTranslator,
     CachedTranslator,
@@ -176,6 +178,49 @@ class CacheOnlyTranslatorTests(unittest.TestCase):
             translator = CacheOnlyTranslator(cache_file)
             result = translator.translate_batch(["ok"])
             self.assertEqual(result, ["好的"])
+
+
+class CLIParserTests(unittest.TestCase):
+    def test_translate_subcommand_basic_args(self):
+        parser = build_parser()
+        args = parser.parse_args(["translate", "in.pdf", "out.pdf"])
+        self.assertEqual(args.command, "translate")
+        self.assertEqual(args.input_pdf, Path("in.pdf"))
+        self.assertEqual(args.output_pdf, Path("out.pdf"))
+        self.assertFalse(args.dry_run)
+        self.assertFalse(args.preserve_graphics_text)
+        self.assertFalse(args.skip_overflow)
+
+    def test_translate_preserve_graphics_text_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["translate", "in.pdf", "out.pdf", "--preserve-graphics-text"])
+        self.assertTrue(args.preserve_graphics_text)
+
+    def test_translate_skip_overflow_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["translate", "in.pdf", "out.pdf", "--skip-overflow"])
+        self.assertTrue(args.skip_overflow)
+
+    def test_translate_model_and_font_options(self):
+        parser = build_parser()
+        args = parser.parse_args([
+            "translate", "in.pdf", "out.pdf",
+            "--model", "gpt-4o", "--font-name", "china-ss",
+        ])
+        self.assertEqual(args.model, "gpt-4o")
+        self.assertEqual(args.font_name, "china-ss")
+
+    def test_export_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["export", "in.pdf", "out.jsonl"])
+        self.assertEqual(args.command, "export")
+        self.assertEqual(args.input_pdf, Path("in.pdf"))
+        self.assertEqual(args.blocks_jsonl, Path("out.jsonl"))
+
+    def test_no_command_shows_help(self):
+        parser = build_parser()
+        args = parser.parse_args([])
+        self.assertIsNone(args.command)
 
 
 if __name__ == "__main__":
