@@ -458,16 +458,25 @@ async function openReader(paperId) {
   await loadPdfDocument('original', `/api/papers/${paperId}/view/original`);
   if (loadId !== currentLoadId) return;
 
+  const btnTranslate = document.getElementById('btn-translate');
+  const btnRetranslate = document.getElementById('btn-retranslate');
+
   if (currentPaper.has_translated) {
     placeholder.classList.add('hidden');
     document.getElementById('pdf-container-translated').classList.remove('hidden');
     await loadPdfDocument('translated', `/api/papers/${paperId}/view/translated`);
     if (loadId !== currentLoadId) return;
     document.getElementById('btn-download-mono').classList.remove('hidden');
+    // Show re-translate button, hide translate button
+    if (btnTranslate) btnTranslate.classList.add('hidden');
+    if (btnRetranslate) btnRetranslate.classList.remove('hidden');
   } else {
     placeholder.classList.remove('hidden');
     document.getElementById('pdf-container-translated').classList.add('hidden');
     document.getElementById('btn-download-mono').classList.add('hidden');
+    // Show translate button, hide re-translate button
+    if (btnTranslate) btnTranslate.classList.remove('hidden');
+    if (btnRetranslate) btnRetranslate.classList.add('hidden');
 
     // Show error details and retry button for failed translations
     const placeholderIcon = placeholder.querySelector('.placeholder-icon');
@@ -1056,6 +1065,7 @@ const actionHandlers = {
   'do-upload': doUpload,
   'cancel-upload': cancelUpload,
   'start-translate': startTranslate,
+  'retranslate': startTranslate,
   'cancel-translate': cancelTranslation,
   'toggle-sync-scroll': toggleSyncScroll,
   'download-translated': downloadTranslated,
