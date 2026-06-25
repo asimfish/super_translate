@@ -355,4 +355,7 @@ body {
   .resizer { width: 100%; height: 6px; cursor: row-resize; }
   .toast-container { left: 16px; right: 16px; }
   .toast { max-width: 100%; }
+  .reader-toolbar { flex-wrap: wrap; gap: 8px; }
+  .reader-actions { flex-wrap: wrap; width: 100%; }
+  .translate-controls { flex-wrap: wrap; }
 }
