@@ -12,6 +12,7 @@ from pdf_zh_translator.translators import (
     cache_key,
     chunked_by_size,
     coerce_translation_list,
+    extract_openai_message,
     normalize_chat_url,
     normalize_deepseek_chat_url,
     parse_json_string_list,
@@ -108,6 +109,41 @@ class TranslatorParsingTests(unittest.TestCase):
 
     def test_cache_key_differs_for_different_text(self):
         self.assertNotEqual(cache_key("hello"), cache_key("world"))
+
+    def test_coerce_rejects_non_list(self):
+        self.assertIsNone(coerce_translation_list("not a list"))
+        self.assertIsNone(coerce_translation_list(None))
+
+    def test_coerce_rejects_mixed_types(self):
+        self.assertIsNone(coerce_translation_list(["ok", 42]))
+
+    def test_coerce_extracts_text_from_dicts(self):
+        self.assertEqual(
+            coerce_translation_list([{"text": "你好"}, {"translated_text": "世界"}]),
+            ["你好", "世界"],
+        )
+
+    def test_coerce_extracts_translation_key(self):
+        self.assertEqual(
+            coerce_translation_list([{"translation": "你好"}]),
+            ["你好"],
+        )
+
+    def test_extract_openai_message_from_content(self):
+        data = {"choices": [{"message": {"content": "你好世界"}}]}
+        self.assertEqual(extract_openai_message(data), "你好世界")
+
+    def test_extract_openai_message_from_text(self):
+        data = {"choices": [{"text": "你好世界"}]}
+        self.assertEqual(extract_openai_message(data), "你好世界")
+
+    def test_extract_openai_message_raises_on_no_choices(self):
+        with self.assertRaises(TranslationError):
+            extract_openai_message({"choices": []})
+
+    def test_extract_openai_message_raises_on_missing_content(self):
+        with self.assertRaises(TranslationError):
+            extract_openai_message({"choices": [{"message": {}}]})
 
     def test_cached_translator_reuses_jsonl_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
