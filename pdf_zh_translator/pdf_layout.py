@@ -403,7 +403,6 @@ def verify_translation(
         trans_page = trans_doc[page_idx]
 
         # Check for untranslated English paragraphs
-        orig_blocks = orig_page.get_text("dict").get("blocks", [])
         trans_blocks = trans_page.get_text("dict").get("blocks", [])
 
         # Count English-only text blocks in translated PDF
@@ -1092,7 +1091,8 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
 
     # Check if a bold section heading ends the bibliography range
     # (e.g., "Appendix", "Supplementary Material")
-    if _bibliography_seen and block.bold and block.font_size >= max(_bibliography_heading_size * 0.92, 10.5):
+    bib_size_threshold = max(_bibliography_heading_size * 0.92, 10.5)
+    if _bibliography_seen and block.bold and block.font_size >= bib_size_threshold:
         if _SECTION_NUM_RE.match(block.text.strip()) or len(block.text.strip()) < 60:
             _bibliography_ended = True
 
