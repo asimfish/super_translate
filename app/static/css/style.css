@@ -98,6 +98,14 @@ body {
   transition: var(--transition);
 }
 .filter-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(74,158,255,0.2); }
+
+/* Tag chips */
+.tag-chip {
+  display: inline-block; padding: 2px 8px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 12px; font-size: 11px; color: var(--text-dim); cursor: pointer;
+  transition: var(--transition);
+}
+.tag-chip:hover { border-color: var(--accent); color: var(--accent); }
 .toolbar-actions {
   display: flex; gap: 12px; align-items: center;
 }

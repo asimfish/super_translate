@@ -230,7 +230,7 @@ function renderPaperList() {
       ${p.translation_status === 'failed' && p.translation_error ? `
         <div class="meta" style="margin-top:4px;color:var(--error);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.translation_error)}">⚠ ${esc(p.translation_error)}</div>
       ` : ''}
-      ${p.tags ? `<div class="meta" style="margin-top:6px">🏷 ${esc(p.tags)}</div>` : ''}
+      ${p.tags ? `<div class="meta tags-row" style="margin-top:6px">🏷 ${p.tags.split(',').map(t => `<span class="tag-chip" data-action="filter-by-tag" data-tag="${esc(t.trim())}">${esc(t.trim())}</span>`).join(' ')}</div>` : ''}
       <div class="actions" data-action="stop-propagation">
         ${p.translation_status === 'pending' || p.translation_status === 'failed' ?
           `<button class="btn btn-sm btn-primary" data-action="quick-translate" data-paper-id="${esc(p.id)}">翻译</button>` : ''}
@@ -1074,6 +1074,16 @@ const actionHandlers = {
   'download-dual': downloadDual,
   'debounce-search': debounceSearch,
   'load-papers': loadPapers,
+  'filter-by-tag': (e) => {
+    const tag = e.target.dataset.tag;
+    if (tag) {
+      const tagInput = document.getElementById('tag-filter');
+      if (tagInput) {
+        tagInput.value = tag;
+        loadPapers();
+      }
+    }
+  },
   'handle-file-select': (e) => handleFileSelect(e.target),
   'open-reader': (e) => {
     const id = e.target.closest('[data-paper-id]')?.dataset.paperId;
