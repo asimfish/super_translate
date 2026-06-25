@@ -24,6 +24,20 @@ class CountingTranslator(Translator):
         return ["译:" + text for text in texts]
 
 
+class FailingSecondCallTranslator(Translator):
+    batch_size = 1
+    max_batch_chars = 100
+
+    def __init__(self):
+        self.calls = 0
+
+    def translate_batch(self, texts):
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("boom")
+        return ["译:" + text for text in texts]
+
+
 class TranslatorParsingTests(unittest.TestCase):
     def test_parse_generic_string_list(self):
         self.assertEqual(
@@ -94,6 +108,17 @@ class TranslatorParsingTests(unittest.TestCase):
             cached_again = CachedTranslator(wrapped, cache_file)
             self.assertEqual(cached_again.translate_batch(["a"]), ["译:a"])
             self.assertEqual(wrapped.calls, 1)
+
+    def test_cached_translator_persists_completed_chunks_before_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            cached = CachedTranslator(FailingSecondCallTranslator(), cache_file)
+
+            with self.assertRaises(RuntimeError):
+                cached.translate_batch(["a", "b"])
+
+            cached_again = CachedTranslator(CountingTranslator(), cache_file)
+            self.assertEqual(cached_again.translate_batch(["a"]), ["译:a"])
 
 
 if __name__ == "__main__":

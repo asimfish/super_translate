@@ -182,6 +182,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Insert placeholder translations without API call.",
     )
+    translate.add_argument(
+        "--preserve-graphics-text",
+        action="store_true",
+        help=(
+            "Keep text inside figures/tables and math-heavy labels unchanged "
+            "while still translating surrounding captions and prose."
+        ),
+    )
+    translate.add_argument(
+        "--skip-overflow",
+        action="store_true",
+        help="Leave original text unchanged when the Chinese translation cannot fit its bbox.",
+    )
 
     export = subparsers.add_parser(
         "export",
@@ -222,6 +235,8 @@ def run_translate(args: argparse.Namespace) -> int:
             min_font_size=args.min_font_size,
             font_scale=args.font_scale,
             margin=args.margin,
+            preserve_graphics_text=args.preserve_graphics_text,
+            skip_overflow=args.skip_overflow,
         )
     except TranslationError as exc:
         print("Translation failed: %s" % exc, file=sys.stderr)
