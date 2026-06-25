@@ -197,6 +197,13 @@ body {
   padding: 6px 10px; background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius); color: var(--text); font-size: 12px;
 }
+.translate-option {
+  display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-dim);
+  cursor: pointer; white-space: nowrap;
+}
+.translate-option input[type="checkbox"] {
+  width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer;
+}
 
 .reader-body {
   display: flex; height: calc(100vh - 160px); gap: 0;

@@ -59,10 +59,12 @@ const api = {
     if (!res.ok) throw new Error(await errorDetail(res, 'Paper not found'));
     return res.json();
   },
-  async translatePaper(id, backend = '', quality = 'balanced') {
+  async translatePaper(id, backend = '', quality = 'balanced', options = {}) {
     const params = new URLSearchParams();
     if (backend) params.set('backend', backend);
     if (quality) params.set('quality', quality);
+    if (options.preserve_graphics_text) params.set('preserve_graphics_text', 'true');
+    if (options.skip_overflow) params.set('skip_overflow', 'true');
     const res = await fetch(`/api/papers/${id}/translate?${params}`, { method: 'POST' });
     if (!res.ok) throw new Error(await errorDetail(res, 'Translation failed'));
     return res.json();
@@ -727,7 +729,11 @@ let translating = false;
 async function startTranslate() {
   if (!currentPaper) return;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
-  doTranslateDirect(currentPaper.id, '', quality);
+  const options = {
+    preserve_graphics_text: document.getElementById('preserve-graphics-text')?.checked || false,
+    skip_overflow: document.getElementById('skip-overflow')?.checked || false,
+  };
+  doTranslateDirect(currentPaper.id, '', quality, options);
 }
 
 async function quickTranslate(paperId) {
@@ -738,11 +744,11 @@ async function quickTranslate(paperId) {
   doTranslateDirect(paperId, '', 'balanced');
 }
 
-async function doTranslateDirect(paperId, backend, quality) {
+async function doTranslateDirect(paperId, backend, quality, options = {}) {
   if (translating) return;
   translating = true;
   try {
-    await api.translatePaper(paperId, backend, quality);
+    await api.translatePaper(paperId, backend, quality, options);
     pollTranslationStatus(paperId);
   } catch (e) {
     toastError(e.message);

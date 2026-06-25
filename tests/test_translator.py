@@ -49,6 +49,8 @@ class TestTranslationConfig(unittest.TestCase):
         self.assertEqual(config.quality, QualityPreset.BALANCED)
         self.assertEqual(config.max_retries, 2)
         self.assertEqual(config.threads, 8)
+        self.assertFalse(config.preserve_graphics_text)
+        self.assertFalse(config.skip_overflow)
 
     def test_custom_values(self):
         config = TranslationConfig(
@@ -61,6 +63,8 @@ class TestTranslationConfig(unittest.TestCase):
             quality=QualityPreset.QUALITY,
             max_retries=3,
             threads=8,
+            preserve_graphics_text=True,
+            skip_overflow=True,
         )
         self.assertEqual(config.backend, "openai")
         self.assertEqual(config.lang_in, "fr")
@@ -71,6 +75,8 @@ class TestTranslationConfig(unittest.TestCase):
         self.assertEqual(config.quality, QualityPreset.QUALITY)
         self.assertEqual(config.max_retries, 3)
         self.assertEqual(config.threads, 8)
+        self.assertTrue(config.preserve_graphics_text)
+        self.assertTrue(config.skip_overflow)
 
     def test_frozen(self):
         config = TranslationConfig()

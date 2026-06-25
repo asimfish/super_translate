@@ -480,6 +480,8 @@ async def start_translation(
     db: Annotated[AsyncSession, Depends(get_session)],
     backend: str = "",
     quality: str = "balanced",
+    preserve_graphics_text: bool = False,
+    skip_overflow: bool = False,
 ) -> dict[str, bool | str]:
     """Start translation for a paper.
 
@@ -487,6 +489,8 @@ async def start_translation(
         paper_id: The paper's unique identifier
         backend: Translation backend (deepseek, openai, google)
         quality: Quality preset (fast, balanced, quality)
+        preserve_graphics_text: Keep text inside figures/tables unchanged
+        skip_overflow: Leave original text when Chinese won't fit its bbox
 
     Returns:
         Success status with translation status
@@ -530,6 +534,8 @@ async def start_translation(
         paper_id,
         backend or settings.translation_backend,
         quality,
+        preserve_graphics_text,
+        skip_overflow,
     )
 
     return {"ok": True, "status": "translating"}
@@ -559,7 +565,12 @@ _BACKEND_API_KEY_ATTRS = {
 }
 
 
-def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> TranslationConfig:
+def _resolve_backend_config(
+    backend: str,
+    quality_preset: QualityPreset,
+    preserve_graphics_text: bool = False,
+    skip_overflow: bool = False,
+) -> TranslationConfig:
     """Build TranslationConfig from backend name and quality preset.
 
     Resolves API keys from settings, handles fast-mode override to Google.
@@ -605,6 +616,8 @@ def _resolve_backend_config(backend: str, quality_preset: QualityPreset) -> Tran
         base_url=base_url,
         model=model_name,
         quality=quality_preset,
+        preserve_graphics_text=preserve_graphics_text,
+        skip_overflow=skip_overflow,
     )
 
 
@@ -636,7 +649,13 @@ def _reset_paper_status(paper_id: str, error_message: str) -> None:
         logger.exception("Failed to reset paper status for %s", paper_id)
 
 
-def _run_translation(paper_id: str, backend: str, quality: str = "balanced") -> None:
+def _run_translation(
+    paper_id: str,
+    backend: str,
+    quality: str = "balanced",
+    preserve_graphics_text: bool = False,
+    skip_overflow: bool = False,
+) -> None:
     acquired = _translation_semaphore.acquire(timeout=300)
     if not acquired:
         logger.error("Translation queue full, rejecting paper %s", paper_id)
@@ -645,7 +664,12 @@ def _run_translation(paper_id: str, backend: str, quality: str = "balanced") -> 
 
     try:
         quality_preset = _quality_map.get(quality, QualityPreset.BALANCED)
-        config = _resolve_backend_config(backend, quality_preset)
+        config = _resolve_backend_config(
+            backend,
+            quality_preset,
+            preserve_graphics_text=preserve_graphics_text,
+            skip_overflow=skip_overflow,
+        )
 
         asyncio.run(_do_translate(paper_id, config, quality))
 

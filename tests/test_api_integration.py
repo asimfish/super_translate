@@ -1178,6 +1178,27 @@ class TestHelpers:
             config = _resolve_backend_config("deepseek", QualityPreset.FAST)
             assert config.backend == "google"
 
+    def test_resolve_backend_config_passes_graphics_flags(self):
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+
+        config = _resolve_backend_config(
+            "google",
+            QualityPreset.BALANCED,
+            preserve_graphics_text=True,
+            skip_overflow=True,
+        )
+        assert config.preserve_graphics_text is True
+        assert config.skip_overflow is True
+
+    def test_resolve_backend_config_graphics_flags_default_false(self):
+        from app.api.papers import _resolve_backend_config
+        from app.services.translator import QualityPreset
+
+        config = _resolve_backend_config("google", QualityPreset.BALANCED)
+        assert config.preserve_graphics_text is False
+        assert config.skip_overflow is False
+
 
 class TestRunTranslation:
     """Test _run_translation background function."""

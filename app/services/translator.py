@@ -95,6 +95,8 @@ class TranslationConfig:
     quality: QualityPreset = QualityPreset.BALANCED
     max_retries: int = 2
     threads: int = 8  # concurrent page translation threads
+    preserve_graphics_text: bool = False
+    skip_overflow: bool = False
 
 
 # Quality presets configuration
@@ -379,6 +381,8 @@ def _translate_sync_native(
                     input_pdf=input_path,
                     output_pdf=mono_path,
                     translator=translator,
+                    preserve_graphics_text=config.preserve_graphics_text,
+                    skip_overflow=config.skip_overflow,
                 )
                 report = future.result(timeout=_TRANSLATION_TIMEOUT)
             for warning in report.warnings:
