@@ -85,10 +85,19 @@ body {
   transition: var(--transition);
 }
 .search-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(74,158,255,0.2); }
+.filter-box {
+  display: flex; gap: 8px; align-items: center;
+}
 .filter-box select {
   padding: 10px 14px; background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--radius); color: var(--text); font-size: 14px; outline: none;
 }
+.filter-box input {
+  padding: 10px 14px; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); color: var(--text); font-size: 14px; outline: none;
+  transition: var(--transition);
+}
+.filter-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(74,158,255,0.2); }
 .toolbar-actions {
   display: flex; gap: 12px; align-items: center;
 }

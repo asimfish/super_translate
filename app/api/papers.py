@@ -272,6 +272,7 @@ async def list_papers(
     db: Annotated[AsyncSession, Depends(get_session)],
     search: str = "",
     status: str = "",
+    tag: str = "",
     offset: int = 0,
     limit: int = 50,
 ) -> PaperListResponse:
@@ -280,6 +281,7 @@ async def list_papers(
     Args:
         search: Search term for paper title
         status: Filter by translation status
+        tag: Filter by tag (exact match within comma-separated tags)
         offset: Number of papers to skip
         limit: Maximum number of papers to return (1-200)
 
@@ -301,6 +303,9 @@ async def list_papers(
         base = base.where(Paper.title.like(f"%{escaped}%", escape="\\"))
     if status:
         base = base.where(Paper.translation_status == status)
+    if tag:
+        escaped_tag = _escape_like(tag)
+        base = base.where(Paper.tags.like(f"%{escaped_tag}%", escape="\\"))
 
     # Count and paginate from the same filtered base
     total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0

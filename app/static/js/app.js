@@ -14,10 +14,11 @@ async function errorDetail(res, fallback) {
 }
 
 const api = {
-  async listPapers(search = '', status = '', offset = 0, limit = 50) {
+  async listPapers(search = '', status = '', tag = '', offset = 0, limit = 50) {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     if (status) params.set('status', status);
+    if (tag) params.set('tag', tag);
     params.set('offset', offset);
     params.set('limit', limit);
     const res = await fetch(`/api/papers/?${params}`);
@@ -124,6 +125,7 @@ function showUpload() {
 async function loadPapers() {
   const search = document.getElementById('search-input').value;
   const status = document.getElementById('status-filter').value;
+  const tag = document.getElementById('tag-filter')?.value || '';
   const skeleton = document.getElementById('loading-skeleton');
   const paperList = document.getElementById('paper-list');
 
@@ -133,7 +135,7 @@ async function loadPapers() {
   }
 
   try {
-    const data = await api.listPapers(search, status, pagination.offset, pagination.limit);
+    const data = await api.listPapers(search, status, tag, pagination.offset, pagination.limit);
     papers = data.papers;
     pagination.total = data.total;
     renderPaperList();
