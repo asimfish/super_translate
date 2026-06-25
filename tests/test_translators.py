@@ -3,8 +3,11 @@ import unittest
 from pathlib import Path
 
 from pdf_zh_translator.translators import (
+    CacheOnlyTranslator,
     CachedTranslator,
+    TranslationError,
     Translator,
+    cache_key,
     chunked_by_size,
     coerce_translation_list,
     normalize_chat_url,
@@ -96,6 +99,14 @@ class TranslatorParsingTests(unittest.TestCase):
             [["aa"], ["bbb", "c"], ["dddd"]],
         )
 
+    def test_cache_key_is_stable_sha256(self):
+        key = cache_key("hello world")
+        self.assertEqual(len(key), 64)  # SHA-256 hex digest
+        self.assertEqual(key, cache_key("hello world"))  # deterministic
+
+    def test_cache_key_differs_for_different_text(self):
+        self.assertNotEqual(cache_key("hello"), cache_key("world"))
+
     def test_cached_translator_reuses_jsonl_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_file = Path(tmpdir) / "cache.jsonl"
@@ -119,6 +130,52 @@ class TranslatorParsingTests(unittest.TestCase):
 
             cached_again = CachedTranslator(CountingTranslator(), cache_file)
             self.assertEqual(cached_again.translate_batch(["a"]), ["译:a"])
+
+
+class CacheOnlyTranslatorTests(unittest.TestCase):
+    def test_returns_cached_translations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            # Pre-populate cache
+            with cache_file.open("w") as f:
+                f.write('{"key": "%s", "source": "hello", "translation": "你好"}\n' % cache_key("hello"))
+                f.write('{"key": "%s", "source": "world", "translation": "世界"}\n' % cache_key("world"))
+
+            translator = CacheOnlyTranslator(cache_file)
+            result = translator.translate_batch(["hello", "world"])
+            self.assertEqual(result, ["你好", "世界"])
+
+    def test_raises_on_cache_miss(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            # Pre-populate with only one entry
+            with cache_file.open("w") as f:
+                f.write('{"key": "%s", "source": "hello", "translation": "你好"}\n' % cache_key("hello"))
+
+            translator = CacheOnlyTranslator(cache_file)
+            with self.assertRaises(TranslationError) as ctx:
+                translator.translate_batch(["hello", "missing"])
+            self.assertIn("1/2", str(ctx.exception))
+
+    def test_empty_cache_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            cache_file.touch()
+
+            translator = CacheOnlyTranslator(cache_file)
+            with self.assertRaises(TranslationError):
+                translator.translate_batch(["anything"])
+
+    def test_ignores_malformed_json_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            with cache_file.open("w") as f:
+                f.write("not json\n")
+                f.write('{"key": "%s", "source": "ok", "translation": "好的"}\n' % cache_key("ok"))
+
+            translator = CacheOnlyTranslator(cache_file)
+            result = translator.translate_batch(["ok"])
+            self.assertEqual(result, ["好的"])
 
 
 if __name__ == "__main__":
