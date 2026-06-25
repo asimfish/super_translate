@@ -161,6 +161,17 @@ class TestPapersListEndpoint:
         response = client.get("/api/papers/?status=completed")
         assert response.status_code == 200
 
+    def test_list_papers_with_tag_filter(self, client, mock_db):
+        mock_db.scalar.return_value = 0
+        mock_result = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all.return_value = []
+        mock_result.scalars.return_value = mock_scalars
+        mock_db.execute.return_value = mock_result
+
+        response = client.get("/api/papers/?tag=ml")
+        assert response.status_code == 200
+
     def test_list_papers_rejects_long_search(self, client, mock_db):
         """Search term over 200 characters should be rejected."""
         long_search = "a" * 201
