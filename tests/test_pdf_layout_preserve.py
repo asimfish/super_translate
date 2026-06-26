@@ -23,6 +23,7 @@ from pdf_zh_translator.pdf_layout import (
     segments_from_record,
     should_preserve_original_block,
     verify_translation,
+    verify_translation_issues,
 )
 
 
@@ -546,6 +547,32 @@ class TestTranslationVerification(unittest.TestCase):
         translated.close()
         self.assertTrue(any("untranslated English" in issue for issue in issues))
         self.assertFalse(any("2 block" in issue for issue in issues))
+
+    def test_flags_caption_overlapping_figure_region(self):
+        original = fitz.open()
+        page = original.new_page(width=300, height=260)
+        page.draw_rect(fitz.Rect(50, 50, 240, 150))
+        page.insert_text((50, 178), "Figure 1: Overview of the system.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=300, height=260)
+        page.draw_rect(fitz.Rect(50, 50, 240, 150))
+        page.insert_text((58, 92), "Figure 1: System overview.", fontsize=10)
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "caption_overlap" for issue in issues))
 
 
 class TestBlockInZone(unittest.TestCase):

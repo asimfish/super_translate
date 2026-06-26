@@ -1,16 +1,18 @@
-import argparse
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from pdf_zh_translator.cli import build_parser
 from pdf_zh_translator.translators import (
-    CacheOnlyTranslator,
     CachedTranslator,
+    CacheOnlyTranslator,
     TranslationError,
     Translator,
+    VendorTranslator,
     cache_key,
     chunked_by_size,
+    coerce_plain_translation,
     coerce_translation_list,
     extract_openai_message,
     normalize_chat_url,
@@ -44,6 +46,36 @@ class FailingSecondCallTranslator(Translator):
         return ["译:" + text for text in texts]
 
 
+class JsonFailingVendorTranslator(VendorTranslator):
+    def __init__(self):
+        super().__init__(api_url="https://example.com", mode="deepseek", progress=False)
+        self.plain_calls = []
+
+    def _translate_chunk(self, chunk):
+        raise TranslationError("bad json")
+
+    def _translate_single_plain(self, text, reason):
+        self.plain_calls.append((text, str(reason)))
+        return "纯文本:" + text
+
+
+class RawJsonFailingVendorTranslator(JsonFailingVendorTranslator):
+    def _translate_chunk(self, chunk):
+        raise json.JSONDecodeError("bad json", "not-json", 0)
+
+
+class MultiFailingVendorTranslator(VendorTranslator):
+    def __init__(self):
+        super().__init__(api_url="https://example.com", mode="deepseek", progress=False)
+        self.calls = []
+
+    def _translate_chunk(self, chunk):
+        self.calls.append(list(chunk))
+        if len(chunk) > 1:
+            raise TranslationError("bad json")
+        return ["译:" + chunk[0]]
+
+
 class TranslatorParsingTests(unittest.TestCase):
     def test_parse_generic_string_list(self):
         self.assertEqual(
@@ -71,6 +103,12 @@ class TranslatorParsingTests(unittest.TestCase):
             parse_json_translations('{"translations": ["第一段", "第二段"]}'),
             ["第一段", "第二段"],
         )
+
+    def test_coerce_plain_translation_from_markdown_fence(self):
+        self.assertEqual(coerce_plain_translation("```text\n纯文本译文\n```"), "纯文本译文")
+
+    def test_coerce_plain_translation_from_single_json_item(self):
+        self.assertEqual(coerce_plain_translation('{"translations": ["纯文本译文"]}'), "纯文本译文")
 
     def test_normalize_chat_url(self):
         self.assertEqual(
@@ -169,6 +207,32 @@ class TranslatorParsingTests(unittest.TestCase):
             cached_again = CachedTranslator(CountingTranslator(), cache_file)
             self.assertEqual(cached_again.translate_batch(["a"]), ["译:a"])
 
+    def test_single_item_parse_failure_uses_plain_text_fallback(self):
+        translator = JsonFailingVendorTranslator()
+
+        self.assertEqual(
+            translator._translate_chunk_with_fallback(["Model Details bullet list"]),
+            ["纯文本:Model Details bullet list"],
+        )
+        self.assertEqual(translator.plain_calls[0][0], "Model Details bullet list")
+
+    def test_raw_json_decode_failure_uses_plain_text_fallback(self):
+        translator = RawJsonFailingVendorTranslator()
+
+        self.assertEqual(
+            translator._translate_chunk_with_fallback(["Model Details bullet list"]),
+            ["纯文本:Model Details bullet list"],
+        )
+
+    def test_multi_item_parse_failure_retries_one_by_one(self):
+        translator = MultiFailingVendorTranslator()
+
+        self.assertEqual(
+            translator._translate_chunk_with_fallback(["first", "second"]),
+            ["译:first", "译:second"],
+        )
+        self.assertEqual(translator.calls, [["first", "second"], ["first"], ["second"]])
+
 
 class CacheOnlyTranslatorTests(unittest.TestCase):
     def test_returns_cached_translations(self):
@@ -176,8 +240,14 @@ class CacheOnlyTranslatorTests(unittest.TestCase):
             cache_file = Path(tmpdir) / "cache.jsonl"
             # Pre-populate cache
             with cache_file.open("w") as f:
-                f.write('{"key": "%s", "source": "hello", "translation": "你好"}\n' % cache_key("hello"))
-                f.write('{"key": "%s", "source": "world", "translation": "世界"}\n' % cache_key("world"))
+                f.write(
+                    '{"key": "%s", "source": "hello", "translation": "你好"}\n'
+                    % cache_key("hello")
+                )
+                f.write(
+                    '{"key": "%s", "source": "world", "translation": "世界"}\n'
+                    % cache_key("world")
+                )
 
             translator = CacheOnlyTranslator(cache_file)
             result = translator.translate_batch(["hello", "world"])
@@ -188,7 +258,10 @@ class CacheOnlyTranslatorTests(unittest.TestCase):
             cache_file = Path(tmpdir) / "cache.jsonl"
             # Pre-populate with only one entry
             with cache_file.open("w") as f:
-                f.write('{"key": "%s", "source": "hello", "translation": "你好"}\n' % cache_key("hello"))
+                f.write(
+                    '{"key": "%s", "source": "hello", "translation": "你好"}\n'
+                    % cache_key("hello")
+                )
 
             translator = CacheOnlyTranslator(cache_file)
             with self.assertRaises(TranslationError) as ctx:

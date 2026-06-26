@@ -37,6 +37,24 @@ async def init_db() -> None:
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_papers_created ON papers (created_at)"),
         )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_translation_jobs_paper_created "
+                "ON translation_jobs (paper_id, created_at)"
+            ),
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_translation_jobs_status "
+                "ON translation_jobs (status)"
+            ),
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_translation_jobs_cancel_requested "
+                "ON translation_jobs (cancel_requested)"
+            ),
+        )
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

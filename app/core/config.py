@@ -42,6 +42,7 @@ class Settings(BaseSettings):
 
     # Translation concurrency
     max_concurrent_translations: int = 3
+    translation_timeout_seconds: int = 600
 
     # Feishu/Lark notification webhook
     feishu_webhook_url: str = ""

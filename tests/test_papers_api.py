@@ -32,9 +32,31 @@ class TestPaperToResponse(unittest.TestCase):
         self.assertEqual(resp.id, "test-id-123")
         self.assertEqual(resp.title, "Test Paper")
         self.assertEqual(resp.file_size, 1024)
+        self.assertEqual(resp.translation_stage, "等待翻译")
+        self.assertIsNone(resp.translation_eta_seconds)
+        self.assertEqual(resp.translation_eta, "")
         self.assertFalse(resp.has_original)
         self.assertFalse(resp.has_translated)
         self.assertFalse(resp.has_dual)
+
+    def test_translation_eta_and_stage_are_derived_from_log(self):
+        paper = self._make_paper(
+            translation_status="translating",
+            translation_progress=0.4,
+            translation_log="[10:00:00] 翻译进度: 40%，预计剩余 1分20秒",
+        )
+        resp = _paper_to_response(paper)
+        self.assertEqual(resp.translation_stage, "翻译中")
+        self.assertEqual(resp.translation_eta_seconds, 80)
+        self.assertEqual(resp.translation_eta, "1分20秒")
+
+    def test_translation_stage_reports_qa_phase(self):
+        paper = self._make_paper(
+            translation_status="translating",
+            translation_log="[10:00:00] 正在检查译文和版面",
+        )
+        resp = _paper_to_response(paper)
+        self.assertEqual(resp.translation_stage, "译后检查")
 
     def test_with_file_flags(self):
         paper = self._make_paper()

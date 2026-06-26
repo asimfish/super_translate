@@ -21,7 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_session
-from app.models.paper import Paper, TranslationStatus
+from app.models.paper import (
+    Paper,
+    TranslationJob,
+    TranslationJobStatus,
+    TranslationStatus,
+    generate_job_id,
+)
 from app.services.library import (
     cleanup_output_dir,
     delete_paper_files,
@@ -65,8 +71,12 @@ _MAX_TAGS_LEN = 1000
 _MAX_NOTES_LEN = 10_000
 _MAX_SEARCH_LEN = 200
 _PROGRESS_THROTTLE = 0.05
+_PROGRESS_LOG_STEP = 10
 _VALID_QA_MODES = {"single", "iterative"}
 _VALID_OCR_MODES = {"off", "auto", "force"}
+_ETA_RE = re.compile(
+    r"预计剩余\s*(?:(?P<hours>\d+)小时)?(?:(?P<minutes>\d+)分)?(?:(?P<seconds>\d+)秒)?"
+)
 
 
 def _cancel_marker_path(paper_id: str) -> Path:
@@ -146,6 +156,9 @@ class PaperResponse(BaseModel):
     translation_progress: float
     translation_error: str | None
     translation_log: str = ""
+    translation_stage: str = ""
+    translation_eta_seconds: int | None = None
+    translation_eta: str = ""
     tags: str
     notes: str
     has_original: bool
@@ -164,6 +177,29 @@ class PaperListResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class TranslationJobResponse(BaseModel):
+    """Response model for durable translation job data."""
+
+    id: str
+    paper_id: str
+    backend: str
+    quality: str
+    qa_mode: str
+    qa_max_passes: int
+    ocr_mode: str
+    ocr_language: str
+    ocr_dpi: int
+    status: str
+    progress: float
+    cancel_requested: bool
+    error: str | None
+    created_at: str
+    updated_at: str
+    heartbeat_at: str
+    started_at: str
+    finished_at: str
 
 
 class PaperUpdateRequest(BaseModel):
@@ -215,6 +251,7 @@ def _paper_to_response(
     has_dual: bool = False,
 ) -> PaperResponse:
     """Convert a Paper model to a PaperResponse."""
+    progress_meta = _translation_progress_meta(paper)
     return PaperResponse(
         id=paper.id,
         title=paper.title,
@@ -225,6 +262,9 @@ def _paper_to_response(
         translation_progress=max(0.0, min(1.0, paper.translation_progress)),
         translation_error=paper.translation_error,
         translation_log=paper.translation_log or "",
+        translation_stage=progress_meta["stage"],
+        translation_eta_seconds=progress_meta["eta_seconds"],
+        translation_eta=progress_meta["eta"],
         tags=paper.tags,
         notes=paper.notes,
         has_original=has_original,
@@ -233,6 +273,74 @@ def _paper_to_response(
         created_at=paper.created_at.isoformat() if paper.created_at else "",
         updated_at=paper.updated_at.isoformat() if paper.updated_at else "",
     )
+
+
+def _job_to_response(job: TranslationJob) -> TranslationJobResponse:
+    return TranslationJobResponse(
+        id=job.id,
+        paper_id=job.paper_id,
+        backend=job.backend,
+        quality=job.quality,
+        qa_mode=job.qa_mode,
+        qa_max_passes=job.qa_max_passes,
+        ocr_mode=job.ocr_mode,
+        ocr_language=job.ocr_language,
+        ocr_dpi=job.ocr_dpi,
+        status=job.status,
+        progress=max(0.0, min(1.0, job.progress)),
+        cancel_requested=job.cancel_requested,
+        error=job.error,
+        created_at=job.created_at.isoformat() if job.created_at else "",
+        updated_at=job.updated_at.isoformat() if job.updated_at else "",
+        heartbeat_at=job.heartbeat_at.isoformat() if job.heartbeat_at else "",
+        started_at=job.started_at.isoformat() if job.started_at else "",
+        finished_at=job.finished_at.isoformat() if job.finished_at else "",
+    )
+
+
+def _translation_progress_meta(paper: Paper) -> dict:
+    """Derive structured progress metadata without requiring a DB migration."""
+    log = paper.translation_log or ""
+    eta_seconds = _parse_latest_eta_seconds(log)
+    return {
+        "stage": _infer_translation_stage(paper.translation_status, log),
+        "eta_seconds": eta_seconds,
+        "eta": _format_duration(eta_seconds) if eta_seconds is not None else "",
+    }
+
+
+def _infer_translation_stage(status: str, log: str) -> str:
+    if status == TranslationStatus.PENDING.value:
+        return "等待翻译"
+    if status == TranslationStatus.COMPLETED.value:
+        return "已完成"
+    if status == TranslationStatus.FAILED.value:
+        return "失败"
+    if status != TranslationStatus.TRANSLATING.value:
+        return status or ""
+
+    recent = "\n".join((log or "").splitlines()[-8:])
+    if "版面修复" in recent or "自动执行一次版面修复" in recent:
+        return "版面修复"
+    if "检查" in recent or "QA" in recent:
+        return "译后检查"
+    if "OCR" in recent:
+        return "OCR 处理"
+    if "已记录" in recent and "术语" in recent:
+        return "术语检查"
+    return "翻译中"
+
+
+def _parse_latest_eta_seconds(log: str) -> int | None:
+    matches = list(_ETA_RE.finditer(log or ""))
+    if not matches:
+        return None
+    match = matches[-1]
+    hours = int(match.group("hours") or 0)
+    minutes = int(match.group("minutes") or 0)
+    seconds = int(match.group("seconds") or 0)
+    total = hours * 3600 + minutes * 60 + seconds
+    return total if total > 0 else None
 
 
 def _escape_like(value: str) -> str:
@@ -579,6 +687,22 @@ async def start_translation(
         # Either paper doesn't exist or already translating
         await _get_paper_or_404(paper_id, db)  # raises 404 if missing
         raise HTTPException(409, "Translation already in progress")
+    job_id = generate_job_id()
+    job = TranslationJob(
+        id=job_id,
+        paper_id=paper_id,
+        backend=backend or settings.translation_backend,
+        quality=quality,
+        preserve_graphics_text=preserve_graphics_text,
+        skip_overflow=skip_overflow,
+        qa_mode=qa_mode,
+        qa_max_passes=qa_max_passes,
+        ocr_mode=ocr_mode,
+        ocr_language=ocr_language,
+        ocr_dpi=ocr_dpi,
+        status=TranslationJobStatus.QUEUED.value,
+    )
+    db.add(job)
     await db.commit()
 
     background_tasks.add_task(
@@ -593,9 +717,10 @@ async def start_translation(
         ocr_mode,
         ocr_language,
         ocr_dpi,
+        job_id,
     )
 
-    return {"ok": True, "status": "translating"}
+    return {"ok": True, "status": "translating", "job_id": job_id}
 
 
 @router.post("/{paper_id}/cancel")
@@ -611,7 +736,34 @@ async def cancel_translation(
     if paper.translation_status != TranslationStatus.TRANSLATING.value:
         raise HTTPException(409, "Paper is not currently being translated")
     _mark_cancel_requested(paper_id)
+    await db.execute(
+        update(TranslationJob)
+        .where(
+            TranslationJob.paper_id == paper_id,
+            TranslationJob.status.in_(
+                [TranslationJobStatus.QUEUED.value, TranslationJobStatus.RUNNING.value]
+            ),
+        )
+        .values(cancel_requested=True, updated_at=func.now()),
+    )
+    await db.commit()
     return {"ok": True, "status": "cancelling"}
+
+
+@router.get("/{paper_id}/jobs")
+async def list_translation_jobs(
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> list[TranslationJobResponse]:
+    """List recent durable translation jobs for one paper."""
+    await _get_paper_or_404(paper_id, db)
+    result = await db.execute(
+        select(TranslationJob)
+        .where(TranslationJob.paper_id == paper_id)
+        .order_by(TranslationJob.created_at.desc())
+        .limit(50)
+    )
+    return [_job_to_response(job) for job in result.scalars().all()]
 
 
 _BACKEND_API_KEY_ATTRS = {
@@ -683,7 +835,42 @@ def _resolve_backend_config(
     )
 
 
-def _reset_paper_status(paper_id: str, error_message: str) -> None:
+async def _update_translation_job(
+    db: AsyncSession,
+    job_id: str | None,
+    *,
+    status: str | None = None,
+    progress: float | None = None,
+    error: str | None = None,
+    cancel_requested: bool | None = None,
+    started: bool = False,
+    finished: bool = False,
+    heartbeat: bool = False,
+) -> None:
+    """Update a durable translation job when one exists."""
+    if not job_id:
+        return
+    values: dict[str, object] = {"updated_at": func.now()}
+    if status is not None:
+        values["status"] = status
+    if progress is not None:
+        values["progress"] = max(0.0, min(1.0, progress))
+    if error is not None:
+        values["error"] = error
+    if cancel_requested is not None:
+        values["cancel_requested"] = cancel_requested
+    if started:
+        values["started_at"] = func.now()
+    if finished:
+        values["finished_at"] = func.now()
+    if heartbeat:
+        values["heartbeat_at"] = func.now()
+    await db.execute(
+        update(TranslationJob).where(TranslationJob.id == job_id).values(**values)
+    )
+
+
+def _reset_paper_status(paper_id: str, error_message: str, job_id: str | None = None) -> None:
     """Reset a paper's translation status to failed (synchronous, for background threads)."""
     from app.core.database import async_session
 
@@ -704,6 +891,13 @@ def _reset_paper_status(paper_id: str, error_message: str) -> None:
                         translation_error=error_message,
                     ),
                 )
+                await _update_translation_job(
+                    db,
+                    job_id,
+                    status=TranslationJobStatus.FAILED.value,
+                    error=error_message,
+                    finished=True,
+                )
                 await db.commit()
 
         asyncio.run(_do_reset())
@@ -722,11 +916,19 @@ def _run_translation(
     ocr_mode: str = "off",
     ocr_language: str = "eng",
     ocr_dpi: int = 180,
+    job_id: str | None = None,
 ) -> None:
     acquired = _translation_semaphore.acquire(timeout=300)
     if not acquired:
         logger.error("Translation queue full, rejecting paper %s", paper_id)
-        _reset_paper_status(paper_id, "Translation queue is busy, please try again later")
+        if job_id:
+            _reset_paper_status(
+                paper_id,
+                "Translation queue is busy, please try again later",
+                job_id,
+            )
+        else:
+            _reset_paper_status(paper_id, "Translation queue is busy, please try again later")
         return
 
     try:
@@ -742,16 +944,22 @@ def _run_translation(
             ocr_dpi=ocr_dpi,
         )
 
-        asyncio.run(_do_translate(paper_id, config, quality, qa_mode, qa_max_passes))
+        asyncio.run(_do_translate(paper_id, config, quality, qa_mode, qa_max_passes, job_id))
 
     except HTTPException as e:
         # Config validation errors (missing API key, etc.) — surface the real message
-        _reset_paper_status(paper_id, e.detail)
+        if job_id:
+            _reset_paper_status(paper_id, e.detail, job_id)
+        else:
+            _reset_paper_status(paper_id, e.detail)
     except Exception:
         # Safety net: if anything outside _do_translate fails, reset paper status
         # so it doesn't stay stuck as "translating" forever
         logger.exception("Unhandled error in _run_translation for paper %s", paper_id)
-        _reset_paper_status(paper_id, "Unexpected server error during translation")
+        if job_id:
+            _reset_paper_status(paper_id, "Unexpected server error during translation", job_id)
+        else:
+            _reset_paper_status(paper_id, "Unexpected server error during translation")
 
     finally:
         _clear_cancel_requested(paper_id)
@@ -764,6 +972,7 @@ async def _do_translate(
     quality: str,
     qa_mode: str = "single",
     qa_max_passes: int = 4,
+    job_id: str | None = None,
 ) -> None:
     """Execute translation in async context.
 
@@ -782,10 +991,26 @@ async def _do_translate(
         paper = result.scalar_one_or_none()
         if not paper:
             logger.error("Paper %s not found for translation", paper_id)
+            await _update_translation_job(
+                db,
+                job_id,
+                status=TranslationJobStatus.FAILED.value,
+                error="Paper not found",
+                finished=True,
+            )
+            await db.commit()
             _clear_cancel_requested(paper_id)
             return
 
         stored_filename = paper.stored_filename
+        await _update_translation_job(
+            db,
+            job_id,
+            status=TranslationJobStatus.RUNNING.value,
+            progress=0.0,
+            started=True,
+            heartbeat=True,
+        )
 
         # Validate paths while session is open (can write error status directly)
         papers_base = settings.papers_path.resolve()
@@ -794,6 +1019,13 @@ async def _do_translate(
             logger.error("Path traversal detected for paper %s", paper_id)
             paper.translation_status = TranslationStatus.FAILED.value
             paper.translation_error = "Invalid file path"
+            await _update_translation_job(
+                db,
+                job_id,
+                status=TranslationJobStatus.FAILED.value,
+                error="Invalid file path",
+                finished=True,
+            )
             await db.commit()
             _clear_cancel_requested(paper_id)
             return
@@ -802,9 +1034,19 @@ async def _do_translate(
             logger.error("Original file missing for paper %s", paper_id)
             paper.translation_status = TranslationStatus.FAILED.value
             paper.translation_error = "Original PDF file not found"
+            await _update_translation_job(
+                db,
+                job_id,
+                status=TranslationJobStatus.FAILED.value,
+                error="Original PDF file not found",
+                finished=True,
+            )
             await db.commit()
             _clear_cancel_requested(paper_id)
             return
+
+        if job_id:
+            await db.commit()
 
     output_dir = settings.translations_path / paper_id
     # Clean up old translation files before starting re-translation
@@ -822,7 +1064,7 @@ async def _do_translate(
     _append_log(paper_id, loop, f"共 {paper.page_count} 页, 文件大小: {paper.file_size // 1024}KB")
 
     # Phase 2: Run translation (no DB session held)
-    on_progress = _create_progress_handler(paper_id, loop)
+    on_progress = _create_progress_handler(paper_id, loop, job_id=job_id)
 
     try:
         trans_result = translate_pdf_sync(input_path, output_dir, config, on_progress)
@@ -837,6 +1079,15 @@ async def _do_translate(
                 paper.translation_status = TranslationStatus.PENDING.value
                 paper.translation_progress = 0.0
                 paper.translation_error = None
+                await _update_translation_job(
+                    db,
+                    job_id,
+                    status=TranslationJobStatus.CANCELLED.value,
+                    progress=0.0,
+                    error="Translation cancelled by user",
+                    cancel_requested=True,
+                    finished=True,
+                )
                 await db.commit()
         cleanup_output_dir(output_dir)
         _clear_cancel_requested(paper_id)
@@ -851,6 +1102,13 @@ async def _do_translate(
             if paper:
                 paper.translation_status = TranslationStatus.FAILED.value
                 paper.translation_error = sanitize_error(e)
+                await _update_translation_job(
+                    db,
+                    job_id,
+                    status=TranslationJobStatus.FAILED.value,
+                    error=sanitize_error(e),
+                    finished=True,
+                )
                 await db.commit()
         cleanup_output_dir(output_dir)
         _clear_cancel_requested(paper_id)
@@ -865,9 +1123,9 @@ async def _do_translate(
             qa_mode=qa_mode,
             max_passes=qa_max_passes,
         )
-        if qa_mode == "iterative" and _has_unresolved_error(unresolved_issues):
+        if _has_unresolved_error(unresolved_issues):
             trans_result = TranslationResult(
-                error="QA found unresolved layout or translation issues after iterative checks"
+                error="QA found unresolved layout or translation issues after post-checks"
             )
 
     elapsed = time.monotonic() - start_time
@@ -884,17 +1142,34 @@ async def _do_translate(
 
         _update_paper_result(paper, trans_result, output_dir)
         if trans_result.success:
+            await _update_translation_job(
+                db,
+                job_id,
+                status=TranslationJobStatus.COMPLETED.value,
+                progress=1.0,
+                finished=True,
+            )
+        else:
+            await _update_translation_job(
+                db,
+                job_id,
+                status=TranslationJobStatus.FAILED.value,
+                error=trans_result.error or "Translation failed",
+                finished=True,
+            )
+        if trans_result.success:
             _append_log(paper_id, loop, f"翻译完成! 耗时 {elapsed:.0f}秒")
         else:
             _append_log(paper_id, loop, f"翻译失败: {trans_result.error} (耗时 {elapsed:.0f}秒)")
         await db.commit()
 
         # Send Feishu notification
-        if settings.feishu_webhook_url:
+        webhook_url = settings.feishu_webhook_url
+        if isinstance(webhook_url, str) and webhook_url:
             from app.services.notify import notify_translation_complete
 
             notify_translation_complete(
-                settings.feishu_webhook_url,
+                webhook_url,
                 paper.title,
                 paper_id,
                 trans_result.success,
@@ -959,7 +1234,9 @@ def _run_post_translation_qa(
 
 
 def _has_fixable_layout_issue(issues: list) -> bool:
-    return any(getattr(issue, "code", "") in {"text_overlap"} for issue in issues)
+    return any(
+        getattr(issue, "code", "") in {"caption_overlap", "text_overlap"} for issue in issues
+    )
 
 
 def _has_unresolved_error(issues: list) -> bool:
@@ -1042,6 +1319,8 @@ def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) ->
 def _create_progress_handler(
     paper_id: str,
     loop: asyncio.AbstractEventLoop,
+    *,
+    job_id: str | None = None,
 ) -> Callable:
     """Create a progress callback that updates the database."""
     _last_pct: list[float] = [0.0]
@@ -1076,14 +1355,22 @@ def _create_progress_handler(
                     )
                     .values(translation_progress=pct),
                 )
+                await _update_translation_job(
+                    p_db,
+                    job_id,
+                    progress=pct,
+                    heartbeat=True,
+                )
                 await p_db.commit()
 
         with contextlib.suppress(Exception):
             asyncio.run_coroutine_threadsafe(_update(), loop)
 
         # Log milestone progress
-        milestone = pct_display // 25
-        if pct >= 1.0 or (pct_display >= 25 and milestone > _last_milestone[0]):
+        milestone = pct_display // _PROGRESS_LOG_STEP
+        if pct >= 1.0 or (
+            pct_display >= _PROGRESS_LOG_STEP and milestone > _last_milestone[0]
+        ):
             _last_milestone[0] = milestone
             _append_log(paper_id, loop, f"翻译进度: {pct_display}%{eta_text}")
 

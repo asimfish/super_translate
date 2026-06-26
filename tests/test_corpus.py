@@ -82,11 +82,20 @@ def test_record_candidate_terms_appends_new_jsonl_records(tmp_path):
 def test_packaged_corpus_includes_top_conference_categories():
     stats = corpus_stats()
 
-    assert stats["_total"] >= 550
+    assert stats["_total"] >= 1000
     assert stats["neurips_icml_iclr"] >= 70
+    assert stats["neurips_foundations_theory"] >= 30
+    assert stats["icml_optimization_learning_theory"] >= 30
+    assert stats["iclr_representations_architectures"] >= 30
     assert stats["cvpr_computer_vision"] >= 45
+    assert stats["cvpr_detection_segmentation"] >= 30
+    assert stats["cvpr_3d_geometry_reconstruction"] >= 30
     assert stats["acl_nlp"] >= 45
+    assert stats["acl_machine_translation_generation"] >= 30
+    assert stats["acl_information_extraction_retrieval"] >= 30
     assert stats["paper_layout_and_reporting"] >= 35
+    assert stats["ml_systems_data_scaling"] >= 30
+    assert stats["ai_agents_tool_use"] >= 30
 
 
 def test_candidate_review_promote_and_release_workflow(tmp_path):

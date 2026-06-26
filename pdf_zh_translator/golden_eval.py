@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,52 @@ def write_manifest_template(path: Path, *, target_cases: int = 100) -> None:
         "cases": [],
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def discover_golden_pairs(
+    root_dir: Path,
+    manifest_path: Path,
+    *,
+    target_cases: int = 100,
+    original_suffix: str = "-original.pdf",
+    translated_suffix: str = "-translated.pdf",
+    min_visual_score: float = 0.55,
+) -> int:
+    """Discover original/translated PDF pairs and write a golden manifest.
+
+    Expected file naming:
+    ``paper-id-original.pdf`` and ``paper-id-translated.pdf`` in any nested
+    directory under ``root_dir``.
+    """
+    cases = []
+    for translated in sorted(root_dir.rglob(f"*{translated_suffix}")):
+        prefix = translated.name[: -len(translated_suffix)]
+        original = translated.with_name(prefix + original_suffix)
+        if not original.exists():
+            continue
+        case_id = str(translated.relative_to(root_dir).with_suffix(""))
+        if case_id.endswith(translated_suffix[:-4]):
+            case_id = case_id[: -len(translated_suffix[:-4])]
+        cases.append(
+            {
+                "id": case_id.replace("/", "__"),
+                "original_pdf": os.path.relpath(original, manifest_path.parent),
+                "translated_pdf": os.path.relpath(translated, manifest_path.parent),
+                "min_visual_score": min_visual_score,
+            }
+        )
+
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "target_cases": target_cases,
+        "description": "Golden regression set discovered from paired PDFs.",
+        "cases": cases,
+    }
+    manifest_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return len(cases)
 
 
 def load_golden_manifest(path: Path) -> tuple[int, list[GoldenCase]]:

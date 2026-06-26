@@ -4,7 +4,11 @@ import json
 
 import fitz
 
-from pdf_zh_translator.golden_eval import evaluate_golden_set, write_manifest_template
+from pdf_zh_translator.golden_eval import (
+    discover_golden_pairs,
+    evaluate_golden_set,
+    write_manifest_template,
+)
 
 
 def _save_blank_pdf(path) -> None:
@@ -51,3 +55,20 @@ def test_golden_evaluation_requires_target_case_count(tmp_path):
     assert result.evaluated_cases == 1
     assert result.passed_cases == 1
     assert result.ready_for_release is False
+
+
+def test_discovers_paired_golden_pdfs(tmp_path):
+    pairs_dir = tmp_path / "pairs"
+    pairs_dir.mkdir()
+    _save_blank_pdf(pairs_dir / "paper-a-original.pdf")
+    _save_blank_pdf(pairs_dir / "paper-a-translated.pdf")
+    _save_blank_pdf(pairs_dir / "paper-b-translated.pdf")
+    manifest = tmp_path / "manifest" / "golden.json"
+
+    count = discover_golden_pairs(pairs_dir, manifest, target_cases=100)
+
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    assert count == 1
+    assert data["target_cases"] == 100
+    assert data["cases"][0]["id"] == "paper-a"
+    assert data["cases"][0]["original_pdf"].endswith("paper-a-original.pdf")

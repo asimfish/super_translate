@@ -29,6 +29,27 @@ _COMMON_CANDIDATE_WORDS = frozenset(
     "abstract introduction related work experiment experiments conclusion appendix "
     "figure table algorithm theorem proof this paper our method".split()
 )
+TOP_CONFERENCE_FIELDS = (
+    "neurips_icml_iclr",
+    "neurips_foundations_theory",
+    "neurips_rl_decision_making",
+    "neurips_generative_multimodal",
+    "icml_optimization_learning_theory",
+    "icml_probabilistic_bayes",
+    "iclr_representations_architectures",
+    "cvpr_computer_vision",
+    "cvpr_detection_segmentation",
+    "cvpr_3d_geometry_reconstruction",
+    "cvpr_video_embodied_vision",
+    "acl_nlp",
+    "acl_machine_translation_generation",
+    "acl_information_extraction_retrieval",
+    "acl_dialogue_safety_evaluation",
+    "agents_alignment_safety",
+    "paper_layout_and_reporting",
+    "ml_systems_data_scaling",
+    "ai_agents_tool_use",
+)
 
 
 def _load_corpus() -> Dict[str, Dict[str, str]]:
@@ -122,6 +143,26 @@ def corpus_stats() -> Dict[str, int]:
     stats = {field: len(terms) for field, terms in corpus.items()}
     stats["_total"] = sum(stats.values())
     return stats
+
+
+def corpus_health(candidate_path: Optional[Path] = None) -> dict:
+    """Return corpus coverage and maintenance signals for AI conference terms."""
+    stats = corpus_stats()
+    root_data = _load_raw_corpus(_CORPUS_PATH)
+    metadata = root_data.get("_metadata") or root_data.get("_meta") or {}
+    candidates = load_candidate_terms(candidate_path) if candidate_path else []
+    top_counts = {field: stats.get(field, 0) for field in TOP_CONFERENCE_FIELDS}
+    return {
+        "total_terms": stats.get("_total", 0),
+        "top_conference_terms": sum(top_counts.values()),
+        "top_conference_fields": top_counts,
+        "missing_top_conference_fields": [
+            field for field, count in top_counts.items() if count <= 0
+        ],
+        "candidate_terms": len(candidates),
+        "extra_corpora": sorted(path.name for path in _CORPORA_DIR.glob("*.json")),
+        "metadata": metadata,
+    }
 
 
 def upsert_terms(

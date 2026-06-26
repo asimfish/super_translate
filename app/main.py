@@ -41,13 +41,19 @@ async def _recover_stuck_translations() -> None:
     On startup, any paper with translation_status='translating' is marked
     as failed, since the translation process no longer exists.
     """
+    from sqlalchemy import func
     from sqlalchemy import update as sa_update
 
     from app.core.database import async_session
-    from app.models.paper import Paper, TranslationStatus
+    from app.models.paper import (
+        Paper,
+        TranslationJob,
+        TranslationJobStatus,
+        TranslationStatus,
+    )
 
     async with async_session() as db:
-        result = await db.execute(
+        paper_result = await db.execute(
             sa_update(Paper)
             .where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
             .values(
@@ -55,10 +61,25 @@ async def _recover_stuck_translations() -> None:
                 translation_error="Translation was interrupted (server restart)",
             ),
         )
-        if result.rowcount > 0:
+        job_result = await db.execute(
+            sa_update(TranslationJob)
+            .where(
+                TranslationJob.status.in_(
+                    [TranslationJobStatus.QUEUED.value, TranslationJobStatus.RUNNING.value]
+                )
+            )
+            .values(
+                status=TranslationJobStatus.FAILED.value,
+                error="Translation was interrupted (server restart)",
+                finished_at=func.now(),
+                updated_at=func.now(),
+            ),
+        )
+        recovered = (paper_result.rowcount or 0) + (job_result.rowcount or 0)
+        if recovered > 0:
             try:
                 await db.commit()
-                logger.info("Recovered %d stuck translation(s)", result.rowcount)
+                logger.info("Recovered %d stuck translation record(s)", recovered)
             except Exception:
                 await db.rollback()
                 logger.exception("Failed to recover stuck translations")
@@ -234,10 +255,14 @@ def cli() -> None:
     args = parser.parse_args()
 
     if args.host not in ("127.0.0.1", "localhost", "::1"):
-        logger.warning(
-            "Binding to %s — API has no authentication! Ensure network is trusted.",
-            args.host,
-        )
+        if settings.api_token.get_secret_value():
+            logger.info("Binding to %s with API token authentication enabled.", args.host)
+        else:
+            logger.warning(
+                "Binding to %s without PAPER_CHINA_API_TOKEN. Remote API clients will be rejected "
+                "unless PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE=true.",
+                args.host,
+            )
 
     if args.open:
         webbrowser.open(f"http://{args.host}:{args.port}")

@@ -194,13 +194,29 @@ class VendorTranslator(Translator):
         return results
 
     def _translate_chunk_with_fallback(self, chunk: Sequence[str]) -> List[str]:
-        translated = self._translate_chunk(chunk)
+        try:
+            translated = self._translate_chunk(chunk)
+        except (TranslationError, json.JSONDecodeError) as exc:
+            if len(chunk) == 1:
+                return [self._translate_single_plain(chunk[0], exc)]
+            if self.progress:
+                print(
+                    "Warning: supplier response could not be parsed for %d inputs; "
+                    "retrying one by one" % len(chunk),
+                    file=sys.stderr,
+                    flush=True,
+                )
+            return self._translate_items_one_by_one(chunk)
+
         if len(translated) == len(chunk):
             return translated
         if len(chunk) == 1:
-            raise TranslationError(
-                "Supplier returned %d translations for 1 input" % len(translated)
-            )
+            return [self._translate_single_plain(
+                chunk[0],
+                TranslationError(
+                    "Supplier returned %d translations for 1 input" % len(translated)
+                ),
+            )]
 
         if self.progress:
             print(
@@ -209,16 +225,66 @@ class VendorTranslator(Translator):
                 file=sys.stderr,
                 flush=True,
             )
+        return self._translate_items_one_by_one(chunk)
 
+    def _translate_items_one_by_one(self, chunk: Sequence[str]) -> List[str]:
         singles: List[str] = []
         for item in chunk:
-            single = self._translate_chunk([item])
+            single = self._translate_chunk_with_fallback([item])
             if len(single) != 1:
                 raise TranslationError(
-                    "Supplier returned %d translations for 1 input during fallback" % len(single)
+                    "Supplier returned %d translations for 1 input during fallback"
+                    % len(single)
                 )
             singles.extend(single)
         return singles
+
+    def _translate_single_plain(self, text: str, reason: BaseException) -> str:
+        if self.mode not in {"deepseek", "openai-compatible"}:
+            raise TranslationError(
+                "Supplier JSON response was unusable and plain-text fallback is unsupported: %s"
+                % reason
+            )
+        if self.progress:
+            print(
+                "Warning: single-item JSON translation failed (%s); using plain-text fallback"
+                % reason,
+                file=sys.stderr,
+                flush=True,
+            )
+        if self.mode == "deepseek":
+            return self._translate_deepseek_plain(text)
+        return self._translate_openai_plain(text)
+
+    def _translate_openai_plain(self, text: str) -> str:
+        payload = {
+            "model": self.model or "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": single_translation_prompt()},
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0,
+            "max_tokens": self.max_output_tokens,
+        }
+        data = self._post_json(normalize_chat_url(self.api_url), payload)
+        return coerce_plain_translation(extract_openai_message(data))
+
+    def _translate_deepseek_plain(self, text: str) -> str:
+        payload: Dict[str, Any] = {
+            "model": self.model or "deepseek-v4-pro",
+            "messages": [
+                {"role": "system", "content": single_translation_prompt()},
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0,
+            "max_tokens": self.max_output_tokens,
+            "stream": False,
+            "thinking": {"type": self.deepseek_thinking},
+        }
+        if self.deepseek_thinking == "enabled":
+            payload["reasoning_effort"] = self.reasoning_effort
+        data = self._post_json(normalize_deepseek_chat_url(self.api_url), payload)
+        return coerce_plain_translation(extract_openai_message(data))
 
     def _translate_chunk(self, chunk: Sequence[str]) -> List[str]:
         if self.mode == "generic":
@@ -448,6 +514,15 @@ def translation_array_prompt() -> str:
     )
 
 
+def single_translation_prompt() -> str:
+    return (
+        _TRANSLATION_RULES + "\nTranslate the user's text from English to Simplified Chinese. "
+        "Preserve numbers, citations, equations, URLs, product names, and placeholders "
+        "like ⟦0⟧ exactly. Do not add commentary, labels, Markdown fences, or JSON. "
+        "Return only the translated Chinese text."
+    )
+
+
 # Structure-aware type hints for block classification
 _BLOCK_TYPE_HINTS: dict[str, str] = {
     "title": "【注意】这是论文标题，翻译要简洁准确，保留原标题的学术风格。",
@@ -532,11 +607,29 @@ def parse_json_string_list(content: str) -> List[str]:
     return parsed
 
 
+def coerce_plain_translation(content: str) -> str:
+    cleaned = strip_markdown_fence(content).strip()
+    if not cleaned:
+        raise TranslationError("Plain-text fallback returned an empty translation")
+    try:
+        parsed = load_json_from_content(cleaned)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, str):
+        cleaned = parsed.strip()
+    elif isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], str):
+        cleaned = parsed[0].strip()
+    elif isinstance(parsed, dict):
+        parsed_list = parse_translation_list(parsed)
+        if len(parsed_list) == 1:
+            cleaned = parsed_list[0].strip()
+    if not cleaned:
+        raise TranslationError("Plain-text fallback returned an empty translation")
+    return cleaned
+
+
 def load_json_from_content(content: str) -> Any:
-    cleaned = content.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = strip_markdown_fence(content)
 
     try:
         return json.loads(cleaned)
@@ -545,6 +638,14 @@ def load_json_from_content(content: str) -> Any:
         if not match:
             raise
         return json.loads(match.group(0))
+
+
+def strip_markdown_fence(content: str) -> str:
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json|text)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    return cleaned
 
 
 def normalize_chat_url(api_url: str) -> str:

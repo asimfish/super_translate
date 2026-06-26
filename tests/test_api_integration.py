@@ -656,6 +656,8 @@ class TestTranslationEndpoint:
             response = client.post(f"/api/papers/{sample_paper.id}/translate")
             assert response.status_code == 200
             assert response.json()["status"] == "translating"
+            assert response.json()["job_id"]
+            assert mock_db.add.call_count == 1
 
     def test_translate_with_quality_param(self, client, mock_db, sample_paper):
         sample_paper.translation_status = "pending"
@@ -838,11 +840,52 @@ class TestCancelEndpoint:
         assert response.status_code == 200
         assert response.json()["ok"] is True
         assert response.json()["status"] == "cancelling"
+        assert mock_db.execute.await_count >= 2
+        assert mock_db.commit.await_count >= 1
 
         # Verify paper was added to cancelled set
         with _cancel_lock:
             assert sample_paper.id in _cancelled_papers
             _cancelled_papers.discard(sample_paper.id)
+
+
+class TestTranslationJobsEndpoint:
+    def test_lists_translation_jobs(self, client, mock_db, sample_paper):
+        paper_result = MagicMock()
+        paper_result.scalar_one_or_none.return_value = sample_paper
+
+        job = MagicMock()
+        job.id = "job123"
+        job.paper_id = sample_paper.id
+        job.backend = "deepseek"
+        job.quality = "balanced"
+        job.qa_mode = "iterative"
+        job.qa_max_passes = 4
+        job.ocr_mode = "auto"
+        job.ocr_language = "eng"
+        job.ocr_dpi = 180
+        job.status = "running"
+        job.progress = 0.5
+        job.cancel_requested = False
+        job.error = None
+        job.created_at = None
+        job.updated_at = None
+        job.heartbeat_at = None
+        job.started_at = None
+        job.finished_at = None
+
+        jobs_result = MagicMock()
+        jobs_result.scalars.return_value.all.return_value = [job]
+        mock_db.execute.side_effect = [paper_result, jobs_result]
+
+        response = client.get(f"/api/papers/{sample_paper.id}/jobs")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["id"] == "job123"
+        assert data[0]["status"] == "running"
+        assert data[0]["progress"] == 0.5
+        assert data[0]["qa_mode"] == "iterative"
 
 
 class TestDownloadEndpoints:
@@ -1340,6 +1383,16 @@ class TestRunTranslation:
         db.commit = AsyncMock()
         return db
 
+    def _write_valid_pdf(self, path: Path, text: str = "translated content") -> None:
+        import fitz
+
+        document = fitz.open()
+        page = document.new_page(width=300, height=220)
+        page.insert_text((36, 48), text, fontsize=11)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        document.save(path)
+        document.close()
+
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
     def test_successful_translation(self, mock_settings, mock_translate, tmp_path):
@@ -1363,14 +1416,16 @@ class TestRunTranslation:
         mock_settings.translations_path = translations_dir
 
         # Create the input file so the existence check passes
-        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+        self._write_valid_pdf(papers_dir / "test.pdf", "Original paper content.")
 
         mono_path = translations_dir / "paper123" / "test-mono.pdf"
-        mono_path.parent.mkdir(parents=True)
-        mono_path.write_bytes(b"translated")
+        self._write_valid_pdf(mono_path, "译文内容。")
         mock_translate.return_value = TranslationResult(mono_path=mono_path)
 
-        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+        with (
+            patch("app.core.database.async_session", self._make_async_session_mock(db)),
+            patch("app.api.papers._run_post_translation_qa", return_value=[]),
+        ):
             _run_translation("paper123", "google", "fast")
 
         assert paper.translation_status == "completed"
@@ -1399,11 +1454,10 @@ class TestRunTranslation:
         mock_settings.papers_path = papers_dir
         mock_settings.translations_path = translations_dir
 
-        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+        self._write_valid_pdf(papers_dir / "test.pdf", "Original paper content.")
 
         mono_path = translations_dir / "paper123" / "test-mono.pdf"
-        mono_path.parent.mkdir(parents=True)
-        mono_path.write_bytes(b"translated")
+        self._write_valid_pdf(mono_path, "译文内容。")
 
         def fake_translate(input_path, output_dir, config, progress_callback=None):
             if progress_callback:
@@ -1433,7 +1487,10 @@ class TestRunTranslation:
             ctx.__aexit__ = AsyncMock(return_value=False)
             return ctx
 
-        with patch("app.core.database.async_session", side_effect=session_factory):
+        with (
+            patch("app.core.database.async_session", side_effect=session_factory),
+            patch("app.api.papers._run_post_translation_qa", return_value=[]),
+        ):
             _run_translation("paper123", "google", "fast")
 
         assert paper.translation_status == "completed"
@@ -1555,7 +1612,7 @@ class TestRunTranslation:
         mock_settings.translations_path = translations_dir
 
         # Create the input file so the existence check passes
-        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+        self._write_valid_pdf(papers_dir / "test.pdf", "Original paper content.")
 
         mock_translate.side_effect = Exception("API error")
 
@@ -1620,8 +1677,8 @@ class TestRunTranslation:
         mock_settings.papers_path = papers_dir
         mock_settings.translations_path = translations_dir
 
-        # Create the input file so the existence check passes
-        (papers_dir / "test.pdf").write_bytes(b"PDF content")
+        # Create the input file so format checks and QA can read it.
+        self._write_valid_pdf(papers_dir / "test.pdf", "Original paper content.")
 
         partial_dir = translations_dir / "paper123"
         partial_dir.mkdir()
@@ -1769,12 +1826,15 @@ class TestRunTranslation:
         out_dir.mkdir()
         mono = out_dir / "test-mono.pdf"
         dual = out_dir / "test-dual.pdf"
-        mono.write_bytes(b"mono")
-        dual.write_bytes(b"dual")
+        self._write_valid_pdf(mono, "译文内容。")
+        self._write_valid_pdf(dual, "Original paper content.\n译文内容。")
 
         mock_translate.return_value = TranslationResult(mono_path=mono, dual_path=dual)
 
-        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+        with (
+            patch("app.core.database.async_session", self._make_async_session_mock(db)),
+            patch("app.api.papers._run_post_translation_qa", return_value=[]),
+        ):
             _run_translation("paper123", "google", "fast")
 
         assert paper.translation_status == "completed"
@@ -1988,7 +2048,9 @@ class TestRunTranslation:
         from app.api.papers import _create_progress_handler
 
         mock_db = AsyncMock()
-        mock_db.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar.return_value = ""
+        mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.commit = AsyncMock()
 
         ctx = MagicMock()
@@ -2014,6 +2076,36 @@ class TestRunTranslation:
         # execute called for: progress update + log read + log write
         assert mock_db.execute.call_count >= 1
         assert mock_db.commit.call_count >= 1
+
+    def test_progress_handler_updates_translation_job_when_present(self):
+        from app.api.papers import _create_progress_handler
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar.return_value = ""
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        session_mock = MagicMock(return_value=ctx)
+
+        def fake_run_coro(coro, _loop):
+            asyncio.run(coro)
+            return MagicMock()
+
+        handler = _create_progress_handler("paper123", MagicMock(), job_id="job123")
+
+        with (
+            patch("app.core.database.async_session", session_mock),
+            patch.object(asyncio, "run_coroutine_threadsafe", side_effect=fake_run_coro),
+        ):
+            handler(0.5)
+
+        assert mock_db.execute.call_count >= 2
+        compiled = str(mock_db.execute.call_args_list[1][0][0].compile())
+        assert "translation_jobs" in compiled
 
     def test_append_log_truncates_long_log(self):
         """Test that _append_log truncates log to 2000 chars."""
@@ -2246,6 +2338,7 @@ class TestInitDb:
             )
             table_names = [row[0] for row in result]
             assert "papers" in table_names
+            assert "translation_jobs" in table_names
 
         await test_engine.dispose()
 
@@ -2278,6 +2371,9 @@ class TestInitDb:
             index_names = {row[0] for row in result}
             assert "ix_papers_status" in index_names
             assert "ix_papers_created" in index_names
+            assert "ix_translation_jobs_paper_created" in index_names
+            assert "ix_translation_jobs_status" in index_names
+            assert "ix_translation_jobs_cancel_requested" in index_names
 
         await test_engine.dispose()
 
@@ -2372,7 +2468,9 @@ class TestCliFunction:
         ):
             cli()
             mock_logger.warning.assert_called_once()
-            assert "no authentication" in mock_logger.warning.call_args[0][0].lower()
+            warning = mock_logger.warning.call_args[0][0]
+            assert "PAPER_CHINA_API_TOKEN" in warning
+            assert "Remote API clients will be rejected" in warning
 
     @patch("app.main.webbrowser.open")
     @patch("uvicorn.run")

@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-516%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-529%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -17,7 +17,11 @@ Super Translate is a web-based system for translating English academic papers in
 - **Figure/Text Safety** — Preserves figure internals while translating captions and surrounding prose
 - **Citation Safety** — Reference markers [1], [2] and citation formatting remain unchanged
 - **Real-time Progress** — Live translation progress with ETA and detailed status logs
-- **Post-translation QA** — Checks untranslated English, missing images, empty pages, and text overlap
+- **Durable Translation Jobs** — Tracks each translation run with job history, cancellation state, heartbeat, progress, and restart failure recovery
+- **Post-translation QA** — Supports single-pass or iterative checks for untranslated English, missing images, empty pages, text overlap, and visual layout regressions
+- **OCR Fallback** — Optional scanned-PDF OCR path for image-only papers before translation
+- **Conference Terminology Corpus** — 1000+ curated AI conference terms across NeurIPS, ICML, ICLR, CVPR, ACL, systems, agents, and safety tracks
+- **Golden Regression Evaluation** — Build and run PDF layout/quality regression sets for large paper batches
 - **Dual View** — Side-by-side PDF viewer with synchronized scrolling and adjustable split
 - **Batch Processing** — Translate multiple papers simultaneously
 - **Feishu Notifications** — Get notified via Feishu/Lark webhook when translation completes
@@ -77,6 +81,7 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 | `PAPER_CHINA_OPENAI_API_KEY` | — | OpenAI API key |
 | `PAPER_CHINA_TRANSLATION_ENGINE` | `native` | Translation engine (`native` or `pdf2zh`) |
 | `PAPER_CHINA_TRANSLATION_BACKEND` | `deepseek` | Default translation backend |
+| `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` | `600` | Global timeout for each translation run |
 | `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `3` | Max concurrent translations |
 | `PAPER_CHINA_API_TOKEN` | — | Optional bearer token for `/api/*` requests |
 | `PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE` | `false` | Allow remote API access without token |
@@ -97,7 +102,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (516 tests)
+└── tests/            # Test suite (529 tests)
 ```
 
 ## Development
@@ -111,6 +116,9 @@ super_translate/
 
 # Lint check
 .venv/bin/ruff check app/ tests/
+
+# Discover a 100-paper golden regression manifest
+.venv/bin/python -m pdf_zh_translator.cli golden-discover data/golden data/golden/manifest.json
 ```
 
 ## License

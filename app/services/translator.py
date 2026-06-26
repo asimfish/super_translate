@@ -14,6 +14,8 @@ from enum import Enum
 from pathlib import Path
 from string import Template
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 # Error sanitization constants
@@ -312,12 +314,15 @@ def _use_native_engine(config: TranslationConfig) -> bool:
     return settings.translation_engine == "native" and config.backend in _NATIVE_ENGINE_BACKENDS
 
 
-_TRANSLATION_TIMEOUT = 600  # 10 minutes max for the entire translation
+_TRANSLATION_TIMEOUT = 600  # Fallback: 10 minutes max for the entire translation
 
 
 def _run_with_timeout(fn, *args, timeout: int | None = None, **kwargs):
     if timeout is None:
-        timeout = _TRANSLATION_TIMEOUT
+        configured_timeout = getattr(settings, "translation_timeout_seconds", _TRANSLATION_TIMEOUT)
+        if configured_timeout == 600:
+            configured_timeout = _TRANSLATION_TIMEOUT
+        timeout = max(1, int(configured_timeout))
     pool = ThreadPoolExecutor(max_workers=1)
     future = pool.submit(fn, *args, **kwargs)
     try:

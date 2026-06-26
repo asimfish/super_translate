@@ -428,11 +428,16 @@ const RENDER_SCALE = 1.5;
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 3.0;
 const OVERSCAN_PX = 600; // render pages within this distance of viewport
+let scrollSyncToken = 0;
+
+function availablePdfWidth(container) {
+  return Math.max(320, (container?.clientWidth || 0) - 20);
+}
 
 function getRenderScale(panel) {
   const container = document.getElementById(`pdf-container-${panel}`);
   if (!container) return RENDER_SCALE;
-  const containerWidth = container.clientWidth - 20; // padding
+  const containerWidth = availablePdfWidth(container);
   const metrics = pageMetrics[panel];
   if (!metrics || metrics.length === 0) return RENDER_SCALE;
   // Scale so the widest page fits the container
@@ -502,7 +507,7 @@ async function openReader(paperId) {
     document.getElementById('pdf-container-translated').classList.remove('hidden');
     await loadPdfDocument('translated', `/api/papers/${paperId}/view/translated`);
     if (loadId !== currentLoadId) return;
-    syncScrollFromPanel('original');
+    requestAnimationFrame(() => syncScrollFromPanel('original'));
     document.getElementById('btn-download-mono').classList.remove('hidden');
     // Show re-translate button, hide translate button
     if (btnTranslate) btnTranslate.classList.add('hidden');
@@ -568,7 +573,7 @@ async function loadPdfDocument(panel, url) {
     }
 
     // Calculate adaptive scale to fit container width
-    const containerWidth = container.clientWidth - 20;
+    const containerWidth = availablePdfWidth(container);
     const maxPageWidth = Math.max(...baseMetrics.map(m => m.width));
     const adaptiveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, containerWidth / maxPageWidth * RENDER_SCALE));
 
@@ -610,7 +615,7 @@ async function loadPdfDocument(panel, url) {
       for (const entry of entries) {
         const idx = parseInt(entry.target.dataset.pageIdx);
         if (entry.isIntersecting) {
-          renderPage(panel, idx);
+          void renderPage(panel, idx);
         }
       }
     }, {
@@ -701,6 +706,42 @@ function setupSmoothScrollSync(panel) {
   scrollListeners[panel] = listener;
 }
 
+function pageScrollPosition(panel, scrollTop) {
+  const metrics = pageMetrics[panel];
+  if (!metrics?.length) return { pageIdx: 0, fraction: 0 };
+
+  let pageIdx = 0;
+  const anchor = scrollTop + 20;
+  for (let i = metrics.length - 1; i >= 0; i--) {
+    if (metrics[i].top <= anchor) {
+      pageIdx = i;
+      break;
+    }
+  }
+
+  const pageTop = metrics[pageIdx].top;
+  const pageHeight = metrics[pageIdx].height;
+  const fraction = pageHeight > 0
+    ? Math.max(0, Math.min(1, (scrollTop - pageTop) / pageHeight))
+    : 0;
+  return { pageIdx, fraction };
+}
+
+function targetScrollTop(panel, pageIdx, fraction) {
+  const metrics = pageMetrics[panel];
+  if (!metrics?.length) return 0;
+  const idx = Math.min(pageIdx, metrics.length - 1);
+  return metrics[idx].top + fraction * metrics[idx].height;
+}
+
+function releaseScrollSyncAfterPaint(token) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (scrollSyncToken === token) scrollSyncing = false;
+    });
+  });
+}
+
 function syncScrollFromPanel(panel) {
   const otherPanel = panel === 'original' ? 'translated' : 'original';
   if (!pdfDocs[otherPanel]) return;
@@ -710,28 +751,15 @@ function syncScrollFromPanel(panel) {
   const metrics = pageMetrics[panel];
   const otherMetrics = pageMetrics[otherPanel];
   if (!container || !otherContainer || !metrics?.length || !otherMetrics?.length) return;
+  if (otherContainer.classList.contains('hidden') || otherContainer.clientHeight <= 0) return;
 
-  const scrollTop = container.scrollTop;
-  let currentPageIdx = 0;
-  for (let i = metrics.length - 1; i >= 0; i--) {
-    if (metrics[i].top <= scrollTop + 20) {
-      currentPageIdx = i;
-      break;
-    }
-  }
-
-  const pageTop = metrics[currentPageIdx].top;
-  const pageHeight = metrics[currentPageIdx].height;
-  const fraction = pageHeight > 0 ? Math.max(0, Math.min(1, (scrollTop - pageTop) / pageHeight)) : 0;
-  const otherIdx = Math.min(currentPageIdx, otherMetrics.length - 1);
-  const otherTop = otherMetrics[otherIdx].top;
-  const otherHeight = otherMetrics[otherIdx].height;
-
+  const { pageIdx, fraction } = pageScrollPosition(panel, container.scrollTop);
   scrollSyncing = true;
-  otherContainer.scrollTop = otherTop + fraction * otherHeight;
+  const token = ++scrollSyncToken;
+  otherContainer.scrollTop = targetScrollTop(otherPanel, pageIdx, fraction);
   updatePageInfo(otherPanel, otherContainer.scrollTop);
-  renderVisiblePages(otherPanel, otherContainer);
-  requestAnimationFrame(() => { scrollSyncing = false; });
+  void renderVisiblePages(otherPanel, otherContainer);
+  releaseScrollSyncAfterPaint(token);
 }
 
 function updatePageInfo(panel, scrollTop) {
@@ -879,9 +907,12 @@ function pollTranslationStatus(paperId) {
         lastPct = pct;
         lastPctTime = now;
       }
-      const etaStr = smoothedRate > 0 && pct > 0 && pct < 100
-        ? ` · 预计剩余 ${formatEta(Math.ceil((100 - pct) / smoothedRate))}`
+      const serverEtaStr = paper.translation_eta
+        ? ` · 预计剩余 ${paper.translation_eta}`
         : '';
+      const etaStr = serverEtaStr || (smoothedRate > 0 && pct > 0 && pct < 100
+        ? ` · 预计剩余 ${formatEta(Math.ceil((100 - pct) / smoothedRate))}`
+        : '');
 
       if (paper.translation_status === 'completed') {
         clearInterval(translationPollId);
@@ -901,7 +932,8 @@ function pollTranslationStatus(paperId) {
         fill.style.background = 'var(--error)';
         loadPapers();
       } else {
-        statusEl.textContent = `翻译中... ${elapsedStr}${etaStr}`;
+        const stage = paper.translation_stage || '翻译中';
+        statusEl.textContent = `${stage}... ${elapsedStr}${etaStr}`;
       }
     } catch (e) {
       consecutiveErrors++;
@@ -1047,9 +1079,9 @@ function reRenderPanel(panel) {
 
   // Use base dimensions (at RENDER_SCALE) to avoid compounding mutations
   const baseScale = metrics._baseScale || RENDER_SCALE;
-  const containerWidth = container.clientWidth - 20;
+  const containerWidth = availablePdfWidth(container);
   const maxPageWidth = Math.max(...metrics.map(m => m.baseWidth));
-  const adaptiveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, containerWidth / maxPageWidth));
+  const adaptiveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, containerWidth / maxPageWidth * baseScale));
   pageMetrics[panel]._adaptiveScale = adaptiveScale;
 
   // Update wrapper sizes from base dimensions
@@ -1070,7 +1102,7 @@ function reRenderPanel(panel) {
   }
 
   // Re-render visible pages
-  renderVisiblePages(panel, container);
+  void renderVisiblePages(panel, container);
 }
 
 // === Helpers ===

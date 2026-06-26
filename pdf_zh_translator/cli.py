@@ -23,6 +23,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_corpus_add(args)
     if args.command == "corpus-stats":
         return run_corpus_stats(args)
+    if args.command == "corpus-health":
+        return run_corpus_health(args)
     if args.command == "corpus-review":
         return run_corpus_review(args)
     if args.command == "corpus-promote":
@@ -31,6 +33,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_corpus_release(args)
     if args.command == "golden-init":
         return run_golden_init(args)
+    if args.command == "golden-discover":
+        return run_golden_discover(args)
     if args.command == "golden-eval":
         return run_golden_eval(args)
 
@@ -240,6 +244,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("corpus-stats", help="Print terminology counts by field.")
 
+    corpus_health = subparsers.add_parser(
+        "corpus-health",
+        help="Report AI conference corpus coverage and pending candidate terms.",
+    )
+    corpus_health.add_argument(
+        "--candidates-jsonl",
+        type=Path,
+        help="Optional terminology_candidates.jsonl file to include pending review count.",
+    )
+    corpus_health.add_argument("--json", action="store_true", help="Print JSON report.")
+
     corpus_review = subparsers.add_parser(
         "corpus-review",
         help="Deduplicate terminology candidates into a review JSON file.",
@@ -269,6 +284,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     golden_init.add_argument("manifest", type=Path)
     golden_init.add_argument("--target-cases", type=int, default=100)
+
+    golden_discover = subparsers.add_parser(
+        "golden-discover",
+        help="Discover paired original/translated PDFs and write a golden manifest.",
+    )
+    golden_discover.add_argument("root_dir", type=Path)
+    golden_discover.add_argument("manifest", type=Path)
+    golden_discover.add_argument("--target-cases", type=int, default=100)
+    golden_discover.add_argument("--original-suffix", default="-original.pdf")
+    golden_discover.add_argument("--translated-suffix", default="-translated.pdf")
+    golden_discover.add_argument("--min-visual-score", type=float, default=0.55)
 
     golden_eval = subparsers.add_parser(
         "golden-eval",
@@ -314,6 +340,31 @@ def run_corpus_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_corpus_health(args: argparse.Namespace) -> int:
+    import json
+
+    from .corpus import corpus_health
+
+    health = corpus_health(args.candidates_jsonl)
+    if args.json:
+        print(json.dumps(health, ensure_ascii=False, indent=2))
+        return 0
+
+    print("Total terms: %s" % health["total_terms"])
+    print("Top-conference terms: %s" % health["top_conference_terms"])
+    for field, count in sorted(health["top_conference_fields"].items()):
+        print(f"{field}: {count}")
+    print("Candidate terms pending review: %s" % health["candidate_terms"])
+    if health["missing_top_conference_fields"]:
+        missing = ", ".join(health["missing_top_conference_fields"])
+        print("Missing top-conference fields: " + missing)
+    else:
+        print("Top-conference fields: complete")
+    if health["extra_corpora"]:
+        print("Extra corpora: " + ", ".join(health["extra_corpora"]))
+    return 0
+
+
 def run_corpus_review(args: argparse.Namespace) -> int:
     from .corpus import write_candidate_review
 
@@ -349,6 +400,21 @@ def run_golden_init(args: argparse.Namespace) -> int:
     write_manifest_template(args.manifest, target_cases=args.target_cases)
     print("Wrote golden manifest template: %s" % args.manifest)
     return 0
+
+
+def run_golden_discover(args: argparse.Namespace) -> int:
+    from .golden_eval import discover_golden_pairs
+
+    count = discover_golden_pairs(
+        args.root_dir,
+        args.manifest,
+        target_cases=args.target_cases,
+        original_suffix=args.original_suffix,
+        translated_suffix=args.translated_suffix,
+        min_visual_score=args.min_visual_score,
+    )
+    print("Discovered %d golden PDF pair%s." % (count, "" if count == 1 else "s"))
+    return 0 if count >= args.target_cases else 1
 
 
 def run_golden_eval(args: argparse.Namespace) -> int:

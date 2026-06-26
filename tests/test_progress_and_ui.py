@@ -17,10 +17,13 @@ def test_reader_sync_scroll_maps_page_fraction_and_renders_target_panel():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
 
     assert "function syncScrollFromPanel(panel)" in js
+    assert "function pageScrollPosition(panel, scrollTop)" in js
+    assert "function targetScrollTop(panel, pageIdx, fraction)" in js
     assert "const fraction = pageHeight > 0" in js
-    assert "otherContainer.scrollTop = otherTop + fraction * otherHeight;" in js
-    assert "renderVisiblePages(otherPanel, otherContainer);" in js
-    assert "syncScrollFromPanel('original');" in js
+    assert "otherContainer.scrollTop = targetScrollTop(otherPanel, pageIdx, fraction);" in js
+    assert "void renderVisiblePages(otherPanel, otherContainer);" in js
+    assert "releaseScrollSyncAfterPaint(token);" in js
+    assert "requestAnimationFrame(() => syncScrollFromPanel('original'));" in js
 
 
 def test_translation_progress_ui_has_client_eta_smoothing():
@@ -29,6 +32,8 @@ def test_translation_progress_ui_has_client_eta_smoothing():
 
     assert "let smoothedRate = 0;" in js
     assert "预计剩余" in js
+    assert "paper.translation_eta" in js
+    assert "paper.translation_stage" in js
     assert "function formatEta(seconds)" in js
     assert 'id="trans-percent"' in html
 

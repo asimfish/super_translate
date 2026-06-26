@@ -579,6 +579,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     )
                     break
 
+        issues.extend(_caption_graphic_overlap_issues(orig_page, trans_page, page_idx + 1))
+
         # Check for empty translated page
         trans_text = trans_page.get_text("text").strip()
         orig_text = orig_page.get_text("text").strip()
@@ -748,6 +750,90 @@ def _count_vector_graphics(page: object) -> int:
         if width >= GRAPHIC_REGION_MIN_SIDE and height >= GRAPHIC_REGION_MIN_SIDE:
             count += 1
     return count
+
+
+def _caption_graphic_overlap_issues(
+    original_page: object,
+    translated_page: object,
+    page_number: int,
+) -> List[TranslationIssue]:
+    visual_regions = _visual_regions_for_page(original_page)
+    if not visual_regions:
+        return []
+
+    issues: List[TranslationIssue] = []
+    for block in translated_page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        text = _extract_text_from_block(block)
+        if not _CAPTION_RE.match(text.strip()):
+            continue
+        bbox = block.get("bbox")
+        if not bbox:
+            continue
+        for region in visual_regions:
+            if _bbox_overlap_ratio(tuple(bbox), region) >= 0.08:
+                issues.append(
+                    TranslationIssue(
+                        page=page_number,
+                        code="caption_overlap",
+                        message=(
+                            f"Page {page_number}: caption overlaps a figure or table region"
+                        ),
+                    )
+                )
+                break
+    return issues
+
+
+def _visual_regions_for_page(page: object) -> List[BBox]:
+    regions: List[BBox] = []
+    text_boxes = [
+        tuple(float(value) for value in block.get("bbox", (0, 0, 0, 0)))
+        for block in page.get_text("dict").get("blocks", [])
+        if block.get("type") == 0 and block.get("bbox")
+    ]
+    for img in page.get_images():
+        try:
+            rect = page.get_image_bbox(img)
+        except Exception:
+            continue
+        if rect and rect.is_empty is False and rect.is_valid:
+            regions.append((rect.x0, rect.y0, rect.x1, rect.y1))
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        drawings = []
+    for drawing in drawings:
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        width = float(rect.x1 - rect.x0)
+        height = float(rect.y1 - rect.y0)
+        bbox = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+        if _looks_like_text_background(bbox, text_boxes):
+            continue
+        if width >= GRAPHIC_REGION_MIN_SIDE and height >= GRAPHIC_REGION_MIN_SIDE:
+            regions.append(bbox)
+    if not regions:
+        return []
+    return merge_nearby_bboxes(regions, 2.0)
+
+
+def _looks_like_text_background(bbox: BBox, text_boxes: Sequence[BBox]) -> bool:
+    area = max(1.0, bbox_area(bbox))
+    return any(bbox_intersection_area(bbox, text_box) / area >= 0.10 for text_box in text_boxes)
+
+
+def _bbox_overlap_ratio(a: BBox, b: BBox) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    overlap_w = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+    overlap_h = max(0.0, min(ay1, by1) - max(ay0, by0))
+    if overlap_w <= 0 or overlap_h <= 0:
+        return 0.0
+    area = max(1.0, (ax1 - ax0) * (ay1 - ay0))
+    return (overlap_w * overlap_h) / area
 
 
 def _extract_formula_fragments(page: object) -> List[str]:
