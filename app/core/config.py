@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     # Base URL for notification links (e.g., "http://localhost:8001")
     base_url: str = "http://localhost:8001"
 
+    # Optional single-user API token. When set, /api/* requests must include
+    # Authorization: Bearer <token>. When unset, remote non-loopback clients are
+    # rejected unless allow_unauthenticated_remote is explicitly enabled.
+    api_token: SecretStr = SecretStr("")
+    allow_unauthenticated_remote: bool = False
+
     # CORS (comma-separated origins, e.g. "http://localhost:3000,https://example.com")
     cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
 

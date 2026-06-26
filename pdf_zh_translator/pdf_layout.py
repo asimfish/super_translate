@@ -90,6 +90,10 @@ _FOOTER_PAGE_NUM_RE = re.compile(r"^\d{1,3}$")
 _FIGURE_LABEL_MAX_LEN = 15
 # Image zone extension to include nearby captions
 _IMAGE_ZONE_CAPTION_GAP = 20.0  # points below image to look for captions
+_CAPTION_EXTRA_HEIGHT = 36.0
+_CAPTION_MIN_FONT_SIZE = 3.8
+_CAPTION_TIGHT_LEADING = 1.02
+_ABSOLUTE_MIN_FONT_SIZE = 2.8
 # Column detection
 _COLUMN_CLUSTER_GAP = 150.0  # minimum x0 separation for two-column layout
 
@@ -212,6 +216,16 @@ class TranslationReport:
     warnings: List[str]
 
 
+@dataclass(frozen=True)
+class TranslationIssue:
+    """Structured post-translation QA issue."""
+
+    page: int
+    code: str
+    message: str
+    severity: str = "warning"
+
+
 @dataclass
 class FontPack:
     """Fonts used by the CJK typesetting engine.
@@ -297,6 +311,7 @@ def translate_pdf(
         centered_flags = detect_centered_blocks(
             [block for block, _ in candidate_items], page.rect.width
         )
+        relax_caption_boxes(page, candidate_items)
         page_items: List[Tuple[TextBlock, str]] = []
         item_centered_flags: List[bool] = []
         for (block, translated_text), centered in zip(candidate_items, centered_flags):
@@ -378,25 +393,56 @@ def create_dual_pdf(
     orig_doc.close()
 
 
-def verify_translation(
-    original_pdf: Path,
-    translated_pdf: Path,
-) -> List[str]:
-    """Verify translated PDF quality. Returns list of issues found.
+_CJK_DETECT_RE = re.compile(r"[\u2e80-\u9fff\uf900-\ufaff]")
+_ASCII_WORD_DETECT_RE = re.compile(r"[A-Za-z]{3,}")
+_REFERENCE_ENTRY_RE = re.compile(
+    r"^\s*(?:\[\d+\]|\d+\.|\w.+\(\d{4}[a-z]?\)|doi:|arxiv:)",
+    re.IGNORECASE,
+)
+
+
+def verify_translation(original_pdf: Path, translated_pdf: Path) -> List[str]:
+    """Verify translated PDF quality. Returns user-readable issue messages."""
+    return [issue.message for issue in verify_translation_issues(original_pdf, translated_pdf)]
+
+
+def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[TranslationIssue]:
+    """Run post-translation QA.
 
     Checks:
-    1. Untranslated English paragraphs (likely missed by translator)
-    2. Overlapping text blocks
-    3. Empty pages (translation produced no output)
+    1. Untranslated English prose outside references/formulas
+    2. Text block collisions that can indicate broken layout
+    3. Empty pages
+    4. Missing raster images after redaction/rendering
     """
     import fitz
 
-    issues: List[str] = []
+    issues: List[TranslationIssue] = []
     try:
         orig_doc = fitz.open(str(original_pdf))
         trans_doc = fitz.open(str(translated_pdf))
     except Exception as e:
-        return [f"Failed to open PDFs for verification: {e}"]
+        return [
+            TranslationIssue(
+                page=0,
+                code="qa_open_failed",
+                message=f"Failed to open PDFs for verification: {e}",
+                severity="error",
+            )
+        ]
+
+    if orig_doc.page_count != trans_doc.page_count:
+        issues.append(
+            TranslationIssue(
+                page=0,
+                code="page_count_mismatch",
+                message=(
+                    "Translated PDF page count differs from original: "
+                    f"{trans_doc.page_count} vs {orig_doc.page_count}"
+                ),
+                severity="error",
+            )
+        )
 
     for page_idx in range(min(orig_doc.page_count, trans_doc.page_count)):
         orig_page = orig_doc[page_idx]
@@ -406,24 +452,25 @@ def verify_translation(
         trans_blocks = trans_page.get_text("dict").get("blocks", [])
 
         # Count English-only text blocks in translated PDF
-        untranslated = 0
+        untranslated_examples: List[str] = []
         for block in trans_blocks:
             if block.get("type") != 0:
                 continue
-            text = ""
-            for line in block.get("lines", []):
-                for span in line.get("spans", []):
-                    text += span.get("text", "")
-            text = text.strip()
-            if len(text) > 30:
-                # Check if text is mostly ASCII (likely untranslated English)
-                ascii_chars = sum(1 for c in text if ord(c) < 128)
-                if ascii_chars / len(text) > 0.8:
-                    untranslated += 1
+            text = _extract_text_from_block(block)
+            if _looks_like_untranslated_english(text):
+                untranslated_examples.append(" ".join(text.split())[:80])
 
-        if untranslated > 2:
+        if untranslated_examples:
             issues.append(
-                f"Page {page_idx + 1}: {untranslated} blocks appear to be untranslated English"
+                TranslationIssue(
+                    page=page_idx + 1,
+                    code="untranslated_english",
+                    message=(
+                        f"Page {page_idx + 1}: {len(untranslated_examples)} block(s) "
+                        "look like untranslated English outside references/formulas"
+                    ),
+                    severity="error",
+                )
             )
 
         # Check for overlapping text blocks in translated PDF
@@ -431,31 +478,103 @@ def verify_translation(
         for block in trans_blocks:
             if block.get("type") != 0:
                 continue
+            text = _extract_text_from_block(block)
+            if len(text.strip()) < 4 or _is_reference_or_formula_text(text):
+                continue
             bbox = block.get("bbox")
             if bbox:
-                text_bboxes.append(bbox)
+                text_bboxes.append((bbox, text))
 
         for i in range(len(text_bboxes)):
             for j in range(i + 1, len(text_bboxes)):
-                x0a, y0a, x1a, y1a = text_bboxes[i]
-                x0b, y0b, x1b, y1b = text_bboxes[j]
+                (x0a, y0a, x1a, y1a), _ = text_bboxes[i]
+                (x0b, y0b, x1b, y1b), _ = text_bboxes[j]
                 h_overlap = max(0, min(x1a, x1b) - max(x0a, x0b))
                 v_overlap = max(0, min(y1a, y1b) - max(y0a, y0b))
-                if h_overlap > 10 and v_overlap > 10:
+                if h_overlap > 10 and v_overlap > 8:
                     issues.append(
-                        f"Page {page_idx + 1}: text blocks overlap at "
-                        f"y={max(y0a, y0b):.0f}"
+                        TranslationIssue(
+                            page=page_idx + 1,
+                            code="text_overlap",
+                            message=(
+                                f"Page {page_idx + 1}: text blocks overlap near "
+                                f"y={max(y0a, y0b):.0f}"
+                            ),
+                        )
                     )
+                    break
 
         # Check for empty translated page
         trans_text = trans_page.get_text("text").strip()
         orig_text = orig_page.get_text("text").strip()
         if len(orig_text) > 100 and len(trans_text) < 20:
-            issues.append(f"Page {page_idx + 1}: translated page appears empty")
+            issues.append(
+                TranslationIssue(
+                    page=page_idx + 1,
+                    code="empty_page",
+                    message=f"Page {page_idx + 1}: translated page appears empty",
+                    severity="error",
+                )
+            )
+
+        try:
+            orig_images = len(orig_page.get_images())
+            trans_images = len(trans_page.get_images())
+        except Exception:
+            orig_images = trans_images = 0
+        if orig_images and trans_images < orig_images:
+            issues.append(
+                TranslationIssue(
+                    page=page_idx + 1,
+                    code="missing_image",
+                    message=(
+                        f"Page {page_idx + 1}: translated page has fewer raster images "
+                        f"({trans_images}/{orig_images})"
+                    ),
+                    severity="error",
+                )
+            )
 
     trans_doc.close()
     orig_doc.close()
     return issues
+
+
+def _extract_text_from_block(block: dict) -> str:
+    text = ""
+    for line in block.get("lines", []):
+        for span in line.get("spans", []):
+            text += span.get("text", "")
+    return text.strip()
+
+
+def _is_reference_or_formula_text(text: str) -> bool:
+    compact = " ".join(text.split())
+    if not compact:
+        return True
+    if _REFERENCE_ENTRY_RE.search(compact):
+        return True
+    lower = compact.lower()
+    if "doi" in lower or "arxiv" in lower or "http://" in lower or "https://" in lower:
+        return True
+    if looks_like_math(compact):
+        return True
+    math_chars = sum(1 for char in compact if char in MATH_SYMBOLS)
+    return math_chars >= 3 and math_chars / max(len(compact), 1) >= 0.08
+
+
+def _looks_like_untranslated_english(text: str) -> bool:
+    compact = " ".join(text.split())
+    if len(compact) < 35 or _is_reference_or_formula_text(compact):
+        return False
+    words = _ASCII_WORD_DETECT_RE.findall(compact)
+    if len(words) < 5:
+        return False
+    cjk_chars = len(_CJK_DETECT_RE.findall(compact))
+    if cjk_chars >= max(4, len(words) // 2):
+        return False
+    ascii_letters = sum(1 for char in compact if char.isascii() and char.isalpha())
+    return ascii_letters / max(len(compact), 1) >= 0.45
 
 
 def _normalize_font_name(name: str) -> str:
@@ -823,6 +942,8 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
     plain = " ".join(strip_sentinels(block.text).split())
     if not plain:
         return True
+    if block.block_type == "caption" or _CAPTION_RE.match(plain):
+        return False
     if block_overlaps_graphic_region(block.bbox, graphic_regions):
         return True
     if math_heavy_block(block):
@@ -912,7 +1033,7 @@ def collect_text_blocks(document: object) -> Tuple[List[TextBlock], Dict[int, Li
 
 
 def detect_image_zones(page: object) -> List[BBox]:
-    """Detect image regions and extend them to include nearby captions.
+    """Detect visual regions and extend them to include nearby captions.
 
     Returns a list of bboxes representing figure+caption zones.
     """
@@ -931,7 +1052,10 @@ def detect_image_zones(page: object) -> List[BBox]:
                 ))
         except Exception:
             continue
-    return zones
+    zones.extend(graphic_regions_for_page(page))
+    if not zones:
+        return []
+    return merge_nearby_bboxes(zones, _IMAGE_ZONE_CAPTION_GAP)
 
 
 def detect_columns(blocks: List[TextBlock]) -> List[Tuple[float, float]]:
@@ -1984,6 +2108,32 @@ def detect_centered_blocks(blocks: Sequence[TextBlock], page_width: float) -> Li
     return flags
 
 
+def relax_caption_boxes(page: object, items: Sequence[Tuple[TextBlock, str]]) -> None:
+    """Give translated captions a little extra vertical room when it is free."""
+    if not items:
+        return
+    page_bottom = float(page.rect.height) - 18.0
+    blocks = [block for block, _ in items]
+    for block in blocks:
+        if block.block_type != "caption":
+            continue
+        x0, y0, x1, y1 = block.bbox
+        next_y = page_bottom
+        for other in blocks:
+            if other is block or other.page_index != block.page_index:
+                continue
+            ox0, oy0, ox1, _ = other.bbox
+            if oy0 <= y1:
+                continue
+            overlap = min(x1, ox1) - max(x0, ox0)
+            if overlap <= min(x1 - x0, ox1 - ox0) * 0.2:
+                continue
+            next_y = min(next_y, oy0 - 1.0)
+        relaxed_y1 = min(y1 + _CAPTION_EXTRA_HEIGHT, next_y, page_bottom)
+        if relaxed_y1 > y1 + 2.0:
+            block.bbox = (x0, y0, x1, relaxed_y1)
+
+
 # --- CJK typesetting engine ---------------------------------------------------
 
 
@@ -2156,6 +2306,40 @@ def stretchable_gaps(line: Sequence[_Token]) -> List[int]:
     return gaps
 
 
+def effective_min_font_size(block: TextBlock, min_font_size: float) -> float:
+    if block.block_type == "caption":
+        return min(min_font_size, _CAPTION_MIN_FONT_SIZE)
+    return min_font_size
+
+
+def leading_options(block: TextBlock) -> Tuple[float, ...]:
+    if block.block_type == "caption":
+        return (1.18, 1.08, _CAPTION_TIGHT_LEADING)
+    return (DEFAULT_LEADING, 1.26, 1.15)
+
+
+def choose_compressed_layout(
+    tokens: List[_Token],
+    fonts: Sequence[Tuple[object, str]],
+    width: float,
+    height: float,
+    min_size: float,
+    centered: bool,
+) -> Tuple[float, float, List[List[_Token]]]:
+    """Last-resort layout that still keeps text inside its rectangle."""
+    size = min_size
+    best: Tuple[float, float, List[List[_Token]]] | None = None
+    while size >= _ABSOLUTE_MIN_FONT_SIZE - 1e-6:
+        lines = break_lines(tokens, fonts, size, width, prefer_space_break=centered)
+        for leading in (1.08, 1.0, 0.94):
+            best = (size, leading, lines)
+            if line_block_height(lines, size, leading) <= height + size * 0.25:
+                return best
+        size -= 0.2
+    assert best is not None
+    return best
+
+
 def translated_text_fits(
     block: TextBlock,
     text: str,
@@ -2178,17 +2362,18 @@ def translated_text_fits(
     if not tokens:
         return True
 
+    min_size = effective_min_font_size(block, min_font_size)
     if block.nowrap:
         width = sum(token_width(token, fonts, font_size) for token in tokens)
         if width <= rect.width or width <= 0:
             return True
         scaled_size = font_size * rect.width / width
-        return scaled_size >= min_font_size * 0.8
+        return scaled_size >= min_size * 0.8
 
     size = font_size
-    while size >= min_font_size - 1e-6:
+    while size >= min_size - 1e-6:
         lines = break_lines(tokens, fonts, size, rect.width, prefer_space_break=centered)
-        for leading in (DEFAULT_LEADING, 1.26, 1.15):
+        for leading in leading_options(block):
             if line_block_height(lines, size, leading) <= rect.height + size * 0.4:
                 return True
         size -= 0.25
@@ -2222,18 +2407,19 @@ def insert_translated_text(
     if not tokens:
         return True
 
+    min_size = effective_min_font_size(block, min_font_size)
     if block.nowrap:
         # Table cell: one line at the original anchor, shrunk to the cell width.
         for token in tokens:
             token.width = token_width(token, fonts, font_size)
-        render_single_line(page, tokens, rect, fonts, font_size, block.color, False, min_font_size)
+        render_single_line(page, tokens, rect, fonts, font_size, block.color, False, min_size)
         return True
 
     chosen: Optional[Tuple[float, float, List[List[_Token]]]] = None
     size = font_size
-    while size >= min_font_size - 1e-6:
+    while size >= min_size - 1e-6:
         lines = break_lines(tokens, fonts, size, rect.width, prefer_space_break=centered)
-        for leading in (DEFAULT_LEADING, 1.26, 1.15):
+        for leading in leading_options(block):
             height = line_block_height(lines, size, leading)
             if height <= rect.height + size * 0.4:
                 chosen = (size, leading, lines)
@@ -2244,17 +2430,19 @@ def insert_translated_text(
 
     fitted = chosen is not None
     if chosen is None:
-        # Last resort: smallest size, tightest leading; render anyway (the
-        # engine never spills outside the rect width; extra lines may slightly
-        # exceed the rect bottom).
-        size = min_font_size
-        lines = break_lines(tokens, fonts, size, rect.width)
-        chosen = (size, 1.08, lines)
+        chosen = choose_compressed_layout(
+            tokens,
+            fonts,
+            rect.width,
+            rect.height,
+            min_size,
+            centered,
+        )
 
     size, leading, lines = chosen
 
     if len(lines) == 1:
-        render_single_line(page, lines[0], rect, fonts, size, block.color, centered, min_font_size)
+        render_single_line(page, lines[0], rect, fonts, size, block.color, centered, min_size)
         return fitted
 
     ascent = fonts[0][0].ascender if fonts[0][0].ascender > 0 else 0.8

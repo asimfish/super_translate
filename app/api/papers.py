@@ -67,6 +67,35 @@ _MAX_SEARCH_LEN = 200
 _PROGRESS_THROTTLE = 0.05
 
 
+def _cancel_marker_path(paper_id: str) -> Path:
+    safe_id = re.sub(r"[^0-9A-Za-z_-]", "_", paper_id)
+    return settings.translations_path / f"{safe_id}.cancel"
+
+
+def _mark_cancel_requested(paper_id: str) -> None:
+    with _cancel_lock:
+        _cancelled_papers.add(paper_id)
+    try:
+        settings.translations_path.mkdir(parents=True, exist_ok=True)
+        _cancel_marker_path(paper_id).write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        logger.warning("Failed to persist cancellation marker for %s", paper_id)
+
+
+def _clear_cancel_requested(paper_id: str) -> None:
+    with _cancel_lock:
+        _cancelled_papers.discard(paper_id)
+    with contextlib.suppress(OSError):
+        _cancel_marker_path(paper_id).unlink(missing_ok=True)
+
+
+def _is_cancel_requested(paper_id: str) -> bool:
+    with _cancel_lock:
+        if paper_id in _cancelled_papers:
+            return True
+    return _cancel_marker_path(paper_id).exists()
+
+
 def _write_upload_chunks(
     file: UploadFile,
     stored_path: Path,
@@ -485,7 +514,7 @@ async def start_translation(
     db: Annotated[AsyncSession, Depends(get_session)],
     backend: str = "",
     quality: str = "balanced",
-    preserve_graphics_text: bool = False,
+    preserve_graphics_text: bool = True,
     skip_overflow: bool = False,
 ) -> dict[str, bool | str]:
     """Start translation for a paper.
@@ -558,8 +587,7 @@ async def cancel_translation(
     paper = await _get_paper_or_404(paper_id, db)
     if paper.translation_status != TranslationStatus.TRANSLATING.value:
         raise HTTPException(409, "Paper is not currently being translated")
-    with _cancel_lock:
-        _cancelled_papers.add(paper_id)
+    _mark_cancel_requested(paper_id)
     return {"ok": True, "status": "cancelling"}
 
 
@@ -658,7 +686,7 @@ def _run_translation(
     paper_id: str,
     backend: str,
     quality: str = "balanced",
-    preserve_graphics_text: bool = False,
+    preserve_graphics_text: bool = True,
     skip_overflow: bool = False,
 ) -> None:
     acquired = _translation_semaphore.acquire(timeout=300)
@@ -668,6 +696,7 @@ def _run_translation(
         return
 
     try:
+        _clear_cancel_requested(paper_id)
         quality_preset = _quality_map.get(quality, QualityPreset.BALANCED)
         config = _resolve_backend_config(
             backend,
@@ -688,6 +717,7 @@ def _run_translation(
         _reset_paper_status(paper_id, "Unexpected server error during translation")
 
     finally:
+        _clear_cancel_requested(paper_id)
         _translation_semaphore.release()
 
 
@@ -713,6 +743,7 @@ async def _do_translate(
         paper = result.scalar_one_or_none()
         if not paper:
             logger.error("Paper %s not found for translation", paper_id)
+            _clear_cancel_requested(paper_id)
             return
 
         stored_filename = paper.stored_filename
@@ -725,6 +756,7 @@ async def _do_translate(
             paper.translation_status = TranslationStatus.FAILED.value
             paper.translation_error = "Invalid file path"
             await db.commit()
+            _clear_cancel_requested(paper_id)
             return
 
         if not input_path.exists():
@@ -732,6 +764,7 @@ async def _do_translate(
             paper.translation_status = TranslationStatus.FAILED.value
             paper.translation_error = "Original PDF file not found"
             await db.commit()
+            _clear_cancel_requested(paper_id)
             return
 
     output_dir = settings.translations_path / paper_id
@@ -767,6 +800,7 @@ async def _do_translate(
                 paper.translation_error = None
                 await db.commit()
         cleanup_output_dir(output_dir)
+        _clear_cancel_requested(paper_id)
         return
     except Exception as e:
         elapsed = time.monotonic() - start_time
@@ -780,7 +814,11 @@ async def _do_translate(
                 paper.translation_error = sanitize_error(e)
                 await db.commit()
         cleanup_output_dir(output_dir)
+        _clear_cancel_requested(paper_id)
         return
+
+    if trans_result.success and trans_result.mono_path:
+        _run_post_translation_qa(paper_id, loop, input_path, trans_result)
 
     elapsed = time.monotonic() - start_time
 
@@ -791,6 +829,7 @@ async def _do_translate(
         if not paper:
             logger.error("Paper %s disappeared during translation", paper_id)
             cleanup_output_dir(output_dir)
+            _clear_cancel_requested(paper_id)
             return
 
         _update_paper_result(paper, trans_result, output_dir)
@@ -812,6 +851,41 @@ async def _do_translate(
                 trans_result.error,
                 base_url=settings.base_url,
             )
+    _clear_cancel_requested(paper_id)
+
+
+def _run_post_translation_qa(
+    paper_id: str,
+    loop: asyncio.AbstractEventLoop,
+    input_path: Path,
+    trans_result: TranslationResult,
+) -> None:
+    """Run a fast layout/translation QA pass and try one layout repair."""
+    mono_path = trans_result.mono_path
+    if mono_path is None:
+        return
+    try:
+        from pdf_zh_translator.pdf_layout import verify_translation
+
+        _append_log(paper_id, loop, "正在检查译文和版面")
+        issues = verify_translation(input_path, mono_path)
+        if any("overlap" in issue for issue in issues):
+            from app.services.layout_fix import fix_translated_layout
+
+            fixed = fix_translated_layout(mono_path)
+            if trans_result.dual_path:
+                fix_translated_layout(trans_result.dual_path)
+            if fixed:
+                _append_log(paper_id, loop, "检测到文字重叠，已自动执行一次版面修复")
+                issues = verify_translation(input_path, mono_path)
+        if issues:
+            _append_log(paper_id, loop, f"检查发现 {len(issues)} 个潜在问题")
+            for issue in issues[:3]:
+                _append_log(paper_id, loop, issue)
+        else:
+            _append_log(paper_id, loop, "译文检查通过")
+    except Exception as e:
+        logger.warning("Post-translation QA failed for %s: %s", paper_id, sanitize_error(e))
 
 
 def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) -> None:
@@ -848,18 +922,24 @@ def _create_progress_handler(
 ) -> Callable:
     """Create a progress callback that updates the database."""
     _last_pct: list[float] = [0.0]
+    _last_milestone: list[int] = [-1]
+    started_at = time.monotonic()
 
     def _on_progress(pct: float) -> None:
         # Check for cancellation at every progress callback
-        with _cancel_lock:
-            if paper_id in _cancelled_papers:
-                _cancelled_papers.discard(paper_id)
-                raise TranslationCancelledError("Translation cancelled by user")
+        if _is_cancel_requested(paper_id):
+            _clear_cancel_requested(paper_id)
+            raise TranslationCancelledError("Translation cancelled by user")
 
         if pct - _last_pct[0] < _PROGRESS_THROTTLE and pct < 1.0:
             return
         _last_pct[0] = pct
         pct_display = int(pct * 100)
+        elapsed = max(0.0, time.monotonic() - started_at)
+        eta_text = ""
+        if pct > 0.02 and pct < 1.0:
+            eta_seconds = max(0, int((elapsed / pct) - elapsed))
+            eta_text = f"，预计剩余 {_format_duration(eta_seconds)}"
 
         async def _update():
             from app.core.database import async_session
@@ -879,10 +959,22 @@ def _create_progress_handler(
             asyncio.run_coroutine_threadsafe(_update(), loop)
 
         # Log milestone progress
-        if pct_display % 25 == 0 or pct >= 1.0:
-            _append_log(paper_id, loop, f"翻译进度: {pct_display}%")
+        milestone = pct_display // 25
+        if pct >= 1.0 or (pct_display >= 25 and milestone > _last_milestone[0]):
+            _last_milestone[0] = milestone
+            _append_log(paper_id, loop, f"翻译进度: {pct_display}%{eta_text}")
 
     return _on_progress
+
+
+def _format_duration(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}秒"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}分{sec:02d}秒"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}小时{minutes:02d}分"
 
 
 def _update_paper_result(

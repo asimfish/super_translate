@@ -312,6 +312,20 @@ def _use_native_engine(config: TranslationConfig) -> bool:
 _TRANSLATION_TIMEOUT = 600  # 10 minutes max for the entire translation
 
 
+def _run_with_timeout(fn, *args, timeout: int | None = None, **kwargs):
+    if timeout is None:
+        timeout = _TRANSLATION_TIMEOUT
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=timeout)
+    except FutureTimeout:
+        future.cancel()
+        raise
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 class _ProgressTranslator:
     """Wrap a pdf_zh_translator Translator to report batch progress."""
 
@@ -375,16 +389,14 @@ def _translate_sync_native(
 
     for attempt in range(config.max_retries + 1):
         try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(
-                    translate_pdf,
-                    input_pdf=input_path,
-                    output_pdf=mono_path,
-                    translator=translator,
-                    preserve_graphics_text=config.preserve_graphics_text,
-                    skip_overflow=config.skip_overflow,
-                )
-                report = future.result(timeout=_TRANSLATION_TIMEOUT)
+            report = _run_with_timeout(
+                translate_pdf,
+                input_pdf=input_path,
+                output_pdf=mono_path,
+                translator=translator,
+                preserve_graphics_text=config.preserve_graphics_text,
+                skip_overflow=config.skip_overflow,
+            )
             for warning in report.warnings:
                 logger.warning("Native engine: %s", warning)
             break
@@ -463,7 +475,8 @@ def _translate_sync(
 
     for attempt in range(config.max_retries + 1):
         try:
-            translate(
+            _run_with_timeout(
+                translate,
                 files=[str(input_path)],
                 lang_in=config.lang_in,
                 lang_out=config.lang_out,
@@ -481,6 +494,15 @@ def _translate_sync(
             )
             break  # Success
 
+        except FutureTimeout:
+            cleanup_output_dir(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger.error(
+                "pdf2zh translation timed out after %ds for %s",
+                _TRANSLATION_TIMEOUT,
+                input_path.name,
+            )
+            raise TimeoutError(f"Translation timed out after {_TRANSLATION_TIMEOUT}s")
         except Exception as e:
             # Clean up partial output from this attempt (files and subdirs)
             cleanup_output_dir(output_dir)

@@ -1,22 +1,26 @@
 """Tests for conservative native-layout preservation rules."""
 
 import unittest
+from pathlib import Path
 
 import fitz
 
 from pdf_zh_translator.pdf_layout import (
     SENTINEL_CLOSE,
     SENTINEL_OPEN,
+    FontPack,
     TextBlock,
     _LineRec,
     _RawBlockRec,
     clean_translation,
+    insert_translated_text,
     is_math_span,
     math_heavy_block,
     merge_paragraph_blocks,
     prepare_translation_units,
     segments_from_record,
     should_preserve_original_block,
+    verify_translation,
 )
 
 
@@ -67,6 +71,18 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         )
 
         self.assertTrue(should_preserve_original_block(block, [(170.0, 20.0, 280.0, 100.0)]))
+
+    def test_caption_over_graphic_region_is_still_translated(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(10.0, 100.0, 260.0, 124.0),
+            text="Figure 2: Accuracy improves with additional supervision.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+
+        self.assertFalse(should_preserve_original_block(block, [(0.0, 40.0, 280.0, 140.0)]))
 
 
 def _span(text, bbox, size=10.0, font="NimbusRomNo9L-Regu", flags=4):
@@ -257,9 +273,44 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         normal_sources = [source for _, source, _ in normal_units]
         preserved_sources = [source for _, source, _ in preserved_units]
 
-        self.assertTrue(any("Figure Label" in source for source in normal_sources))
+        self.assertFalse(any("Figure Label" in source for source in normal_sources))
         self.assertFalse(any("Figure Label" in source for source in preserved_sources))
+        self.assertTrue(any("body sentence" in source for source in normal_sources))
         self.assertTrue(any("body sentence" in source for source in preserved_sources))
+
+    def test_insert_translated_text_renders_caption_without_name_error(self):
+        document = fitz.open()
+        page = document.new_page(width=300, height=180)
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+        block = TextBlock(
+            page_index=0,
+            bbox=(30.0, 40.0, 250.0, 90.0),
+            text="Figure 1: Small caption.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+
+        inserted = insert_translated_text(
+            page=page,
+            block=block,
+            text="Short translated caption.",
+            font_pack=font_pack,
+            font_size=10.0,
+            min_font_size=5.0,
+            margin=0.8,
+        )
+
+        self.assertTrue(inserted)
+        self.assertIn("Short translated caption", page.get_text("text"))
 
 
 class TestClassifyBlocks(unittest.TestCase):
@@ -372,6 +423,50 @@ class TestDetectColumns(unittest.TestCase):
         from pdf_zh_translator.pdf_layout import detect_columns
 
         self.assertEqual(detect_columns([]), [])
+
+
+class TestDetectImageZones(unittest.TestCase):
+    def test_vector_drawing_region_is_detected(self):
+        from pdf_zh_translator.pdf_layout import detect_image_zones
+
+        document = fitz.open()
+        page = document.new_page(width=300, height=300)
+        page.draw_rect(fitz.Rect(50, 50, 220, 140))
+
+        zones = detect_image_zones(page)
+
+        self.assertTrue(any(z[0] <= 50 and z[2] >= 220 for z in zones))
+        document.close()
+
+
+class TestTranslationVerification(unittest.TestCase):
+    def test_flags_untranslated_body_but_ignores_reference_entry(self):
+        original = fitz.open()
+        page = original.new_page(width=300, height=300)
+        page.insert_text((30, 40), "This method improves the training objective significantly.")
+        page.insert_text((30, 80), "[1] Smith et al. Learning representations. 2024.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=300, height=300)
+        page.insert_text((30, 40), "This method improves the training objective significantly.")
+        page.insert_text((30, 80), "[1] Smith et al. Learning representations. 2024.")
+
+        with self.subTest("verification"):
+            import tempfile
+            from pathlib import Path
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original_path = Path(tmpdir) / "orig.pdf"
+                translated_path = Path(tmpdir) / "zh.pdf"
+                original.save(original_path)
+                translated.save(translated_path)
+
+                issues = verify_translation(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any("untranslated English" in issue for issue in issues))
+        self.assertFalse(any("2 block" in issue for issue in issues))
 
 
 class TestBlockInZone(unittest.TestCase):

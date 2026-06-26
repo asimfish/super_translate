@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-398%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-481%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -14,8 +14,10 @@ Super Translate is a web-based system for translating English academic papers in
 - **Smart Translation Engine** — Supports DeepSeek, OpenAI, and Google Translate backends with automatic fallback
 - **Layout Preservation** — Maintains original page dimensions, images, vector graphics, and text block positions
 - **Formula Protection** — Mathematical formulas, equations, and variables are preserved as-is
+- **Figure/Text Safety** — Preserves figure internals while translating captions and surrounding prose
 - **Citation Safety** — Reference markers [1], [2] and citation formatting remain unchanged
-- **Real-time Progress** — Live translation progress with detailed status logs
+- **Real-time Progress** — Live translation progress with ETA and detailed status logs
+- **Post-translation QA** — Checks untranslated English, missing images, empty pages, and text overlap
 - **Dual View** — Side-by-side PDF viewer with synchronized scrolling and adjustable split
 - **Batch Processing** — Translate multiple papers simultaneously
 - **Feishu Notifications** — Get notified via Feishu/Lark webhook when translation completes
@@ -61,9 +63,9 @@ Open **http://localhost:8001** in your browser.
 Super Translate produces high-quality academic translations with:
 
 - **Pure Chinese output** — No English-Chinese mixing, proper academic terminology
-- **Smart terminology** — First occurrence: "Neural Network (Neural Network)", subsequent: "Neural Network"
+- **Smart terminology** — First occurrence: "神经网络（Neural Network）", subsequent: "神经网络"
 - **Format preservation** — Bold, italic, and section headers are preserved
-- **Clean layout** — Automatic control character cleanup and text reformatting
+- **Clean layout** — Automatic control character cleanup, caption compaction, and overlap checks
 
 ## Configuration
 
@@ -76,7 +78,13 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 | `PAPER_CHINA_TRANSLATION_ENGINE` | `native` | Translation engine (`native` or `pdf2zh`) |
 | `PAPER_CHINA_TRANSLATION_BACKEND` | `deepseek` | Default translation backend |
 | `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `3` | Max concurrent translations |
+| `PAPER_CHINA_API_TOKEN` | — | Optional bearer token for `/api/*` requests |
+| `PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE` | `false` | Allow remote API access without token |
 | `PAPER_CHINA_FEISHU_WEBHOOK_URL` | — | Feishu webhook for notifications |
+
+Remote access is local-only by default unless `PAPER_CHINA_API_TOKEN` is set.
+When a token is configured, the web UI stores it in browser local storage and
+sends `Authorization: Bearer <token>` for API, PDF preview, and downloads.
 
 ## Architecture
 
@@ -89,7 +97,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (388 tests)
+└── tests/            # Test suite (481 tests)
 ```
 
 ## Development

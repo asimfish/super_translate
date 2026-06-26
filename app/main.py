@@ -1,7 +1,9 @@
 """Main application entry point."""
 
 import asyncio
+import ipaddress
 import logging
+import secrets
 import time
 import webbrowser
 from collections.abc import AsyncGenerator
@@ -91,6 +93,38 @@ app.add_middleware(
 
 # Response compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+def _client_is_local(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    if host in ("", "unknown", "testclient"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host in ("localhost",)
+
+
+@app.middleware("http")
+async def enforce_api_access(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    if not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    token = settings.api_token.get_secret_value()
+    if token:
+        auth = request.headers.get("Authorization", "")
+        expected = f"Bearer {token}"
+        if not secrets.compare_digest(auth, expected):
+            return JSONResponse(status_code=401, content={"detail": "Invalid or missing API token"})
+    elif not settings.allow_unauthenticated_remote and not _client_is_local(request):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Remote API access requires PAPER_CHINA_API_TOKEN"},
+        )
+
+    return await call_next(request)
 
 
 @app.middleware("http")

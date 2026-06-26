@@ -33,7 +33,7 @@ dev = [
 paper-china = "app.main:cli"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app*", "pdf_zh_translator*"]
 
 [tool.ruff]
 line-length = 100

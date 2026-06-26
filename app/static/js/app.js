@@ -13,6 +13,28 @@ async function errorDetail(res, fallback) {
   try { return (await res.json()).detail || fallback; } catch { return fallback; }
 }
 
+function getApiToken() {
+  return localStorage.getItem('paperChinaApiToken') || '';
+}
+
+function authHeaders(extra = {}) {
+  const token = getApiToken();
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
+}
+
+async function apiFetch(url, options = {}, retryAuth = true) {
+  const headers = authHeaders(options.headers || {});
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 401 && retryAuth) {
+    const token = prompt('请输入 API Token');
+    if (token) {
+      localStorage.setItem('paperChinaApiToken', token.trim());
+      return apiFetch(url, options, false);
+    }
+  }
+  return res;
+}
+
 const api = {
   async listPapers(search = '', status = '', tag = '', offset = 0, limit = 50) {
     const params = new URLSearchParams();
@@ -21,7 +43,7 @@ const api = {
     if (tag) params.set('tag', tag);
     params.set('offset', offset);
     params.set('limit', limit);
-    const res = await fetch(`/api/papers/?${params}`);
+    const res = await apiFetch(`/api/papers/?${params}`);
     if (!res.ok) throw new Error(await errorDetail(res, 'Failed to load papers'));
     return res.json();
   },
@@ -29,7 +51,7 @@ const api = {
     const form = new FormData();
     form.append('file', file);
     if (tags) form.append('tags', tags);
-    const res = await fetch('/api/papers/upload', { method: 'POST', body: form });
+    const res = await apiFetch('/api/papers/upload', { method: 'POST', body: form });
     if (!res.ok) throw new Error(await errorDetail(res, 'Upload failed'));
     return res.json();
   },
@@ -52,11 +74,13 @@ const api = {
       });
       xhr.addEventListener('error', () => reject(new Error('Network error')));
       xhr.open('POST', '/api/papers/upload');
+      const token = getApiToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.send(form);
     });
   },
   async getPaper(id) {
-    const res = await fetch(`/api/papers/${id}`);
+    const res = await apiFetch(`/api/papers/${id}`);
     if (!res.ok) throw new Error(await errorDetail(res, 'Paper not found'));
     return res.json();
   },
@@ -66,22 +90,22 @@ const api = {
     if (quality) params.set('quality', quality);
     if (options.preserve_graphics_text) params.set('preserve_graphics_text', 'true');
     if (options.skip_overflow) params.set('skip_overflow', 'true');
-    const res = await fetch(`/api/papers/${id}/translate?${params}`, { method: 'POST' });
+    const res = await apiFetch(`/api/papers/${id}/translate?${params}`, { method: 'POST' });
     if (!res.ok) throw new Error(await errorDetail(res, 'Translation failed'));
     return res.json();
   },
   async cancelTranslation(id) {
-    const res = await fetch(`/api/papers/${id}/cancel`, { method: 'POST' });
+    const res = await apiFetch(`/api/papers/${id}/cancel`, { method: 'POST' });
     if (!res.ok) throw new Error(await errorDetail(res, 'Cancel failed'));
     return res.json();
   },
   async deletePaper(id) {
-    const res = await fetch(`/api/papers/${id}`, { method: 'DELETE' });
+    const res = await apiFetch(`/api/papers/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error(await errorDetail(res, 'Delete failed'));
     return res.json();
   },
   async updatePaper(id, data) {
-    const res = await fetch(`/api/papers/${id}`, {
+    const res = await apiFetch(`/api/papers/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -90,7 +114,7 @@ const api = {
     return res.json();
   },
   async getStats() {
-    const res = await fetch('/api/stats');
+    const res = await apiFetch('/api/stats');
     if (!res.ok) throw new Error(await errorDetail(res, 'Failed to load stats'));
     return res.json();
   }
@@ -468,6 +492,7 @@ async function openReader(paperId) {
     document.getElementById('pdf-container-translated').classList.remove('hidden');
     await loadPdfDocument('translated', `/api/papers/${paperId}/view/translated`);
     if (loadId !== currentLoadId) return;
+    syncScrollFromPanel('original');
     document.getElementById('btn-download-mono').classList.remove('hidden');
     // Show re-translate button, hide translate button
     if (btnTranslate) btnTranslate.classList.add('hidden');
@@ -518,7 +543,7 @@ async function loadPdfDocument(panel, url) {
   container.appendChild(loadingDiv);
 
   try {
-    const loadingTask = pdfjsLib.getDocument(url);
+    const loadingTask = pdfjsLib.getDocument({ url, httpHeaders: authHeaders() });
     const pdf = await loadingTask.promise;
     pdfDocs[panel] = pdf;
 
@@ -651,52 +676,52 @@ let scrollRafId = null;
 
 function setupSmoothScrollSync(panel) {
   const container = document.getElementById(`pdf-container-${panel}`);
-  const otherPanel = panel === 'original' ? 'translated' : 'original';
 
   const listener = () => {
+    updatePageInfo(panel, container.scrollTop);
     if (!syncScrollEnabled || scrollSyncing) return;
-    if (!pdfDocs[otherPanel]) return;
 
     if (scrollRafId) return;
     scrollRafId = requestAnimationFrame(() => {
       scrollRafId = null;
-
-      const scrollTop = container.scrollTop;
-      const metrics = pageMetrics[panel];
-      const otherMetrics = pageMetrics[otherPanel];
-      if (!metrics || !otherMetrics || metrics.length === 0 || otherMetrics.length === 0) return;
-
-      // Find which page is currently visible (top of viewport)
-      let currentPageIdx = 0;
-      for (let i = metrics.length - 1; i >= 0; i--) {
-        if (metrics[i].top <= scrollTop + 20) {
-          currentPageIdx = i;
-          break;
-        }
-      }
-
-      // Calculate fractional position within the current page
-      const pageTop = metrics[currentPageIdx].top;
-      const pageHeight = metrics[currentPageIdx].height;
-      const fraction = pageHeight > 0 ? Math.max(0, Math.min(1, (scrollTop - pageTop) / pageHeight)) : 0;
-
-      // Map to corresponding page in the other panel
-      const otherIdx = Math.min(currentPageIdx, otherMetrics.length - 1);
-      const otherPageTop = otherMetrics[otherIdx].top;
-      const otherPageHeight = otherMetrics[otherIdx].height;
-
-      scrollSyncing = true;
-      const otherContainer = document.getElementById(`pdf-container-${otherPanel}`);
-      otherContainer.scrollTop = otherPageTop + fraction * otherPageHeight;
-
-      updatePageInfo(panel, scrollTop);
-      updatePageInfo(otherPanel, otherContainer.scrollTop);
-
-      requestAnimationFrame(() => { scrollSyncing = false; });
+      syncScrollFromPanel(panel);
     });
   };
   container.addEventListener('scroll', listener, { passive: true });
   scrollListeners[panel] = listener;
+}
+
+function syncScrollFromPanel(panel) {
+  const otherPanel = panel === 'original' ? 'translated' : 'original';
+  if (!pdfDocs[otherPanel]) return;
+
+  const container = document.getElementById(`pdf-container-${panel}`);
+  const otherContainer = document.getElementById(`pdf-container-${otherPanel}`);
+  const metrics = pageMetrics[panel];
+  const otherMetrics = pageMetrics[otherPanel];
+  if (!container || !otherContainer || !metrics?.length || !otherMetrics?.length) return;
+
+  const scrollTop = container.scrollTop;
+  let currentPageIdx = 0;
+  for (let i = metrics.length - 1; i >= 0; i--) {
+    if (metrics[i].top <= scrollTop + 20) {
+      currentPageIdx = i;
+      break;
+    }
+  }
+
+  const pageTop = metrics[currentPageIdx].top;
+  const pageHeight = metrics[currentPageIdx].height;
+  const fraction = pageHeight > 0 ? Math.max(0, Math.min(1, (scrollTop - pageTop) / pageHeight)) : 0;
+  const otherIdx = Math.min(currentPageIdx, otherMetrics.length - 1);
+  const otherTop = otherMetrics[otherIdx].top;
+  const otherHeight = otherMetrics[otherIdx].height;
+
+  scrollSyncing = true;
+  otherContainer.scrollTop = otherTop + fraction * otherHeight;
+  updatePageInfo(otherPanel, otherContainer.scrollTop);
+  renderVisiblePages(otherPanel, otherContainer);
+  requestAnimationFrame(() => { scrollSyncing = false; });
 }
 
 function updatePageInfo(panel, scrollTop) {
@@ -797,6 +822,9 @@ function pollTranslationStatus(paperId) {
   const MAX_CONSECUTIVE_ERRORS = 10; // stop after 20s of consecutive failures
   let pollCount = 0;
   let consecutiveErrors = 0;
+  let lastPct = 0;
+  let lastPctTime = startTime;
+  let smoothedRate = 0;
 
   translationPollId = setInterval(async () => {
     pollCount++;
@@ -829,6 +857,18 @@ function pollTranslationStatus(paperId) {
 
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
       const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m${elapsed % 60}s`;
+      const now = Date.now();
+      if (pct > lastPct) {
+        const deltaPct = pct - lastPct;
+        const deltaSeconds = Math.max(1, (now - lastPctTime) / 1000);
+        const rate = deltaPct / deltaSeconds;
+        smoothedRate = smoothedRate ? smoothedRate * 0.65 + rate * 0.35 : rate;
+        lastPct = pct;
+        lastPctTime = now;
+      }
+      const etaStr = smoothedRate > 0 && pct > 0 && pct < 100
+        ? ` · 预计剩余 ${formatEta(Math.ceil((100 - pct) / smoothedRate))}`
+        : '';
 
       if (paper.translation_status === 'completed') {
         clearInterval(translationPollId);
@@ -848,7 +888,7 @@ function pollTranslationStatus(paperId) {
         fill.style.background = 'var(--error)';
         loadPapers();
       } else {
-        statusEl.textContent = `翻译中... ${elapsedStr}`;
+        statusEl.textContent = `翻译中... ${elapsedStr}${etaStr}`;
       }
     } catch (e) {
       consecutiveErrors++;
@@ -864,6 +904,16 @@ function pollTranslationStatus(paperId) {
   }, 2000);
 }
 
+function formatEta(seconds) {
+  if (!isFinite(seconds) || seconds < 0) return '--';
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return `${minutes}m${String(rest).padStart(2, '0')}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h${String(minutes % 60).padStart(2, '0')}m`;
+}
+
 function addTransLog(msg, cls = '') {
   const logEl = document.getElementById('trans-log');
   if (!logEl) return;
@@ -876,14 +926,23 @@ function addTransLog(msg, cls = '') {
 }
 
 // === Downloads ===
-function downloadFile(url) {
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = '';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+async function downloadFile(url) {
+  try {
+    const res = await apiFetch(url);
+    if (!res.ok) throw new Error(await errorDetail(res, '下载失败'));
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = '';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (e) {
+    toastError(e.message || '下载失败');
+  }
 }
 
 function downloadTranslated() {

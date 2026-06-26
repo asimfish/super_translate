@@ -712,7 +712,7 @@ class TestCancelEndpoint:
         assert response.status_code == 409
         assert "not currently being translated" in response.json()["detail"]
 
-    def test_cancel_success(self, client, mock_db, sample_paper):
+    def test_cancel_success(self, client, mock_db, sample_paper, tmp_path):
         from app.api.papers import _cancel_lock, _cancelled_papers
 
         sample_paper.translation_status = "translating"
@@ -724,7 +724,9 @@ class TestCancelEndpoint:
         with _cancel_lock:
             _cancelled_papers.discard(sample_paper.id)
 
-        response = client.post(f"/api/papers/{sample_paper.id}/cancel")
+        with patch("app.api.papers.settings") as mock_settings:
+            mock_settings.translations_path = tmp_path
+            response = client.post(f"/api/papers/{sample_paper.id}/cancel")
         assert response.status_code == 200
         assert response.json()["ok"] is True
         assert response.json()["status"] == "cancelling"
@@ -1532,6 +1534,7 @@ class TestRunTranslation:
         from app.api.papers import (
             _cancel_lock,
             _cancelled_papers,
+            _mark_cancel_requested,
             _run_translation,
         )
 
@@ -1548,15 +1551,13 @@ class TestRunTranslation:
         translations_dir.mkdir()
         mock_settings.papers_path = papers_dir
         mock_settings.translations_path = translations_dir
+        mock_settings.feishu_webhook_url = ""
 
         (papers_dir / "test.pdf").write_bytes(b"PDF content")
 
-        # Add paper to cancelled set before translation starts
-        with _cancel_lock:
-            _cancelled_papers.add("paper123")
-
         def fake_translate(input_path, output_dir, config, progress_callback=None):
-            # Simulate progress callback triggering cancellation check
+            # Simulate a user cancellation arriving while translation is running.
+            _mark_cancel_requested("paper123")
             if progress_callback:
                 progress_callback(0.1)
             return MagicMock()  # Should not reach here
