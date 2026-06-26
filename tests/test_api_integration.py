@@ -1011,6 +1011,56 @@ class TestDownloadEndpoints:
             assert response.status_code == 200
             assert "paper_dual.pdf" in response.headers.get("content-disposition", "")
 
+    def test_get_qa_report_success(self, client, mock_db, sample_paper, tmp_path):
+        """Test successful QA report lookup."""
+        from unittest.mock import patch as _patch
+
+        sample_paper.translated_filename = "paper123/mono.pdf"
+        report_dir = tmp_path / "paper123"
+        report_dir.mkdir()
+        (report_dir / "mono.pdf").write_bytes(b"%PDF-1.4 translated")
+        (report_dir / "mono.qa.json").write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "passes_run": 1,
+                    "issue_count": 0,
+                    "issues": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.translations_path = tmp_path
+            response = client.get(f"/api/papers/{sample_paper.id}/qa-report")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "passed"
+
+    def test_get_qa_report_missing(self, client, mock_db, sample_paper, tmp_path):
+        """Missing QA report returns 404."""
+        from unittest.mock import patch as _patch
+
+        sample_paper.translated_filename = "paper123/mono.pdf"
+        report_dir = tmp_path / "paper123"
+        report_dir.mkdir()
+        (report_dir / "mono.pdf").write_bytes(b"%PDF-1.4 translated")
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.translations_path = tmp_path
+            response = client.get(f"/api/papers/{sample_paper.id}/qa-report")
+
+        assert response.status_code == 404
+
 
 class TestStatsEndpoint:
     """Test stats endpoint."""

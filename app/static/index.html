@@ -116,6 +116,7 @@
             <button class="btn btn-sm btn-outline hidden" id="btn-retranslate" data-action="retranslate">重新翻译</button>
           </div>
           <button class="btn btn-sm btn-primary" id="btn-sync-scroll" data-action="toggle-sync-scroll">同步滚动: 开</button>
+          <button class="btn btn-sm btn-outline hidden" id="btn-qa-report" data-action="show-qa-report">质检报告</button>
           <button class="btn btn-sm hidden" id="btn-download-mono" data-action="download-translated">下载译文</button>
           <button class="btn btn-sm hidden" id="btn-download-dual" data-action="download-dual">下载双语</button>
         </div>
@@ -148,6 +149,13 @@
           <div id="trans-log" class="trans-log" style="flex:1;margin-top:0"></div>
           <button class="btn btn-sm btn-danger" id="btn-cancel-translate" data-action="cancel-translate" style="margin-left:8px;white-space:nowrap">取消</button>
         </div>
+      </div>
+      <div id="qa-report-panel" class="qa-report-panel hidden">
+        <div class="qa-report-header">
+          <span>质检报告</span>
+          <button class="btn btn-sm btn-outline" data-action="hide-qa-report">关闭</button>
+        </div>
+        <div id="qa-report-content" class="qa-report-content"></div>
       </div>
     </div>
   </main>

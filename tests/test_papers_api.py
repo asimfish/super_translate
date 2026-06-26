@@ -38,6 +38,7 @@ class TestPaperToResponse(unittest.TestCase):
         self.assertFalse(resp.has_original)
         self.assertFalse(resp.has_translated)
         self.assertFalse(resp.has_dual)
+        self.assertFalse(resp.has_qa_report)
 
     def test_translation_eta_and_stage_are_derived_from_log(self):
         paper = self._make_paper(
@@ -60,10 +61,16 @@ class TestPaperToResponse(unittest.TestCase):
 
     def test_with_file_flags(self):
         paper = self._make_paper()
-        resp = _paper_to_response(paper, has_original=True, has_translated=True)
+        resp = _paper_to_response(
+            paper,
+            has_original=True,
+            has_translated=True,
+            has_qa_report=True,
+        )
         self.assertTrue(resp.has_original)
         self.assertTrue(resp.has_translated)
         self.assertFalse(resp.has_dual)
+        self.assertTrue(resp.has_qa_report)
 
     def test_with_datetime(self):
         from datetime import datetime

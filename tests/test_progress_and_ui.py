@@ -48,3 +48,8 @@ def test_translation_ui_exposes_qa_and_ocr_controls():
     assert "params.set('qa_mode'" in js
     assert "params.set('ocr_mode'" in js
     assert "api.translatePaper(p.id, '', quality, options)" in js
+    assert 'id="btn-qa-report"' in html
+    assert 'id="qa-report-panel"' in html
+    assert "async getQaReport(id)" in js
+    assert "function renderQaReport(report)" in js
+    assert "'show-qa-report': showQaReport" in js

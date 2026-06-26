@@ -316,6 +316,84 @@ select:focus-visible {
 .trans-log .log-entry.error { color: var(--error); }
 .trans-log .log-entry.success { color: var(--success); }
 
+.qa-report-panel {
+  position: fixed;
+  right: 24px;
+  top: 88px;
+  width: min(460px, calc(100vw - 48px));
+  max-height: calc(100vh - 128px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 220;
+  overflow: hidden;
+}
+.qa-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+}
+.qa-report-content {
+  padding: 12px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+.qa-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text-dim);
+}
+.qa-status {
+  color: var(--text);
+  font-weight: 600;
+}
+.qa-status-passed { color: var(--success); }
+.qa-status-warning { color: var(--warning); }
+.qa-status-failed,
+.qa-status-qa_failed { color: var(--error); }
+.qa-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.qa-issue {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: var(--bg);
+}
+.qa-issue.qa-error { border-left-color: var(--error); }
+.qa-issue-title {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.qa-issue-message {
+  color: var(--text);
+  line-height: 1.5;
+}
+.qa-report-empty,
+.qa-report-loading,
+.qa-report-error {
+  color: var(--text-dim);
+  padding: 8px 0;
+}
+.qa-report-error { color: var(--error); }
+
 /* Loading skeleton */
 .skeleton-card {
   pointer-events: none;
@@ -388,4 +466,10 @@ select:focus-visible {
   .reader-toolbar { flex-wrap: wrap; gap: 8px; }
   .reader-actions { flex-wrap: wrap; width: 100%; }
   .translate-controls { flex-wrap: wrap; }
+  .qa-report-panel {
+    top: 72px;
+    left: 16px;
+    right: 16px;
+    width: auto;
+  }
 }

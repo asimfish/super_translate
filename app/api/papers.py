@@ -166,6 +166,7 @@ class PaperResponse(BaseModel):
     has_original: bool
     has_translated: bool
     has_dual: bool
+    has_qa_report: bool = False
     created_at: str
     updated_at: str
 
@@ -251,6 +252,7 @@ def _paper_to_response(
     has_original: bool = False,
     has_translated: bool = False,
     has_dual: bool = False,
+    has_qa_report: bool = False,
 ) -> PaperResponse:
     """Convert a Paper model to a PaperResponse."""
     progress_meta = _translation_progress_meta(paper)
@@ -272,6 +274,7 @@ def _paper_to_response(
         has_original=has_original,
         has_translated=has_translated,
         has_dual=has_dual,
+        has_qa_report=has_qa_report,
         created_at=paper.created_at.isoformat() if paper.created_at else "",
         updated_at=paper.updated_at.isoformat() if paper.updated_at else "",
     )
@@ -398,6 +401,22 @@ def _file_exists_safe(
     return file_path.exists()
 
 
+def _qa_report_path(paper: Paper) -> Path:
+    translated_path = _get_paper_file(
+        paper,
+        "translated_filename",
+        settings.translations_path,
+    )
+    return translated_path.with_suffix(".qa.json")
+
+
+def _qa_report_exists(paper: Paper) -> bool:
+    try:
+        return _qa_report_path(paper).exists()
+    except HTTPException:
+        return False
+
+
 async def _get_paper_or_404(paper_id: str, db: AsyncSession) -> Paper:
     """Fetch paper by ID or raise 404."""
     _validate_paper_id(paper_id)
@@ -478,6 +497,7 @@ async def list_papers(
                     p.dual_filename,
                     trans_base,
                 ),
+                has_qa_report=_qa_report_exists(p),
             )
             for p in papers
         ]
@@ -584,11 +604,13 @@ async def get_paper(
     has_original = _file_exists_safe(settings.papers_path, paper.stored_filename)
     has_translated = _file_exists_safe(settings.translations_path, paper.translated_filename)
     has_dual = _file_exists_safe(settings.translations_path, paper.dual_filename)
+    has_qa_report = _qa_report_exists(paper)
     return _paper_to_response(
         paper,
         has_original=has_original,
         has_translated=has_translated,
         has_dual=has_dual,
+        has_qa_report=has_qa_report,
     )
 
 
@@ -1580,6 +1602,25 @@ async def view_translated(
     return await _serve_paper_file(paper, "translated_filename", settings.translations_path)
 
 
+@router.get("/{paper_id}/qa-report")
+async def get_qa_report(
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    """Return the machine-readable post-translation QA report."""
+    paper = await _get_paper_or_404(paper_id, db)
+    report_path = _qa_report_path(paper)
+    if not report_path.exists():
+        raise HTTPException(404, "QA report not found")
+    try:
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        raise HTTPException(500, "QA report is invalid") from None
+    if not isinstance(data, dict):
+        raise HTTPException(500, "QA report is invalid")
+    return data
+
+
 @router.patch("/{paper_id}")
 async def update_paper(
     paper_id: str,
@@ -1599,9 +1640,11 @@ async def update_paper(
     has_original = _file_exists_safe(settings.papers_path, paper.stored_filename)
     has_translated = _file_exists_safe(settings.translations_path, paper.translated_filename)
     has_dual = _file_exists_safe(settings.translations_path, paper.dual_filename)
+    has_qa_report = _qa_report_exists(paper)
     return _paper_to_response(
         paper,
         has_original=has_original,
         has_translated=has_translated,
         has_dual=has_dual,
+        has_qa_report=has_qa_report,
     )

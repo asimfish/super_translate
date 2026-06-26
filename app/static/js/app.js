@@ -120,6 +120,11 @@ const api = {
     const res = await apiFetch('/api/stats');
     if (!res.ok) throw new Error(await errorDetail(res, 'Failed to load stats'));
     return res.json();
+  },
+  async getQaReport(id) {
+    const res = await apiFetch(`/api/papers/${id}/qa-report`);
+    if (!res.ok) throw new Error(await errorDetail(res, '质检报告不可用'));
+    return res.json();
   }
 };
 
@@ -477,8 +482,13 @@ async function openReader(paperId) {
   if (loadId !== currentLoadId) return;
 
   document.getElementById('reader-title').textContent = currentPaper.title;
+  hideQaReportPanel();
 
   const placeholder = document.getElementById('translate-placeholder');
+  const qaReportBtn = document.getElementById('btn-qa-report');
+  if (qaReportBtn) {
+    qaReportBtn.classList.toggle('hidden', !currentPaper.has_qa_report);
+  }
 
   // Clean up previous observers and scroll listeners
   if (renderObservers.original) renderObservers.original.disconnect();
@@ -970,6 +980,70 @@ function addTransLog(msg, cls = '') {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+// === QA Report ===
+async function showQaReport() {
+  if (!currentPaper) return;
+  const panel = document.getElementById('qa-report-panel');
+  const content = document.getElementById('qa-report-content');
+  if (!panel || !content) return;
+  panel.classList.remove('hidden');
+  content.innerHTML = '<div class="qa-report-loading">加载中...</div>';
+
+  try {
+    const report = await api.getQaReport(currentPaper.id);
+    renderQaReport(report);
+  } catch (e) {
+    content.innerHTML = `<div class="qa-report-error">${esc(e.message || '质检报告不可用')}</div>`;
+  }
+}
+
+function hideQaReportPanel() {
+  const panel = document.getElementById('qa-report-panel');
+  if (panel) panel.classList.add('hidden');
+}
+
+function renderQaReport(report) {
+  const content = document.getElementById('qa-report-content');
+  if (!content) return;
+  const issues = Array.isArray(report.issues) ? report.issues : [];
+  const status = report.status || 'unknown';
+  const statusText = qaStatusLabel(status);
+  const issueHtml = issues.length > 0
+    ? issues.map(issue => `
+      <div class="qa-issue qa-${sanitizeClass(issue.severity || 'warning')}">
+        <div class="qa-issue-title">
+          <span>第 ${Number(issue.page || 0)} 页</span>
+          <span>${esc(issue.code || 'unknown')}</span>
+          <span>${esc(issue.severity || 'warning')}</span>
+        </div>
+        <div class="qa-issue-message">${esc(issue.message || '')}</div>
+      </div>
+    `).join('')
+    : '<div class="qa-report-empty">未发现需要处理的问题</div>';
+
+  content.innerHTML = `
+    <div class="qa-summary">
+      <div class="qa-status qa-status-${sanitizeClass(status)}">${esc(statusText)}</div>
+      <div>轮次：${Number(report.passes_run || 0)}</div>
+      <div>错误：${Number(report.error_count || 0)}</div>
+      <div>警告：${Number(report.warning_count || 0)}</div>
+      <div>自动修复：${report.repair_attempted ? '是' : '否'}</div>
+    </div>
+    <div class="qa-issues">${issueHtml}</div>
+  `;
+}
+
+function qaStatusLabel(status) {
+  const map = {
+    passed: '通过',
+    warning: '有警告',
+    failed: '未通过',
+    qa_failed: '检查失败',
+    unknown: '未知',
+  };
+  return map[status] || status;
+}
+
 // === Downloads ===
 async function downloadFile(url) {
   try {
@@ -1174,6 +1248,8 @@ const actionHandlers = {
   'retranslate': startTranslate,
   'cancel-translate': cancelTranslation,
   'toggle-sync-scroll': toggleSyncScroll,
+  'show-qa-report': showQaReport,
+  'hide-qa-report': hideQaReportPanel,
   'download-translated': downloadTranslated,
   'download-dual': downloadDual,
   'debounce-search': debounceSearch,
