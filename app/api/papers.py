@@ -868,6 +868,7 @@ def _run_post_translation_qa(
         from pdf_zh_translator.pdf_layout import verify_translation
 
         _append_log(paper_id, loop, "正在检查译文和版面")
+        _record_terminology_candidates(paper_id, loop, input_path)
         issues = verify_translation(input_path, mono_path)
         if any("overlap" in issue for issue in issues):
             from app.services.layout_fix import fix_translated_layout
@@ -886,6 +887,40 @@ def _run_post_translation_qa(
             _append_log(paper_id, loop, "译文检查通过")
     except Exception as e:
         logger.warning("Post-translation QA failed for %s: %s", paper_id, sanitize_error(e))
+
+
+def _record_terminology_candidates(
+    paper_id: str,
+    loop: asyncio.AbstractEventLoop,
+    input_path: Path,
+) -> None:
+    """Record candidate AI/ML terms for later reviewed corpus updates."""
+    try:
+        import fitz
+
+        from pdf_zh_translator.corpus import record_candidate_terms
+
+        texts: list[str] = []
+        document = fitz.open(str(input_path))
+        try:
+            for page in document:
+                page_text = page.get_text("text").strip()
+                if page_text:
+                    texts.append(page_text)
+        finally:
+            document.close()
+
+        candidates_path = settings.base_dir / settings.data_dir / "terminology_candidates.jsonl"
+        added = record_candidate_terms(
+            texts,
+            candidates_path,
+            source=f"paper:{paper_id}",
+            max_terms=80,
+        )
+        if added:
+            _append_log(paper_id, loop, f"已记录 {added} 个待审核术语候选")
+    except Exception as e:
+        logger.debug("Terminology candidate recording skipped for %s: %s", paper_id, e)
 
 
 def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) -> None:

@@ -19,6 +19,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_translate(args)
     if args.command == "export":
         return run_export(args)
+    if args.command == "corpus-add":
+        return run_corpus_add(args)
 
     parser.print_help()
     return 2
@@ -207,7 +209,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output JSONL: {key, page, source} per block",
     )
 
+    corpus_add = subparsers.add_parser(
+        "corpus-add",
+        help="Add or update approved terminology in the academic corpus.",
+    )
+    corpus_add.add_argument("field", help="Corpus field/category, e.g. ai_conference")
+    corpus_add.add_argument(
+        "terms",
+        nargs="+",
+        help="Approved term pair in English=中文 format. May be repeated.",
+    )
+    corpus_add.add_argument("--source", default="cli", help="Source label for metadata.")
+    corpus_add.add_argument(
+        "--corpus-file",
+        type=Path,
+        help="Optional corpus JSON path. Defaults to the package corpus.",
+    )
+
     return parser
+
+
+def run_corpus_add(args: argparse.Namespace) -> int:
+    from .corpus import upsert_terms
+
+    pairs: dict[str, str] = {}
+    for item in args.terms:
+        if "=" not in item:
+            print("Invalid term pair, expected English=中文: %s" % item, file=sys.stderr)
+            return 1
+        english, chinese = item.split("=", 1)
+        english = english.strip()
+        chinese = chinese.strip()
+        if not english or not chinese:
+            print("Invalid empty term pair: %s" % item, file=sys.stderr)
+            return 1
+        pairs[english] = chinese
+
+    changed = upsert_terms(
+        args.field,
+        pairs,
+        source=args.source,
+        corpus_path=args.corpus_file,
+    )
+    print("Updated %d terminology entr%s." % (changed, "y" if changed == 1 else "ies"))
+    return 0
 
 
 def run_translate(args: argparse.Namespace) -> int:

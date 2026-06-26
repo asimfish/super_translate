@@ -288,19 +288,58 @@ def translate_pdf(
         document.close()
         return TranslationReport(input_pdf, output_pdf, page_count, 0, skipped, warnings)
 
+    protected_sources = [protected for _, protected, _ in units]
+    block_types = [block.block_type for block, _, _ in units]
+
     # Set block types for context-aware translation prompts
     if hasattr(translator, "block_types"):
-        translator.block_types = [block.block_type for block, _, _ in units]
-    translations = translator.translate_batch([protected for _, protected, _ in units])
+        translator.block_types = block_types
+    translations = list(translator.translate_batch(protected_sources))
+    if len(translations) != len(units):
+        warnings.append(
+            "Translator returned %d block(s) for %d source block(s)"
+            % (len(translations), len(units))
+        )
+        if len(translations) < len(units):
+            translations.extend(protected_sources[len(translations) :])
+        else:
+            translations = translations[: len(units)]
+
+    cleaned_results = [
+        _restore_unit_translation(translated_text, mapping)
+        for (_, _, mapping), translated_text in zip(units, translations)
+    ]
+    retry_indexes = [
+        index
+        for index, ((block, _, _), (translated_text, _)) in enumerate(zip(units, cleaned_results))
+        if _translated_block_still_english(block, translated_text)
+    ]
+    if retry_indexes:
+        if hasattr(translator, "block_types"):
+            translator.block_types = [units[index][0].block_type for index in retry_indexes]
+        retry_outputs = list(
+            translator.translate_batch([protected_sources[index] for index in retry_indexes])
+        )
+        for index, retry_text in zip(retry_indexes, retry_outputs):
+            retry_cleaned, retry_missing = _restore_unit_translation(retry_text, units[index][2])
+            if not _translated_block_still_english(units[index][0], retry_cleaned):
+                cleaned_results[index] = (retry_cleaned, retry_missing)
+        if hasattr(translator, "block_types"):
+            translator.block_types = block_types
+
     by_page: Dict[int, List[Tuple[TextBlock, str]]] = {}
-    for (block, _, mapping), translated_text in zip(units, translations):
-        restored, missing = restore_text(translated_text, mapping)
+    for (block, _, _), (translated_text, missing) in zip(units, cleaned_results):
         if missing:
             warnings.append(
                 "Page %d: translator dropped %d placeholder(s); fragments appended at block end"
                 % (block.page_index + 1, len(missing))
             )
-        by_page.setdefault(block.page_index, []).append((block, clean_translation(restored)))
+        if _translated_block_still_english(block, translated_text):
+            warnings.append(
+                "Page %d: translated %s block still looks like English after retry"
+                % (block.page_index + 1, block.block_type)
+            )
+        by_page.setdefault(block.page_index, []).append((block, translated_text))
 
     for page_index in range(document.page_count):
         candidate_items = by_page.get(page_index, [])
@@ -414,6 +453,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
     2. Text block collisions that can indicate broken layout
     3. Empty pages
     4. Missing raster images after redaction/rendering
+    5. Missing formula fragments from math-heavy source blocks
+    6. Missing vector graphics from figures/tables
     """
     import fitz
 
@@ -535,6 +576,40 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 )
             )
 
+        orig_graphics = _count_vector_graphics(orig_page)
+        trans_graphics = _count_vector_graphics(trans_page)
+        if orig_graphics and trans_graphics < max(1, orig_graphics // 2):
+            issues.append(
+                TranslationIssue(
+                    page=page_idx + 1,
+                    code="missing_graphic",
+                    message=(
+                        f"Page {page_idx + 1}: translated page has far fewer vector graphics "
+                        f"({trans_graphics}/{orig_graphics})"
+                    ),
+                    severity="error",
+                )
+            )
+
+        formula_fragments = _extract_formula_fragments(orig_page)
+        if formula_fragments:
+            trans_compact = re.sub(r"\s+", "", trans_page.get_text("text"))
+            missing_formulas = [
+                fragment for fragment in formula_fragments if fragment not in trans_compact
+            ]
+            if missing_formulas:
+                issues.append(
+                    TranslationIssue(
+                        page=page_idx + 1,
+                        code="formula_changed",
+                        message=(
+                            f"Page {page_idx + 1}: {len(missing_formulas)} formula "
+                            "fragment(s) appear missing or altered"
+                        ),
+                        severity="error",
+                    )
+                )
+
     trans_doc.close()
     orig_doc.close()
     return issues
@@ -575,6 +650,68 @@ def _looks_like_untranslated_english(text: str) -> bool:
         return False
     ascii_letters = sum(1 for char in compact if char.isascii() and char.isalpha())
     return ascii_letters / max(len(compact), 1) >= 0.45
+
+
+def _restore_unit_translation(
+    translated_text: str,
+    mapping: Dict[int, str],
+) -> Tuple[str, List[int]]:
+    restored, missing = restore_text(translated_text, mapping)
+    return clean_translation(restored), missing
+
+
+def _translated_block_still_english(block: TextBlock, translated_text: str) -> bool:
+    if not block.should_translate:
+        return False
+    if block.block_type in ("algorithm", "bibliography", "equation", "figure_label", "footer"):
+        return False
+    return _looks_like_untranslated_english(translated_text)
+
+
+def _count_vector_graphics(page: object) -> int:
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        return 0
+    count = 0
+    for drawing in drawings:
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        width = float(rect.x1 - rect.x0)
+        height = float(rect.y1 - rect.y0)
+        if width >= GRAPHIC_REGION_MIN_SIDE and height >= GRAPHIC_REGION_MIN_SIDE:
+            count += 1
+    return count
+
+
+def _extract_formula_fragments(page: object) -> List[str]:
+    fragments: List[str] = []
+    seen: set[str] = set()
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        text = _extract_text_from_block(block)
+        if not _looks_like_formula_fragment(text):
+            continue
+        compact = re.sub(r"\s+", "", text)
+        if compact and compact not in seen:
+            fragments.append(compact)
+            seen.add(compact)
+    return fragments[:20]
+
+
+def _looks_like_formula_fragment(text: str) -> bool:
+    compact = " ".join(text.split())
+    if len(compact) < 3 or _REFERENCE_ENTRY_RE.search(compact):
+        return False
+    words = _ASCII_WORD_DETECT_RE.findall(compact)
+    math_chars = sum(1 for char in compact if char in MATH_SYMBOLS)
+    if "=" in compact and not words:
+        return True
+    if looks_like_math(compact) and len(words) <= 1:
+        return True
+    return math_chars >= 2 and math_chars / max(len(compact), 1) >= 0.08 and len(words) <= 1
 
 
 def _normalize_font_name(name: str) -> str:

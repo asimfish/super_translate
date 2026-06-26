@@ -1,0 +1,33 @@
+"""Regression tests for progress ETA and reader UI wiring."""
+
+from pathlib import Path
+
+from app.api.papers import _format_duration
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_format_duration_for_progress_eta():
+    assert _format_duration(12) == "12秒"
+    assert _format_duration(75) == "1分15秒"
+    assert _format_duration(3665) == "1小时01分"
+
+
+def test_reader_sync_scroll_maps_page_fraction_and_renders_target_panel():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "function syncScrollFromPanel(panel)" in js
+    assert "const fraction = pageHeight > 0" in js
+    assert "otherContainer.scrollTop = otherTop + fraction * otherHeight;" in js
+    assert "renderVisiblePages(otherPanel, otherContainer);" in js
+    assert "syncScrollFromPanel('original');" in js
+
+
+def test_translation_progress_ui_has_client_eta_smoothing():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+
+    assert "let smoothedRate = 0;" in js
+    assert "预计剩余" in js
+    assert "function formatEta(seconds)" in js
+    assert 'id="trans-percent"' in html

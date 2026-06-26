@@ -7,14 +7,27 @@ the most specific match wins (longer terms first).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 _CORPUS_PATH = Path(__file__).parent / "corpus.json"
 _corpus: Optional[Dict[str, Dict[str, str]]] = None
 _flat_terms: Optional[List[Tuple[str, str]]] = None
+_TERM_CANDIDATE_RE = re.compile(
+    r"\b(?:"
+    r"[A-Z][A-Za-z]+(?:[- ][A-Z][A-Za-z]+){1,4}|"
+    r"[A-Z]{2,}(?:[- ][A-Za-z0-9]+){0,4}|"
+    r"[A-Za-z]+(?:-[A-Za-z]+){1,4}"
+    r")\b"
+)
+_COMMON_CANDIDATE_WORDS = frozenset(
+    "abstract introduction related work experiment experiments conclusion appendix "
+    "figure table algorithm theorem proof this paper our method".split()
+)
 
 
 def _load_corpus() -> Dict[str, Dict[str, str]]:
@@ -26,6 +39,23 @@ def _load_corpus() -> Dict[str, Dict[str, str]]:
         # Remove metadata key
         _corpus = {k: v for k, v in data.items() if not k.startswith("_")}
     return _corpus
+
+
+def _load_raw_corpus(corpus_path: Path) -> dict:
+    if not corpus_path.exists():
+        return {"_metadata": {"version": "1.0.0"}}
+    with corpus_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("Corpus JSON must contain an object at the top level")
+    return data
+
+
+def _write_raw_corpus(corpus_path: Path, data: dict) -> None:
+    corpus_path.parent.mkdir(parents=True, exist_ok=True)
+    with corpus_path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
 
 
 def _get_flat_terms() -> List[Tuple[str, str]]:
@@ -76,6 +106,161 @@ def build_terminology_prompt(terms: Dict[str, str]) -> str:
     for en, zh in sorted(terms.items()):
         lines.append(f"  {en} → {zh}")
     return "\n".join(lines)
+
+
+def upsert_terms(
+    field: str,
+    terms: Mapping[str, str],
+    *,
+    source: str = "manual",
+    corpus_path: Optional[Path] = None,
+) -> int:
+    """Add or update approved terminology in the corpus.
+
+    Returns the number of entries that changed. The in-memory cache is
+    invalidated when the project corpus is updated.
+    """
+    field_name = field.strip()
+    if not field_name:
+        raise ValueError("field must not be empty")
+
+    cleaned_terms = {
+        en.strip(): zh.strip()
+        for en, zh in terms.items()
+        if en and zh and en.strip() and zh.strip()
+    }
+    if not cleaned_terms:
+        return 0
+
+    target_path = corpus_path or _CORPUS_PATH
+    data = _load_raw_corpus(target_path)
+    field_data = data.setdefault(field_name, {})
+    if not isinstance(field_data, dict):
+        raise ValueError(f"Corpus field '{field_name}' must contain an object")
+
+    changed = 0
+    for english, chinese in sorted(cleaned_terms.items(), key=lambda item: item[0].lower()):
+        if field_data.get(english) != chinese:
+            field_data[english] = chinese
+            changed += 1
+
+    if changed:
+        metadata = data.setdefault("_metadata", {})
+        metadata["updated_at"] = _utc_now()
+        metadata["last_source"] = source
+        metadata["total_terms"] = _count_terms(data)
+        _write_raw_corpus(target_path, data)
+        if target_path.resolve() == _CORPUS_PATH.resolve():
+            reload_corpus()
+    return changed
+
+
+def extract_candidate_terms(texts: List[str], max_terms: int = 100) -> List[str]:
+    """Extract review candidates for later terminology curation.
+
+    This deliberately records candidates instead of auto-adding translations;
+    final Chinese terms still need a reviewed entry through ``upsert_terms``.
+    """
+    known = {_candidate_key(term) for term, _ in _get_flat_terms()}
+    candidates: Dict[str, str] = {}
+    for text in texts:
+        for match in _TERM_CANDIDATE_RE.finditer(text):
+            raw = match.group(0).strip()
+            key = _candidate_key(raw)
+            if key in candidates or key in known:
+                continue
+            if key in _COMMON_CANDIDATE_WORDS:
+                continue
+            if len(key) < 4 or key.isdigit():
+                continue
+            if not _looks_like_academic_candidate(raw):
+                continue
+            candidates[key] = raw
+            if len(candidates) >= max_terms:
+                return sorted(candidates.values(), key=str.lower)
+    return sorted(candidates.values(), key=str.lower)
+
+
+def record_candidate_terms(
+    texts: List[str],
+    output_path: Path,
+    *,
+    source: str,
+    max_terms: int = 100,
+) -> int:
+    """Append new candidate terminology observations to a JSONL file."""
+    terms = extract_candidate_terms(texts, max_terms=max_terms)
+    if not terms:
+        return 0
+
+    existing: set[str] = set()
+    if output_path.exists():
+        with output_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                with contextlib.suppress(json.JSONDecodeError):
+                    record = json.loads(line)
+                    term = ""
+                    if isinstance(record, dict):
+                        term = str(record.get("term", "")).strip().lower()
+                    if term:
+                        existing.add(_candidate_key(term))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    observed_at = _utc_now()
+    added = 0
+    with output_path.open("a", encoding="utf-8") as f:
+        for term in terms:
+            key = _candidate_key(term)
+            if key in existing:
+                continue
+            f.write(
+                json.dumps(
+                    {"term": term, "source": source, "observed_at": observed_at},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            existing.add(key)
+            added += 1
+    return added
+
+
+def _looks_like_academic_candidate(term: str) -> bool:
+    if any(char.isupper() for char in term):
+        return True
+    lower = term.lower()
+    academic_markers = (
+        "learning",
+        "optimization",
+        "alignment",
+        "transformer",
+        "retrieval",
+        "diffusion",
+        "reasoning",
+        "representation",
+        "preference",
+        "context",
+        "multimodal",
+        "vision",
+        "language",
+    )
+    return "-" in term and any(marker in lower for marker in academic_markers)
+
+
+def _candidate_key(term: str) -> str:
+    return " ".join(term.replace("-", " ").split()).lower()
+
+
+def _count_terms(data: dict) -> int:
+    return sum(
+        len(value)
+        for key, value in data.items()
+        if not key.startswith("_") and isinstance(value, dict)
+    )
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def reload_corpus() -> None:
