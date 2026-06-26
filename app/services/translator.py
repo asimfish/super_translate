@@ -97,6 +97,9 @@ class TranslationConfig:
     threads: int = 8  # concurrent page translation threads
     preserve_graphics_text: bool = False
     skip_overflow: bool = False
+    ocr_mode: str = "off"  # off | auto | force
+    ocr_language: str = "eng"
+    ocr_dpi: int = 180
 
 
 # Quality presets configuration
@@ -326,6 +329,36 @@ def _run_with_timeout(fn, *args, timeout: int | None = None, **kwargs):
         pool.shutdown(wait=False, cancel_futures=True)
 
 
+def _prepare_ocr_source(input_path: Path, output_dir: Path, config: TranslationConfig) -> Path:
+    """Return a searchable source PDF when OCR is requested."""
+    if config.ocr_mode not in {"off", "auto", "force"}:
+        raise ValueError(f"Invalid OCR mode: {config.ocr_mode}")
+    if config.ocr_mode == "off":
+        return input_path
+
+    from pdf_zh_translator.ocr import is_scanned_pdf, ocr_pdf_to_searchable
+
+    if config.ocr_mode == "auto" and not is_scanned_pdf(input_path):
+        return input_path
+
+    ocr_path = output_dir / "_ocr" / f"{input_path.stem}-ocr.pdf"
+    ocr_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("Running OCR before translation for %s", input_path.name)
+    report = ocr_pdf_to_searchable(
+        input_path,
+        ocr_path,
+        language=config.ocr_language,
+        dpi=config.ocr_dpi,
+    )
+    logger.info(
+        "OCR completed for %s: text pages %d -> %d",
+        input_path.name,
+        report.text_pages_before,
+        report.text_pages_after,
+    )
+    return ocr_path
+
+
 class _ProgressTranslator:
     """Wrap a pdf_zh_translator Translator to report batch progress."""
 
@@ -361,6 +394,9 @@ def _translate_sync_native(
     from pdf_zh_translator.pdf_layout import translate_pdf
     from pdf_zh_translator.translators import CachedTranslator, VendorTranslator
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    source_path = input_path
+
     if config.backend == "deepseek":
         api_url = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com")
         api_key = config.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
@@ -389,9 +425,10 @@ def _translate_sync_native(
 
     for attempt in range(config.max_retries + 1):
         try:
+            source_path = _prepare_ocr_source(input_path, output_dir, config)
             report = _run_with_timeout(
                 translate_pdf,
-                input_pdf=input_path,
+                input_pdf=source_path,
                 output_pdf=mono_path,
                 translator=translator,
                 preserve_graphics_text=config.preserve_graphics_text,
@@ -438,7 +475,7 @@ def _translate_sync_native(
     try:
         from pdf_zh_translator.pdf_layout import verify_translation
 
-        issues = verify_translation(input_path, mono_path)
+        issues = verify_translation(source_path, mono_path)
         if issues:
             for issue in issues:
                 logger.warning("Translation quality: %s", issue)
@@ -467,6 +504,7 @@ def _translate_sync(
 
     service = _resolve_service(config, preset["fallback_backend"])
     envs = _build_pdf2zh_envs(service, config)
+    source_path = input_path
 
     onnx_model = get_model()
     threads = preset.get("threads", config.threads)
@@ -475,9 +513,10 @@ def _translate_sync(
 
     for attempt in range(config.max_retries + 1):
         try:
+            source_path = _prepare_ocr_source(input_path, output_dir, config)
             _run_with_timeout(
                 translate,
-                files=[str(input_path)],
+                files=[str(source_path)],
                 lang_in=config.lang_in,
                 lang_out=config.lang_out,
                 service=service,
@@ -538,14 +577,15 @@ def _create_progress_callback(
                 pct = current / total if total > 0 else 0
             elif len(args) == 1 and isinstance(args[0], (int, float)):
                 pct = args[0]
-
-            if pct is not None:
-                pct = max(0.0, min(1.0, pct))
-                logger.debug("Translation progress: %.0f%%", pct * 100)
-                if progress_callback:
-                    progress_callback(pct)
         except Exception as e:
-            logger.warning("Progress callback error: %s", e)
+            logger.warning("Progress callback parse error: %s", e)
+            return
+
+        if pct is not None:
+            pct = max(0.0, min(1.0, pct))
+            logger.debug("Translation progress: %.0f%%", pct * 100)
+            if progress_callback:
+                progress_callback(pct)
 
     return pdf2zh_callback
 

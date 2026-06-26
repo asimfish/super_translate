@@ -13,11 +13,13 @@ from pdf_zh_translator.pdf_layout import (
     _LineRec,
     _RawBlockRec,
     clean_translation,
+    fragmented_prose_warnings_from_units,
     insert_translated_text,
     is_math_span,
     math_heavy_block,
     merge_paragraph_blocks,
     prepare_translation_units,
+    record_is_table,
     segments_from_record,
     should_preserve_original_block,
     verify_translation,
@@ -87,6 +89,83 @@ class PreserveOriginalBlockTests(unittest.TestCase):
 
 def _span(text, bbox, size=10.0, font="NimbusRomNo9L-Regu", flags=4):
     return {"text": text, "bbox": bbox, "size": size, "font": font, "flags": flags}
+
+
+def _line(text, bbox, is_cell=False):
+    return _LineRec(text=text, bbox=bbox, spans=[_span(text, bbox)], is_cell=is_cell)
+
+
+class TableDetectionTests(unittest.TestCase):
+    def test_same_baseline_prose_fragments_are_not_table(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("A of Fig. 1.", (50.0, 74.0, 102.0, 84.0)),
+                _line("It remains open to building an end-to-end", (110.0, 74.0, 286.0, 84.0)),
+                _line(
+                    "SGG model in a general open-vocabulary setting. More-",
+                    (50.0, 86.0, 286.0, 96.0),
+                ),
+                _line(
+                    "over, those methods often employ an additional pre-training",
+                    (50.0, 98.0, 286.0, 108.0),
+                ),
+                _line(
+                    "framework consisting of three main components.",
+                    (50.0, 400.0, 256.0, 410.0),
+                ),
+                _line("First,", (266.0, 400.0, 286.0, 410.0)),
+                _line("we introduce scene graph prompts.", (50.0, 412.0, 286.0, 422.0)),
+            ]
+        )
+
+        self.assertFalse(record_is_table(record))
+
+        segments = segments_from_record(0, record)
+        self.assertEqual(len(segments), 1)
+        self.assertFalse(segments[0].nowrap)
+        self.assertIn("Moreover", segments[0].text)
+        self.assertIn("components. First, we introduce", segments[0].text)
+
+    def test_repeated_wide_same_row_gaps_are_table(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Metric", (50.0, 100.0, 90.0, 110.0)),
+                _line("Score", (180.0, 100.0, 220.0, 110.0)),
+                _line("Accuracy", (50.0, 116.0, 102.0, 126.0)),
+                _line("91.2", (180.0, 116.0, 205.0, 126.0)),
+            ]
+        )
+
+        self.assertTrue(record_is_table(record))
+
+        segments = segments_from_record(0, record)
+        self.assertTrue(all(segment.nowrap for segment in segments))
+
+
+class FragmentedProseWarningTests(unittest.TestCase):
+    def test_warns_when_many_body_units_are_fixed_width_fragments(self):
+        units = [
+            (
+                TextBlock(
+                    page_index=0,
+                    bbox=(50.0, 80.0 + index * 12.0, 286.0, 90.0 + index * 12.0),
+                    text="This body line was incorrectly isolated from a paragraph.",
+                    font_size=10.0,
+                    color=(0.0, 0.0, 0.0),
+                    nowrap=True,
+                    source_lines=1,
+                ),
+                "This body line was incorrectly isolated from a paragraph.",
+                {},
+            )
+            for index in range(6)
+        ]
+
+        warnings = fragmented_prose_warnings_from_units(units)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Page 1", warnings[0])
+        self.assertIn("fixed-width fragments", warnings[0])
 
 
 class FormulaTailProseTests(unittest.TestCase):

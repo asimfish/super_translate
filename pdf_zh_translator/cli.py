@@ -21,6 +21,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_export(args)
     if args.command == "corpus-add":
         return run_corpus_add(args)
+    if args.command == "corpus-stats":
+        return run_corpus_stats(args)
+    if args.command == "corpus-review":
+        return run_corpus_review(args)
+    if args.command == "corpus-promote":
+        return run_corpus_promote(args)
+    if args.command == "corpus-release":
+        return run_corpus_release(args)
+    if args.command == "golden-init":
+        return run_golden_init(args)
+    if args.command == "golden-eval":
+        return run_golden_eval(args)
 
     parser.print_help()
     return 2
@@ -226,6 +238,44 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional corpus JSON path. Defaults to the package corpus.",
     )
 
+    subparsers.add_parser("corpus-stats", help="Print terminology counts by field.")
+
+    corpus_review = subparsers.add_parser(
+        "corpus-review",
+        help="Deduplicate terminology candidates into a review JSON file.",
+    )
+    corpus_review.add_argument("candidates_jsonl", type=Path)
+    corpus_review.add_argument("review_json", type=Path)
+
+    corpus_promote = subparsers.add_parser(
+        "corpus-promote",
+        help="Promote approved review terms into the official corpus.",
+    )
+    corpus_promote.add_argument("review_json", type=Path)
+    corpus_promote.add_argument("field")
+    corpus_promote.add_argument("--source", default="candidate-review")
+    corpus_promote.add_argument("--corpus-file", type=Path)
+
+    corpus_release = subparsers.add_parser(
+        "corpus-release",
+        help="Stamp a reviewed corpus version.",
+    )
+    corpus_release.add_argument("version")
+    corpus_release.add_argument("--corpus-file", type=Path)
+
+    golden_init = subparsers.add_parser(
+        "golden-init",
+        help="Create a 100-paper golden regression manifest template.",
+    )
+    golden_init.add_argument("manifest", type=Path)
+    golden_init.add_argument("--target-cases", type=int, default=100)
+
+    golden_eval = subparsers.add_parser(
+        "golden-eval",
+        help="Evaluate translated papers listed in a golden manifest.",
+    )
+    golden_eval.add_argument("manifest", type=Path)
+
     return parser
 
 
@@ -253,6 +303,63 @@ def run_corpus_add(args: argparse.Namespace) -> int:
     )
     print("Updated %d terminology entr%s." % (changed, "y" if changed == 1 else "ies"))
     return 0
+
+
+def run_corpus_stats(args: argparse.Namespace) -> int:
+    from .corpus import corpus_stats
+
+    stats = corpus_stats()
+    for field, count in sorted(stats.items()):
+        print(f"{field}: {count}")
+    return 0
+
+
+def run_corpus_review(args: argparse.Namespace) -> int:
+    from .corpus import write_candidate_review
+
+    count = write_candidate_review(args.candidates_jsonl, args.review_json)
+    print("Wrote %d deduplicated candidate term%s." % (count, "" if count == 1 else "s"))
+    return 0
+
+
+def run_corpus_promote(args: argparse.Namespace) -> int:
+    from .corpus import promote_reviewed_terms
+
+    changed = promote_reviewed_terms(
+        args.review_json,
+        field=args.field,
+        corpus_path=args.corpus_file,
+        source=args.source,
+    )
+    print("Promoted %d reviewed term%s." % (changed, "" if changed == 1 else "s"))
+    return 0
+
+
+def run_corpus_release(args: argparse.Namespace) -> int:
+    from .corpus import release_corpus_version
+
+    metadata = release_corpus_version(version=args.version, corpus_path=args.corpus_file)
+    print("Released corpus %s with %s terms." % (metadata["version"], metadata["total_terms"]))
+    return 0
+
+
+def run_golden_init(args: argparse.Namespace) -> int:
+    from .golden_eval import write_manifest_template
+
+    write_manifest_template(args.manifest, target_cases=args.target_cases)
+    print("Wrote golden manifest template: %s" % args.manifest)
+    return 0
+
+
+def run_golden_eval(args: argparse.Namespace) -> int:
+    from .golden_eval import evaluate_golden_set
+
+    result = evaluate_golden_set(args.manifest)
+    print(
+        "Evaluated %d/%d cases; %d passed."
+        % (result.evaluated_cases, result.target_cases, result.passed_cases)
+    )
+    return 0 if result.ready_for_release else 1
 
 
 def run_translate(args: argparse.Namespace) -> int:

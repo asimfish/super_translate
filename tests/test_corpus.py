@@ -3,9 +3,14 @@
 import json
 
 from pdf_zh_translator.corpus import (
+    corpus_stats,
     extract_candidate_terms,
+    load_candidate_terms,
+    promote_reviewed_terms,
     record_candidate_terms,
+    release_corpus_version,
     upsert_terms,
+    write_candidate_review,
 )
 
 
@@ -72,3 +77,53 @@ def test_record_candidate_terms_appends_new_jsonl_records(tmp_path):
     assert second == 0
     assert {record["source"] for record in records} == {"paper:abc"}
     assert any(record["term"] == "Adaptive Computation Graph" for record in records)
+
+
+def test_packaged_corpus_includes_top_conference_categories():
+    stats = corpus_stats()
+
+    assert stats["_total"] >= 550
+    assert stats["neurips_icml_iclr"] >= 70
+    assert stats["cvpr_computer_vision"] >= 45
+    assert stats["acl_nlp"] >= 45
+    assert stats["paper_layout_and_reporting"] >= 35
+
+
+def test_candidate_review_promote_and_release_workflow(tmp_path):
+    candidates_path = tmp_path / "candidates.jsonl"
+    candidates_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"term": "Latent Consistency Planning", "source": "paper:a"}),
+                json.dumps({"term": "Latent-Consistency Planning", "source": "paper:b"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    review_path = tmp_path / "review.json"
+    corpus_path = tmp_path / "corpus.json"
+
+    candidates = load_candidate_terms(candidates_path)
+    count = write_candidate_review(candidates_path, review_path)
+
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    review["candidates"][0]["approved"] = True
+    review["candidates"][0]["translation"] = "潜在一致性规划"
+    review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+
+    promoted = promote_reviewed_terms(
+        review_path,
+        field="neurips_icml_iclr",
+        corpus_path=corpus_path,
+        source="unit-test-review",
+    )
+    metadata = release_corpus_version(version="2026.06-test", corpus_path=corpus_path)
+    corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+
+    assert count == 1
+    assert candidates[0]["count"] == 2
+    assert promoted == 1
+    assert corpus["neurips_icml_iclr"]["Latent Consistency Planning"] == "潜在一致性规划"
+    assert metadata["version"] == "2026.06-test"
+    assert metadata["total_terms"] == 1

@@ -35,6 +35,9 @@ paper-china = "app.main:cli"
 [tool.setuptools.packages.find]
 include = ["app*", "pdf_zh_translator*"]
 
+[tool.setuptools.package-data]
+pdf_zh_translator = ["*.json", "corpora/*.json"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

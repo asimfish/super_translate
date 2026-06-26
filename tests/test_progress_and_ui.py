@@ -31,3 +31,15 @@ def test_translation_progress_ui_has_client_eta_smoothing():
     assert "预计剩余" in js
     assert "function formatEta(seconds)" in js
     assert 'id="trans-percent"' in html
+
+
+def test_translation_ui_exposes_qa_and_ocr_controls():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+
+    assert 'id="qa-mode"' in html
+    assert 'value="iterative"' in html
+    assert 'id="ocr-mode"' in html
+    assert "params.set('qa_mode'" in js
+    assert "params.set('ocr_mode'" in js
+    assert "api.translatePaper(p.id, '', quality, options)" in js

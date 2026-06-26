@@ -51,6 +51,9 @@ class TestTranslationConfig(unittest.TestCase):
         self.assertEqual(config.threads, 8)
         self.assertFalse(config.preserve_graphics_text)
         self.assertFalse(config.skip_overflow)
+        self.assertEqual(config.ocr_mode, "off")
+        self.assertEqual(config.ocr_language, "eng")
+        self.assertEqual(config.ocr_dpi, 180)
 
     def test_custom_values(self):
         config = TranslationConfig(
@@ -65,6 +68,9 @@ class TestTranslationConfig(unittest.TestCase):
             threads=8,
             preserve_graphics_text=True,
             skip_overflow=True,
+            ocr_mode="auto",
+            ocr_language="eng+chi_sim",
+            ocr_dpi=220,
         )
         self.assertEqual(config.backend, "openai")
         self.assertEqual(config.lang_in, "fr")
@@ -77,6 +83,9 @@ class TestTranslationConfig(unittest.TestCase):
         self.assertEqual(config.threads, 8)
         self.assertTrue(config.preserve_graphics_text)
         self.assertTrue(config.skip_overflow)
+        self.assertEqual(config.ocr_mode, "auto")
+        self.assertEqual(config.ocr_language, "eng+chi_sim")
+        self.assertEqual(config.ocr_dpi, 220)
 
     def test_frozen(self):
         config = TranslationConfig()
@@ -701,6 +710,51 @@ class TestTranslatePdfSync(unittest.TestCase):
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
+    def test_pdf2zh_auto_ocr_uses_searchable_source(self, mock_get_model, mock_translate):
+        """OCR mode should also apply to the pdf2zh engine path."""
+        import tempfile
+        from types import SimpleNamespace
+
+        mock_get_model.return_value = MagicMock()
+        captured_files = []
+
+        def fake_ocr(input_pdf, output_pdf, **kwargs):
+            output_pdf.parent.mkdir(parents=True, exist_ok=True)
+            output_pdf.write_bytes(b"%PDF-1.4 searchable")
+            return SimpleNamespace(text_pages_before=0, text_pages_after=1)
+
+        def fake_translate(*args, **kwargs):
+            captured_files.extend(kwargs["files"])
+            output_dir = Path(kwargs["output"])
+            (output_dir / "paper-ocr-mono.pdf").write_bytes(b"%PDF-1.4 translated")
+
+        mock_translate.side_effect = fake_translate
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            input_pdf = tmp_path / "paper.pdf"
+            input_pdf.write_bytes(b"%PDF-1.4 fake")
+            output_dir = tmp_path / "output"
+            output_dir.mkdir()
+            config = TranslationConfig(
+                backend="google",
+                quality=QualityPreset.FAST,
+                ocr_mode="auto",
+            )
+
+            with (
+                patch("pdf_zh_translator.ocr.is_scanned_pdf", return_value=True),
+                patch("pdf_zh_translator.ocr.ocr_pdf_to_searchable", side_effect=fake_ocr),
+            ):
+                result = translate_pdf_sync(input_pdf, output_dir, config)
+
+        self.assertTrue(result.success)
+        self.assertEqual(Path(captured_files[0]).name, "paper-ocr.pdf")
+        self.assertEqual(Path(captured_files[0]).parent.name, "_ocr")
+        self.assertEqual(result.mono_path.name, "paper-ocr-mono.pdf")
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
     def test_callback_with_two_args(self, mock_get_model, mock_translate):
         """Test pdf2zh callback with (current, total) arguments."""
         import tempfile
@@ -1198,18 +1252,18 @@ class TestBuildPdf2zhEnvs(unittest.TestCase):
 
 
 class TestCreateProgressCallback(unittest.TestCase):
-    """Test _create_progress_callback error handling."""
+    """Test _create_progress_callback behavior."""
 
-    def test_callback_exception_is_caught(self):
-        """Progress callback exceptions should be caught and logged."""
+    def test_callback_exception_propagates_for_cancellation(self):
+        """Progress callback exceptions must propagate so cancellation can abort translation."""
         from app.services.translator import _create_progress_callback
 
         def bad_callback(pct):
             raise RuntimeError("callback boom")
 
         pdf2zh_cb = _create_progress_callback(bad_callback)
-        # Should not raise despite bad_callback raising
-        pdf2zh_cb(0.5)
+        with self.assertRaises(RuntimeError):
+            pdf2zh_cb(0.5)
 
     def test_callback_with_none_callback(self):
         """When no progress_callback is provided, should not raise."""

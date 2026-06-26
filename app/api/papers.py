@@ -65,6 +65,8 @@ _MAX_TAGS_LEN = 1000
 _MAX_NOTES_LEN = 10_000
 _MAX_SEARCH_LEN = 200
 _PROGRESS_THROTTLE = 0.05
+_VALID_QA_MODES = {"single", "iterative"}
+_VALID_OCR_MODES = {"off", "auto", "force"}
 
 
 def _cancel_marker_path(paper_id: str) -> Path:
@@ -514,8 +516,13 @@ async def start_translation(
     db: Annotated[AsyncSession, Depends(get_session)],
     backend: str = "",
     quality: str = "balanced",
-    preserve_graphics_text: bool = True,
+    preserve_graphics_text: bool = False,
     skip_overflow: bool = False,
+    qa_mode: str = "single",
+    qa_max_passes: int = 4,
+    ocr_mode: str = "off",
+    ocr_language: str = "eng",
+    ocr_dpi: int = 180,
 ) -> dict[str, bool | str]:
     """Start translation for a paper.
 
@@ -525,6 +532,9 @@ async def start_translation(
         quality: Quality preset (fast, balanced, quality)
         preserve_graphics_text: Keep text inside figures/tables unchanged
         skip_overflow: Leave original text when Chinese won't fit its bbox
+        qa_mode: Post-translation QA mode: single or iterative
+        qa_max_passes: Maximum QA/fix passes in iterative mode
+        ocr_mode: OCR behavior for scanned PDFs: off, auto, or force
 
     Returns:
         Success status with translation status
@@ -539,6 +549,14 @@ async def start_translation(
         raise HTTPException(400, f"Invalid backend: {backend}")
     if quality not in valid_qualities:
         raise HTTPException(400, f"Invalid quality: {quality}")
+    if qa_mode not in _VALID_QA_MODES:
+        raise HTTPException(400, f"Invalid QA mode: {qa_mode}")
+    if qa_max_passes < 1 or qa_max_passes > 8:
+        raise HTTPException(400, "qa_max_passes must be between 1 and 8")
+    if ocr_mode not in _VALID_OCR_MODES:
+        raise HTTPException(400, f"Invalid OCR mode: {ocr_mode}")
+    if ocr_dpi < 96 or ocr_dpi > 300:
+        raise HTTPException(400, "ocr_dpi must be between 96 and 300")
 
     # Atomic check-and-set: prevents two concurrent requests from both
     # starting translation for the same paper (TOCTOU race condition).
@@ -570,6 +588,11 @@ async def start_translation(
         quality,
         preserve_graphics_text,
         skip_overflow,
+        qa_mode,
+        qa_max_passes,
+        ocr_mode,
+        ocr_language,
+        ocr_dpi,
     )
 
     return {"ok": True, "status": "translating"}
@@ -603,6 +626,9 @@ def _resolve_backend_config(
     quality_preset: QualityPreset,
     preserve_graphics_text: bool = False,
     skip_overflow: bool = False,
+    ocr_mode: str = "off",
+    ocr_language: str = "eng",
+    ocr_dpi: int = 180,
 ) -> TranslationConfig:
     """Build TranslationConfig from backend name and quality preset.
 
@@ -651,6 +677,9 @@ def _resolve_backend_config(
         quality=quality_preset,
         preserve_graphics_text=preserve_graphics_text,
         skip_overflow=skip_overflow,
+        ocr_mode=ocr_mode,
+        ocr_language=ocr_language,
+        ocr_dpi=ocr_dpi,
     )
 
 
@@ -686,8 +715,13 @@ def _run_translation(
     paper_id: str,
     backend: str,
     quality: str = "balanced",
-    preserve_graphics_text: bool = True,
+    preserve_graphics_text: bool = False,
     skip_overflow: bool = False,
+    qa_mode: str = "single",
+    qa_max_passes: int = 4,
+    ocr_mode: str = "off",
+    ocr_language: str = "eng",
+    ocr_dpi: int = 180,
 ) -> None:
     acquired = _translation_semaphore.acquire(timeout=300)
     if not acquired:
@@ -703,9 +737,12 @@ def _run_translation(
             quality_preset,
             preserve_graphics_text=preserve_graphics_text,
             skip_overflow=skip_overflow,
+            ocr_mode=ocr_mode,
+            ocr_language=ocr_language,
+            ocr_dpi=ocr_dpi,
         )
 
-        asyncio.run(_do_translate(paper_id, config, quality))
+        asyncio.run(_do_translate(paper_id, config, quality, qa_mode, qa_max_passes))
 
     except HTTPException as e:
         # Config validation errors (missing API key, etc.) — surface the real message
@@ -725,6 +762,8 @@ async def _do_translate(
     paper_id: str,
     config: TranslationConfig,
     quality: str,
+    qa_mode: str = "single",
+    qa_max_passes: int = 4,
 ) -> None:
     """Execute translation in async context.
 
@@ -818,7 +857,18 @@ async def _do_translate(
         return
 
     if trans_result.success and trans_result.mono_path:
-        _run_post_translation_qa(paper_id, loop, input_path, trans_result)
+        unresolved_issues = _run_post_translation_qa(
+            paper_id,
+            loop,
+            input_path,
+            trans_result,
+            qa_mode=qa_mode,
+            max_passes=qa_max_passes,
+        )
+        if qa_mode == "iterative" and _has_unresolved_error(unresolved_issues):
+            trans_result = TranslationResult(
+                error="QA found unresolved layout or translation issues after iterative checks"
+            )
 
     elapsed = time.monotonic() - start_time
 
@@ -859,34 +909,72 @@ def _run_post_translation_qa(
     loop: asyncio.AbstractEventLoop,
     input_path: Path,
     trans_result: TranslationResult,
-) -> None:
-    """Run a fast layout/translation QA pass and try one layout repair."""
+    *,
+    qa_mode: str = "single",
+    max_passes: int = 4,
+) -> list:
+    """Run layout/translation QA.
+
+    single: one verification pass and one possible layout repair.
+    iterative: verify/fix repeatedly until clean or max_passes is reached.
+    """
     mono_path = trans_result.mono_path
     if mono_path is None:
-        return
+        return []
     try:
-        from pdf_zh_translator.pdf_layout import verify_translation
+        from pdf_zh_translator.pdf_layout import verify_translation_issues
 
         _append_log(paper_id, loop, "正在检查译文和版面")
         _record_terminology_candidates(paper_id, loop, input_path)
-        issues = verify_translation(input_path, mono_path)
-        if any("overlap" in issue for issue in issues):
-            from app.services.layout_fix import fix_translated_layout
+        passes = max(1, max_passes if qa_mode == "iterative" else 1)
+        issues = []
+        for pass_index in range(1, passes + 1):
+            issues = verify_translation_issues(input_path, mono_path)
+            if not issues:
+                _append_log(paper_id, loop, f"译文检查通过 (第 {pass_index} 轮)")
+                return []
 
-            fixed = fix_translated_layout(mono_path)
-            if trans_result.dual_path:
-                fix_translated_layout(trans_result.dual_path)
-            if fixed:
-                _append_log(paper_id, loop, "检测到文字重叠，已自动执行一次版面修复")
-                issues = verify_translation(input_path, mono_path)
-        if issues:
-            _append_log(paper_id, loop, f"检查发现 {len(issues)} 个潜在问题")
+            _append_log(
+                paper_id,
+                loop,
+                f"第 {pass_index} 轮检查发现 {len(issues)} 个潜在问题",
+            )
             for issue in issues[:3]:
-                _append_log(paper_id, loop, issue)
-        else:
-            _append_log(paper_id, loop, "译文检查通过")
+                _append_log(paper_id, loop, issue.message)
+
+            if not _has_fixable_layout_issue(issues):
+                break
+            fixed = _fix_translated_outputs(trans_result)
+            if not fixed:
+                break
+            _append_log(paper_id, loop, "检测到可修复版面问题，已自动执行一次版面修复")
+            if qa_mode != "iterative":
+                issues = verify_translation_issues(input_path, mono_path)
+                break
+
+        return issues
     except Exception as e:
         logger.warning("Post-translation QA failed for %s: %s", paper_id, sanitize_error(e))
+        return []
+
+
+def _has_fixable_layout_issue(issues: list) -> bool:
+    return any(getattr(issue, "code", "") in {"text_overlap"} for issue in issues)
+
+
+def _has_unresolved_error(issues: list) -> bool:
+    return any(getattr(issue, "severity", "warning") == "error" for issue in issues)
+
+
+def _fix_translated_outputs(trans_result: TranslationResult) -> bool:
+    from app.services.layout_fix import fix_translated_layout
+
+    fixed = False
+    if trans_result.mono_path:
+        fixed = fix_translated_layout(trans_result.mono_path) or fixed
+    if trans_result.dual_path:
+        fixed = fix_translated_layout(trans_result.dual_path) or fixed
+    return fixed
 
 
 def _record_terminology_candidates(

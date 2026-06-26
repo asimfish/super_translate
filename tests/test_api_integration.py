@@ -670,6 +670,56 @@ class TestTranslationEndpoint:
             call_args = mock_task.call_args[0]
             assert call_args[3] == "fast"  # quality is 4th arg (after func, paper_id, backend)
 
+    def test_translate_defaults_to_translating_graphics_text(self, client, mock_db, sample_paper):
+        sample_paper.translation_status = "pending"
+        mock_update_result = MagicMock()
+        mock_update_result.rowcount = 1
+        mock_db.execute.return_value = mock_update_result
+
+        with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
+            response = client.post(f"/api/papers/{sample_paper.id}/translate")
+            assert response.status_code == 200
+            call_args = mock_task.call_args[0]
+            assert call_args[4] is False
+
+    def test_translate_can_preserve_graphics_text_when_requested(
+        self,
+        client,
+        mock_db,
+        sample_paper,
+    ):
+        sample_paper.translation_status = "pending"
+        mock_update_result = MagicMock()
+        mock_update_result.rowcount = 1
+        mock_db.execute.return_value = mock_update_result
+
+        with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
+            response = client.post(
+                f"/api/papers/{sample_paper.id}/translate?preserve_graphics_text=true",
+            )
+            assert response.status_code == 200
+            call_args = mock_task.call_args[0]
+            assert call_args[4] is True
+
+    def test_translate_passes_qa_and_ocr_options(self, client, mock_db, sample_paper):
+        sample_paper.translation_status = "pending"
+        mock_update_result = MagicMock()
+        mock_update_result.rowcount = 1
+        mock_db.execute.return_value = mock_update_result
+
+        with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
+            response = client.post(
+                f"/api/papers/{sample_paper.id}/translate"
+                "?qa_mode=iterative&qa_max_passes=6&ocr_mode=auto&ocr_language=eng&ocr_dpi=200",
+            )
+            assert response.status_code == 200
+            call_args = mock_task.call_args[0]
+            assert call_args[6] == "iterative"
+            assert call_args[7] == 6
+            assert call_args[8] == "auto"
+            assert call_args[9] == "eng"
+            assert call_args[10] == 200
+
     def test_translate_invalid_backend_rejected(self, client, mock_db, sample_paper):
         sample_paper.translation_status = "pending"
         mock_result = MagicMock()
@@ -689,6 +739,64 @@ class TestTranslationEndpoint:
         response = client.post(f"/api/papers/{sample_paper.id}/translate?quality=ultra")
         assert response.status_code == 400
         assert "Invalid quality" in response.json()["detail"]
+
+    def test_translate_invalid_qa_mode_rejected(self, client, mock_db, sample_paper):
+        sample_paper.translation_status = "pending"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.post(f"/api/papers/{sample_paper.id}/translate?qa_mode=loop")
+        assert response.status_code == 400
+        assert "Invalid QA mode" in response.json()["detail"]
+
+    def test_translate_invalid_ocr_mode_rejected(self, client, mock_db, sample_paper):
+        sample_paper.translation_status = "pending"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.post(f"/api/papers/{sample_paper.id}/translate?ocr_mode=always")
+        assert response.status_code == 400
+        assert "Invalid OCR mode" in response.json()["detail"]
+
+    def test_iterative_qa_rechecks_after_layout_fix(self, tmp_path):
+        from app.api.papers import _run_post_translation_qa
+        from app.services.translator import TranslationResult
+
+        mono_path = tmp_path / "paper-mono.pdf"
+        dual_path = tmp_path / "paper-dual.pdf"
+        input_path = tmp_path / "paper.pdf"
+        mono_path.write_bytes(b"%PDF-1.4 mono")
+        dual_path.write_bytes(b"%PDF-1.4 dual")
+        input_path.write_bytes(b"%PDF-1.4 input")
+
+        issue = MagicMock()
+        issue.code = "text_overlap"
+        issue.severity = "warning"
+        issue.message = "Page 1: text blocks overlap"
+
+        with (
+            patch("app.api.papers._append_log"),
+            patch("app.api.papers._record_terminology_candidates"),
+            patch(
+                "pdf_zh_translator.pdf_layout.verify_translation_issues",
+                side_effect=[[issue], []],
+            ) as mock_verify,
+            patch("app.services.layout_fix.fix_translated_layout", return_value=True) as mock_fix,
+        ):
+            unresolved = _run_post_translation_qa(
+                "abcd12345678",
+                MagicMock(),
+                input_path,
+                TranslationResult(mono_path=mono_path, dual_path=dual_path),
+                qa_mode="iterative",
+                max_passes=3,
+            )
+
+        assert unresolved == []
+        assert mock_verify.call_count == 2
+        assert mock_fix.call_count == 2
 
 
 class TestCancelEndpoint:

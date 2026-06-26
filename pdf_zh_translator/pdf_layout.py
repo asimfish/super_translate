@@ -276,10 +276,26 @@ def translate_pdf(
     font_pack = build_font_pack(font_file, warnings)
 
     document = fitz.open(str(input_pdf))
+    try:
+        from .layout_profiles import detect_layout_profile
+
+        profile = detect_layout_profile(document)
+        warnings.append(
+            "Detected layout profile: %s (confidence %.2f, %d column%s)"
+            % (
+                profile.name,
+                profile.confidence,
+                profile.columns,
+                "" if profile.columns == 1 else "s",
+            )
+        )
+    except Exception:
+        pass
     units, gutter_rects, skipped = prepare_translation_units(
         document,
         preserve_graphics_text=preserve_graphics_text,
     )
+    warnings.extend(fragmented_prose_warnings_from_units(units))
 
     if not units:
         warnings.append("No extractable English text was found. Scanned PDFs need OCR.")
@@ -455,6 +471,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
     4. Missing raster images after redaction/rendering
     5. Missing formula fragments from math-heavy source blocks
     6. Missing vector graphics from figures/tables
+    7. Render-based visual layout score
+    8. High-risk table/algorithm/float regions
     """
     import fitz
 
@@ -482,6 +500,22 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     f"{trans_doc.page_count} vs {orig_doc.page_count}"
                 ),
                 severity="error",
+            )
+        )
+
+    try:
+        source_units, _, _ = prepare_translation_units(orig_doc)
+    except Exception:
+        source_units = []
+    for warning in fragmented_prose_warnings_from_units(source_units):
+        match = re.search(r"Page (\d+):", warning)
+        page = int(match.group(1)) if match else 0
+        issues.append(
+            TranslationIssue(
+                page=page,
+                code="fragmented_prose",
+                message=warning,
+                severity="warning",
             )
         )
 
@@ -610,6 +644,37 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     )
                 )
 
+        for feature in _detect_high_risk_layout_features(orig_page):
+            issues.append(
+                TranslationIssue(
+                    page=page_idx + 1,
+                    code="high_risk_layout",
+                    message=f"Page {page_idx + 1}: high-risk layout feature detected: {feature}",
+                    severity="warning",
+                )
+            )
+
+    try:
+        from .visual_qa import score_visual_layout
+
+        visual = score_visual_layout(original_pdf, translated_pdf)
+        if visual.overall_score < 0.35:
+            worst = min(visual.pages, key=lambda page: page.score) if visual.pages else None
+            page_num = worst.page if worst else 0
+            issues.append(
+                TranslationIssue(
+                    page=page_num,
+                    code="visual_layout_score_low",
+                    message=(
+                        "Rendered layout similarity is low "
+                        f"(score={visual.overall_score:.2f}); inspect visual output"
+                    ),
+                    severity="error",
+                )
+            )
+    except Exception:
+        pass
+
     trans_doc.close()
     orig_doc.close()
     return issues
@@ -712,6 +777,56 @@ def _looks_like_formula_fragment(text: str) -> bool:
     if looks_like_math(compact) and len(words) <= 1:
         return True
     return math_chars >= 2 and math_chars / max(len(compact), 1) >= 0.08 and len(words) <= 1
+
+
+def _detect_high_risk_layout_features(page: object) -> List[str]:
+    features: List[str] = []
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        drawings = []
+    if len(drawings) >= 40:
+        features.append("dense vector drawing or table grid")
+    if _has_table_like_text_grid(page):
+        features.append("table-like text grid")
+    if _has_algorithm_like_text(page):
+        features.append("algorithm or pseudocode block")
+    if _has_cross_page_float_risk(page):
+        features.append("float near page boundary")
+    return features
+
+
+def _has_table_like_text_grid(page: object) -> bool:
+    rows: Dict[int, int] = {}
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        text = _extract_text_from_block(block)
+        if len(text.strip()) > 35:
+            continue
+        bbox = block.get("bbox")
+        if not bbox:
+            continue
+        row = int(float(bbox[1]) // 8)
+        rows[row] = rows.get(row, 0) + 1
+    return sum(1 for count in rows.values() if count >= 4) >= 3
+
+
+def _has_algorithm_like_text(page: object) -> bool:
+    text = page.get_text("text")
+    markers = len(re.findall(r"^\s*\d{1,2}:\s+\S", text, flags=re.MULTILINE))
+    keywords = re.search(r"\b(Require|Ensure|Input|Output|Algorithm)\b", text)
+    return markers >= 2 or bool(markers and keywords)
+
+
+def _has_cross_page_float_risk(page: object) -> bool:
+    height = float(page.rect.height)
+    risky = 0
+    for zone in detect_image_zones(page):
+        _x0, y0, _x1, y1 = zone
+        if y0 < 40.0 or y1 > height - 40.0:
+            risky += 1
+    return risky >= 1
 
 
 def _normalize_font_name(name: str) -> str:
@@ -910,6 +1025,31 @@ def register_font_pack(page: object, pack: FontPack) -> None:
 
 
 TranslationUnit = Tuple[TextBlock, str, Dict[int, str]]
+
+
+def fragmented_prose_warnings_from_units(units: Sequence[TranslationUnit]) -> List[str]:
+    """Flag pages where prose was split into many fixed-width single-line units."""
+    page_counts: Dict[int, Tuple[int, int]] = {}
+    for block, _, _ in units:
+        if block.block_type != "body":
+            continue
+        body_count, fragmented_count = page_counts.get(block.page_index, (0, 0))
+        body_count += 1
+        plain = strip_sentinels(block.text)
+        if block.nowrap and block.source_lines <= 1 and len(plain.strip()) >= 20:
+            fragmented_count += 1
+        page_counts[block.page_index] = (body_count, fragmented_count)
+
+    warnings: List[str] = []
+    for page_index, (body_count, fragmented_count) in sorted(page_counts.items()):
+        threshold = max(6, int(body_count * 0.35))
+        if fragmented_count >= threshold:
+            warnings.append(
+                "Page %d: %d body line(s) were treated as fixed-width fragments; "
+                "prose may have been translated line-by-line"
+                % (page_index + 1, fragmented_count)
+            )
+    return warnings
 
 
 def prepare_translation_units(
@@ -1639,21 +1779,54 @@ def record_is_table(record: _RawBlockRec) -> bool:
     """Table blocks expose cells as separate physical lines sharing a y-band.
 
     Sequential paragraph lines never overlap vertically; two-line headings
-    ("3.4" + title) are excluded by the minimum line count."""
+    ("3.4" + title) are excluded by the minimum line count. Some PDFs also split
+    a normal prose line into two same-baseline text objects; those have only a
+    small horizontal gap and must stay mergeable as paragraph text."""
     lines = record.lines
     if len(lines) < 3:
         return False
-    overlapping_rows = 0
-    for index in range(1, len(lines)):
-        current_bbox = lines[index].bbox
-        for other in range(max(0, index - 8), index):
-            other_bbox = lines[other].bbox
-            overlap = min(current_bbox[3], other_bbox[3]) - max(current_bbox[1], other_bbox[1])
-            min_height = min(current_bbox[3] - current_bbox[1], other_bbox[3] - other_bbox[1])
-            if min_height > 0 and overlap >= 0.5 * min_height:
-                overlapping_rows += 1
+    table_rows = 0
+    for row in group_same_y_lines(lines):
+        if row_has_table_gap(row):
+            table_rows += 1
+        if table_rows >= 2:
+            return True
+    return False
+
+
+def group_same_y_lines(lines: Sequence[_LineRec]) -> List[List[_LineRec]]:
+    rows: List[List[_LineRec]] = []
+    for line in sorted(lines, key=lambda item: ((item.bbox[1] + item.bbox[3]) / 2.0, item.bbox[0])):
+        for row in rows:
+            if any(lines_share_y_band(line, existing) for existing in row):
+                row.append(line)
                 break
-        if overlapping_rows >= 2:
+        else:
+            rows.append([line])
+    return rows
+
+
+def lines_share_y_band(first: _LineRec, second: _LineRec) -> bool:
+    first_height = first.bbox[3] - first.bbox[1]
+    second_height = second.bbox[3] - second.bbox[1]
+    min_height = min(first_height, second_height)
+    if min_height <= 0:
+        return False
+    overlap = min(first.bbox[3], second.bbox[3]) - max(first.bbox[1], second.bbox[1])
+    return overlap >= 0.5 * min_height
+
+
+def row_has_table_gap(row: Sequence[_LineRec]) -> bool:
+    if len(row) < 2:
+        return False
+    if any(line.is_cell for line in row):
+        return True
+    ordered = sorted(row, key=lambda line: line.bbox[0])
+    heights = [line.bbox[3] - line.bbox[1] for line in ordered]
+    threshold = max(CELL_GAP_MIN, median_or_default(heights, 10.0) * CELL_GAP_FACTOR)
+    for previous, current in zip(ordered, ordered[1:]):
+        gap = current.bbox[0] - previous.bbox[2]
+        if gap >= threshold:
             return True
     return False
 

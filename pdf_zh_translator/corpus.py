@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 
 _CORPUS_PATH = Path(__file__).parent / "corpus.json"
+_CORPORA_DIR = Path(__file__).parent / "corpora"
 _corpus: Optional[Dict[str, Dict[str, str]]] = None
 _flat_terms: Optional[List[Tuple[str, str]]] = None
 _TERM_CANDIDATE_RE = re.compile(
@@ -38,6 +39,13 @@ def _load_corpus() -> Dict[str, Dict[str, str]]:
             data = json.load(f)
         # Remove metadata key
         _corpus = {k: v for k, v in data.items() if not k.startswith("_")}
+        for extra_path in sorted(_CORPORA_DIR.glob("*.json")):
+            extra = _load_raw_corpus(extra_path)
+            for field, terms in extra.items():
+                if field.startswith("_") or not isinstance(terms, dict):
+                    continue
+                field_data = _corpus.setdefault(field, {})
+                field_data.update({str(en): str(zh) for en, zh in terms.items()})
     return _corpus
 
 
@@ -106,6 +114,14 @@ def build_terminology_prompt(terms: Dict[str, str]) -> str:
     for en, zh in sorted(terms.items()):
         lines.append(f"  {en} → {zh}")
     return "\n".join(lines)
+
+
+def corpus_stats() -> Dict[str, int]:
+    """Return term counts by field for diagnostics."""
+    corpus = _load_corpus()
+    stats = {field: len(terms) for field, terms in corpus.items()}
+    stats["_total"] = sum(stats.values())
+    return stats
 
 
 def upsert_terms(
@@ -223,6 +239,101 @@ def record_candidate_terms(
             existing.add(key)
             added += 1
     return added
+
+
+def load_candidate_terms(candidate_path: Path) -> List[dict]:
+    """Load and deduplicate terminology candidate observations."""
+    grouped: Dict[str, dict] = {}
+    if not candidate_path.exists():
+        return []
+    with candidate_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            with contextlib.suppress(json.JSONDecodeError):
+                record = json.loads(line)
+                if not isinstance(record, dict):
+                    continue
+                term = str(record.get("term", "")).strip()
+                if not term:
+                    continue
+                key = _candidate_key(term)
+                item = grouped.setdefault(
+                    key,
+                    {
+                        "term": term,
+                        "sources": [],
+                        "count": 0,
+                        "approved": False,
+                        "translation": "",
+                    },
+                )
+                item["count"] += 1
+                source = str(record.get("source", "")).strip()
+                if source and source not in item["sources"]:
+                    item["sources"].append(source)
+    return sorted(grouped.values(), key=lambda item: (-item["count"], item["term"].lower()))
+
+
+def write_candidate_review(candidate_path: Path, review_path: Path) -> int:
+    """Write a deduplicated review JSON for human/agent approval."""
+    candidates = load_candidate_terms(candidate_path)
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_path.write_text(
+        json.dumps(
+            {
+                "_meta": {
+                    "source": str(candidate_path),
+                    "generated_at": _utc_now(),
+                    "instructions": "Set approved=true and fill translation to promote terms.",
+                },
+                "candidates": candidates,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return len(candidates)
+
+
+def promote_reviewed_terms(
+    review_path: Path,
+    *,
+    field: str,
+    corpus_path: Optional[Path] = None,
+    source: str = "candidate-review",
+) -> int:
+    """Promote approved reviewed candidates to the official corpus."""
+    data = json.loads(review_path.read_text(encoding="utf-8"))
+    approved = {}
+    for item in data.get("candidates", []):
+        if not isinstance(item, dict) or not item.get("approved"):
+            continue
+        term = str(item.get("term", "")).strip()
+        translation = str(item.get("translation", "")).strip()
+        if term and translation:
+            approved[term] = translation
+    return upsert_terms(field, approved, source=source, corpus_path=corpus_path)
+
+
+def release_corpus_version(
+    *,
+    version: str,
+    corpus_path: Optional[Path] = None,
+) -> dict:
+    """Stamp corpus metadata for a reviewed release."""
+    target_path = corpus_path or _CORPUS_PATH
+    data = _load_raw_corpus(target_path)
+    metadata = data.get("_meta")
+    if not isinstance(metadata, dict):
+        metadata = data.setdefault("_metadata", {})
+    metadata["version"] = version
+    metadata["released_at"] = _utc_now()
+    metadata["total_terms"] = _count_terms(data)
+    _write_raw_corpus(target_path, data)
+    if target_path.resolve() == _CORPUS_PATH.resolve():
+        reload_corpus()
+    return metadata
 
 
 def _looks_like_academic_candidate(term: str) -> bool:

@@ -90,6 +90,9 @@ const api = {
     if (quality) params.set('quality', quality);
     if (options.preserve_graphics_text) params.set('preserve_graphics_text', 'true');
     if (options.skip_overflow) params.set('skip_overflow', 'true');
+    if (options.qa_mode) params.set('qa_mode', options.qa_mode);
+    if (options.qa_max_passes) params.set('qa_max_passes', String(options.qa_max_passes));
+    if (options.ocr_mode) params.set('ocr_mode', options.ocr_mode);
     const res = await apiFetch(`/api/papers/${id}/translate?${params}`, { method: 'POST' });
     if (!res.ok) throw new Error(await errorDetail(res, 'Translation failed'));
     return res.json();
@@ -202,11 +205,18 @@ async function batchTranslate() {
 
   batchTranslating = true;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
+  const options = {
+    preserve_graphics_text: document.getElementById('preserve-graphics-text')?.checked || false,
+    skip_overflow: document.getElementById('skip-overflow')?.checked || false,
+    qa_mode: document.getElementById('qa-mode')?.value || 'single',
+    qa_max_passes: 4,
+    ocr_mode: document.getElementById('ocr-mode')?.value || 'off',
+  };
 
   try {
     // Submit all translations in parallel (server runs them in background)
     const results = await Promise.allSettled(
-      pending.map(p => api.translatePaper(p.id, '', quality))
+      pending.map(p => api.translatePaper(p.id, '', quality, options))
     );
     const success = results.filter(r => r.status === 'fulfilled').length;
     const failed = results.length - success;
@@ -768,6 +778,9 @@ async function startTranslate() {
   const options = {
     preserve_graphics_text: document.getElementById('preserve-graphics-text')?.checked || false,
     skip_overflow: document.getElementById('skip-overflow')?.checked || false,
+    qa_mode: document.getElementById('qa-mode')?.value || 'single',
+    qa_max_passes: 4,
+    ocr_mode: document.getElementById('ocr-mode')?.value || 'off',
   };
   doTranslateDirect(currentPaper.id, '', quality, options);
 }
