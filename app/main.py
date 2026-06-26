@@ -138,7 +138,7 @@ async def add_security_headers(request: Request, call_next: RequestResponseEndpo
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self'; "
-        "style-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
         "font-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "

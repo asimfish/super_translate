@@ -1954,11 +1954,11 @@ class TestSecurityHeaders:
         csp = response.headers["Content-Security-Policy"]
         assert "default-src 'self'" in csp
         assert "script-src 'self'" in csp
-        assert "style-src 'self'" in csp
+        assert "style-src 'self' 'unsafe-inline'" in csp
         assert "connect-src 'self'" in csp
         assert "font-src 'self'" in csp
         assert "frame-ancestors 'none'" in csp
-        assert "'unsafe-inline'" not in csp
+        assert "script-src 'self';" in csp
 
     def test_security_headers_on_api(self, client, mock_db):
         mock_db.scalar.return_value = 0
