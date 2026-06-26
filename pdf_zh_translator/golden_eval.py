@@ -27,6 +27,10 @@ class GoldenCaseResult:
     visual_score: float
     issue_count: int
     issues: list[str]
+    layout_profile: str = "unknown"
+    profile_confidence: float = 0.0
+    visual_risk: str = "unknown"
+    min_visual_region_score: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,13 @@ class GoldenEvaluationResult:
             self.evaluated_cases >= self.target_cases
             and self.passed_cases == self.evaluated_cases
         )
+
+    @property
+    def profile_summary(self) -> dict[str, int]:
+        summary: dict[str, int] = {}
+        for result in self.results:
+            summary[result.layout_profile] = summary.get(result.layout_profile, 0) + 1
+        return summary
 
 
 def write_manifest_template(path: Path, *, target_cases: int = 100) -> None:
@@ -79,12 +90,15 @@ def discover_golden_pairs(
         case_id = str(translated.relative_to(root_dir).with_suffix(""))
         if case_id.endswith(translated_suffix[:-4]):
             case_id = case_id[: -len(translated_suffix[:-4])]
+        profile_name, profile_confidence = _detect_case_profile(original)
         cases.append(
             {
                 "id": case_id.replace("/", "__"),
                 "original_pdf": os.path.relpath(original, manifest_path.parent),
                 "translated_pdf": os.path.relpath(translated, manifest_path.parent),
                 "min_visual_score": min_visual_score,
+                "layout_profile": profile_name,
+                "profile_confidence": profile_confidence,
             }
         )
 
@@ -114,6 +128,7 @@ def evaluate_golden_set(manifest_path: Path) -> GoldenEvaluationResult:
     for case in cases:
         issues = verify_translation_issues(case.original_pdf, case.translated_pdf)
         visual = score_visual_layout(case.original_pdf, case.translated_pdf)
+        profile_name, profile_confidence = _detect_case_profile(case.original_pdf)
         messages = [issue.message for issue in issues]
         passed = not issues and visual.overall_score >= case.min_visual_score
         results.append(
@@ -123,6 +138,10 @@ def evaluate_golden_set(manifest_path: Path) -> GoldenEvaluationResult:
                 visual_score=visual.overall_score,
                 issue_count=len(issues),
                 issues=messages,
+                layout_profile=profile_name,
+                profile_confidence=profile_confidence,
+                visual_risk=visual.risk_level,
+                min_visual_region_score=visual.min_zone_score,
             )
         )
     return GoldenEvaluationResult(
@@ -131,6 +150,22 @@ def evaluate_golden_set(manifest_path: Path) -> GoldenEvaluationResult:
         passed_cases=sum(1 for result in results if result.passed),
         results=results,
     )
+
+
+def _detect_case_profile(original_pdf: Path) -> tuple[str, float]:
+    try:
+        import fitz
+
+        from .layout_profiles import detect_layout_profile
+
+        document = fitz.open(str(original_pdf))
+        try:
+            profile = detect_layout_profile(document)
+            return profile.name, profile.confidence
+        finally:
+            document.close()
+    except Exception:
+        return "unknown", 0.0
 
 
 def _parse_case(item: dict[str, Any], base_dir: Path) -> GoldenCase:

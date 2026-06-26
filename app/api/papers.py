@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -1203,10 +1205,21 @@ def _run_post_translation_qa(
         _record_terminology_candidates(paper_id, loop, input_path)
         passes = max(1, max_passes if qa_mode == "iterative" else 1)
         issues = []
+        passes_run = 0
+        repair_attempted = False
         for pass_index in range(1, passes + 1):
             issues = verify_translation_issues(input_path, mono_path)
+            passes_run += 1
             if not issues:
                 _append_log(paper_id, loop, f"译文检查通过 (第 {pass_index} 轮)")
+                _write_qa_report(
+                    trans_result,
+                    issues,
+                    qa_mode=qa_mode,
+                    passes_run=passes_run,
+                    repair_attempted=repair_attempted,
+                    status="passed",
+                )
                 return []
 
             _append_log(
@@ -1220,17 +1233,94 @@ def _run_post_translation_qa(
             if not _has_fixable_layout_issue(issues):
                 break
             fixed = _fix_translated_outputs(trans_result)
+            repair_attempted = True
             if not fixed:
                 break
             _append_log(paper_id, loop, "检测到可修复版面问题，已自动执行一次版面修复")
             if qa_mode != "iterative":
                 issues = verify_translation_issues(input_path, mono_path)
+                passes_run += 1
                 break
 
+        _write_qa_report(
+            trans_result,
+            issues,
+            qa_mode=qa_mode,
+            passes_run=passes_run,
+            repair_attempted=repair_attempted,
+            status="failed" if _has_unresolved_error(issues) else "warning",
+        )
         return issues
     except Exception as e:
         logger.warning("Post-translation QA failed for %s: %s", paper_id, sanitize_error(e))
+        _write_qa_report(
+            trans_result,
+            [],
+            qa_mode=qa_mode,
+            passes_run=0,
+            repair_attempted=False,
+            status="qa_failed",
+            error=sanitize_error(e),
+        )
         return []
+
+
+def _write_qa_report(
+    trans_result: TranslationResult,
+    issues: list,
+    *,
+    qa_mode: str,
+    passes_run: int,
+    repair_attempted: bool,
+    status: str,
+    error: str | None = None,
+) -> None:
+    """Write a machine-readable QA sidecar next to translated PDFs."""
+    if not trans_result.mono_path:
+        return
+    try:
+        issue_items = [_qa_issue_to_dict(issue) for issue in issues]
+        report = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "qa_mode": qa_mode,
+            "status": status,
+            "passes_run": passes_run,
+            "repair_attempted": repair_attempted,
+            "issue_count": len(issue_items),
+            "error_count": sum(1 for item in issue_items if item["severity"] == "error"),
+            "warning_count": sum(1 for item in issue_items if item["severity"] != "error"),
+            "issues": issue_items,
+        }
+        if error:
+            report["qa_error"] = error
+        report_path = trans_result.mono_path.with_suffix(".qa.json")
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("Failed to write QA report: %s", sanitize_error(e))
+
+
+def _qa_issue_to_dict(issue: object) -> dict:
+    page = getattr(issue, "page", 0)
+    if not isinstance(page, int):
+        page = 0
+    code = getattr(issue, "code", "unknown")
+    if not isinstance(code, str):
+        code = "unknown"
+    message = getattr(issue, "message", "")
+    if not isinstance(message, str):
+        message = str(message)
+    severity = getattr(issue, "severity", "warning")
+    if severity not in {"error", "warning"}:
+        severity = "warning"
+    return {
+        "page": page,
+        "code": code,
+        "message": message,
+        "severity": severity,
+    }
 
 
 def _has_fixable_layout_issue(issues: list) -> bool:

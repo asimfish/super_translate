@@ -548,6 +548,92 @@ class TestTranslationVerification(unittest.TestCase):
         self.assertTrue(any("untranslated English" in issue for issue in issues))
         self.assertFalse(any("2 block" in issue for issue in issues))
 
+    def test_ignores_multiline_english_reference_section(self):
+        original = fitz.open()
+        page = original.new_page(width=360, height=360)
+        page.insert_text((30, 40), "The proposed model improves retrieval quality substantially.")
+        page.insert_text((30, 180), "References", fontsize=12)
+        page.insert_text(
+            (30, 205),
+            "Smith and Doe introduce contrastive learning for dense representations.",
+        )
+
+        translated = fitz.open()
+        page = translated.new_page(width=360, height=360)
+        page.insert_text((30, 40), "The proposed model improves retrieval quality substantially.")
+        page.insert_text((30, 180), "参考文献", fontsize=12)
+        page.insert_text(
+            (30, 205),
+            "Smith and Doe introduce contrastive learning for dense representations.",
+        )
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        english_issues = [issue for issue in issues if issue.code == "untranslated_english"]
+        self.assertEqual(len(english_issues), 1)
+        self.assertIn("1 block", english_issues[0].message)
+
+    def test_flags_short_untranslated_english_caption(self):
+        original = fitz.open()
+        page = original.new_page(width=300, height=220)
+        page.insert_text((30, 80), "Figure 1: System overview.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=300, height=220)
+        page.insert_text((30, 80), "Figure 1: System overview.")
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "untranslated_caption" for issue in issues))
+
+    def test_flags_short_untranslated_formula_explanation(self):
+        original = fitz.open()
+        page = original.new_page(width=300, height=220)
+        page.insert_text((30, 80), "where x denotes the input vector.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=300, height=220)
+        page.insert_text((30, 80), "where x denotes the input vector.")
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(
+            any(issue.code == "untranslated_formula_explanation" for issue in issues)
+        )
+
     def test_flags_caption_overlapping_figure_region(self):
         original = fitz.open()
         page = original.new_page(width=300, height=260)

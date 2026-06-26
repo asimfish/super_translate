@@ -3,12 +3,14 @@
 import json
 
 from pdf_zh_translator.corpus import (
+    audit_candidate_terms,
     corpus_stats,
     extract_candidate_terms,
     load_candidate_terms,
     promote_reviewed_terms,
     record_candidate_terms,
     release_corpus_version,
+    suggest_candidate_field,
     upsert_terms,
     write_candidate_review,
 )
@@ -136,3 +138,65 @@ def test_candidate_review_promote_and_release_workflow(tmp_path):
     assert corpus["neurips_icml_iclr"]["Latent Consistency Planning"] == "潜在一致性规划"
     assert metadata["version"] == "2026.06-test"
     assert metadata["total_terms"] == 1
+
+
+def test_candidate_audit_suggests_fields_and_marks_known_terms(tmp_path):
+    candidates_path = tmp_path / "candidates.jsonl"
+    candidates_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"term": "Object Detection Head", "source": "paper:cvpr"}),
+                json.dumps({"term": "Retrieval-Augmented Generation", "source": "paper:acl"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    audited = audit_candidate_terms(candidates_path)
+    by_term = {item["term"]: item for item in audited}
+
+    assert by_term["Object Detection Head"]["suggested_field"] == "cvpr_detection_segmentation"
+    assert by_term["Object Detection Head"]["status"] == "needs_translation"
+    assert by_term["Retrieval-Augmented Generation"]["status"] == "known"
+    assert by_term["Retrieval-Augmented Generation"]["known_translation"] == "检索增强生成"
+
+
+def test_suggest_candidate_field_uses_track_keywords():
+    field, confidence, reason = suggest_candidate_field("Bayesian Posterior Calibration")
+
+    assert field == "icml_probabilistic_bayes"
+    assert confidence > 0.5
+    assert "matched keywords" in reason
+
+
+def test_auto_field_promote_uses_review_field(tmp_path):
+    review_path = tmp_path / "review.json"
+    corpus_path = tmp_path / "corpus.json"
+    review_path.write_text(
+        json.dumps(
+            {
+                "candidates": [
+                    {
+                        "term": "Object Detection Head",
+                        "translation": "目标检测头",
+                        "approved": True,
+                        "field": "cvpr_detection_segmentation",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    promoted = promote_reviewed_terms(
+        review_path,
+        field="auto",
+        corpus_path=corpus_path,
+        source="unit-test-auto",
+    )
+
+    corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+    assert promoted == 1
+    assert corpus["cvpr_detection_segmentation"]["Object Detection Head"] == "目标检测头"

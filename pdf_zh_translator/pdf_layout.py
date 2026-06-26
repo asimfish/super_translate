@@ -77,6 +77,14 @@ MATH_SYMBOLS = set(
 _CAPTION_RE = re.compile(
     r"^(?:Figure|Fig\.|Table|图|表)\s*\d", re.IGNORECASE,
 )
+_ENGLISH_CAPTION_PREFIX_RE = re.compile(
+    r"^(?:Figure|Fig\.|Table)\s*\d+(?:\s*[:.\-\u2013]\s*)?",
+    re.IGNORECASE,
+)
+_FORMULA_EXPLANATION_RE = re.compile(
+    r"^(?:where|with|here|for all|such that|subject to)\b",
+    re.IGNORECASE,
+)
 # Heading patterns: "1 Introduction", "2.1 Background", "A. Appendix"
 _HEADING_RE = re.compile(
     r"^(?:\d+(?:\.\d+)*\.?\s|[A-Z]\.\s)",
@@ -525,14 +533,25 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
 
         # Check for untranslated English paragraphs
         trans_blocks = trans_page.get_text("dict").get("blocks", [])
+        reference_y = _reference_section_start_y(trans_page)
+        if reference_y is None:
+            reference_y = _reference_section_start_y(orig_page)
 
         # Count English-only text blocks in translated PDF
         untranslated_examples: List[str] = []
+        untranslated_caption_examples: List[str] = []
+        untranslated_formula_examples: List[str] = []
         for block in trans_blocks:
             if block.get("type") != 0:
                 continue
+            if _block_in_reference_section(block, reference_y):
+                continue
             text = _extract_text_from_block(block)
-            if _looks_like_untranslated_english(text):
+            if _looks_like_untranslated_caption(text):
+                untranslated_caption_examples.append(" ".join(text.split())[:80])
+            elif _looks_like_untranslated_formula_explanation(text):
+                untranslated_formula_examples.append(" ".join(text.split())[:80])
+            elif _looks_like_untranslated_english(text):
                 untranslated_examples.append(" ".join(text.split())[:80])
 
         if untranslated_examples:
@@ -547,11 +566,37 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     severity="error",
                 )
             )
+        if untranslated_caption_examples:
+            issues.append(
+                TranslationIssue(
+                    page=page_idx + 1,
+                    code="untranslated_caption",
+                    message=(
+                        f"Page {page_idx + 1}: {len(untranslated_caption_examples)} caption(s) "
+                        "still look like English and should be translated"
+                    ),
+                    severity="error",
+                )
+            )
+        if untranslated_formula_examples:
+            issues.append(
+                TranslationIssue(
+                    page=page_idx + 1,
+                    code="untranslated_formula_explanation",
+                    message=(
+                        f"Page {page_idx + 1}: {len(untranslated_formula_examples)} formula "
+                        "explanation block(s) still look like English"
+                    ),
+                    severity="error",
+                )
+            )
 
         # Check for overlapping text blocks in translated PDF
         text_bboxes = []
         for block in trans_blocks:
             if block.get("type") != 0:
+                continue
+            if _block_in_reference_section(block, reference_y):
                 continue
             text = _extract_text_from_block(block)
             if len(text.strip()) < 4 or _is_reference_or_formula_text(text):
@@ -674,6 +719,25 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     severity="error",
                 )
             )
+        elif visual.min_zone_score < 0.25 and visual.overall_score < 0.90:
+            worst = (
+                min(visual.pages, key=lambda page: page.min_zone_score)
+                if visual.pages
+                else None
+            )
+            page_num = worst.page if worst else 0
+            issues.append(
+                TranslationIssue(
+                    page=page_num,
+                    code="visual_layout_region_low",
+                    message=(
+                        "Rendered layout has a low-similarity page region "
+                        f"(overall={visual.overall_score:.2f}, "
+                        f"min_region={visual.min_zone_score:.2f}); inspect figures/tables"
+                    ),
+                    severity="error",
+                )
+            )
     except Exception:
         pass
 
@@ -717,6 +781,48 @@ def _looks_like_untranslated_english(text: str) -> bool:
         return False
     ascii_letters = sum(1 for char in compact if char.isascii() and char.isalpha())
     return ascii_letters / max(len(compact), 1) >= 0.45
+
+
+def _looks_like_untranslated_caption(text: str) -> bool:
+    compact = " ".join(text.split())
+    if not _ENGLISH_CAPTION_PREFIX_RE.match(compact):
+        return False
+    body = _ENGLISH_CAPTION_PREFIX_RE.sub("", compact, count=1).strip()
+    if not body or _CJK_DETECT_RE.search(body):
+        return False
+    return bool(_ASCII_WORD_DETECT_RE.search(body))
+
+
+def _looks_like_untranslated_formula_explanation(text: str) -> bool:
+    compact = " ".join(text.split())
+    if len(compact) < 12 or not _FORMULA_EXPLANATION_RE.match(compact):
+        return False
+    if _CJK_DETECT_RE.search(compact):
+        return False
+    words = _ASCII_WORD_DETECT_RE.findall(compact)
+    if len(words) < 3:
+        return False
+    ascii_letters = sum(1 for char in compact if char.isascii() and char.isalpha())
+    return ascii_letters / max(len(compact), 1) >= 0.35
+
+
+def _reference_section_start_y(page: object) -> float | None:
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        compact = " ".join(_extract_text_from_block(block).split()).rstrip(":：")
+        if _REFERENCES_HEADING_RE.match(compact):
+            bbox = block.get("bbox")
+            if bbox:
+                return max(0.0, float(bbox[1]) - 1.0)
+    return None
+
+
+def _block_in_reference_section(block: dict, reference_y: float | None) -> bool:
+    if reference_y is None:
+        return False
+    bbox = block.get("bbox")
+    return bool(bbox and float(bbox[1]) >= reference_y)
 
 
 def _restore_unit_translation(
@@ -1192,7 +1298,10 @@ def prepare_translation_units(
     return units, gutter_rects, skipped
 
 
-_REFERENCES_HEADING_RE = re.compile(r"^(references|bibliography)$", re.IGNORECASE)
+_REFERENCES_HEADING_RE = re.compile(
+    r"^(?:references|bibliography|参考文献)$",
+    re.IGNORECASE,
+)
 
 
 def mark_bibliography_blocks(

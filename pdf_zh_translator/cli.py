@@ -27,6 +27,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_corpus_health(args)
     if args.command == "corpus-review":
         return run_corpus_review(args)
+    if args.command == "corpus-audit":
+        return run_corpus_audit(args)
     if args.command == "corpus-promote":
         return run_corpus_promote(args)
     if args.command == "corpus-release":
@@ -262,12 +264,22 @@ def build_parser() -> argparse.ArgumentParser:
     corpus_review.add_argument("candidates_jsonl", type=Path)
     corpus_review.add_argument("review_json", type=Path)
 
+    corpus_audit = subparsers.add_parser(
+        "corpus-audit",
+        help="Audit, deduplicate, and auto-classify terminology candidates.",
+    )
+    corpus_audit.add_argument("candidates_jsonl", type=Path)
+    corpus_audit.add_argument("review_json", type=Path)
+
     corpus_promote = subparsers.add_parser(
         "corpus-promote",
         help="Promote approved review terms into the official corpus.",
     )
     corpus_promote.add_argument("review_json", type=Path)
-    corpus_promote.add_argument("field")
+    corpus_promote.add_argument(
+        "field",
+        help="Target field/category, or 'auto' to use review fields.",
+    )
     corpus_promote.add_argument("--source", default="candidate-review")
     corpus_promote.add_argument("--corpus-file", type=Path)
 
@@ -373,6 +385,15 @@ def run_corpus_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_corpus_audit(args: argparse.Namespace) -> int:
+    from .corpus import write_candidate_review
+
+    count = write_candidate_review(args.candidates_jsonl, args.review_json)
+    print("Audited %d candidate term%s." % (count, "" if count == 1 else "s"))
+    print("Review file: %s" % args.review_json)
+    return 0
+
+
 def run_corpus_promote(args: argparse.Namespace) -> int:
     from .corpus import promote_reviewed_terms
 
@@ -425,6 +446,15 @@ def run_golden_eval(args: argparse.Namespace) -> int:
         "Evaluated %d/%d cases; %d passed."
         % (result.evaluated_cases, result.target_cases, result.passed_cases)
     )
+    if result.profile_summary:
+        profiles = ", ".join(
+            "%s=%d" % (profile, count)
+            for profile, count in sorted(result.profile_summary.items())
+        )
+        print("Layout profiles: %s" % profiles)
+    risky = sum(1 for item in result.results if item.visual_risk != "low")
+    if risky:
+        print("Visual risk cases: %d" % risky)
     return 0 if result.ready_for_release else 1
 
 

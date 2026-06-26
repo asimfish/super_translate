@@ -55,6 +55,9 @@ def test_golden_evaluation_requires_target_case_count(tmp_path):
     assert result.evaluated_cases == 1
     assert result.passed_cases == 1
     assert result.ready_for_release is False
+    assert result.results[0].layout_profile == "single_column"
+    assert result.results[0].visual_risk == "low"
+    assert result.profile_summary == {"single_column": 1}
 
 
 def test_discovers_paired_golden_pdfs(tmp_path):
@@ -72,3 +75,5 @@ def test_discovers_paired_golden_pdfs(tmp_path):
     assert data["target_cases"] == 100
     assert data["cases"][0]["id"] == "paper-a"
     assert data["cases"][0]["original_pdf"].endswith("paper-a-original.pdf")
+    assert data["cases"][0]["layout_profile"] == "single_column"
+    assert data["cases"][0]["profile_confidence"] > 0

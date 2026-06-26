@@ -132,6 +132,59 @@ def test_corpus_promote_and_release_commands(tmp_path, capsys):
     assert "Released corpus 2026.06-test" in output
 
 
+def test_corpus_audit_command_writes_classified_review(tmp_path, capsys):
+    candidates = tmp_path / "candidates.jsonl"
+    review = tmp_path / "review.json"
+    candidates.write_text(
+        json.dumps({"term": "Object Detection Head", "source": "paper:cvpr"}) + "\n",
+        encoding="utf-8",
+    )
+
+    code = main(["corpus-audit", str(candidates), str(review)])
+
+    data = json.loads(review.read_text(encoding="utf-8"))
+    output = capsys.readouterr().out
+    assert code == 0
+    assert data["candidates"][0]["suggested_field"] == "cvpr_detection_segmentation"
+    assert data["candidates"][0]["status"] == "needs_translation"
+    assert "Audited 1 candidate term" in output
+
+
+def test_corpus_promote_auto_uses_review_field(tmp_path):
+    review_path = tmp_path / "review.json"
+    corpus_path = tmp_path / "corpus.json"
+    review_path.write_text(
+        json.dumps(
+            {
+                "candidates": [
+                    {
+                        "term": "Object Detection Head",
+                        "translation": "目标检测头",
+                        "approved": True,
+                        "field": "cvpr_detection_segmentation",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "corpus-promote",
+            str(review_path),
+            "auto",
+            "--corpus-file",
+            str(corpus_path),
+        ]
+    )
+
+    data = json.loads(corpus_path.read_text(encoding="utf-8"))
+    assert code == 0
+    assert data["cvpr_detection_segmentation"]["Object Detection Head"] == "目标检测头"
+
+
 def test_golden_init_command_writes_100_case_template(tmp_path, capsys):
     manifest = tmp_path / "golden.json"
 

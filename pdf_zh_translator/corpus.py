@@ -50,6 +50,166 @@ TOP_CONFERENCE_FIELDS = (
     "ml_systems_data_scaling",
     "ai_agents_tool_use",
 )
+FIELD_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "cvpr_detection_segmentation",
+        (
+            "detection",
+            "segmentation",
+            "object",
+            "instance",
+            "mask",
+            "bounding box",
+            "recognition",
+        ),
+    ),
+    (
+        "cvpr_3d_geometry_reconstruction",
+        (
+            "3d",
+            "geometry",
+            "reconstruction",
+            "nerf",
+            "point cloud",
+            "pose",
+            "depth",
+            "surface",
+        ),
+    ),
+    (
+        "cvpr_video_embodied_vision",
+        (
+            "video",
+            "tracking",
+            "embodied",
+            "action",
+            "temporal",
+            "robot",
+            "scene",
+        ),
+    ),
+    (
+        "acl_machine_translation_generation",
+        (
+            "translation",
+            "generation",
+            "summarization",
+            "decoding",
+            "preference",
+            "faithfulness",
+        ),
+    ),
+    (
+        "acl_information_extraction_retrieval",
+        (
+            "retrieval",
+            "reranking",
+            "extraction",
+            "entity",
+            "question answering",
+            "knowledge graph",
+        ),
+    ),
+    (
+        "acl_dialogue_safety_evaluation",
+        (
+            "dialogue",
+            "alignment",
+            "safety",
+            "toxicity",
+            "evaluation",
+            "instruction",
+        ),
+    ),
+    (
+        "neurips_rl_decision_making",
+        (
+            "reinforcement",
+            "policy",
+            "reward",
+            "offline rl",
+            "bandit",
+            "decision",
+        ),
+    ),
+    (
+        "neurips_generative_multimodal",
+        (
+            "diffusion",
+            "multimodal",
+            "vision-language",
+            "generative",
+            "latent",
+        ),
+    ),
+    (
+        "icml_optimization_learning_theory",
+        (
+            "optimization",
+            "generalization",
+            "gradient",
+            "convex",
+            "learning theory",
+            "convergence",
+        ),
+    ),
+    (
+        "icml_probabilistic_bayes",
+        (
+            "bayes",
+            "probabilistic",
+            "variational",
+            "causal",
+            "uncertainty",
+            "posterior",
+        ),
+    ),
+    (
+        "iclr_representations_architectures",
+        (
+            "representation",
+            "transformer",
+            "attention",
+            "architecture",
+            "normalization",
+            "adapter",
+        ),
+    ),
+    (
+        "ml_systems_data_scaling",
+        (
+            "serving",
+            "throughput",
+            "latency",
+            "scaling",
+            "distributed",
+            "checkpoint",
+            "pipeline",
+        ),
+    ),
+    (
+        "ai_agents_tool_use",
+        (
+            "agent",
+            "tool",
+            "planning",
+            "workflow",
+            "function calling",
+            "environment",
+        ),
+    ),
+    (
+        "paper_layout_and_reporting",
+        (
+            "ablation",
+            "appendix",
+            "benchmark",
+            "reproducibility",
+            "statistical",
+            "confidence interval",
+        ),
+    ),
+)
 
 
 def _load_corpus() -> Dict[str, Dict[str, str]]:
@@ -314,9 +474,60 @@ def load_candidate_terms(candidate_path: Path) -> List[dict]:
     return sorted(grouped.values(), key=lambda item: (-item["count"], item["term"].lower()))
 
 
+def audit_candidate_terms(candidate_path: Path) -> List[dict]:
+    """Return deduplicated terminology candidates with review hints."""
+    known = _known_term_lookup()
+    audited: List[dict] = []
+    for item in load_candidate_terms(candidate_path):
+        term = str(item.get("term", "")).strip()
+        key = _candidate_key(term)
+        known_entry = known.get(key)
+        suggested_field, confidence, reason = suggest_candidate_field(term)
+        enriched = dict(item)
+        enriched.setdefault("approved", False)
+        enriched.setdefault("translation", "")
+        enriched["suggested_field"] = suggested_field
+        enriched["suggested_confidence"] = confidence
+        enriched["classification_reason"] = reason
+        enriched["field"] = enriched.get("field") or suggested_field
+        if known_entry:
+            field, canonical_term, translation = known_entry
+            enriched["status"] = "known"
+            enriched["known_field"] = field
+            enriched["known_term"] = canonical_term
+            enriched["known_translation"] = translation
+            enriched["translation"] = enriched.get("translation") or translation
+            enriched["review_notes"] = (
+                "Already covered by corpus; do not promote unless changing译法."
+            )
+        else:
+            enriched["status"] = "needs_translation"
+            enriched["review_notes"] = (
+                "Set approved=true after confirming field and Chinese translation."
+            )
+        audited.append(enriched)
+    return audited
+
+
+def suggest_candidate_field(term: str) -> tuple[str, float, str]:
+    """Suggest the most likely top-conference field for a candidate term."""
+    key = _candidate_key(term)
+    best_field = "neurips_icml_iclr"
+    best_hits: list[str] = []
+    for field, keywords in FIELD_KEYWORDS:
+        hits = [keyword for keyword in keywords if keyword in key]
+        if len(hits) > len(best_hits):
+            best_field = field
+            best_hits = hits
+    if best_hits:
+        confidence = min(0.95, 0.52 + len(best_hits) * 0.12)
+        return best_field, confidence, "matched keywords: " + ", ".join(best_hits[:4])
+    return best_field, 0.35, "fallback to broad NeurIPS/ICML/ICLR terminology"
+
+
 def write_candidate_review(candidate_path: Path, review_path: Path) -> int:
     """Write a deduplicated review JSON for human/agent approval."""
-    candidates = load_candidate_terms(candidate_path)
+    candidates = audit_candidate_terms(candidate_path)
     review_path.parent.mkdir(parents=True, exist_ok=True)
     review_path.write_text(
         json.dumps(
@@ -324,7 +535,12 @@ def write_candidate_review(candidate_path: Path, review_path: Path) -> int:
                 "_meta": {
                     "source": str(candidate_path),
                     "generated_at": _utc_now(),
-                    "instructions": "Set approved=true and fill translation to promote terms.",
+                    "instructions": (
+                        "Review suggested_field/field, fill translation, then set "
+                        "approved=true. Use corpus-promote FIELD or FIELD=auto."
+                    ),
+                    "candidate_count": len(candidates),
+                    "known_count": sum(1 for item in candidates if item["status"] == "known"),
                 },
                 "candidates": candidates,
             },
@@ -346,15 +562,29 @@ def promote_reviewed_terms(
 ) -> int:
     """Promote approved reviewed candidates to the official corpus."""
     data = json.loads(review_path.read_text(encoding="utf-8"))
-    approved = {}
+    approved_by_field: Dict[str, Dict[str, str]] = {}
     for item in data.get("candidates", []):
         if not isinstance(item, dict) or not item.get("approved"):
             continue
         term = str(item.get("term", "")).strip()
         translation = str(item.get("translation", "")).strip()
         if term and translation:
-            approved[term] = translation
-    return upsert_terms(field, approved, source=source, corpus_path=corpus_path)
+            target_field = field
+            if field == "auto":
+                target_field = str(item.get("field") or item.get("suggested_field") or "").strip()
+            if not target_field:
+                raise ValueError("review item is missing field/suggested_field for auto promote")
+            approved_by_field.setdefault(target_field, {})[term] = translation
+
+    changed = 0
+    for target_field, approved in sorted(approved_by_field.items()):
+        changed += upsert_terms(
+            target_field,
+            approved,
+            source=source,
+            corpus_path=corpus_path,
+        )
+    return changed
 
 
 def release_corpus_version(
@@ -401,6 +631,14 @@ def _looks_like_academic_candidate(term: str) -> bool:
 
 def _candidate_key(term: str) -> str:
     return " ".join(term.replace("-", " ").split()).lower()
+
+
+def _known_term_lookup() -> Dict[str, Tuple[str, str, str]]:
+    known: Dict[str, Tuple[str, str, str]] = {}
+    for field, terms in _load_corpus().items():
+        for english, chinese in terms.items():
+            known[_candidate_key(english)] = (field, english, chinese)
+    return known
 
 
 def _count_terms(data: dict) -> int:

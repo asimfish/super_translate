@@ -1,6 +1,7 @@
 """Integration tests for Super Translate API endpoints."""
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -799,6 +800,11 @@ class TestTranslationEndpoint:
         assert unresolved == []
         assert mock_verify.call_count == 2
         assert mock_fix.call_count == 2
+        report = json.loads(mono_path.with_suffix(".qa.json").read_text(encoding="utf-8"))
+        assert report["status"] == "passed"
+        assert report["passes_run"] == 2
+        assert report["repair_attempted"] is True
+        assert report["issue_count"] == 0
 
 
 class TestCancelEndpoint:
