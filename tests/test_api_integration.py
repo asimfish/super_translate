@@ -782,6 +782,8 @@ class TestTranslationEndpoint:
         with (
             patch("app.api.papers._append_log"),
             patch("app.api.papers._record_terminology_candidates"),
+            # This test is about layout-fix rechecks, not cancellation.
+            patch("app.api.papers._is_cancel_requested", return_value=False),
             patch(
                 "pdf_zh_translator.pdf_layout.verify_translation_issues",
                 side_effect=[[issue], []],
@@ -1920,6 +1922,56 @@ class TestRunTranslation:
         assert paper.translation_error is None
 
         # Cleanup
+        with _cancel_lock:
+            _cancelled_papers.discard("paper123")
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_cancellation_during_qa_resets_to_pending(
+        self, mock_settings, mock_translate, tmp_path
+    ):
+        """A cancel that arrives during post-translation QA also resets to pending."""
+        from app.api.papers import (
+            _cancel_lock,
+            _cancelled_papers,
+            _mark_cancel_requested,
+            _run_translation,
+        )
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translation_status = "translating"
+
+        db = self._setup_db_mock(paper)
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+        mock_settings.feishu_webhook_url = ""
+
+        self._write_valid_pdf(papers_dir / "test.pdf", "Original content.")
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        self._write_valid_pdf(mono_path, "译文内容。")
+
+        def fake_translate(input_path, output_dir, config, progress_callback=None):
+            # Translation finishes; cancel arrives before post-translation QA runs.
+            _mark_cancel_requested("paper123")
+            return TranslationResult(mono_path=mono_path)
+
+        mock_translate.side_effect = fake_translate
+
+        with patch("app.core.database.async_session", self._make_async_session_mock(db)):
+            _run_translation("paper123", "deepseek", "balanced")
+
+        assert paper.translation_status == "pending"
+        assert paper.translation_progress == 0.0
+        assert paper.translation_error is None
+
         with _cancel_lock:
             _cancelled_papers.discard("paper123")
 

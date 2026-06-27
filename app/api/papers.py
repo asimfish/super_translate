@@ -1108,6 +1108,44 @@ def _run_translation(
         _translation_semaphore.release()
 
 
+async def _finalize_cancelled_translation(
+    paper_id: str,
+    loop: asyncio.AbstractEventLoop,
+    output_dir: Path,
+    start_time: float,
+    job_id: str | None,
+) -> None:
+    """Reset state for a user-cancelled translation.
+
+    Shared by the translate phase and the post-translation QA phase so a cancel
+    request takes effect promptly during either.
+    """
+    from app.core.database import async_session
+
+    elapsed = time.monotonic() - start_time
+    logger.info("Translation cancelled for paper %s", paper_id)
+    _append_log(paper_id, loop, f"翻译已取消 (耗时 {elapsed:.0f}秒)")
+    async with async_session() as db:
+        result = await db.execute(select(Paper).where(Paper.id == paper_id))
+        paper = result.scalar_one_or_none()
+        if paper:
+            paper.translation_status = TranslationStatus.PENDING.value
+            paper.translation_progress = 0.0
+            paper.translation_error = None
+            await _update_translation_job(
+                db,
+                job_id,
+                status=TranslationJobStatus.CANCELLED.value,
+                progress=0.0,
+                error="Translation cancelled by user",
+                cancel_requested=True,
+                finished=True,
+            )
+            await db.commit()
+    cleanup_output_dir(output_dir)
+    _clear_cancel_requested(paper_id)
+
+
 async def _do_translate(
     paper_id: str,
     config: TranslationConfig,
@@ -1211,28 +1249,7 @@ async def _do_translate(
     try:
         trans_result = translate_pdf_sync(input_path, output_dir, config, on_progress)
     except TranslationCancelledError:
-        elapsed = time.monotonic() - start_time
-        logger.info("Translation cancelled for paper %s", paper_id)
-        _append_log(paper_id, loop, f"翻译已取消 (耗时 {elapsed:.0f}秒)")
-        async with async_session() as db:
-            result = await db.execute(select(Paper).where(Paper.id == paper_id))
-            paper = result.scalar_one_or_none()
-            if paper:
-                paper.translation_status = TranslationStatus.PENDING.value
-                paper.translation_progress = 0.0
-                paper.translation_error = None
-                await _update_translation_job(
-                    db,
-                    job_id,
-                    status=TranslationJobStatus.CANCELLED.value,
-                    progress=0.0,
-                    error="Translation cancelled by user",
-                    cancel_requested=True,
-                    finished=True,
-                )
-                await db.commit()
-        cleanup_output_dir(output_dir)
-        _clear_cancel_requested(paper_id)
+        await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)
         return
     except Exception as e:
         elapsed = time.monotonic() - start_time
@@ -1257,14 +1274,18 @@ async def _do_translate(
         return
 
     if trans_result.success and trans_result.mono_path:
-        unresolved_issues = _run_post_translation_qa(
-            paper_id,
-            loop,
-            input_path,
-            trans_result,
-            qa_mode=qa_mode,
-            max_passes=qa_max_passes,
-        )
+        try:
+            unresolved_issues = _run_post_translation_qa(
+                paper_id,
+                loop,
+                input_path,
+                trans_result,
+                qa_mode=qa_mode,
+                max_passes=qa_max_passes,
+            )
+        except TranslationCancelledError:
+            await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)
+            return
         if _has_unresolved_error(unresolved_issues):
             trans_result = TranslationResult(
                 error="QA found unresolved layout or translation issues after post-checks"
@@ -1341,6 +1362,8 @@ def _run_post_translation_qa(
     try:
         from pdf_zh_translator.pdf_layout import verify_translation_issues
 
+        if _is_cancel_requested(paper_id):
+            raise TranslationCancelledError("Translation cancelled by user")
         _append_log(paper_id, loop, "正在检查译文和版面")
         _set_translation_stage(paper_id, loop, "译后检查")
         _record_terminology_candidates(paper_id, loop, input_path)
@@ -1350,6 +1373,8 @@ def _run_post_translation_qa(
         passes_run = 0
         repair_attempted = False
         for pass_index in range(1, passes + 1):
+            if _is_cancel_requested(paper_id):
+                raise TranslationCancelledError("Translation cancelled by user")
             issues = verify_translation_issues(input_path, mono_path)
             passes_run += 1
             if not issues:
@@ -1394,6 +1419,9 @@ def _run_post_translation_qa(
             status="failed" if _has_unresolved_error(issues) else "warning",
         )
         return issues
+    except TranslationCancelledError:
+        # Propagate so the caller resets the paper to pending (not a QA failure).
+        raise
     except Exception as e:
         logger.warning("Post-translation QA failed for %s: %s", paper_id, sanitize_error(e))
         _write_qa_report(
