@@ -207,6 +207,35 @@ class TranslatorParsingTests(unittest.TestCase):
             cached_again = CachedTranslator(CountingTranslator(), cache_file)
             self.assertEqual(cached_again.translate_batch(["a"]), ["译:a"])
 
+    def test_cached_translator_concurrent_writes_stay_valid_jsonl(self):
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            cached = CachedTranslator(CountingTranslator(), cache_file)
+            errors: list = []
+
+            def worker(items):
+                try:
+                    cached.translate_batch(items)
+                except Exception as exc:  # pragma: no cover - failure path
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=worker, args=([f"t{i}-{j}" for j in range(5)],))
+                for i in range(6)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            self.assertEqual(errors, [])
+            # The write lock must keep every appended line individually valid.
+            for line in cache_file.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    json.loads(line)
+
     def test_cached_translator_forwards_block_types_to_wrapped(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_file = Path(tmpdir) / "cache.jsonl"

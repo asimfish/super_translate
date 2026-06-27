@@ -7,7 +7,7 @@ import os
 import re
 import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from enum import Enum
@@ -367,10 +367,17 @@ def _prepare_ocr_source(input_path: Path, output_dir: Path, config: TranslationC
 class _ProgressTranslator:
     """Wrap a pdf_zh_translator Translator to report batch progress."""
 
-    def __init__(self, inner, progress_callback: Callable | None, group_size: int = 4):
+    def __init__(
+        self,
+        inner,
+        progress_callback: Callable | None,
+        group_size: int = 4,
+        concurrency: int = 1,
+    ):
         self._inner = inner
         self._callback = progress_callback
         self._group_size = max(1, group_size)
+        self._concurrency = max(1, concurrency)
 
     @property
     def block_types(self):
@@ -383,13 +390,51 @@ class _ProgressTranslator:
         self._inner.block_types = value
 
     def translate_batch(self, texts):
-        results = []
+        texts = list(texts)
         total = len(texts)
-        for start in range(0, total, self._group_size):
-            group = list(texts[start : start + self._group_size])
+        groups = [texts[i : i + self._group_size] for i in range(0, total, self._group_size)]
+        if self._concurrency <= 1 or len(groups) <= 1:
+            return self._translate_serial(groups, total)
+        return self._translate_parallel(groups, total)
+
+    def _translate_serial(self, groups, total):
+        results: list = []
+        for group in groups:
             results.extend(self._inner.translate_batch(group))
             if self._callback and total:
-                self._callback(min(1.0, (start + len(group)) / total))
+                self._callback(min(1.0, len(results) / total))
+        return results
+
+    def _translate_parallel(self, groups, total):
+        """Translate groups with bounded parallelism, preserving input order.
+
+        Overlapping supplier round-trips is the main speedup for long papers.
+        Progress is reported as groups complete; on cancellation/error, pending
+        groups are cancelled (in-flight requests still drain, bounded by timeout).
+        """
+        results_by_index: list = [None] * len(groups)
+        completed = 0
+        executor = ThreadPoolExecutor(max_workers=self._concurrency)
+        try:
+            future_to_index = {
+                executor.submit(self._inner.translate_batch, group): index
+                for index, group in enumerate(groups)
+            }
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                results_by_index[index] = future.result()
+                completed += len(groups[index])
+                if self._callback and total:
+                    self._callback(min(1.0, completed / total))
+        except BaseException:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
+
+        results: list = []
+        for group_result in results_by_index:
+            results.extend(group_result)
         return results
 
 
@@ -436,7 +481,11 @@ def _translate_sync_native(
         target_lang=config.lang_out,
         progress=False,
     )
-    translator = _ProgressTranslator(CachedTranslator(vendor, cache_path), progress_callback)
+    translator = _ProgressTranslator(
+        CachedTranslator(vendor, cache_path),
+        progress_callback,
+        concurrency=settings.translation_concurrency,
+    )
 
     for attempt in range(config.max_retries + 1):
         try:

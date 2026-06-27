@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-599%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-603%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -84,7 +84,8 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 | `PAPER_CHINA_TRANSLATION_ENGINE` | `native` | Translation engine (`native` or `pdf2zh`) |
 | `PAPER_CHINA_TRANSLATION_BACKEND` | `deepseek` | Default translation backend |
 | `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` | `600` | Global timeout for each translation run |
-| `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `3` | Max concurrent translations |
+| `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `3` | Max concurrent translation jobs |
+| `PAPER_CHINA_TRANSLATION_CONCURRENCY` | `4` | Parallel supplier requests within one translation (lower to `1` for rate-limited API keys) |
 | `PAPER_CHINA_API_TOKEN` | — | Optional bearer token for `/api/*` requests |
 | `PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE` | `false` | Allow remote API access without token |
 | `PAPER_CHINA_FEISHU_WEBHOOK_URL` | — | Feishu webhook for notifications |
@@ -104,7 +105,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (599 tests)
+└── tests/            # Test suite (603 tests)
 ```
 
 ## Deployment Notes

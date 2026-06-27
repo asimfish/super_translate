@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -54,6 +55,9 @@ class CachedTranslator(Translator):
         self.wrapped = wrapped
         self.cache_file = cache_file
         self.cache: Dict[str, str] = {}
+        # Guards cache-file appends so concurrent translate_batch calls (parallel
+        # supplier requests) don't interleave/corrupt the JSONL.
+        self._write_lock = threading.Lock()
         self._load()
 
     @property
@@ -82,7 +86,7 @@ class CachedTranslator(Translator):
             )
             for chunk in chunked_by_size(missing, batch_size, max_chars):
                 translations = self.wrapped.translate_batch(chunk)
-                with self.cache_file.open("a", encoding="utf-8") as handle:
+                with self._write_lock, self.cache_file.open("a", encoding="utf-8") as handle:
                     for source, translation in zip(chunk, translations):
                         key = cache_key(source)
                         self.cache[key] = translation

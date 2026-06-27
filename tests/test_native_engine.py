@@ -69,6 +69,33 @@ class ProgressTranslatorTests(unittest.TestCase):
         self.assertEqual(inner.block_types, ["title", "caption"])
         self.assertEqual(wrapper.block_types, ["title", "caption"])
 
+    def test_parallel_preserves_order_and_reports_progress(self):
+        inner = _EchoInner()
+        seen = []
+        wrapper = _ProgressTranslator(inner, seen.append, group_size=1, concurrency=4)
+        result = wrapper.translate_batch(["a", "b", "c", "d", "e"])
+        # Order must match input despite out-of-order parallel completion.
+        self.assertEqual(result, ["译:a", "译:b", "译:c", "译:d", "译:e"])
+        self.assertEqual(seen[-1], 1.0)
+        self.assertEqual(seen, sorted(seen))  # progress is monotonic non-decreasing
+        self.assertTrue(all(0.0 < value <= 1.0 for value in seen))
+
+    def test_concurrency_one_uses_serial_path(self):
+        inner = _EchoInner()
+        wrapper = _ProgressTranslator(inner, None, group_size=2, concurrency=1)
+        result = wrapper.translate_batch(["a", "b", "c"])
+        self.assertEqual(result, ["译:a", "译:b", "译:c"])
+        self.assertEqual(inner.batches, [["a", "b"], ["c"]])
+
+    def test_parallel_propagates_supplier_errors(self):
+        class _Boom:
+            def translate_batch(self, texts):
+                raise RuntimeError("supplier down")
+
+        wrapper = _ProgressTranslator(_Boom(), None, group_size=1, concurrency=3)
+        with self.assertRaises(RuntimeError):
+            wrapper.translate_batch(["a", "b", "c"])
+
 
 class TranslateSyncNativeTests(unittest.TestCase):
     def test_produces_mono_result(self):

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # Translation concurrency
     max_concurrent_translations: int = 3
     translation_timeout_seconds: int = 600
+    # Parallel supplier requests within a single native translation. Speeds up
+    # long papers by overlapping API round-trips. Lower to 1 for rate-limited
+    # API keys (e.g. free tiers) to avoid HTTP 429s.
+    translation_concurrency: int = 4
 
     # Feishu/Lark notification webhook
     feishu_webhook_url: str = ""
