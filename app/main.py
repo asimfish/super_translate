@@ -29,18 +29,61 @@ _STATS_CACHE_TTL = 30  # seconds
 _stats_cache: dict | None = None
 _stats_cache_time: float = 0.0
 _stats_lock = asyncio.Lock()
+_startup_translation_tasks: set[asyncio.Task] = set()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-async def _recover_stuck_translations() -> None:
-    """Reset papers stuck in 'translating' status after a crash.
+def _translation_job_resume_payload(job) -> dict[str, object]:
+    """Serialize a queued translation job into _run_translation arguments."""
+    return {
+        "paper_id": job.paper_id,
+        "backend": job.backend,
+        "quality": job.quality,
+        "preserve_graphics_text": job.preserve_graphics_text,
+        "skip_overflow": job.skip_overflow,
+        "qa_mode": job.qa_mode,
+        "qa_max_passes": job.qa_max_passes,
+        "ocr_mode": job.ocr_mode,
+        "ocr_language": job.ocr_language,
+        "ocr_dpi": job.ocr_dpi,
+        "job_id": job.id,
+    }
 
-    On startup, any paper with translation_status='translating' is marked
-    as failed, since the translation process no longer exists.
+
+def _schedule_recovered_translation(payload: dict[str, object]) -> None:
+    """Resume a durable queued translation job after startup."""
+    from app.api.papers import _run_translation
+
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            _run_translation,
+            payload["paper_id"],
+            payload["backend"],
+            payload["quality"],
+            payload["preserve_graphics_text"],
+            payload["skip_overflow"],
+            payload["qa_mode"],
+            payload["qa_max_passes"],
+            payload["ocr_mode"],
+            payload["ocr_language"],
+            payload["ocr_dpi"],
+            payload["job_id"],
+        )
+    )
+    _startup_translation_tasks.add(task)
+    task.add_done_callback(_startup_translation_tasks.discard)
+
+
+async def _recover_stuck_translations() -> list[dict[str, object]]:
+    """Recover durable translation records after a crash.
+
+    Queued jobs are safe to resume because they have not started running yet.
+    Running jobs are marked failed because the previous process may have died
+    mid-write; re-running them automatically could duplicate side effects.
     """
-    from sqlalchemy import func
+    from sqlalchemy import func, select
     from sqlalchemy import update as sa_update
 
     from app.core.database import async_session
@@ -52,21 +95,29 @@ async def _recover_stuck_translations() -> None:
     )
 
     async with async_session() as db:
+        queued_result = await db.execute(
+            select(TranslationJob)
+            .where(TranslationJob.status == TranslationJobStatus.QUEUED.value)
+            .order_by(TranslationJob.created_at.asc())
+        )
+        queued_jobs = list(queued_result.scalars().all())
+        resume_payloads = [_translation_job_resume_payload(job) for job in queued_jobs]
+        queued_paper_ids = [payload["paper_id"] for payload in resume_payloads]
+
+        paper_update = sa_update(Paper).where(
+            Paper.translation_status == TranslationStatus.TRANSLATING.value
+        )
+        if queued_paper_ids:
+            paper_update = paper_update.where(Paper.id.not_in(queued_paper_ids))
         paper_result = await db.execute(
-            sa_update(Paper)
-            .where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
-            .values(
+            paper_update.values(
                 translation_status=TranslationStatus.FAILED.value,
                 translation_error="Translation was interrupted (server restart)",
             ),
         )
         job_result = await db.execute(
             sa_update(TranslationJob)
-            .where(
-                TranslationJob.status.in_(
-                    [TranslationJobStatus.QUEUED.value, TranslationJobStatus.RUNNING.value]
-                )
-            )
+            .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
             .values(
                 status=TranslationJobStatus.FAILED.value,
                 error="Translation was interrupted (server restart)",
@@ -74,7 +125,18 @@ async def _recover_stuck_translations() -> None:
                 updated_at=func.now(),
             ),
         )
-        recovered = (paper_result.rowcount or 0) + (job_result.rowcount or 0)
+        refreshed = 0
+        if queued_paper_ids:
+            queued_paper_result = await db.execute(
+                sa_update(Paper)
+                .where(Paper.id.in_(queued_paper_ids))
+                .values(
+                    translation_status=TranslationStatus.TRANSLATING.value,
+                    translation_error=None,
+                ),
+            )
+            refreshed = queued_paper_result.rowcount or 0
+        recovered = (paper_result.rowcount or 0) + (job_result.rowcount or 0) + refreshed
         if recovered > 0:
             try:
                 await db.commit()
@@ -82,13 +144,19 @@ async def _recover_stuck_translations() -> None:
             except Exception:
                 await db.rollback()
                 logger.exception("Failed to recover stuck translations")
+                return []
+        return resume_payloads
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ensure_dirs()
     await init_db()
-    await _recover_stuck_translations()
+    queued_jobs = await _recover_stuck_translations()
+    for payload in queued_jobs:
+        _schedule_recovered_translation(payload)
+    if queued_jobs:
+        logger.info("Resumed %d queued translation job(s)", len(queued_jobs))
     logger.info("Super Translate started at http://localhost:8000")
     yield
 

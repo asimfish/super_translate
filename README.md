@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-617%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-619%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -112,7 +112,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (617 tests)
+└── tests/            # Test suite (619 tests)
 ```
 
 ## Deployment Notes
@@ -123,6 +123,11 @@ Super Translate targets local / single-machine / small-team use:
   translation queue are process-local. Running multiple uvicorn workers would
   multiply the effective concurrency limit and split cancel state, so prefer one
   worker (scale by running more translations inside it, not more workers).
+- **Queued jobs survive restarts.** Translation requests are persisted before
+  execution; if the process restarts while a job is still `queued`, startup
+  schedules it again with the original backend, QA, OCR, and layout options.
+  Jobs that were already `running` are still marked failed on restart because
+  the previous process may have died mid-write.
 - **SQLite is tuned for this.** The database opens in WAL mode with a busy
   timeout and `synchronous=NORMAL`, so the 2-second status polling and frequent
   progress writes can run concurrently without "database is locked" errors. For

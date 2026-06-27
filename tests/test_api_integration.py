@@ -2425,11 +2425,15 @@ class TestRecoverStuckTranslations:
     async def test_recovers_stuck_papers(self):
         from app.main import _recover_stuck_translations
 
-        mock_result = MagicMock()
-        mock_result.rowcount = 2
+        queued_result = MagicMock()
+        queued_result.scalars.return_value.all.return_value = []
+        paper_result = MagicMock()
+        paper_result.rowcount = 1
+        job_result = MagicMock()
+        job_result.rowcount = 1
 
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session.execute = AsyncMock(side_effect=[queued_result, paper_result, job_result])
         mock_session.commit = AsyncMock()
 
         mock_ctx_manager = MagicMock()
@@ -2437,19 +2441,24 @@ class TestRecoverStuckTranslations:
         mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
         mock_factory = MagicMock(return_value=mock_ctx_manager)
         with patch("app.core.database.async_session", mock_factory):
-            await _recover_stuck_translations()
+            resume_payloads = await _recover_stuck_translations()
 
+        assert resume_payloads == []
         mock_session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_noop_when_no_stuck_papers(self):
         from app.main import _recover_stuck_translations
 
-        mock_result = MagicMock()
-        mock_result.rowcount = 0
+        queued_result = MagicMock()
+        queued_result.scalars.return_value.all.return_value = []
+        paper_result = MagicMock()
+        paper_result.rowcount = 0
+        job_result = MagicMock()
+        job_result.rowcount = 0
 
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session.execute = AsyncMock(side_effect=[queued_result, paper_result, job_result])
         mock_session.commit = AsyncMock()
 
         mock_ctx_manager = MagicMock()
@@ -2457,8 +2466,9 @@ class TestRecoverStuckTranslations:
         mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
         mock_factory = MagicMock(return_value=mock_ctx_manager)
         with patch("app.core.database.async_session", mock_factory):
-            await _recover_stuck_translations()
+            resume_payloads = await _recover_stuck_translations()
 
+        assert resume_payloads == []
         mock_session.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -2466,11 +2476,15 @@ class TestRecoverStuckTranslations:
         """Commit failure should rollback and log, not crash."""
         from app.main import _recover_stuck_translations
 
-        mock_result = MagicMock()
-        mock_result.rowcount = 1
+        queued_result = MagicMock()
+        queued_result.scalars.return_value.all.return_value = []
+        paper_result = MagicMock()
+        paper_result.rowcount = 1
+        job_result = MagicMock()
+        job_result.rowcount = 0
 
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session.execute = AsyncMock(side_effect=[queued_result, paper_result, job_result])
         mock_session.commit = AsyncMock(side_effect=Exception("database locked"))
 
         mock_ctx_manager = MagicMock()
@@ -2479,10 +2493,67 @@ class TestRecoverStuckTranslations:
         mock_factory = MagicMock(return_value=mock_ctx_manager)
         with patch("app.core.database.async_session", mock_factory):
             # Should not raise
-            await _recover_stuck_translations()
+            resume_payloads = await _recover_stuck_translations()
 
+        assert resume_payloads == []
         mock_session.commit.assert_awaited_once()
         mock_session.rollback.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_queued_jobs_for_startup_resume(self):
+        from app.main import _recover_stuck_translations
+
+        job = MagicMock()
+        job.id = "job123"
+        job.paper_id = "abcd12345678"
+        job.backend = "deepseek"
+        job.quality = "balanced"
+        job.preserve_graphics_text = True
+        job.skip_overflow = False
+        job.qa_mode = "iterative"
+        job.qa_max_passes = 4
+        job.ocr_mode = "auto"
+        job.ocr_language = "eng"
+        job.ocr_dpi = 180
+
+        queued_result = MagicMock()
+        queued_result.scalars.return_value.all.return_value = [job]
+        paper_result = MagicMock()
+        paper_result.rowcount = 0
+        job_result = MagicMock()
+        job_result.rowcount = 0
+        queued_paper_result = MagicMock()
+        queued_paper_result.rowcount = 1
+
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(
+            side_effect=[queued_result, paper_result, job_result, queued_paper_result]
+        )
+        mock_session.commit = AsyncMock()
+
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx_manager)
+        with patch("app.core.database.async_session", mock_factory):
+            resume_payloads = await _recover_stuck_translations()
+
+        assert resume_payloads == [
+            {
+                "paper_id": "abcd12345678",
+                "backend": "deepseek",
+                "quality": "balanced",
+                "preserve_graphics_text": True,
+                "skip_overflow": False,
+                "qa_mode": "iterative",
+                "qa_max_passes": 4,
+                "ocr_mode": "auto",
+                "ocr_language": "eng",
+                "ocr_dpi": 180,
+                "job_id": "job123",
+            }
+        ]
+        mock_session.commit.assert_awaited_once()
 
 
 class TestEnsureDirs:
@@ -2531,7 +2602,11 @@ class TestLifespan:
         with (
             patch("app.main.ensure_dirs") as mock_dirs,
             patch("app.main.init_db", new_callable=AsyncMock) as mock_db,
-            patch("app.main._recover_stuck_translations", new_callable=AsyncMock) as mock_recover,
+            patch(
+                "app.main._recover_stuck_translations",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_recover,
         ):
             async with lifespan(MagicMock()):
                 pass
@@ -2539,6 +2614,28 @@ class TestLifespan:
         mock_dirs.assert_called_once()
         mock_db.assert_awaited_once()
         mock_recover.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_lifespan_schedules_recovered_jobs(self):
+        """Queued durable jobs should restart when the app starts."""
+        from app.main import lifespan
+
+        payload = {"job_id": "job123", "paper_id": "abcd12345678"}
+
+        with (
+            patch("app.main.ensure_dirs"),
+            patch("app.main.init_db", new_callable=AsyncMock),
+            patch(
+                "app.main._recover_stuck_translations",
+                new_callable=AsyncMock,
+                return_value=[payload],
+            ),
+            patch("app.main._schedule_recovered_translation") as mock_schedule,
+        ):
+            async with lifespan(MagicMock()):
+                pass
+
+        mock_schedule.assert_called_once_with(payload)
 
 
 class TestInitDb:
