@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -79,6 +79,7 @@ _VALID_OCR_MODES = {"off", "auto", "force"}
 _ETA_RE = re.compile(
     r"预计剩余\s*(?:(?P<hours>\d+)小时)?(?:(?P<minutes>\d+)分)?(?:(?P<seconds>\d+)秒)?"
 )
+_EDITABLE_FIGURES_DIRNAME = "editable_figures"
 
 
 def _cancel_marker_path(paper_id: str) -> Path:
@@ -415,6 +416,104 @@ def _qa_report_exists(paper: Paper) -> bool:
         return _qa_report_path(paper).exists()
     except HTTPException:
         return False
+
+
+def _editable_figures_root() -> Path:
+    return settings.translations_path / _EDITABLE_FIGURES_DIRNAME
+
+
+def _editable_source_manifest_path(paper: Paper) -> Path:
+    from pdf_zh_translator.editable_figures import SOURCE_FIGURES_MANIFEST_FILENAME
+
+    return _editable_figures_root() / paper.id / SOURCE_FIGURES_MANIFEST_FILENAME
+
+
+def _ui_safe_path(value: str | Path | None) -> str:
+    if not value:
+        return ""
+    path = Path(str(value))
+    try:
+        resolved = path.resolve()
+        base_value = getattr(settings, "base_dir", None)
+        if base_value:
+            base_dir = Path(base_value).resolve()
+            if resolved.is_relative_to(base_dir):
+                return str(resolved.relative_to(base_dir))
+    except (OSError, ValueError):
+        pass
+    return path.name
+
+
+def _editable_figure_manifest_response(
+    paper: Paper,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+) -> dict[str, Any]:
+    from pdf_zh_translator.editable_figures import audit_figure_source_manifest
+
+    audit = audit_figure_source_manifest(manifest_path)
+    safe_figures: list[dict[str, Any]] = []
+    for figure in manifest.get("figures", []):
+        if not isinstance(figure, dict):
+            continue
+        safe_figures.append(
+            {
+                "figure_id": str(figure.get("figure_id", "")),
+                "page": figure.get("page"),
+                "bbox": figure.get("bbox") if isinstance(figure.get("bbox"), list) else [],
+                "kind": str(figure.get("kind", "")),
+                "image_path": _ui_safe_path(figure.get("image_path")),
+                "image_sha256": str(figure.get("image_sha256", "")),
+                "width": figure.get("width"),
+                "height": figure.get("height"),
+                "area": figure.get("area"),
+                "status": str(figure.get("status", "")),
+                "editppt_run": _ui_safe_path(figure.get("editppt_run")),
+                "editable_manifest": _ui_safe_path(figure.get("editable_manifest")),
+            }
+        )
+
+    safe_manifest_path = _ui_safe_path(manifest_path)
+    return {
+        "schema_version": manifest.get("schema_version", 1),
+        "paper_id": paper.id,
+        "status": str(manifest.get("status", "unknown")),
+        "generated_at": str(manifest.get("generated_at", "")),
+        "updated_at": str(manifest.get("updated_at", "")),
+        "skill": str(manifest.get("skill", "")),
+        "skill_source": str(manifest.get("skill_source", "")),
+        "source_pdf": _ui_safe_path(manifest.get("source_pdf")),
+        "source_pdf_sha256": str(manifest.get("source_pdf_sha256", "")),
+        "source_manifest_path": safe_manifest_path,
+        "figure_count": int(manifest.get("figure_count") or len(safe_figures)),
+        "prepared_count": int(manifest.get("prepared_count") or 0),
+        "registered_count": int(manifest.get("registered_count") or 0),
+        "figures": safe_figures,
+        "audit": {
+            "ok": audit.ok,
+            "checked": audit.checked,
+            "passed": audit.passed,
+            "failed": audit.failed,
+            "issues": audit.issues,
+        },
+        "next_commands": [
+            f".venv/bin/python -m pdf_zh_translator figure-ppt-source-audit {safe_manifest_path}",
+            f".venv/bin/python -m pdf_zh_translator figure-ppt-batch-prepare {safe_manifest_path}",
+            (
+                ".venv/bin/python -m pdf_zh_translator figure-ppt-source-audit "
+                f"{safe_manifest_path} --require-prepared"
+            ),
+            f".venv/bin/python -m pdf_zh_translator figure-ppt-batch-register {safe_manifest_path}",
+            (
+                ".venv/bin/python -m pdf_zh_translator figure-ppt-source-audit "
+                f"{safe_manifest_path} --require-registered"
+            ),
+            (
+                ".venv/bin/python -m pdf_zh_translator figure-ppt-audit "
+                f"{_ui_safe_path(_editable_figures_root())}"
+            ),
+        ],
+    }
 
 
 async def _get_paper_or_404(paper_id: str, db: AsyncSession) -> Paper:
@@ -1619,6 +1718,62 @@ async def get_qa_report(
     if not isinstance(data, dict):
         raise HTTPException(500, "QA report is invalid")
     return data
+
+
+@router.get("/{paper_id}/editable-figures/source-manifest")
+async def get_editable_figure_manifest(
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Return UI-safe editable-figure source manifest metadata for a paper."""
+    paper = await _get_paper_or_404(paper_id, db)
+    manifest_path = _editable_source_manifest_path(paper)
+    if not manifest_path.exists():
+        raise HTTPException(404, "Editable figure source manifest not found")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        raise HTTPException(500, "Editable figure source manifest is invalid") from None
+    if not isinstance(manifest, dict):
+        raise HTTPException(500, "Editable figure source manifest is invalid")
+    return _editable_figure_manifest_response(paper, manifest, manifest_path)
+
+
+@router.post("/{paper_id}/editable-figures/extract")
+async def extract_editable_figures(
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    max_figures: int = 100,
+) -> dict[str, Any]:
+    """Extract figure source images and write an editable-PPT provenance manifest."""
+    if max_figures < 1 or max_figures > 200:
+        raise HTTPException(400, "max_figures must be between 1 and 200")
+
+    paper = await _get_paper_or_404(paper_id, db)
+    source_pdf = _get_paper_file(paper, "stored_filename", settings.papers_path)
+
+    from pdf_zh_translator.editable_figures import extract_pdf_figures
+
+    try:
+        manifest = await asyncio.to_thread(
+            extract_pdf_figures,
+            source_pdf,
+            _editable_figures_root(),
+            paper_id=paper.id,
+            max_figures=max_figures,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+    return _editable_figure_manifest_response(
+        paper,
+        manifest,
+        _editable_source_manifest_path(paper),
+    )
 
 
 @router.patch("/{paper_id}")

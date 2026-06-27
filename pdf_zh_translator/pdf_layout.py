@@ -541,6 +541,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
 
         # Check for untranslated English paragraphs
         trans_blocks = trans_page.get_text("dict").get("blocks", [])
+        visual_regions = _visual_regions_for_page(orig_page)
         reference_y = _reference_section_start_y(trans_page)
         if reference_y is None:
             reference_y = _reference_section_start_y(orig_page)
@@ -569,6 +570,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             elif _looks_like_untranslated_formula_explanation(text):
                 untranslated_formula_examples.append(" ".join(text.split())[:80])
             elif _looks_like_untranslated_english(text):
+                if _block_inside_visual_region(block, visual_regions):
+                    continue
                 untranslated_examples.append(" ".join(text.split())[:80])
 
         if untranslated_examples:
@@ -1041,6 +1044,23 @@ def _block_in_reference_section(block: dict, reference_y: float | None) -> bool:
         return False
     bbox = block.get("bbox")
     return bool(bbox and float(bbox[1]) >= reference_y)
+
+
+def _block_inside_visual_region(
+    block: dict,
+    visual_regions: Sequence[BBox],
+    *,
+    min_overlap: float = 0.65,
+) -> bool:
+    bbox = block.get("bbox")
+    if not bbox or not visual_regions:
+        return False
+    block_bbox = tuple(float(value) for value in bbox)
+    area = max(1.0, bbox_area(block_bbox))
+    return any(
+        bbox_intersection_area(block_bbox, region) / area >= min_overlap
+        for region in visual_regions
+    )
 
 
 def _restore_unit_translation(

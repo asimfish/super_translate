@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-560%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-584%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -104,7 +104,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (575 tests)
+└── tests/            # Test suite (584 tests)
 ```
 
 ## Development
@@ -127,7 +127,11 @@ super_translate/
 
 # Prepare/register/audit editable figure PPT assets
 .venv/bin/python -m pdf_zh_translator figure-ppt-extract papers/example.pdf data/editable_figures --paper-id example
+.venv/bin/python -m pdf_zh_translator figure-ppt-source-audit data/editable_figures/example/figure_sources_manifest.json
 .venv/bin/python -m pdf_zh_translator figure-ppt-batch-prepare data/editable_figures/example/figure_sources_manifest.json
+.venv/bin/python -m pdf_zh_translator figure-ppt-source-audit data/editable_figures/example/figure_sources_manifest.json --require-prepared
+.venv/bin/python -m pdf_zh_translator figure-ppt-batch-register data/editable_figures/example/figure_sources_manifest.json
+.venv/bin/python -m pdf_zh_translator figure-ppt-source-audit data/editable_figures/example/figure_sources_manifest.json --require-registered
 .venv/bin/python -m pdf_zh_translator figure-ppt-prepare figures/fig1.png data/editable_figures --figure-id fig1
 .venv/bin/python -m pdf_zh_translator figure-ppt-register fig1 figures/fig1.png data/editable_figures/fig1/editppt-run data/editable_figures/fig1
 .venv/bin/python -m pdf_zh_translator figure-ppt-audit data/editable_figures

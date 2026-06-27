@@ -216,6 +216,61 @@ def prepare_extracted_figures(
     return manifest
 
 
+def register_finalized_figures(
+    source_manifest: Path,
+    *,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Register finalized editppt runs listed in a source manifest."""
+    manifest = _read_json(source_manifest)
+    figures = manifest.get("figures", [])
+    if not isinstance(figures, list):
+        raise ValueError("figure source manifest must contain a figures list")
+
+    registered = 0
+    issues: list[str] = []
+    for figure in figures:
+        if limit is not None and registered >= limit:
+            break
+        if not isinstance(figure, dict):
+            issues.append("Invalid figure entry in source manifest")
+            continue
+        figure_id = str(figure.get("figure_id", "unknown"))
+        try:
+            source_image = Path(str(figure.get("image_path", "")))
+            editppt_run_value = figure.get("editppt_run") or source_image.parent / "editppt-run"
+            editppt_run = Path(str(editppt_run_value))
+            registered_manifest = register_editable_figure(
+                figure_id=figure_id,
+                source_image=source_image,
+                editppt_run=editppt_run,
+                output_dir=source_image.parent,
+            )
+        except Exception as exc:
+            issues.append(f"{figure_id}: {exc}")
+            continue
+        figure["status"] = "accepted"
+        figure["registered_at"] = _utc_now()
+        figure["editable_manifest"] = str(source_image.parent / MANIFEST_FILENAME)
+        figure["editppt_output"] = str(registered_manifest["editppt_output"])
+        figure["pptx_sha256"] = registered_manifest["pptx_sha256"]
+        registered += 1
+
+    manifest["registered_count"] = sum(
+        1 for figure in figures if isinstance(figure, dict) and figure.get("status") == "accepted"
+    )
+    manifest["registration_issues"] = issues
+    manifest["status"] = "accepted" if manifest["registered_count"] == len(figures) else "prepared"
+    manifest["updated_at"] = _utc_now()
+    source_manifest.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    manifest["_batch_registered"] = registered
+    manifest["_batch_failed"] = len(issues)
+    return manifest
+
+
 def register_editable_figure(
     *,
     figure_id: str,
@@ -327,6 +382,80 @@ def audit_editable_figure_manifests(root: Path) -> EditableFigureAuditResult:
     )
 
 
+def audit_figure_source_manifest(
+    source_manifest: Path,
+    *,
+    require_prepared: bool = False,
+    require_registered: bool = False,
+) -> EditableFigureAuditResult:
+    """Audit source-extracted figures and their editppt/register status."""
+    try:
+        manifest = _read_json(source_manifest)
+    except Exception as exc:
+        return EditableFigureAuditResult(checked=1, passed=0, failed=1, issues=[str(exc)])
+
+    if manifest.get("skill") not in {None, SKILL_NAME}:
+        return EditableFigureAuditResult(
+            checked=1,
+            passed=0,
+            failed=1,
+            issues=["source manifest skill is not image-to-editable-ppt"],
+        )
+    if manifest.get("skill_source") not in {None, SKILL_SOURCE_URL}:
+        return EditableFigureAuditResult(
+            checked=1,
+            passed=0,
+            failed=1,
+            issues=["source manifest skill_source does not match required GitHub repository"],
+        )
+    figures = manifest.get("figures", [])
+    if not isinstance(figures, list):
+        return EditableFigureAuditResult(
+            checked=1,
+            passed=0,
+            failed=1,
+            issues=["source manifest must contain a figures list"],
+        )
+
+    source_pdf = Path(str(manifest.get("source_pdf", "")))
+    source_pdf_hash = str(manifest.get("source_pdf_sha256", ""))
+    shared_issue = ""
+    if source_pdf_hash:
+        if not source_pdf.exists():
+            shared_issue = "source_pdf is missing"
+        elif sha256_file(source_pdf) != source_pdf_hash:
+            shared_issue = "source_pdf hash mismatch"
+
+    checked = 0
+    passed = 0
+    issues: list[str] = []
+    for figure in figures:
+        checked += 1
+        try:
+            if shared_issue:
+                raise ValueError(shared_issue)
+            _audit_source_figure(
+                figure,
+                require_prepared=require_prepared,
+                require_registered=require_registered,
+            )
+        except Exception as exc:
+            figure_id = (
+                str(figure.get("figure_id", "unknown"))
+                if isinstance(figure, dict)
+                else "unknown"
+            )
+            issues.append(f"{figure_id}: {exc}")
+        else:
+            passed += 1
+    return EditableFigureAuditResult(
+        checked=checked,
+        passed=passed,
+        failed=checked - passed,
+        issues=issues,
+    )
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -374,6 +503,38 @@ def _audit_manifest(manifest_path: Path) -> None:
     if manifest.get("pptx_sha256") != sha256_file(pptx):
         raise ValueError("PPTX hash mismatch")
     validate_editppt_run(run_dir, pptx_path=pptx)
+
+
+def _audit_source_figure(
+    figure: object,
+    *,
+    require_prepared: bool,
+    require_registered: bool,
+) -> None:
+    if not isinstance(figure, dict):
+        raise ValueError("figure entry must be a JSON object")
+    source = Path(str(figure.get("image_path", "")))
+    if not source.exists():
+        raise ValueError("image_path is missing")
+    expected_hash = str(figure.get("image_sha256", ""))
+    if expected_hash and sha256_file(source) != expected_hash:
+        raise ValueError("image_path hash mismatch")
+
+    run_value = str(figure.get("editppt_run", ""))
+    run_dir = Path(run_value) if run_value else source.parent / "editppt-run"
+    if require_prepared and not run_dir.exists():
+        raise ValueError("editppt_run is missing")
+    if run_dir.exists():
+        missing = [name for name in REQUIRED_RUN_FILES if not (run_dir / name).exists()]
+        if missing:
+            raise ValueError("editppt_run is missing required file(s): " + ", ".join(missing))
+
+    manifest_value = str(figure.get("editable_manifest", ""))
+    manifest_path = Path(manifest_value) if manifest_value else source.parent / MANIFEST_FILENAME
+    if require_registered and not manifest_path.exists():
+        raise ValueError("editable figure manifest is missing")
+    if manifest_path.exists():
+        _audit_manifest(manifest_path)
 
 
 def _read_json(path: Path) -> dict[str, Any]:

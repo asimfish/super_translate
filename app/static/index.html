@@ -117,6 +117,7 @@
           </div>
           <button class="btn btn-sm btn-primary" id="btn-sync-scroll" data-action="toggle-sync-scroll">同步滚动: 开</button>
           <button class="btn btn-sm btn-outline hidden" id="btn-qa-report" data-action="show-qa-report">质检报告</button>
+          <button class="btn btn-sm btn-outline" id="btn-editable-figures" data-action="show-editable-figures">图形素材</button>
           <button class="btn btn-sm hidden" id="btn-download-mono" data-action="download-translated">下载译文</button>
           <button class="btn btn-sm hidden" id="btn-download-dual" data-action="download-dual">下载双语</button>
         </div>
@@ -156,6 +157,13 @@
           <button class="btn btn-sm btn-outline" data-action="hide-qa-report">关闭</button>
         </div>
         <div id="qa-report-content" class="qa-report-content"></div>
+      </div>
+      <div id="editable-figures-panel" class="editable-figures-panel hidden">
+        <div class="side-panel-header">
+          <span>可编辑图形素材</span>
+          <button class="btn btn-sm btn-outline" data-action="hide-editable-figures">关闭</button>
+        </div>
+        <div id="editable-figures-content" class="side-panel-content"></div>
       </div>
     </div>
   </main>

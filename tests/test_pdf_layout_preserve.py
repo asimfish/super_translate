@@ -1017,6 +1017,42 @@ class TestTranslationVerification(unittest.TestCase):
         self.assertEqual(len(english_issues), 1)
         self.assertEqual(english_issues[0].page, 1)
 
+    def test_ignores_untranslated_english_inside_visual_region(self):
+        original = fitz.open()
+        page = original.new_page(width=420, height=320)
+        page.draw_rect(fitz.Rect(40, 40, 360, 220))
+        page.insert_text(
+            (80, 126),
+            "Action States Probe best action state layer output",
+            fontsize=8,
+        )
+        page.insert_text((30, 285), "The proposed model improves retrieval quality substantially.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=420, height=320)
+        page.draw_rect(fitz.Rect(40, 40, 360, 220))
+        page.insert_text(
+            (80, 126),
+            "Action States Probe best action state layer output",
+            fontsize=8,
+        )
+        page.insert_text((30, 285), "该模型显著提升了检索质量。")
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertFalse(any(issue.code == "untranslated_english" for issue in issues))
+
     def test_flags_short_untranslated_english_caption(self):
         original = fitz.open()
         page = original.new_page(width=300, height=220)

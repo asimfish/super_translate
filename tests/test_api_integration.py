@@ -1061,6 +1061,133 @@ class TestDownloadEndpoints:
 
         assert response.status_code == 404
 
+    def test_extract_editable_figures_writes_ui_safe_manifest(
+        self,
+        client,
+        mock_db,
+        sample_paper,
+        tmp_path,
+    ):
+        """Editable figure extraction writes a manifest without leaking absolute paths."""
+        from unittest.mock import patch as _patch
+
+        import fitz
+
+        papers_dir = tmp_path / "papers"
+        translations_dir = tmp_path / "translations"
+        papers_dir.mkdir()
+        translations_dir.mkdir()
+        pdf_path = papers_dir / "stored_test.pdf"
+        sample_paper.stored_filename = "stored_test.pdf"
+
+        document = fitz.open()
+        page = document.new_page(width=300, height=240)
+        page.draw_rect(fitz.Rect(60, 50, 210, 150), color=(0, 0, 0), fill=(0.9, 0.9, 0.9))
+        document.save(pdf_path)
+        document.close()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            mock_settings.papers_path = papers_dir
+            mock_settings.translations_path = translations_dir
+            response = client.post(
+                f"/api/papers/{sample_paper.id}/editable-figures/extract?max_figures=5"
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["figure_count"] == 1
+        assert data["audit"]["ok"] is True
+        assert data["source_manifest_path"].startswith("translations/")
+        assert not Path(data["source_manifest_path"]).is_absolute()
+        assert data["figures"][0]["image_path"].startswith("translations/")
+        manifest = (
+            translations_dir
+            / "editable_figures"
+            / sample_paper.id
+            / "figure_sources_manifest.json"
+        )
+        assert manifest.exists()
+
+    def test_get_editable_figure_manifest(self, client, mock_db, sample_paper, tmp_path):
+        """Editable figure manifest endpoint returns sanitized metadata."""
+        from unittest.mock import patch as _patch
+
+        from pdf_zh_translator.editable_figures import sha256_file
+
+        translations_dir = tmp_path / "translations"
+        manifest_dir = translations_dir / "editable_figures" / sample_paper.id
+        figure_dir = manifest_dir / "figures" / "fig-1"
+        figure_dir.mkdir(parents=True)
+        image_path = figure_dir / "source.png"
+        image_path.write_bytes(b"png")
+        manifest_path = manifest_dir / "figure_sources_manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "paper_id": sample_paper.id,
+                    "status": "source-extracted",
+                    "source_pdf": str(tmp_path / "papers" / "stored_test.pdf"),
+                    "figure_count": 1,
+                    "figures": [
+                        {
+                            "figure_id": "fig-1",
+                            "page": 1,
+                            "bbox": [1, 2, 3, 4],
+                            "image_path": str(image_path),
+                            "image_sha256": sha256_file(image_path),
+                            "width": 10,
+                            "height": 20,
+                            "status": "source-extracted",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            mock_settings.translations_path = translations_dir
+            response = client.get(
+                f"/api/papers/{sample_paper.id}/editable-figures/source-manifest"
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["figure_count"] == 1
+        assert data["figures"][0]["image_path"] == (
+            f"translations/editable_figures/{sample_paper.id}/figures/fig-1/source.png"
+        )
+        assert data["audit"]["checked"] == 1
+        assert any("figure-ppt-batch-prepare" in command for command in data["next_commands"])
+        assert any("figure-ppt-batch-register" in command for command in data["next_commands"])
+
+    def test_get_editable_figure_manifest_missing(self, client, mock_db, sample_paper, tmp_path):
+        """Missing editable figure manifest returns 404."""
+        from unittest.mock import patch as _patch
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with _patch("app.api.papers.settings") as mock_settings:
+            mock_settings.translations_path = tmp_path
+            response = client.get(
+                f"/api/papers/{sample_paper.id}/editable-figures/source-manifest"
+            )
+
+        assert response.status_code == 404
+
 
 class TestStatsEndpoint:
     """Test stats endpoint."""

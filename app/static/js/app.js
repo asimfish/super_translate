@@ -125,6 +125,16 @@ const api = {
     const res = await apiFetch(`/api/papers/${id}/qa-report`);
     if (!res.ok) throw new Error(await errorDetail(res, '质检报告不可用'));
     return res.json();
+  },
+  async getEditableFigureManifest(id) {
+    const res = await apiFetch(`/api/papers/${id}/editable-figures/source-manifest`);
+    if (!res.ok) throw new Error(await errorDetail(res, '图形素材清单不可用'));
+    return res.json();
+  },
+  async extractEditableFigures(id) {
+    const res = await apiFetch(`/api/papers/${id}/editable-figures/extract`, { method: 'POST' });
+    if (!res.ok) throw new Error(await errorDetail(res, '图形素材提取失败'));
+    return res.json();
   }
 };
 
@@ -483,6 +493,7 @@ async function openReader(paperId) {
 
   document.getElementById('reader-title').textContent = currentPaper.title;
   hideQaReportPanel();
+  hideEditableFiguresPanel();
 
   const placeholder = document.getElementById('translate-placeholder');
   const qaReportBtn = document.getElementById('btn-qa-report');
@@ -983,6 +994,7 @@ function addTransLog(msg, cls = '') {
 // === QA Report ===
 async function showQaReport() {
   if (!currentPaper) return;
+  hideEditableFiguresPanel();
   const panel = document.getElementById('qa-report-panel');
   const content = document.getElementById('qa-report-content');
   if (!panel || !content) return;
@@ -1042,6 +1054,99 @@ function qaStatusLabel(status) {
     unknown: '未知',
   };
   return map[status] || status;
+}
+
+// === Editable Figure Sources ===
+async function showEditableFigures() {
+  if (!currentPaper) return;
+  hideQaReportPanel();
+  const panel = document.getElementById('editable-figures-panel');
+  const content = document.getElementById('editable-figures-content');
+  if (!panel || !content) return;
+  panel.classList.remove('hidden');
+  content.innerHTML = '<div class="side-panel-loading">加载中...</div>';
+
+  try {
+    const manifest = await api.getEditableFigureManifest(currentPaper.id);
+    renderEditableFigureManifest(manifest);
+  } catch (e) {
+    content.innerHTML = `
+      <div class="side-panel-empty">
+        <div>${esc(e.message || '还没有图形素材清单')}</div>
+        <button class="btn btn-sm btn-primary" data-action="extract-editable-figures">提取图形素材</button>
+      </div>
+    `;
+  }
+}
+
+async function extractEditableFigures() {
+  if (!currentPaper) return;
+  hideQaReportPanel();
+  const panel = document.getElementById('editable-figures-panel');
+  const content = document.getElementById('editable-figures-content');
+  if (!panel || !content) return;
+  panel.classList.remove('hidden');
+  content.innerHTML = '<div class="side-panel-loading">正在从原始 PDF 提取图形区域...</div>';
+
+  try {
+    const manifest = await api.extractEditableFigures(currentPaper.id);
+    renderEditableFigureManifest(manifest);
+    toastSuccess(`已提取 ${Number(manifest.figure_count || 0)} 个图形素材`);
+  } catch (e) {
+    content.innerHTML = `<div class="side-panel-error">${esc(e.message || '图形素材提取失败')}</div>`;
+  }
+}
+
+function hideEditableFiguresPanel() {
+  const panel = document.getElementById('editable-figures-panel');
+  if (panel) panel.classList.add('hidden');
+}
+
+function renderEditableFigureManifest(manifest) {
+  const content = document.getElementById('editable-figures-content');
+  if (!content) return;
+  const figures = Array.isArray(manifest.figures) ? manifest.figures : [];
+  const audit = manifest.audit || {};
+  const figureHtml = figures.length > 0
+    ? figures.slice(0, 20).map(figure => `
+      <div class="figure-source-item">
+        <div class="figure-source-title">
+          <span>${esc(figure.figure_id || 'figure')}</span>
+          <span>第 ${Number(figure.page || 0)} 页</span>
+          <span>${esc(figure.status || 'unknown')}</span>
+        </div>
+        <div class="figure-source-meta">
+          ${Number(figure.width || 0)} × ${Number(figure.height || 0)} px
+          · ${esc(figure.image_path || '')}
+        </div>
+      </div>
+    `).join('')
+    : '<div class="side-panel-empty">没有检测到可提取的图形区域</div>';
+
+  content.innerHTML = `
+    <div class="asset-summary">
+      <div><strong>${Number(manifest.figure_count || figures.length)}</strong><span>图形</span></div>
+      <div><strong>${esc(manifest.status || 'unknown')}</strong><span>状态</span></div>
+      <div><strong>${audit.ok ? '通过' : '需处理'}</strong><span>审计</span></div>
+      <div><strong>${Number(audit.failed || 0)}</strong><span>问题</span></div>
+    </div>
+    <div class="figure-source-actions">
+      <button class="btn btn-sm btn-primary" data-action="extract-editable-figures">重新提取</button>
+    </div>
+    <div class="figure-source-list">${figureHtml}</div>
+    ${renderEditableFigureCommands(manifest)}
+  `;
+}
+
+function renderEditableFigureCommands(manifest) {
+  const commands = Array.isArray(manifest.next_commands) ? manifest.next_commands : [];
+  if (!commands.length) return '';
+  return `
+    <div class="command-block">
+      <div class="command-block-title">下一步</div>
+      ${commands.map(command => `<code>${esc(command)}</code>`).join('')}
+    </div>
+  `;
 }
 
 // === Downloads ===
@@ -1250,6 +1355,9 @@ const actionHandlers = {
   'toggle-sync-scroll': toggleSyncScroll,
   'show-qa-report': showQaReport,
   'hide-qa-report': hideQaReportPanel,
+  'show-editable-figures': showEditableFigures,
+  'extract-editable-figures': extractEditableFigures,
+  'hide-editable-figures': hideEditableFiguresPanel,
   'download-translated': downloadTranslated,
   'download-dual': downloadDual,
   'debounce-search': debounceSearch,

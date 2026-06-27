@@ -47,6 +47,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_figure_ppt_extract(args)
     if args.command == "figure-ppt-batch-prepare":
         return run_figure_ppt_batch_prepare(args)
+    if args.command == "figure-ppt-batch-register":
+        return run_figure_ppt_batch_register(args)
+    if args.command == "figure-ppt-source-audit":
+        return run_figure_ppt_source_audit(args)
     if args.command == "figure-ppt-register":
         return run_figure_ppt_register(args)
     if args.command == "figure-ppt-audit":
@@ -373,6 +377,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not pass --no-text-hints to editppt prepare.",
     )
 
+    figure_batch_register = subparsers.add_parser(
+        "figure-ppt-batch-register",
+        help="Register every finalized editppt figure run in a source manifest.",
+    )
+    figure_batch_register.add_argument("source_manifest", type=Path)
+    figure_batch_register.add_argument("--limit", type=int)
+
+    figure_source_audit = subparsers.add_parser(
+        "figure-ppt-source-audit",
+        help="Audit extracted figure source manifests and editppt/register status.",
+    )
+    figure_source_audit.add_argument("source_manifest", type=Path)
+    figure_source_audit.add_argument("--require-prepared", action="store_true")
+    figure_source_audit.add_argument("--require-registered", action="store_true")
+    figure_source_audit.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Return success when the source manifest has no figures.",
+    )
+
     figure_register = subparsers.add_parser(
         "figure-ppt-register",
         help="Register an editppt-finalized figure PPTX with provenance.",
@@ -637,6 +661,48 @@ def run_figure_ppt_batch_prepare(args: argparse.Namespace) -> int:
     )
     print("Next: reconstruct/finalize each editppt run, then run figure-ppt-register.")
     return 0
+
+
+def run_figure_ppt_batch_register(args: argparse.Namespace) -> int:
+    from .editable_figures import register_finalized_figures
+
+    try:
+        manifest = register_finalized_figures(args.source_manifest, limit=args.limit)
+    except Exception as exc:
+        print("Figure PPT batch register failed: %s" % exc, file=sys.stderr)
+        return 1
+    print(
+        "Registered %d finalized figure%s; %d issue%s."
+        % (
+            manifest.get("_batch_registered", 0),
+            "" if manifest.get("_batch_registered", 0) == 1 else "s",
+            manifest.get("_batch_failed", 0),
+            "" if manifest.get("_batch_failed", 0) == 1 else "s",
+        )
+    )
+    for issue in manifest.get("registration_issues", []):
+        print("Issue: %s" % issue, file=sys.stderr)
+    return 0 if manifest.get("_batch_failed", 0) == 0 else 1
+
+
+def run_figure_ppt_source_audit(args: argparse.Namespace) -> int:
+    from .editable_figures import audit_figure_source_manifest
+
+    result = audit_figure_source_manifest(
+        args.source_manifest,
+        require_prepared=args.require_prepared,
+        require_registered=args.require_registered,
+    )
+    print(
+        "Editable figure source audit: %d checked, %d passed, %d failed."
+        % (result.checked, result.passed, result.failed)
+    )
+    for issue in result.issues:
+        print("Issue: %s" % issue, file=sys.stderr)
+    if result.checked == 0 and not args.allow_empty:
+        print("No extracted figure sources found.", file=sys.stderr)
+        return 1
+    return 0 if result.failed == 0 else 1
 
 
 def run_figure_ppt_register(args: argparse.Namespace) -> int:

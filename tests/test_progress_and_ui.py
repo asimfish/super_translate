@@ -53,3 +53,16 @@ def test_translation_ui_exposes_qa_and_ocr_controls():
     assert "async getQaReport(id)" in js
     assert "function renderQaReport(report)" in js
     assert "'show-qa-report': showQaReport" in js
+
+
+def test_reader_ui_exposes_editable_figure_manifest_workflow():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+
+    assert 'id="btn-editable-figures"' in html
+    assert 'id="editable-figures-panel"' in html
+    assert "async getEditableFigureManifest(id)" in js
+    assert "async function extractEditableFigures()" in js
+    assert "function renderEditableFigureManifest(manifest)" in js
+    assert "'show-editable-figures': showEditableFigures" in js
+    assert "'extract-editable-figures': extractEditableFigures" in js

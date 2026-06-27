@@ -11,10 +11,12 @@ from pdf_zh_translator.editable_figures import (
     SKILL_SOURCE_URL,
     SOURCE_FIGURES_MANIFEST_FILENAME,
     audit_editable_figure_manifests,
+    audit_figure_source_manifest,
     extract_pdf_figures,
     prepare_editable_figure_run,
     prepare_extracted_figures,
     register_editable_figure,
+    register_finalized_figures,
     validate_editppt_run,
 )
 
@@ -184,3 +186,70 @@ def test_prepare_extracted_figures_updates_manifest(tmp_path):
     assert figure["status"] == "prepared"
     assert figure["editppt_run"].endswith("paper_p001_fig001/editppt-run")
     run.assert_called_once()
+
+
+def test_source_audit_requires_prepared_run(tmp_path):
+    source = tmp_path / "editable" / "paper" / "figures" / "paper_p001_fig001" / "source.png"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"png")
+    manifest_path = tmp_path / "editable" / "paper" / SOURCE_FIGURES_MANIFEST_FILENAME
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "paper_id": "paper",
+                "figure_count": 1,
+                "figures": [
+                    {
+                        "figure_id": "paper_p001_fig001",
+                        "image_path": str(source),
+                        "image_sha256": "bad-hash",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audit = audit_figure_source_manifest(manifest_path, require_prepared=True)
+
+    assert audit.ok is False
+    assert audit.failed == 1
+    assert "hash mismatch" in audit.issues[0]
+
+
+def test_register_finalized_figures_updates_source_manifest(tmp_path):
+    source = tmp_path / "editable" / "paper" / "figures" / "paper_p001_fig001" / "source.png"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"source-image")
+    run_dir, pptx = _write_completed_editppt_run(source.parent)
+    manifest_path = tmp_path / "editable" / "paper" / SOURCE_FIGURES_MANIFEST_FILENAME
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "paper_id": "paper",
+                "figure_count": 1,
+                "figures": [
+                    {
+                        "figure_id": "paper_p001_fig001",
+                        "image_path": str(source),
+                        "editppt_run": str(run_dir),
+                        "status": "prepared",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = register_finalized_figures(manifest_path)
+    audit = audit_figure_source_manifest(manifest_path, require_registered=True)
+    figure = manifest["figures"][0]
+
+    assert manifest["_batch_registered"] == 1
+    assert manifest["_batch_failed"] == 0
+    assert figure["status"] == "accepted"
+    assert Path(figure["editable_manifest"]).exists()
+    assert figure["editppt_output"] == str(pptx)
+    assert audit.ok is True
