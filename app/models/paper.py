@@ -62,6 +62,10 @@ class Paper(Base):
         default=TranslationStatus.PENDING.value,
     )
     translation_progress: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    # Live, structured progress metadata written during translation so the API
+    # can serve an accurate stage label and ETA instead of regex-parsing the log.
+    translation_stage: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    translation_eta_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     translation_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     translation_log: Mapped[str] = mapped_column(Text, nullable=False, default="")
     tags: Mapped[str] = mapped_column(String(1000), nullable=False, default="")

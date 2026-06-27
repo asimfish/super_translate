@@ -305,11 +305,30 @@ def _job_to_response(job: TranslationJob) -> TranslationJobResponse:
 
 
 def _translation_progress_meta(paper: Paper) -> dict:
-    """Derive structured progress metadata without requiring a DB migration."""
+    """Derive structured progress metadata.
+
+    Prefers the live ``translation_stage`` / ``translation_eta_seconds`` columns
+    written during translation, and falls back to log parsing for older rows (and
+    for terminal states, where stored stage/ETA would be stale).
+    """
+    status = paper.translation_status
     log = paper.translation_log or ""
-    eta_seconds = _parse_latest_eta_seconds(log)
+
+    if status == TranslationStatus.TRANSLATING.value:
+        db_stage = getattr(paper, "translation_stage", "")
+        stage = (
+            db_stage.strip()
+            if isinstance(db_stage, str) and db_stage.strip()
+            else _infer_translation_stage(status, log)
+        )
+        db_eta = getattr(paper, "translation_eta_seconds", None)
+        eta_seconds = db_eta if isinstance(db_eta, int) else _parse_latest_eta_seconds(log)
+    else:
+        stage = _infer_translation_stage(status, log)
+        eta_seconds = None
+
     return {
-        "stage": _infer_translation_stage(paper.translation_status, log),
+        "stage": stage,
         "eta_seconds": eta_seconds,
         "eta": _format_duration(eta_seconds) if eta_seconds is not None else "",
     }
@@ -1323,6 +1342,7 @@ def _run_post_translation_qa(
         from pdf_zh_translator.pdf_layout import verify_translation_issues
 
         _append_log(paper_id, loop, "正在检查译文和版面")
+        _set_translation_stage(paper_id, loop, "译后检查")
         _record_terminology_candidates(paper_id, loop, input_path)
         passes = max(1, max_passes if qa_mode == "iterative" else 1)
         issues = []
@@ -1353,6 +1373,7 @@ def _run_post_translation_qa(
 
             if not _has_fixable_layout_issue(issues):
                 break
+            _set_translation_stage(paper_id, loop, "版面修复")
             fixed = _fix_translated_outputs(trans_result)
             repair_attempted = True
             if not fixed:
@@ -1499,6 +1520,38 @@ def _record_terminology_candidates(
         logger.debug("Terminology candidate recording skipped for %s: %s", paper_id, e)
 
 
+def _set_translation_stage(
+    paper_id: str,
+    loop: asyncio.AbstractEventLoop,
+    stage: str,
+    *,
+    eta_seconds: int | None = None,
+) -> None:
+    """Update the live translation stage label (e.g. post-translation QA phase).
+
+    Only applies while the paper is still translating so it never clobbers a
+    terminal state. ETA is cleared by default because phases like QA/layout fix
+    don't have a meaningful percentage-based estimate.
+    """
+
+    async def _update():
+        from app.core.database import async_session
+
+        async with async_session() as p_db:
+            await p_db.execute(
+                update(Paper)
+                .where(
+                    Paper.id == paper_id,
+                    Paper.translation_status == TranslationStatus.TRANSLATING.value,
+                )
+                .values(translation_stage=stage, translation_eta_seconds=eta_seconds),
+            )
+            await p_db.commit()
+
+    with contextlib.suppress(Exception):
+        asyncio.run_coroutine_threadsafe(_update(), loop)
+
+
 def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) -> None:
     """Append a log message to the paper's translation_log."""
     from datetime import datetime
@@ -1549,6 +1602,7 @@ def _create_progress_handler(
         _last_pct[0] = pct
         pct_display = int(pct * 100)
         elapsed = max(0.0, time.monotonic() - started_at)
+        eta_seconds: int | None = None
         eta_text = ""
         if pct > 0.02 and pct < 1.0:
             eta_seconds = max(0, int((elapsed / pct) - elapsed))
@@ -1564,7 +1618,11 @@ def _create_progress_handler(
                         Paper.id == paper_id,
                         Paper.translation_status == TranslationStatus.TRANSLATING.value,
                     )
-                    .values(translation_progress=pct),
+                    .values(
+                        translation_progress=pct,
+                        translation_stage="翻译中",
+                        translation_eta_seconds=eta_seconds,
+                    ),
                 )
                 await _update_translation_job(
                     p_db,

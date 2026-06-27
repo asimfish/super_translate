@@ -709,6 +709,19 @@ async function renderPage(panel, idx) {
 
 // Scroll sync with page-based alignment
 let scrollRafId = null;
+let syncRenderTimer = null;
+
+// Render the mirrored panel only after scrolling settles. Rendering PDF pages
+// is CPU/GPU heavy; doing it on every scroll frame was the main cause of the
+// laggy/unresponsive sync scrolling. The IntersectionObserver also renders
+// newly visible pages, so this is mostly a fast-feedback safety net.
+function scheduleOtherPanelRender(otherPanel, otherContainer) {
+  if (syncRenderTimer) clearTimeout(syncRenderTimer);
+  syncRenderTimer = setTimeout(() => {
+    syncRenderTimer = null;
+    void renderVisiblePages(otherPanel, otherContainer);
+  }, 90);
+}
 
 function setupSmoothScrollSync(panel) {
   const container = document.getElementById(`pdf-container-${panel}`);
@@ -779,7 +792,7 @@ function syncScrollFromPanel(panel) {
   const token = ++scrollSyncToken;
   otherContainer.scrollTop = targetScrollTop(otherPanel, pageIdx, fraction);
   updatePageInfo(otherPanel, otherContainer.scrollTop);
-  void renderVisiblePages(otherPanel, otherContainer);
+  scheduleOtherPanelRender(otherPanel, otherContainer);
   releaseScrollSyncAfterPaint(token);
 }
 
@@ -787,15 +800,11 @@ function updatePageInfo(panel, scrollTop) {
   const metrics = pageMetrics[panel];
   if (!metrics || metrics.length === 0) return;
 
-  let currentPage = 1;
-  for (let i = 0; i < metrics.length; i++) {
-    if (scrollTop >= metrics[i].top - 50) {
-      currentPage = i + 1;
-    }
-  }
-
+  // Reuse the same anchor logic as scroll sync so the page indicator and the
+  // mirrored panel always agree on the "current" page.
+  const { pageIdx } = pageScrollPosition(panel, scrollTop);
   const infoEl = document.getElementById(`page-info-${panel}`);
-  if (infoEl) infoEl.textContent = `第 ${currentPage} / ${metrics.length} 页`;
+  if (infoEl) infoEl.textContent = `第 ${pageIdx + 1} / ${metrics.length} 页`;
 }
 
 function toggleSyncScroll() {

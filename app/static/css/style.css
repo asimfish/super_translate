@@ -251,7 +251,9 @@ select:focus-visible {
   flex-direction: column; align-items: center; gap: 4px;
   padding: 8px 0; border: 1px solid var(--border); border-top: none;
   border-radius: 0 0 var(--radius) var(--radius);
-  scroll-behavior: smooth;
+  /* No smooth scroll: synced panels set scrollTop programmatically and CSS
+     smooth animation makes the mirrored panel lag behind the user's panel. */
+  overscroll-behavior: contain;
 }
 .pdf-container canvas {
   display: block;

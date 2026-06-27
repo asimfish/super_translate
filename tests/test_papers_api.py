@@ -59,6 +59,33 @@ class TestPaperToResponse(unittest.TestCase):
         resp = _paper_to_response(paper)
         self.assertEqual(resp.translation_stage, "译后检查")
 
+    def test_translation_stage_and_eta_prefer_db_columns(self):
+        paper = self._make_paper(
+            translation_status="translating",
+            translation_progress=0.6,
+            translation_log="[10:00:00] 翻译进度: 40%，预计剩余 1分20秒",
+        )
+        # Live DB columns must win over stale log parsing.
+        paper.translation_stage = "版面修复"
+        paper.translation_eta_seconds = 12
+        resp = _paper_to_response(paper)
+        self.assertEqual(resp.translation_stage, "版面修复")
+        self.assertEqual(resp.translation_eta_seconds, 12)
+        self.assertEqual(resp.translation_eta, "12秒")
+
+    def test_terminal_state_ignores_stored_stage_and_eta(self):
+        paper = self._make_paper(
+            translation_status="completed",
+            translation_log="",
+        )
+        # A leftover "translating" stage must not leak into a completed paper.
+        paper.translation_stage = "翻译中"
+        paper.translation_eta_seconds = 30
+        resp = _paper_to_response(paper)
+        self.assertEqual(resp.translation_stage, "已完成")
+        self.assertIsNone(resp.translation_eta_seconds)
+        self.assertEqual(resp.translation_eta, "")
+
     def test_with_file_flags(self):
         paper = self._make_paper()
         resp = _paper_to_response(

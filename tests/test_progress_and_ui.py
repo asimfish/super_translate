@@ -21,9 +21,21 @@ def test_reader_sync_scroll_maps_page_fraction_and_renders_target_panel():
     assert "function targetScrollTop(panel, pageIdx, fraction)" in js
     assert "const fraction = pageHeight > 0" in js
     assert "otherContainer.scrollTop = targetScrollTop(otherPanel, pageIdx, fraction);" in js
-    assert "void renderVisiblePages(otherPanel, otherContainer);" in js
     assert "releaseScrollSyncAfterPaint(token);" in js
     assert "requestAnimationFrame(() => syncScrollFromPanel('original'));" in js
+
+
+def test_reader_sync_scroll_defers_mirror_render_to_avoid_jank():
+    """Sync scroll must not render the mirrored panel on every scroll frame."""
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
+
+    # The heavy render is debounced behind a timer, not called inline in sync.
+    assert "function scheduleOtherPanelRender(otherPanel, otherContainer)" in js
+    assert "scheduleOtherPanelRender(otherPanel, otherContainer);" in js
+    assert "syncRenderTimer" in js
+    # Programmatic scrollTop must not be animated by CSS smooth scrolling.
+    assert "scroll-behavior: smooth" not in css
 
 
 def test_translation_progress_ui_has_client_eta_smoothing():

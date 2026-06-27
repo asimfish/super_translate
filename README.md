@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-584%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-588%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -104,8 +104,26 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (584 tests)
+└── tests/            # Test suite (588 tests)
 ```
+
+## Deployment Notes
+
+Super Translate targets local / single-machine / small-team use:
+
+- **Run a single worker.** Concurrency limiting, in-flight cancellation, and the
+  translation queue are process-local. Running multiple uvicorn workers would
+  multiply the effective concurrency limit and split cancel state, so prefer one
+  worker (scale by running more translations inside it, not more workers).
+- **SQLite is tuned for this.** The database opens in WAL mode with a busy
+  timeout and `synchronous=NORMAL`, so the 2-second status polling and frequent
+  progress writes can run concurrently without "database is locked" errors. For
+  heavy multi-user/public deployments, migrate to PostgreSQL + an external job
+  queue.
+- **Authentication is single-token.** There is no per-user login or isolation.
+  Set `PAPER_CHINA_API_TOKEN` (and serve over HTTPS) before exposing the app off
+  `localhost`; otherwise remote clients are rejected unless
+  `PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE=true`.
 
 ## Development
 
