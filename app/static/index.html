@@ -11,11 +11,11 @@
   <!-- Header -->
   <header class="header">
     <div class="header-left">
-      <h1 class="logo">📄 Super Translate</h1>
+      <h1 class="logo"><span class="logo-mark" aria-hidden="true">ST</span><span>Super Translate</span></h1>
       <span class="subtitle">AI 论文翻译阅读系统</span>
     </div>
     <div class="header-right">
-      <button class="btn btn-primary" data-action="show-upload">+ 上传论文</button>
+      <button class="btn btn-primary" data-action="show-upload"><span class="btn-icon" aria-hidden="true">+</span><span>上传论文</span></button>
     </div>
   </header>
 
@@ -35,7 +35,7 @@
             <option value="completed">已完成</option>
             <option value="failed">失败</option>
           </select>
-          <input type="text" id="tag-filter" placeholder="按标签筛选..." aria-label="按标签筛选" data-action="debounce-search" style="width:120px">
+          <input type="text" id="tag-filter" placeholder="按标签筛选..." aria-label="按标签筛选" data-action="debounce-search">
         </div>
         <div class="toolbar-actions">
           <span id="stats-bar" class="stats-bar"></span>
@@ -50,7 +50,7 @@
       <div id="paper-list" class="paper-grid"></div>
       <div id="pagination"></div>
       <div id="empty-state" class="empty-state hidden">
-        <div class="empty-icon">📚</div>
+        <div class="empty-icon" aria-hidden="true">PDF</div>
         <h3>还没有论文</h3>
         <p>上传英文 PDF 开始使用</p>
         <button class="btn btn-primary" data-action="show-upload">上传第一篇论文</button>
@@ -63,7 +63,7 @@
         <button class="btn-back" data-action="show-library">← 返回</button>
         <h2>上传论文</h2>
         <div id="drop-zone" class="drop-zone">
-          <div class="drop-icon">📄</div>
+          <div class="drop-icon" aria-hidden="true">PDF</div>
           <p>拖拽 PDF 文件到这里，或</p>
           <label class="btn btn-outline">
             选择文件
@@ -132,7 +132,7 @@
           <div class="panel-header">译文 (中文) <span id="page-info-translated" class="page-info">第 1 页</span></div>
           <div id="pdf-container-translated" class="pdf-container"></div>
           <div id="translate-placeholder" class="translate-placeholder">
-            <div class="placeholder-icon">🌐</div>
+            <div class="placeholder-icon" aria-hidden="true">译</div>
             <p>点击"翻译"按钮生成中文译文</p>
             <button class="btn btn-primary" data-action="start-translate">开始翻译</button>
           </div>
@@ -140,15 +140,15 @@
       </div>
       <!-- Translation Progress Panel -->
       <div id="translation-progress" class="translation-progress hidden">
-        <div id="trans-title" style="font-size:13px;font-weight:600;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+        <div id="trans-title" class="trans-title"></div>
         <div class="progress-header">
           <span id="trans-status">翻译中...</span>
           <span id="trans-percent">0%</span>
         </div>
         <div class="progress-bar"><div class="progress-fill" id="trans-progress-fill"></div></div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
-          <div id="trans-log" class="trans-log" style="flex:1;margin-top:0"></div>
-          <button class="btn btn-sm btn-danger" id="btn-cancel-translate" data-action="cancel-translate" style="margin-left:8px;white-space:nowrap">取消</button>
+        <div class="progress-log-row">
+          <div id="trans-log" class="trans-log"></div>
+          <button class="btn btn-sm btn-danger" id="btn-cancel-translate" data-action="cancel-translate">取消</button>
         </div>
       </div>
       <div id="qa-report-panel" class="qa-report-panel hidden">

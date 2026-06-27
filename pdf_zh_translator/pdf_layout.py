@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 import statistics
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -371,10 +371,20 @@ def translate_pdf(
         if not candidate_items and not page_gutter:
             continue
         page = document[page_index]
+        page_width = page.rect.width
         centered_flags = detect_centered_blocks(
-            [block for block, _ in candidate_items], page.rect.width
+            [block for block, _ in candidate_items], page_width
         )
         relax_caption_boxes(page, candidate_items)
+        # Float obstacles (figures/tables/captions) that reflowed CJK must avoid.
+        page_floats = list(_visual_regions_for_page(page))
+        page_floats.extend(
+            block.bbox
+            for block, _ in candidate_items
+            if block.preserve_position
+            or block.nowrap
+            or block.block_type in ("caption", "figure_label", "table", "equation", "algorithm")
+        )
         page_items: List[Tuple[TextBlock, str]] = []
         item_centered_flags: List[bool] = []
         for (block, translated_text), centered in zip(candidate_items, centered_flags):
@@ -382,6 +392,21 @@ def translate_pdf(
             if block.preserve_position:
                 centered = False
             requested_size = max(min_font_size, block.font_size * font_scale)
+            # Float-aware clip: keep reflowed CJK body text out of a right-column
+            # figure/table instead of painting over it. Only applied when the
+            # clipped box still fits the text, so it never makes layout worse.
+            if not block.preserve_position and not block.nowrap:
+                clipped = _clip_block_bbox_against_floats(block.bbox, page_floats, page_width)
+                if clipped != block.bbox and translated_text_fits(
+                    block=replace(block, bbox=clipped),
+                    text=translated_text,
+                    font_pack=font_pack,
+                    font_size=requested_size,
+                    min_font_size=min_font_size,
+                    margin=margin,
+                    centered=centered,
+                ):
+                    block = replace(block, bbox=clipped)
             if skip_overflow and not translated_text_fits(
                 block=block,
                 text=translated_text,
@@ -1242,6 +1267,41 @@ def _visual_regions_for_page(page: object) -> List[BBox]:
     if not regions:
         return []
     return merge_nearby_bboxes(regions, 2.0)
+
+
+def _clip_block_bbox_against_floats(
+    bbox: BBox,
+    floats: Sequence[BBox],
+    page_width: float,
+    *,
+    min_keep_ratio: float = 0.34,
+    side_gap: float = 3.0,
+) -> BBox:
+    """Shrink a wide (cross-column) block's right edge so reflowed CJK text stays
+    out of a right-column figure/table/caption.
+
+    Source PDFs often give a paragraph that visually wraps around a right-side
+    float a full-width bounding box (lines above/below the float span the page).
+    The CJK engine then fills that whole box left-to-right and paints over the
+    float. We only clip when the block is clearly cross-column, a float occupies
+    its right region, and the clipped box still keeps a usable width; otherwise
+    the original bbox is returned so nothing gets worse.
+    """
+    x0, y0, x1, y1 = bbox
+    width = x1 - x0
+    if page_width <= 0 or width < page_width * 0.55:
+        return bbox
+    new_x1 = x1
+    for fx0, fy0, fx1, fy1 in floats:
+        if min(y1, fy1) - max(y0, fy0) <= 4.0:
+            continue
+        if fx0 <= x0 + width * 0.45:
+            continue
+        if fx1 >= x1 - width * 0.10 and fx0 < new_x1:
+            new_x1 = min(new_x1, fx0 - side_gap)
+    if new_x1 < x1 - 1.0 and (new_x1 - x0) >= page_width * min_keep_ratio:
+        return (x0, y0, new_x1, y1)
+    return bbox
 
 
 def _looks_like_text_background(bbox: BBox, text_boxes: Sequence[BBox]) -> bool:
@@ -2479,6 +2539,23 @@ def line_is_prose(line: _LineRec) -> bool:
     return has_formula_tail
 
 
+def line_is_short_prose_prefix(line: _LineRec, next_line: _LineRec) -> bool:
+    """A short prose heading glued to the first sentence inside an equation block."""
+    bare = strip_sentinels(line.text).strip()
+    if not bare or sentinel_char_count(line.text):
+        return False
+    if not sentence_final_text(bare):
+        return False
+    words = [word for word in _PROSE_WORD_RE.findall(bare) if word.lower() not in _MATH_WORDS]
+    if not 1 <= len(words) <= 3:
+        return False
+    if looks_like_math(bare):
+        return False
+    if not line_is_prose(next_line):
+        return False
+    return lines_share_y_band(line, next_line)
+
+
 def line_continues_inline_formula_tail(line: _LineRec, current: "_SegmentAccumulator") -> bool:
     """True for same-baseline formula fragments that finish a prose sentence."""
     if not current.bboxes:
@@ -2638,9 +2715,17 @@ def segments_from_record(
         current = _SegmentAccumulator()
         current_has_inline_tail = False
 
-    for line in record.lines:
+    for line_index, line in enumerate(record.lines):
         if equation_record:
             if not line_is_prose(line):
+                next_line = (
+                    record.lines[line_index + 1]
+                    if line_index + 1 < len(record.lines)
+                    else None
+                )
+                if next_line is not None and line_is_short_prose_prefix(line, next_line):
+                    _accumulate_line(current, line)
+                    continue
                 if line_continues_inline_formula_tail(line, current):
                     _accumulate_line(current, line)
                     current_has_inline_tail = True

@@ -11,6 +11,7 @@ from pdf_zh_translator.pdf_layout import (
     SENTINEL_OPEN,
     FontPack,
     TextBlock,
+    _clip_block_bbox_against_floats,
     _LineRec,
     _looks_like_overlap_exempt_text,
     _looks_like_untranslated_english,
@@ -29,6 +30,7 @@ from pdf_zh_translator.pdf_layout import (
     record_is_table,
     segments_from_record,
     should_preserve_original_block,
+    strip_sentinels,
     verify_translation,
     verify_translation_issues,
 )
@@ -559,6 +561,41 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0].redact_bboxes, [first.bbox, second.bbox])
         self.assertLess(segments[0].redact_bboxes[1][2], segments[0].bbox[2])
+
+    def test_equation_record_keeps_short_heading_glued_to_prose(self):
+        heading = _LineRec(
+            text="Gist memory.",
+            bbox=(108.0, 216.7, 168.5, 226.8),
+            spans=[_span("Gist memory.", (108.0, 216.7, 168.5, 226.8))],
+        )
+        first = _LineRec(
+            text="While short-term and event-",
+            bbox=(177.5, 216.8, 297.7, 226.9),
+            spans=[_span("While short-term and event-", (177.5, 216.8, 297.7, 226.9))],
+        )
+        second = _LineRec(
+            text="boundary memories preserve selected frames",
+            bbox=(108.0, 228.8, 296.0, 238.8),
+            spans=[
+                _span(
+                    "boundary memories preserve selected frames",
+                    (108.0, 228.8, 296.0, 238.8),
+                )
+            ],
+        )
+        formula = _LineRec(
+            text=f"{SENTINEL_OPEN}|Cv_full| = O(NL){SENTINEL_CLOSE}",
+            bbox=(167.8, 299.7, 296.7, 313.5),
+            spans=[_span("|Cv_full| = O(NL)", (167.8, 299.7, 296.7, 313.5))],
+        )
+        record = _RawBlockRec(lines=[heading, first, second, formula])
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("Gist memory. While short-term", segments[0].text)
+        self.assertNotIn("O(NL)", strip_sentinels(segments[0].text))
+        self.assertEqual(segments[0].redact_bboxes[0], heading.bbox)
 
 
 class PreserveGraphicsTextTests(unittest.TestCase):
@@ -1225,6 +1262,37 @@ class TestTranslationVerification(unittest.TestCase):
             _normalize_formula_fragment_for_compare("(b) K-NN：|Vs| = 100"),
             "(b)K-NN:|Vs|=100",
         )
+
+    def test_clip_block_bbox_against_right_side_float(self):
+        clipped = _clip_block_bbox_against_floats(
+            (40.0, 100.0, 560.0, 180.0),
+            [(390.0, 90.0, 560.0, 210.0)],
+            600.0,
+        )
+
+        self.assertEqual(clipped, (40.0, 100.0, 387.0, 180.0))
+
+    def test_clip_block_bbox_ignores_non_right_side_float(self):
+        bbox = (40.0, 100.0, 560.0, 180.0)
+
+        clipped = _clip_block_bbox_against_floats(
+            bbox,
+            [(170.0, 90.0, 260.0, 210.0)],
+            600.0,
+        )
+
+        self.assertEqual(clipped, bbox)
+
+    def test_clip_block_bbox_keeps_original_when_too_narrow(self):
+        bbox = (40.0, 100.0, 560.0, 180.0)
+
+        clipped = _clip_block_bbox_against_floats(
+            bbox,
+            [(180.0, 90.0, 560.0, 210.0)],
+            600.0,
+        )
+
+        self.assertEqual(clipped, bbox)
 
 
 class TestBlockInZone(unittest.TestCase):
