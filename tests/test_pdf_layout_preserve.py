@@ -2,6 +2,7 @@
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import fitz
 
@@ -16,6 +17,7 @@ from pdf_zh_translator.pdf_layout import (
     _normalize_formula_fragment_for_compare,
     _RawBlockRec,
     _visible_image_stats,
+    _visual_min_zone_intersects_graphics,
     clean_translation,
     fragmented_prose_warnings_from_units,
     insert_translated_text,
@@ -227,6 +229,28 @@ class FragmentedProseWarningTests(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("Page 1", warnings[0])
         self.assertIn("fixed-width fragments", warnings[0])
+
+    def test_ignores_small_fixed_width_table_fragments(self):
+        units = [
+            (
+                TextBlock(
+                    page_index=0,
+                    bbox=(50.0, 80.0 + index * 8.0, 260.0, 86.0 + index * 8.0),
+                    text=f"0.{index} d4019: Disease code ↔ p966: Procedure code",
+                    font_size=7.0,
+                    color=(0.0, 0.0, 0.0),
+                    nowrap=True,
+                    source_lines=1,
+                ),
+                f"0.{index} d4019: Disease code ↔ p966: Procedure code",
+                {},
+            )
+            for index in range(12)
+        ]
+
+        warnings = fragmented_prose_warnings_from_units(units)
+
+        self.assertEqual(warnings, [])
 
 
 class FormulaTailProseTests(unittest.TestCase):
@@ -1083,6 +1107,31 @@ class TestTranslationVerification(unittest.TestCase):
         document.close()
         self.assertEqual(count, 1)
         self.assertGreater(area, 10000.0)
+
+    def test_visual_min_zone_ignores_text_only_region(self):
+        document = fitz.open()
+        document.new_page(width=300, height=300)
+        visual = SimpleNamespace(
+            pages=[SimpleNamespace(page=1, min_zone_score=0.0, zone_scores=(1, 1, 1, 1, 0, 1))]
+        )
+
+        intersects = _visual_min_zone_intersects_graphics(document, visual)
+
+        document.close()
+        self.assertFalse(intersects)
+
+    def test_visual_min_zone_detects_graphic_region(self):
+        document = fitz.open()
+        page = document.new_page(width=300, height=300)
+        page.draw_rect(fitz.Rect(20, 220, 130, 285))
+        visual = SimpleNamespace(
+            pages=[SimpleNamespace(page=1, min_zone_score=0.0, zone_scores=(1, 1, 1, 1, 0, 1))]
+        )
+
+        intersects = _visual_min_zone_intersects_graphics(document, visual)
+
+        document.close()
+        self.assertTrue(intersects)
 
     def test_formula_fragment_compare_normalizes_fullwidth_punctuation(self):
         self.assertEqual(

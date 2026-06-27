@@ -743,7 +743,11 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     severity="error",
                 )
             )
-        elif visual.min_zone_score < 0.25 and visual.overall_score < 0.90:
+        elif (
+            visual.min_zone_score < 0.25
+            and visual.overall_score < 0.90
+            and _visual_min_zone_intersects_graphics(orig_doc, visual)
+        ):
             worst = (
                 min(visual.pages, key=lambda page: page.min_zone_score)
                 if visual.pages
@@ -768,6 +772,42 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
     trans_doc.close()
     orig_doc.close()
     return issues
+
+
+def _visual_min_zone_intersects_graphics(
+    document: object,
+    visual: object,
+    *,
+    grid_rows: int = 3,
+    grid_cols: int = 2,
+) -> bool:
+    pages = getattr(visual, "pages", [])
+    if not pages:
+        return False
+    worst = min(pages, key=lambda page: getattr(page, "min_zone_score", 1.0))
+    zone_scores = getattr(worst, "zone_scores", ())
+    if not zone_scores:
+        return False
+    min_zone_index = min(range(len(zone_scores)), key=zone_scores.__getitem__)
+    page_number = int(getattr(worst, "page", 0))
+    if page_number <= 0 or page_number > getattr(document, "page_count", 0):
+        return False
+    page = document[page_number - 1]
+    regions = _visual_regions_for_page(page)
+    if not regions:
+        return False
+
+    row = min_zone_index // grid_cols
+    col = min_zone_index % grid_cols
+    rect = page.rect
+    zone = (
+        float(rect.width) * col / grid_cols,
+        float(rect.height) * row / grid_rows,
+        float(rect.width) * (col + 1) / grid_cols,
+        float(rect.height) * (row + 1) / grid_rows,
+    )
+    zone_area = max(1.0, bbox_area(zone))
+    return any(bbox_intersection_area(zone, region) / zone_area >= 0.02 for region in regions)
 
 
 def _extract_text_from_block(block: dict) -> str:
@@ -1497,7 +1537,12 @@ def fragmented_prose_warnings_from_units(units: Sequence[TranslationUnit]) -> Li
         body_count, fragmented_count = page_counts.get(block.page_index, (0, 0))
         body_count += 1
         plain = strip_sentinels(block.text)
-        if block.nowrap and block.source_lines <= 1 and len(plain.strip()) >= 20:
+        if (
+            block.nowrap
+            and block.source_lines <= 1
+            and len(plain.strip()) >= 20
+            and not _looks_like_small_fixed_width_table_fragment(block, plain)
+        ):
             fragmented_count += 1
         page_counts[block.page_index] = (body_count, fragmented_count)
 
@@ -1511,6 +1556,20 @@ def fragmented_prose_warnings_from_units(units: Sequence[TranslationUnit]) -> Li
                 % (page_index + 1, fragmented_count)
             )
     return warnings
+
+
+def _looks_like_small_fixed_width_table_fragment(block: TextBlock, text: str) -> bool:
+    """Small fixed-width cells are usually tables/figure labels, not prose flow."""
+    compact = " ".join(text.split())
+    if not compact:
+        return True
+    if block.font_size <= 8.5:
+        return True
+    if re.search(r"\b(?:CR1|CR2|ICD|K-NN|BA:|Dataset|Success Rate)\b", compact):
+        return True
+    if any(marker in compact for marker in ("↔", "✓", "✗")):
+        return True
+    return False
 
 
 def prepare_translation_units(

@@ -23,6 +23,7 @@ Super Translate is a web-based system for translating English academic papers in
 - **Conference Terminology Corpus** — 1000+ curated AI conference terms across NeurIPS, ICML, ICLR, CVPR, ACL, systems, agents, and safety tracks
 - **Golden Regression Evaluation** — Build and run PDF layout/quality regression sets for large paper batches
 - **Template Layout Learning** — Learn ACM/IEEE/Springer/ACL-style layout profiles from representative PDFs
+- **Editable Figure PPT Provenance** — Figure PPT assets must be finalized by `image-to-editable-ppt`/`editppt` and registered with auditable hashes
 - **Dual View** — Side-by-side PDF viewer with synchronized scrolling and adjustable split
 - **Batch Processing** — Translate multiple papers simultaneously
 - **Feishu Notifications** — Get notified via Feishu/Lark webhook when translation completes
@@ -103,7 +104,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (560 tests)
+└── tests/            # Test suite (568 tests)
 ```
 
 ## Development
@@ -119,10 +120,15 @@ super_translate/
 .venv/bin/ruff check app/ tests/
 
 # Discover a 100-paper golden regression manifest
-.venv/bin/python -m pdf_zh_translator.cli golden-discover data/golden data/golden/manifest.json
+.venv/bin/python -m pdf_zh_translator golden-discover data/golden data/golden/manifest.json
 
 # Learn a reusable paper template layout profile
-.venv/bin/python -m pdf_zh_translator.cli layout-learn ieee data/layout-profiles/ieee.json samples/*.pdf
+.venv/bin/python -m pdf_zh_translator layout-learn ieee data/layout-profiles/ieee.json samples/*.pdf
+
+# Prepare/register/audit editable figure PPT assets
+.venv/bin/python -m pdf_zh_translator figure-ppt-prepare figures/fig1.png data/editable_figures --figure-id fig1
+.venv/bin/python -m pdf_zh_translator figure-ppt-register fig1 figures/fig1.png data/editable_figures/fig1/editppt-run data/editable_figures/fig1
+.venv/bin/python -m pdf_zh_translator figure-ppt-audit data/editable_figures
 ```
 
 ## License

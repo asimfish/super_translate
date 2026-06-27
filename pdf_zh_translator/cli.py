@@ -41,6 +41,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_golden_eval(args)
     if args.command == "layout-learn":
         return run_layout_learn(args)
+    if args.command == "figure-ppt-prepare":
+        return run_figure_ppt_prepare(args)
+    if args.command == "figure-ppt-register":
+        return run_figure_ppt_register(args)
+    if args.command == "figure-ppt-audit":
+        return run_figure_ppt_audit(args)
 
     parser.print_help()
     return 2
@@ -325,6 +331,40 @@ def build_parser() -> argparse.ArgumentParser:
     layout_learn.add_argument("pdfs", type=Path, nargs="+")
     layout_learn.add_argument("--max-pages-per-pdf", type=int, default=6)
 
+    figure_prepare = subparsers.add_parser(
+        "figure-ppt-prepare",
+        help="Create an image-to-editable-ppt editppt run for one figure image.",
+    )
+    figure_prepare.add_argument("source_image", type=Path)
+    figure_prepare.add_argument("output_root", type=Path)
+    figure_prepare.add_argument("--figure-id")
+    figure_prepare.add_argument(
+        "--with-text-hints",
+        action="store_true",
+        help="Do not pass --no-text-hints to editppt prepare.",
+    )
+
+    figure_register = subparsers.add_parser(
+        "figure-ppt-register",
+        help="Register an editppt-finalized figure PPTX with provenance.",
+    )
+    figure_register.add_argument("figure_id")
+    figure_register.add_argument("source_image", type=Path)
+    figure_register.add_argument("editppt_run", type=Path)
+    figure_register.add_argument("output_dir", type=Path)
+    figure_register.add_argument("--pptx", type=Path)
+
+    figure_audit = subparsers.add_parser(
+        "figure-ppt-audit",
+        help="Audit editable figure PPT manifests under a directory.",
+    )
+    figure_audit.add_argument("root", type=Path)
+    figure_audit.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Return success when no editable figure manifests are found.",
+    )
+
     return parser
 
 
@@ -492,6 +532,63 @@ def run_layout_learn(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def run_figure_ppt_prepare(args: argparse.Namespace) -> int:
+    from .editable_figures import prepare_editable_figure_run
+
+    try:
+        run_dir = prepare_editable_figure_run(
+            args.source_image,
+            args.output_root,
+            figure_id=args.figure_id,
+            no_text_hints=not args.with_text_hints,
+        )
+    except Exception as exc:
+        print("Figure PPT prepare failed: %s" % exc, file=sys.stderr)
+        return 1
+    print("Prepared image-to-editable-ppt run: %s" % run_dir)
+    print("Next: reconstruct pages with editppt, then run figure-ppt-register.")
+    return 0
+
+
+def run_figure_ppt_register(args: argparse.Namespace) -> int:
+    from .editable_figures import register_editable_figure
+
+    try:
+        manifest = register_editable_figure(
+            figure_id=args.figure_id,
+            source_image=args.source_image,
+            editppt_run=args.editppt_run,
+            output_dir=args.output_dir,
+            pptx_path=args.pptx,
+        )
+    except Exception as exc:
+        print("Figure PPT register failed: %s" % exc, file=sys.stderr)
+        return 1
+    print("Registered editable figure PPT: %s" % manifest["editppt_output"])
+    print("Manifest: %s" % (args.output_dir / "editable_figure_manifest.json"))
+    return 0
+
+
+def run_figure_ppt_audit(args: argparse.Namespace) -> int:
+    from .editable_figures import audit_editable_figure_manifests
+
+    result = audit_editable_figure_manifests(args.root)
+    print(
+        "Editable figure PPT audit: %d checked, %d passed, %d failed."
+        % (result.checked, result.passed, result.failed)
+    )
+    for issue in result.issues:
+        print("Issue: %s" % issue, file=sys.stderr)
+    if result.checked == 0 and not args.allow_empty:
+        print(
+            "No editable figure manifests found; current figures are not proven to use "
+            "image-to-editable-ppt.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0 if result.failed == 0 else 1
 
 
 def run_translate(args: argparse.Namespace) -> int:
