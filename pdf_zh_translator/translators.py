@@ -56,6 +56,18 @@ class CachedTranslator(Translator):
         self.cache: Dict[str, str] = {}
         self._load()
 
+    @property
+    def block_types(self):
+        """Forward structure-aware block types to the wrapped supplier so the
+        Web path (ProgressTranslator → CachedTranslator → VendorTranslator) still
+        gets caption/heading/title prompt hints."""
+        return getattr(self.wrapped, "block_types", None)
+
+    @block_types.setter
+    def block_types(self, value) -> None:
+        if hasattr(self.wrapped, "block_types"):
+            self.wrapped.block_types = value
+
     def translate_batch(self, texts: Sequence[str]) -> List[str]:
         missing: List[str] = []
         for text in texts:

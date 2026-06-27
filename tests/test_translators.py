@@ -207,6 +207,18 @@ class TranslatorParsingTests(unittest.TestCase):
             cached_again = CachedTranslator(CountingTranslator(), cache_file)
             self.assertEqual(cached_again.translate_batch(["a"]), ["译:a"])
 
+    def test_cached_translator_forwards_block_types_to_wrapped(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            vendor = VendorTranslator(
+                api_url="https://example.com", mode="deepseek", progress=False
+            )
+            cached = CachedTranslator(vendor, cache_file)
+            cached.block_types = ["title", "caption"]
+            # Structure-aware hints must reach the supplier through the cache wrapper.
+            self.assertEqual(vendor.block_types, ["title", "caption"])
+            self.assertEqual(cached.block_types, ["title", "caption"])
+
     def test_single_item_parse_failure_uses_plain_text_fallback(self):
         translator = JsonFailingVendorTranslator()
 

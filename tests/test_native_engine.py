@@ -60,6 +60,15 @@ class ProgressTranslatorTests(unittest.TestCase):
         wrapper = _ProgressTranslator(_EchoInner(), None, group_size=4)
         self.assertEqual(wrapper.translate_batch(["x"]), ["译:x"])
 
+    def test_forwards_block_types_to_inner(self):
+        inner = _EchoInner()
+        wrapper = _ProgressTranslator(inner, None)
+        wrapper.block_types = ["title", "caption"]
+        # translate_pdf sets block_types on the outer wrapper; it must reach the
+        # supplier so caption/heading/title prompt hints actually apply.
+        self.assertEqual(inner.block_types, ["title", "caption"])
+        self.assertEqual(wrapper.block_types, ["title", "caption"])
+
 
 class TranslateSyncNativeTests(unittest.TestCase):
     def test_produces_mono_result(self):

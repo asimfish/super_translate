@@ -372,6 +372,16 @@ class _ProgressTranslator:
         self._callback = progress_callback
         self._group_size = max(1, group_size)
 
+    @property
+    def block_types(self):
+        return getattr(self._inner, "block_types", None)
+
+    @block_types.setter
+    def block_types(self, value):
+        # Forward so translate_pdf's structure-aware hints (caption/heading/title)
+        # reach the supplier through the cache wrapper in the Web path.
+        self._inner.block_types = value
+
     def translate_batch(self, texts):
         results = []
         total = len(texts)
