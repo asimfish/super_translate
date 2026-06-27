@@ -21,6 +21,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access import get_request_access_scope
 from app.core.config import settings
 from app.core.database import get_session
 from app.models.paper import (
@@ -63,6 +64,7 @@ class TranslationCancelledError(Exception):
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/papers", tags=["papers"])
+AccessScope = Annotated[str, Depends(get_request_access_scope)]
 
 # Paper ID format: 12-character hex string (uuid4 hex[:12])
 _PAPER_ID_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -535,10 +537,17 @@ def _editable_figure_manifest_response(
     }
 
 
-async def _get_paper_or_404(paper_id: str, db: AsyncSession) -> Paper:
+async def _get_paper_or_404(
+    paper_id: str,
+    db: AsyncSession,
+    access_scope: str | None = None,
+) -> Paper:
     """Fetch paper by ID or raise 404."""
     _validate_paper_id(paper_id)
-    result = await db.execute(select(Paper).where(Paper.id == paper_id))
+    query = select(Paper).where(Paper.id == paper_id)
+    if access_scope is not None:
+        query = query.where(Paper.access_scope == access_scope)
+    result = await db.execute(query)
     paper = result.scalar_one_or_none()
     if not paper:
         raise HTTPException(404, "Paper not found")
@@ -548,6 +557,7 @@ async def _get_paper_or_404(paper_id: str, db: AsyncSession) -> Paper:
 @router.get("/")
 async def list_papers(
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
     search: str = "",
     status: str = "",
     tag: str = "",
@@ -575,7 +585,11 @@ async def list_papers(
         raise HTTPException(400, f"Search term too long (max {_MAX_SEARCH_LEN} characters)")
 
     # Base query with filters
-    base = select(Paper).order_by(Paper.created_at.desc())
+    base = (
+        select(Paper)
+        .where(Paper.access_scope == access_scope)
+        .order_by(Paper.created_at.desc())
+    )
     if search:
         escaped = _escape_like(search)
         base = base.where(Paper.title.like(f"%{escaped}%", escape="\\"))
@@ -628,6 +642,7 @@ async def list_papers(
 @router.post("/upload")
 async def upload_paper(
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
     file: Annotated[UploadFile, File()],
     tags: Annotated[str, Form()] = "",
 ) -> PaperResponse:
@@ -681,6 +696,7 @@ async def upload_paper(
         raise HTTPException(500, "Failed to process uploaded PDF") from None
 
     paper = Paper(
+        access_scope=access_scope,
         title=title,
         original_filename=file.filename,
         stored_filename=stored_path.name,
@@ -705,6 +721,7 @@ async def upload_paper(
 async def get_paper(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> PaperResponse:
     """Get a specific paper by ID.
 
@@ -717,7 +734,7 @@ async def get_paper(
     Raises:
         HTTPException: If paper not found (404)
     """
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     # Check file existence safely (respects path traversal guard)
     has_original = _file_exists_safe(settings.papers_path, paper.stored_filename)
     has_translated = _file_exists_safe(settings.translations_path, paper.translated_filename)
@@ -736,6 +753,7 @@ async def get_paper(
 async def delete_paper(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> dict[str, bool]:
     """Delete a paper and its associated files.
 
@@ -748,7 +766,7 @@ async def delete_paper(
     Raises:
         HTTPException: If paper not found (404) or translation in progress (409)
     """
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     if paper.translation_status == TranslationStatus.TRANSLATING.value:
         raise HTTPException(409, "Cannot delete paper while translation is in progress")
     # Delete DB record first; if commit fails, files are untouched (no orphaned record)
@@ -764,6 +782,7 @@ async def start_translation(
     paper_id: str,
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
     backend: str = "",
     quality: str = "balanced",
     preserve_graphics_text: bool = False,
@@ -814,6 +833,7 @@ async def start_translation(
         update(Paper)
         .where(
             Paper.id == paper_id,
+            Paper.access_scope == access_scope,
             Paper.translation_status != TranslationStatus.TRANSLATING.value,
         )
         .values(
@@ -827,7 +847,7 @@ async def start_translation(
     )
     if result.rowcount == 0:
         # Either paper doesn't exist or already translating
-        await _get_paper_or_404(paper_id, db)  # raises 404 if missing
+        await _get_paper_or_404(paper_id, db, access_scope)  # raises 404 if missing
         raise HTTPException(409, "Translation already in progress")
     job_id = generate_job_id()
     job = TranslationJob(
@@ -869,12 +889,13 @@ async def start_translation(
 async def cancel_translation(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> dict[str, bool | str]:
     """Request cancellation of an in-progress translation.
 
     The translation will stop at the next progress callback.
     """
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     if paper.translation_status != TranslationStatus.TRANSLATING.value:
         raise HTTPException(409, "Paper is not currently being translated")
     _mark_cancel_requested(paper_id)
@@ -896,9 +917,10 @@ async def cancel_translation(
 async def list_translation_jobs(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> list[TranslationJobResponse]:
     """List recent durable translation jobs for one paper."""
-    await _get_paper_or_404(paper_id, db)
+    await _get_paper_or_404(paper_id, db, access_scope)
     result = await db.execute(
         select(TranslationJob)
         .where(TranslationJob.paper_id == paper_id)
@@ -1766,9 +1788,10 @@ async def _serve_paper_file(
 async def download_original(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> FileResponse:
     """Download the original PDF file."""
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     return await _serve_paper_file(
         paper,
         "stored_filename",
@@ -1781,9 +1804,10 @@ async def download_original(
 async def download_translated(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> FileResponse:
     """Download the translated PDF file."""
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     name = f"{Path(paper.original_filename).stem}_zh.pdf"
     return await _serve_paper_file(
         paper,
@@ -1797,9 +1821,10 @@ async def download_translated(
 async def download_dual(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> FileResponse:
     """Download the dual-language PDF file."""
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     name = f"{Path(paper.original_filename).stem}_dual.pdf"
     return await _serve_paper_file(paper, "dual_filename", settings.translations_path, name)
 
@@ -1808,9 +1833,10 @@ async def download_dual(
 async def view_original(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> FileResponse:
     """View the original PDF file in browser."""
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     return await _serve_paper_file(paper, "stored_filename", settings.papers_path)
 
 
@@ -1818,9 +1844,10 @@ async def view_original(
 async def view_translated(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> FileResponse:
     """View the translated PDF file in browser."""
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     return await _serve_paper_file(paper, "translated_filename", settings.translations_path)
 
 
@@ -1828,9 +1855,10 @@ async def view_translated(
 async def get_qa_report(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> dict:
     """Return the machine-readable post-translation QA report."""
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     report_path = _qa_report_path(paper)
     if not report_path.exists():
         raise HTTPException(404, "QA report not found")
@@ -1847,9 +1875,10 @@ async def get_qa_report(
 async def get_editable_figure_manifest(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> dict[str, Any]:
     """Return UI-safe editable-figure source manifest metadata for a paper."""
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     manifest_path = _editable_source_manifest_path(paper)
     if not manifest_path.exists():
         raise HTTPException(404, "Editable figure source manifest not found")
@@ -1866,13 +1895,14 @@ async def get_editable_figure_manifest(
 async def extract_editable_figures(
     paper_id: str,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
     max_figures: int = 100,
 ) -> dict[str, Any]:
     """Extract figure source images and write an editable-PPT provenance manifest."""
     if max_figures < 1 or max_figures > 200:
         raise HTTPException(400, "max_figures must be between 1 and 200")
 
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     source_pdf = _get_paper_file(paper, "stored_filename", settings.papers_path)
 
     from pdf_zh_translator.editable_figures import extract_pdf_figures
@@ -1904,9 +1934,10 @@ async def update_paper(
     paper_id: str,
     request: PaperUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
 ) -> PaperResponse:
     """Update paper metadata (title, tags, notes)."""
-    paper = await _get_paper_or_404(paper_id, db)
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
     if request.title is not None:
         paper.title = request.title
     if request.tags is not None:

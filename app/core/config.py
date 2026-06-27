@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # Authorization: Bearer <token>. When unset, remote non-loopback clients are
     # rejected unless allow_unauthenticated_remote is explicitly enabled.
     api_token: SecretStr = SecretStr("")
+    # Optional comma/newline-separated workspace tokens for lightweight
+    # multi-user isolation. Entries accept "workspace:token", "workspace=token",
+    # or just "token" (auto-named). Each token only sees papers in its scope.
+    workspace_tokens: str = ""
     allow_unauthenticated_remote: bool = False
 
     # CORS (comma-separated origins, e.g. "http://localhost:3000,https://example.com")

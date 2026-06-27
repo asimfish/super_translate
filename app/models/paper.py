@@ -44,11 +44,13 @@ class Paper(Base):
 
     __tablename__ = "papers"
     __table_args__ = (
+        Index("ix_papers_access_created", "access_scope", "created_at"),
         Index("ix_papers_status", "translation_status"),
         Index("ix_papers_created", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(12), primary_key=True, default=generate_id)
+    access_scope: Mapped[str] = mapped_column(String(80), nullable=False, default="local")
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
     stored_filename: Mapped[str] = mapped_column(String(500), nullable=False)

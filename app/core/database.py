@@ -70,10 +70,19 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         # Lightweight migrations for columns added after the first release.
         await _ensure_column(
+            conn, "papers", "access_scope", "VARCHAR(80) NOT NULL DEFAULT 'local'"
+        )
+        await _ensure_column(
             conn, "papers", "translation_stage", "VARCHAR(40) NOT NULL DEFAULT ''"
         )
         await _ensure_column(conn, "papers", "translation_eta_seconds", "INTEGER")
         # create_all skips indexes on existing tables — ensure they exist
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_papers_access_created "
+                "ON papers (access_scope, created_at)"
+            ),
+        )
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_papers_status ON papers (translation_status)"),
         )

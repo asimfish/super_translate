@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-603%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-615%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -87,12 +87,19 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 | `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `3` | Max concurrent translation jobs |
 | `PAPER_CHINA_TRANSLATION_CONCURRENCY` | `4` | Parallel supplier requests within one translation (lower to `1` for rate-limited API keys) |
 | `PAPER_CHINA_API_TOKEN` | — | Optional bearer token for `/api/*` requests |
+| `PAPER_CHINA_WORKSPACE_TOKENS` | — | Optional comma/newline-separated `workspace:token` entries for lightweight per-workspace isolation |
 | `PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE` | `false` | Allow remote API access without token |
 | `PAPER_CHINA_FEISHU_WEBHOOK_URL` | — | Feishu webhook for notifications |
 
-Remote access is local-only by default unless `PAPER_CHINA_API_TOKEN` is set.
-When a token is configured, the web UI stores it in browser local storage and
-sends `Authorization: Bearer <token>` for API, PDF preview, and downloads.
+Remote access is local-only by default unless `PAPER_CHINA_API_TOKEN` or
+`PAPER_CHINA_WORKSPACE_TOKENS` is set. When a token is configured, the web UI
+stores it in browser local storage and sends `Authorization: Bearer <token>` for
+API, PDF preview, and downloads.
+
+`PAPER_CHINA_API_TOKEN` maps to the default `local` scope for backward
+compatibility. `PAPER_CHINA_WORKSPACE_TOKENS` can contain entries such as
+`lab-a:token-a,lab-b:token-b`; papers uploaded with one workspace token are
+listed, translated, downloaded, and edited only from that workspace scope.
 
 ## Architecture
 
@@ -105,7 +112,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (603 tests)
+└── tests/            # Test suite (615 tests)
 ```
 
 ## Deployment Notes
@@ -121,10 +128,11 @@ Super Translate targets local / single-machine / small-team use:
   progress writes can run concurrently without "database is locked" errors. For
   heavy multi-user/public deployments, migrate to PostgreSQL + an external job
   queue.
-- **Authentication is single-token.** There is no per-user login or isolation.
-  Set `PAPER_CHINA_API_TOKEN` (and serve over HTTPS) before exposing the app off
-  `localhost`; otherwise remote clients are rejected unless
-  `PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE=true`.
+- **Authentication supports token-scoped workspaces, not full accounts.** Set
+  `PAPER_CHINA_API_TOKEN` for a single default scope, or
+  `PAPER_CHINA_WORKSPACE_TOKENS` for lightweight per-workspace isolation. Serve
+  over HTTPS before exposing the app off `localhost`; otherwise remote clients
+  are rejected unless `PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE=true`.
 
 ## Development
 

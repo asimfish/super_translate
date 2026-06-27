@@ -1,9 +1,7 @@
 """Main application entry point."""
 
 import asyncio
-import ipaddress
 import logging
-import secrets
 import time
 import webbrowser
 from collections.abc import AsyncGenerator
@@ -21,6 +19,7 @@ from starlette.responses import Response
 
 from app import __version__
 from app.api.papers import router as papers_router
+from app.core.access import access_decision_for_request
 from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
 from app.core.rate_limit import RateLimitMiddleware
@@ -116,16 +115,6 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
-def _client_is_local(request: Request) -> bool:
-    host = request.client.host if request.client else ""
-    if host in ("", "unknown", "testclient"):
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return host in ("localhost",)
-
-
 @app.middleware("http")
 async def enforce_api_access(request: Request, call_next: RequestResponseEndpoint) -> Response:
     if not request.url.path.startswith("/api/"):
@@ -133,17 +122,9 @@ async def enforce_api_access(request: Request, call_next: RequestResponseEndpoin
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    token = settings.api_token.get_secret_value()
-    if token:
-        auth = request.headers.get("Authorization", "")
-        expected = f"Bearer {token}"
-        if not secrets.compare_digest(auth, expected):
-            return JSONResponse(status_code=401, content={"detail": "Invalid or missing API token"})
-    elif not settings.allow_unauthenticated_remote and not _client_is_local(request):
-        return JSONResponse(
-            status_code=403,
-            content={"detail": "Remote API access requires PAPER_CHINA_API_TOKEN"},
-        )
+    decision = access_decision_for_request(request)
+    if not decision.allowed:
+        return JSONResponse(status_code=decision.status_code, content={"detail": decision.detail})
 
     return await call_next(request)
 
@@ -255,7 +236,7 @@ def cli() -> None:
     args = parser.parse_args()
 
     if args.host not in ("127.0.0.1", "localhost", "::1"):
-        if settings.api_token.get_secret_value():
+        if settings.api_token.get_secret_value() or settings.workspace_tokens:
             logger.info("Binding to %s with API token authentication enabled.", args.host)
         else:
             logger.warning(
