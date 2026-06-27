@@ -1274,7 +1274,7 @@ def _clip_block_bbox_against_floats(
     floats: Sequence[BBox],
     page_width: float,
     *,
-    min_keep_ratio: float = 0.34,
+    min_keep_ratio: float = 0.30,
     side_gap: float = 3.0,
 ) -> BBox:
     """Shrink a wide (cross-column) block's right edge so reflowed CJK text stays

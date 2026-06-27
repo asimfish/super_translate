@@ -1272,6 +1272,15 @@ class TestTranslationVerification(unittest.TestCase):
 
         self.assertEqual(clipped, (40.0, 100.0, 387.0, 180.0))
 
+    def test_clip_block_bbox_allows_two_column_body_width(self):
+        clipped = _clip_block_bbox_against_floats(
+            (107.5, 348.3, 505.2, 525.6),
+            [(306.0, 401.4, 505.6, 476.9)],
+            612.0,
+        )
+
+        self.assertEqual(clipped, (107.5, 348.3, 303.0, 525.6))
+
     def test_clip_block_bbox_ignores_non_right_side_float(self):
         bbox = (40.0, 100.0, 560.0, 180.0)
 
