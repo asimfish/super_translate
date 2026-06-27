@@ -462,6 +462,13 @@ _REFERENCE_ENTRY_RE = re.compile(
     r"^\s*(?:\[\d+\]|\d+\.|\w.+\(\d{4}[a-z]?\)|doi:|arxiv:)",
     re.IGNORECASE,
 )
+_REFERENCE_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}[a-z]?\b", re.IGNORECASE)
+_REFERENCE_FRAGMENT_CUE_RE = re.compile(
+    r"(?:\bet al\.|\bpp\.|\bpages?\b|\bproceedings\b|\bconference\b|\bjournal\b"
+    r"|\btransactions\b|\barxiv\b|\bpreprint\b|\. In\b|\bPMLR\b|\bIEEE\b"
+    r"|\bICRA\b|\bICLR\b|\bCoRL\b|\bNeurIPS\b)",
+    re.IGNORECASE,
+)
 
 
 def verify_translation(original_pdf: Path, translated_pdf: Path) -> List[str]:
@@ -527,6 +534,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             )
         )
 
+    reference_section_active = False
     for page_idx in range(min(orig_doc.page_count, trans_doc.page_count)):
         orig_page = orig_doc[page_idx]
         trans_page = trans_doc[page_idx]
@@ -536,6 +544,15 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         reference_y = _reference_section_start_y(trans_page)
         if reference_y is None:
             reference_y = _reference_section_start_y(orig_page)
+        if reference_y is not None:
+            reference_section_active = True
+        elif reference_section_active and (
+            _page_looks_like_reference_continuation(trans_page)
+            or _page_looks_like_reference_continuation(orig_page)
+        ):
+            reference_y = 0.0
+        else:
+            reference_section_active = False
 
         # Count English-only text blocks in translated PDF
         untranslated_examples: List[str] = []
@@ -599,7 +616,11 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             if _block_in_reference_section(block, reference_y):
                 continue
             text = _extract_text_from_block(block)
-            if len(text.strip()) < 4 or _is_reference_or_formula_text(text):
+            if (
+                len(text.strip()) < 4
+                or _is_reference_or_formula_text(text)
+                or _looks_like_overlap_exempt_text(text)
+            ):
                 continue
             bbox = block.get("bbox")
             if bbox:
@@ -639,19 +660,20 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 )
             )
 
-        try:
-            orig_images = len(orig_page.get_images())
-            trans_images = len(trans_page.get_images())
-        except Exception:
-            orig_images = trans_images = 0
-        if orig_images and trans_images < orig_images:
+        orig_image_count, orig_image_area = _visible_image_stats(orig_page)
+        trans_image_count, trans_image_area = _visible_image_stats(trans_page)
+        image_count_missing = orig_image_count and trans_image_count < max(1, orig_image_count // 2)
+        image_area_missing = (
+            orig_image_area > 1.0 and trans_image_area < orig_image_area * 0.5
+        )
+        if image_count_missing or image_area_missing:
             issues.append(
                 TranslationIssue(
                     page=page_idx + 1,
                     code="missing_image",
                     message=(
-                        f"Page {page_idx + 1}: translated page has fewer raster images "
-                        f"({trans_images}/{orig_images})"
+                        f"Page {page_idx + 1}: translated page has fewer visible image blocks "
+                        f"({trans_image_count}/{orig_image_count})"
                     ),
                     severity="error",
                 )
@@ -674,9 +696,11 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
 
         formula_fragments = _extract_formula_fragments(orig_page)
         if formula_fragments:
-            trans_compact = re.sub(r"\s+", "", trans_page.get_text("text"))
+            trans_compact = _normalize_formula_fragment_for_compare(trans_page.get_text("text"))
             missing_formulas = [
-                fragment for fragment in formula_fragments if fragment not in trans_compact
+                fragment
+                for fragment in formula_fragments
+                if _normalize_formula_fragment_for_compare(fragment) not in trans_compact
             ]
             if missing_formulas:
                 issues.append(
@@ -760,8 +784,12 @@ def _is_reference_or_formula_text(text: str) -> bool:
         return True
     if _REFERENCE_ENTRY_RE.search(compact):
         return True
+    if _looks_like_reference_entry_text(compact):
+        return True
     lower = compact.lower()
     if "doi" in lower or "arxiv" in lower or "http://" in lower or "https://" in lower:
+        return True
+    if _looks_like_code_or_symbolic_text(compact):
         return True
     if looks_like_math(compact):
         return True
@@ -773,6 +801,8 @@ def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 35 or _is_reference_or_formula_text(compact):
         return False
+    if _looks_like_author_or_affiliation_text(compact):
+        return False
     words = _ASCII_WORD_DETECT_RE.findall(compact)
     if len(words) < 5:
         return False
@@ -781,6 +811,115 @@ def _looks_like_untranslated_english(text: str) -> bool:
         return False
     ascii_letters = sum(1 for char in compact if char.isascii() and char.isalpha())
     return ascii_letters / max(len(compact), 1) >= 0.45
+
+
+def _looks_like_author_or_affiliation_text(text: str) -> bool:
+    compact = " ".join(text.split())
+    if "@" in compact or re.search(r"\{[^{}]{3,80}\}", compact):
+        return True
+    authorish = re.sub(r"(?<=[a-z])\d+(?=[A-Z])", " ", compact)
+    names = re.findall(r"\b[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+)+", authorish)
+    lower = compact.lower()
+    body_verbs = (
+        "propose",
+        "proposed",
+        "show",
+        "shows",
+        "using",
+        "improve",
+        "improves",
+        "evaluate",
+        "evaluates",
+    )
+    title_tokens = re.findall(r"\b[A-Z][A-Za-z-]+\b", authorish)
+    lowercase_words = re.findall(r"\b[a-z]{3,}\b", authorish)
+    if re.search(r"[∗†‡*]", compact):
+        return (
+            len(names) >= 3
+            or compact.count(",") >= 3
+            or (len(title_tokens) >= 5 and len(lowercase_words) <= 1)
+        )
+    if compact.count(",") >= 4 and len(names) >= 3:
+        return True
+    if (
+        len(compact) <= 220
+        and len(title_tokens) >= 5
+        and len(lowercase_words) <= 1
+        and not re.search(r"[.!?。！？]", compact)
+    ):
+        return not any(verb in lower for verb in body_verbs)
+    if len(compact) <= 220 and len(names) >= 4:
+        return not any(verb in lower for verb in body_verbs)
+    return False
+
+
+def _looks_like_code_or_symbolic_text(text: str) -> bool:
+    compact = " ".join(text.split())
+    lower = compact.lower()
+    if re.search(r"\bdef\s+\w+\s*\(", compact):
+        return True
+    if any(token in compact for token in (":=", "setdefault(", "supp[", "ρ", "π", "ϕ", "χ", "ξ")):
+        return True
+    words = _ASCII_WORD_DETECT_RE.findall(compact)
+    if re.search(r"\[[0-9]+\]", compact) and len(words) <= 16:
+        if re.search(r"\b(?:VoteNet|ScanRefer|ViewRefer|Success|Rate|Drop|Stage)\b", compact):
+            return True
+    camel_tokens = re.findall(r"\b[A-Z][A-Za-z0-9]*(?:[A-Z][a-z0-9]+)+\b", compact)
+    if len(camel_tokens) >= 2 and len(words) <= 16 and not re.search(r"[.!?。！？]", compact):
+        return True
+    greek_chars = sum(1 for char in compact if "\u0370" <= char <= "\u03ff")
+    math_chars = sum(1 for char in compact if char in MATH_SYMBOLS)
+    if greek_chars >= 2 and (math_chars >= 1 or "supp" in lower):
+        return True
+    return False
+
+
+def _looks_like_overlap_exempt_text(text: str) -> bool:
+    compact = " ".join(text.split())
+    if not compact:
+        return True
+    control_chars = sum(1 for char in compact if ord(char) < 32)
+    if control_chars >= 2:
+        return True
+    if _looks_like_code_or_symbolic_text(compact) or looks_like_math(compact):
+        return True
+
+    words = _PROSE_WORD_RE.findall(compact)
+    math_chars = sum(1 for char in compact if char in MATH_SYMBOLS)
+    greek_chars = sum(1 for char in compact if "\u0370" <= char <= "\u03ff")
+    math_punct_chars = sum(1 for char in compact if char in "(){}[],⟨⟩")
+    digit_chars = sum(1 for char in compact if char.isdigit())
+    if (math_chars + greek_chars + math_punct_chars) >= 2 and len(words) <= 12:
+        return True
+    if greek_chars >= 1 and math_punct_chars >= 1 and len(words) <= 12:
+        return True
+    if re.search(r"\b(?:[CX][st]?\(|Xs|Xt|Orel|lsub)\b", compact) and len(words) <= 16:
+        return True
+    if (
+        re.search(
+            r"\b(?:arg|max|min|log|exp|sim|softmax|crossentropy|mlp|cos|supp)\b",
+            compact,
+            re.IGNORECASE,
+        )
+        and (math_chars or digit_chars)
+        and len(words) <= 14
+    ):
+        return True
+
+    no_space = re.sub(r"\s+", "", compact)
+    if len(no_space) <= 180 and re.search(r"(?:[dp]\d+){3,}", no_space, re.IGNORECASE):
+        return True
+    if len(no_space) <= 140 and digit_chars / max(len(no_space), 1) >= 0.25:
+        return True
+    if len(compact) <= 120 and len(words) <= 8:
+        has_sentence_mark = bool(re.search(r"[。！？.!?]", compact))
+        title_like = sum(1 for word in words if word[0].isupper()) >= 2
+        if not has_sentence_mark and title_like:
+            return True
+    cjk_chars = len(_CJK_DETECT_RE.findall(compact))
+    if cjk_chars >= 30 and not re.search(r"[，。；：！？]", compact):
+        return True
+    return False
 
 
 def _looks_like_untranslated_caption(text: str) -> bool:
@@ -818,6 +957,45 @@ def _reference_section_start_y(page: object) -> float | None:
     return None
 
 
+def _page_looks_like_reference_continuation(page: object) -> bool:
+    text_blocks: List[str] = []
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        compact = " ".join(_extract_text_from_block(block).split())
+        if len(compact) >= 20:
+            text_blocks.append(compact)
+    if not text_blocks:
+        return False
+
+    reference_like = sum(1 for text in text_blocks if _looks_like_reference_entry_text(text))
+    if reference_like >= 2:
+        return True
+    return reference_like == 1 and len(text_blocks) <= 4
+
+
+def _looks_like_reference_entry_text(text: str) -> bool:
+    compact = " ".join(text.split())
+    if not compact:
+        return False
+    if _REFERENCE_ENTRY_RE.search(compact):
+        return True
+    lower = compact.lower()
+    if "doi" in lower or "arxiv" in lower or "http://" in lower or "https://" in lower:
+        return True
+    words = _ASCII_WORD_DETECT_RE.findall(compact)
+    if len(words) < 6 or not _REFERENCE_YEAR_RE.search(compact):
+        if not _REFERENCE_FRAGMENT_CUE_RE.search(compact):
+            return False
+        authorish = compact.count(",") >= 2 or bool(
+            re.match(r"^[A-Z][A-Za-z-]+(?:\s+[A-Z]\.?)?(?:\s+[A-Z][A-Za-z-]+)?", compact)
+        )
+        if not authorish:
+            return False
+    cjk_chars = len(_CJK_DETECT_RE.findall(compact))
+    return cjk_chars < max(4, len(words) // 3)
+
+
 def _block_in_reference_section(block: dict, reference_y: float | None) -> bool:
     if reference_y is None:
         return False
@@ -839,6 +1017,28 @@ def _translated_block_still_english(block: TextBlock, translated_text: str) -> b
     if block.block_type in ("algorithm", "bibliography", "equation", "figure_label", "footer"):
         return False
     return _looks_like_untranslated_english(translated_text)
+
+
+def _visible_image_stats(page: object) -> Tuple[int, float]:
+    """Count visible raster image blocks and their displayed page area."""
+    try:
+        image_blocks = [
+            block
+            for block in page.get_text("dict").get("blocks", [])
+            if block.get("type") == 1 and block.get("bbox")
+        ]
+    except Exception:
+        image_blocks = []
+    if image_blocks:
+        area = 0.0
+        for block in image_blocks:
+            x0, y0, x1, y1 = (float(value) for value in block["bbox"])
+            area += max(0.0, x1 - x0) * max(0.0, y1 - y0)
+        return len(image_blocks), area
+    try:
+        return len(page.get_images()), 0.0
+    except Exception:
+        return 0, 0.0
 
 
 def _count_vector_graphics(page: object) -> int:
@@ -866,6 +1066,7 @@ def _caption_graphic_overlap_issues(
     visual_regions = _visual_regions_for_page(original_page)
     if not visual_regions:
         return []
+    source_captions = _source_caption_regions(original_page)
 
     issues: List[TranslationIssue] = []
     for block in translated_page.get_text("dict").get("blocks", []):
@@ -877,8 +1078,11 @@ def _caption_graphic_overlap_issues(
         bbox = block.get("bbox")
         if not bbox:
             continue
+        caption_bbox = tuple(float(value) for value in bbox)
+        if _caption_near_source_caption(text, caption_bbox, source_captions):
+            continue
         for region in visual_regions:
-            if _bbox_overlap_ratio(tuple(bbox), region) >= 0.08:
+            if _bbox_overlap_ratio(caption_bbox, region) >= 0.08:
                 issues.append(
                     TranslationIssue(
                         page=page_number,
@@ -890,6 +1094,60 @@ def _caption_graphic_overlap_issues(
                 )
                 break
     return issues
+
+
+def _source_caption_regions(page: object) -> List[Tuple[Tuple[str, str], BBox]]:
+    captions: List[Tuple[Tuple[str, str], BBox]] = []
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0 or not block.get("bbox"):
+            continue
+        text = _extract_text_from_block(block).strip()
+        if not _CAPTION_RE.match(text):
+            continue
+        captions.append(
+            (
+                _caption_key(text),
+                tuple(float(value) for value in block["bbox"]),
+            )
+        )
+    return captions
+
+
+def _caption_key(text: str) -> Tuple[str, str]:
+    compact = " ".join(text.split())
+    match = re.match(r"^(Figure|Fig\.|Table|图|表)\s*(\d+)", compact, re.IGNORECASE)
+    if not match:
+        return ("", "")
+    kind = match.group(1).lower()
+    if kind in {"figure", "fig.", "图"}:
+        kind = "figure"
+    elif kind in {"table", "表"}:
+        kind = "table"
+    return kind, match.group(2)
+
+
+def _caption_near_source_caption(
+    text: str,
+    bbox: BBox,
+    source_captions: Sequence[Tuple[Tuple[str, str], BBox]],
+) -> bool:
+    if not source_captions:
+        return False
+    key = _caption_key(text)
+    candidates = [caption for caption in source_captions if key != ("", "") and caption[0] == key]
+    if not candidates:
+        candidates = source_captions
+    for _candidate_key, source_bbox in candidates:
+        height = max(1.0, source_bbox[3] - source_bbox[1])
+        expanded = (
+            source_bbox[0] - 12.0,
+            source_bbox[1] - max(20.0, height * 0.5),
+            source_bbox[2] + 12.0,
+            source_bbox[3] + max(20.0, height * 0.8),
+        )
+        if _bbox_overlap_ratio(bbox, expanded) >= 0.75:
+            return True
+    return False
 
 
 def _visual_regions_for_page(page: object) -> List[BBox]:
@@ -956,6 +1214,17 @@ def _extract_formula_fragments(page: object) -> List[str]:
             fragments.append(compact)
             seen.add(compact)
     return fragments[:20]
+
+
+def _normalize_formula_fragment_for_compare(text: str) -> str:
+    compact = re.sub(r"\s+", "", text)
+    return (
+        compact.replace("：", ":")
+        .replace("，", ",")
+        .replace("（", "(")
+        .replace("）", ")")
+        .replace("−", "-")
+    )
 
 
 def _looks_like_formula_fragment(text: str) -> bool:
@@ -1255,6 +1524,8 @@ def prepare_translation_units(
 
     Phase 1: Structure analysis — classify blocks by semantic type before translation.
     """
+    global _bibliography_ended, _bibliography_heading_size
+
     raw_blocks, gutter_rects = collect_text_blocks(document)
     graphic_regions = collect_graphic_regions(document) if preserve_graphics_text else {}
     blocks = merge_paragraph_blocks(
@@ -1265,6 +1536,7 @@ def prepare_translation_units(
     # --- Phase 1: Structure-aware classification ---
     _bibliography_seen.clear()
     _bibliography_ended = False
+    _bibliography_heading_size = 0.0
     for page_index in range(document.page_count):
         page = document[page_index]
         page_height = page.rect.height
@@ -1302,6 +1574,38 @@ _REFERENCES_HEADING_RE = re.compile(
     r"^(?:references|bibliography|参考文献)$",
     re.IGNORECASE,
 )
+_APPENDIX_HEADING_RE = re.compile(r"^(?:appendix\b|appendix[A-Z0-9])", re.IGNORECASE)
+_APPENDIX_LETTER_HEADING_RE = re.compile(r"^[A-Z]\.?\s+(.+)$")
+
+
+def _looks_like_appendix_heading(text: str, source_lines: int = 1) -> bool:
+    compact = " ".join(text.split()).strip()
+    if not compact:
+        return False
+    if _APPENDIX_HEADING_RE.match(compact):
+        return True
+    if source_lines > 2 or len(compact) > 80:
+        return False
+    if _REFERENCE_ENTRY_RE.search(compact) or _looks_like_reference_entry_text(compact):
+        return False
+    match = _APPENDIX_LETTER_HEADING_RE.match(compact)
+    if not match:
+        return False
+    heading = match.group(1)
+    words = _PROSE_WORD_RE.findall(heading)
+    if not words or len(words) > 8:
+        return False
+    if heading.upper() == heading:
+        return True
+    significant = [
+        word
+        for word in words
+        if word.lower() not in {"a", "an", "and", "for", "in", "of", "on", "the", "to", "with"}
+    ]
+    if not significant:
+        return False
+    title_case_words = sum(1 for word in significant if word[0].isupper())
+    return title_case_words >= max(1, len(significant) - 1)
 
 
 def mark_bibliography_blocks(
@@ -1324,6 +1628,8 @@ def mark_bibliography_blocks(
             heading_size = block.font_size
             flags.append(False)  # the heading itself is translated
             continue
+        if in_references and _looks_like_appendix_heading(compact):
+            in_references = False
         if in_references and block.bold and block.font_size >= max(heading_size * 0.92, 10.5):
             in_references = False  # next section (appendix) starts
         page_height = page_heights.get(block.page_index, 0.0)
@@ -1640,15 +1946,15 @@ def classify_blocks(
             block.preserve_position = True
             continue
 
-        # Heading: bold + numbered + short
-        if block.bold and len(text) < 100 and _HEADING_RE.match(text):
-            block.block_type = "heading"
-            continue
-
         # Bibliography: after "References" heading
         if _is_bibliography_context(block, blocks):
             block.block_type = "bibliography"
             block.should_translate = False
+            continue
+
+        # Heading: bold + numbered + short
+        if block.bold and len(text) < 100 and _HEADING_RE.match(text):
+            block.block_type = "heading"
             continue
 
         # Footer: near bottom of page or page number
@@ -1673,10 +1979,11 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
     """Check if block is in the bibliography section.
 
     Bibliography starts after a "References" heading and ends at the next
-    bold section heading (appendices, supplementary material).
+    appendix/supplement heading.
     """
     global _bibliography_heading_size, _bibliography_ended
-    text = block.text.strip().lower()
+    raw_text = block.text.strip()
+    text = raw_text.lower()
 
     # Check if this block IS the references heading
     if re.match(r"^(references|bibliography|参考文献)\s*$", text, re.IGNORECASE):
@@ -1685,11 +1992,14 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
         _bibliography_ended = False
         return False  # The heading itself is translatable
 
-    # Check if a bold section heading ends the bibliography range
-    # (e.g., "Appendix", "Supplementary Material")
+    # Check if a new appendix/supplement heading ends the bibliography range.
+    if _bibliography_seen and _looks_like_appendix_heading(raw_text, block.source_lines):
+        _bibliography_ended = True
+
+    # Fallback: bold section headings also end the bibliography range.
     bib_size_threshold = max(_bibliography_heading_size * 0.92, 10.5)
     if _bibliography_seen and block.bold and block.font_size >= bib_size_threshold:
-        if _SECTION_NUM_RE.match(block.text.strip()) or len(block.text.strip()) < 60:
+        if _SECTION_NUM_RE.match(raw_text) or len(raw_text) < 60:
             _bibliography_ended = True
 
     if _bibliography_ended:
@@ -2036,6 +2346,41 @@ _PROSE_WORD_RE = re.compile(r"[A-Za-z]{3,}")
 _SHORT_PROSE_WORDS = frozenset(
     "a an and are as at be by for if in is it of on or the to was were when where with".split()
 )
+_FORMULA_CONTEXT_WORDS = frozenset(
+    "fig figure table panel top bottom left right middle row column".split()
+)
+
+
+def _text_outside_sentinels(text: str) -> str:
+    outside: List[str] = []
+    inside = False
+    for char in text:
+        if char == SENTINEL_OPEN:
+            inside = True
+        elif char == SENTINEL_CLOSE:
+            inside = False
+        elif not inside:
+            outside.append(char)
+    return "".join(outside)
+
+
+def line_has_translatable_formula_tail(line: _LineRec) -> bool:
+    """Math-heavy line that still carries prose outside the formula spans."""
+    bare = strip_sentinels(line.text)
+    compact = "".join(bare.split())
+    if not compact:
+        return False
+    inside = sentinel_char_count(line.text)
+    if inside < 2 or inside / len(compact) >= 0.55:
+        return False
+    outside = _text_outside_sentinels(line.text)
+    words = [
+        word
+        for word in _PROSE_WORD_RE.findall(outside)
+        if word.lower()
+        not in _MATH_WORDS | _SHORT_PROSE_WORDS | _FORMULA_CONTEXT_WORDS
+    ]
+    return len(words) >= 2
 
 
 def line_is_prose(line: _LineRec) -> bool:
@@ -2044,12 +2389,15 @@ def line_is_prose(line: _LineRec) -> bool:
     the equation block) must still be translated."""
     bare = strip_sentinels(line.text)
     words = [word for word in _PROSE_WORD_RE.findall(bare) if word.lower() not in _MATH_WORDS]
-    if len(words) < 3:
+    has_formula_tail = line_has_translatable_formula_tail(line)
+    if len(words) < 3 and not has_formula_tail:
         return False
     compact = "".join(bare.split())
     if not compact:
         return False
-    return sentinel_char_count(line.text) / len(compact) < 0.35
+    if sentinel_char_count(line.text) / len(compact) < 0.35:
+        return True
+    return has_formula_tail
 
 
 def line_continues_inline_formula_tail(line: _LineRec, current: "_SegmentAccumulator") -> bool:
@@ -2064,9 +2412,17 @@ def line_continues_inline_formula_tail(line: _LineRec, current: "_SegmentAccumul
     bare = strip_sentinels(line.text)
     if len(bare) > 120:
         return False
-    if not re.search(r"[A-Za-z]|[),.;:]", bare):
+    compact = "".join(bare.split())
+    if EQUATION_NUMBER_RE.fullmatch(compact):
         return False
-    return not EQUATION_NUMBER_RE.fullmatch("".join(bare.split()))
+    if re.search(r"[A-Za-z]|[),.;:]", bare):
+        return True
+    gap = line.bbox[0] - previous[2]
+    return (
+        sentinel_char_count(line.text) > 0
+        and len(compact) <= 40
+        and -2.0 <= gap <= max(12.0, min_height * 2.5)
+    )
 
 
 def segments_from_formula_tail_prose(
@@ -2233,6 +2589,7 @@ def segments_from_record(
 
 def _accumulate_line(accumulator: "_SegmentAccumulator", line: _LineRec) -> None:
     accumulator.lines.append(line.text)
+    accumulator.line_bboxes.append(line.bbox)
     for span in line.spans:
         if "bbox" in span:
             accumulator.bboxes.append(tuple(float(x) for x in span["bbox"]))
@@ -2253,6 +2610,7 @@ def _accumulate_line(accumulator: "_SegmentAccumulator", line: _LineRec) -> None
 @dataclass
 class _SegmentAccumulator:
     lines: List[str] = field(default_factory=list)
+    line_bboxes: List[BBox] = field(default_factory=list)
     bboxes: List[BBox] = field(default_factory=list)
     font_sizes: List[float] = field(default_factory=list)
     colors: List[Color] = field(default_factory=list)
@@ -2275,6 +2633,7 @@ class _SegmentAccumulator:
             bold=bold,
             starts_bold=self.starts_bold,
             source_lines=len(self.lines),
+            redact_bboxes=list(self.line_bboxes) if len(self.line_bboxes) > 1 else None,
         )
 
 
@@ -2531,6 +2890,9 @@ def sentence_final_text(text: str) -> bool:
 
 
 def merge_two_blocks(prev: TextBlock, nxt: TextBlock) -> TextBlock:
+    redact_bboxes: List[BBox] = []
+    redact_bboxes.extend(prev.redact_bboxes or [prev.bbox])
+    redact_bboxes.extend(nxt.redact_bboxes or [nxt.bbox])
     return TextBlock(
         page_index=prev.page_index,
         bbox=union_bbox([prev.bbox, nxt.bbox]),
@@ -2540,6 +2902,7 @@ def merge_two_blocks(prev: TextBlock, nxt: TextBlock) -> TextBlock:
         bold=prev.bold and nxt.bold,
         starts_bold=prev.starts_bold,
         source_lines=prev.source_lines + nxt.source_lines,
+        redact_bboxes=redact_bboxes,
     )
 
 

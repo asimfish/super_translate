@@ -11,11 +11,16 @@ from pdf_zh_translator.pdf_layout import (
     FontPack,
     TextBlock,
     _LineRec,
+    _looks_like_overlap_exempt_text,
+    _looks_like_untranslated_english,
+    _normalize_formula_fragment_for_compare,
     _RawBlockRec,
+    _visible_image_stats,
     clean_translation,
     fragmented_prose_warnings_from_units,
     insert_translated_text,
     is_math_span,
+    mark_bibliography_blocks,
     math_heavy_block,
     merge_paragraph_blocks,
     prepare_translation_units,
@@ -86,6 +91,61 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         )
 
         self.assertFalse(should_preserve_original_block(block, [(0.0, 40.0, 280.0, 140.0)]))
+
+    def test_bibliography_ends_at_appendix_heading(self):
+        blocks = [
+            TextBlock(0, (10, 10, 200, 24), "References", 12.0, (0, 0, 0), bold=True),
+            TextBlock(
+                0,
+                (10, 30, 200, 60),
+                "[1] Smith et al. Learning representations. 2024.",
+                9.0,
+                (0, 0, 0),
+            ),
+            TextBlock(1, (10, 10, 200, 24), "A. Prompt", 10.0, (0, 0, 0)),
+            TextBlock(
+                1,
+                (10, 30, 200, 60),
+                "The appendix describes additional experiments.",
+                9.0,
+                (0, 0, 0),
+            ),
+        ]
+
+        self.assertEqual(mark_bibliography_blocks(blocks), [False, True, False, False])
+
+    def test_prepare_units_translates_appendix_after_references(self):
+        document = fitz.open()
+        page = document.new_page(width=360, height=360)
+        page.insert_text((30, 40), "References", fontsize=12)
+        page.insert_text((30, 70), "[1] Smith et al. Learning representations. 2024.")
+        page = document.new_page(width=360, height=360)
+        page.insert_text((120, 40), "A OPTIMIZATION OF THE PROXY REWARD", fontsize=10)
+        page.insert_text((30, 70), "The appendix describes additional experiments.")
+
+        units, _, _ = prepare_translation_units(document)
+
+        document.close()
+        exported_text = "\n".join(block.text for block, _, _ in units)
+        self.assertIn("The appendix describes additional experiments.", exported_text)
+        self.assertNotIn("Smith et al. Learning representations.", exported_text)
+
+    def test_prepare_units_translates_lettered_appendix_heading_after_references(self):
+        document = fitz.open()
+        page = document.new_page(width=360, height=360)
+        page.insert_text((30, 40), "References", fontsize=12)
+        page.insert_text((30, 70), "[1] Smith et al. Learning representations. 2024.")
+        page = document.new_page(width=360, height=360)
+        page.insert_text((30, 40), "A. Prompt", fontsize=10)
+        page.insert_text((30, 70), "We use a conversational structure to prompt the model.")
+
+        units, _, _ = prepare_translation_units(document)
+
+        document.close()
+        exported_text = "\n".join(block.text for block, _, _ in units)
+        self.assertIn("A. Prompt", exported_text)
+        self.assertIn("We use a conversational structure to prompt the model.", exported_text)
+        self.assertNotIn("Smith et al. Learning representations.", exported_text)
 
 
 def _span(text, bbox, size=10.0, font="NimbusRomNo9L-Regu", flags=4):
@@ -312,6 +372,170 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertIn("already well-constrained", segments[0].text)
         self.assertEqual(segments[0].redact_bboxes, [segments[0].bbox])
 
+    def test_equation_record_keeps_math_wrapped_sentence(self):
+        first = _LineRec(
+            text="We always consider a policy in the context of the underlying metric MDP.",
+            bbox=(120.0, 680.0, 504.0, 690.0),
+            spans=[
+                _span(
+                    "We always consider a policy in the context of the underlying metric MDP.",
+                    (120.0, 680.0, 504.0, 690.0),
+                )
+            ],
+        )
+        formula_sentence = _LineRec(
+            text=(
+                f"({SENTINEL_OPEN}S, A, R, P, T, d{SENTINEL_CLOSE}"
+                f"{SENTINEL_OPEN}E{SENTINEL_CLOSE}) are different from every policy "
+                f"acting on ({SENTINEL_OPEN}S, A, R, P, T, d{SENTINEL_CLOSE}"
+                f"{SENTINEL_OPEN}A{SENTINEL_CLOSE}) as soon as"
+                f"{SENTINEL_OPEN}d{SENTINEL_CLOSE}{SENTINEL_OPEN}E{SENTINEL_CLOSE}"
+                f"{SENTINEL_OPEN}̸{SENTINEL_CLOSE}={SENTINEL_OPEN}d{SENTINEL_CLOSE}"
+                f"{SENTINEL_OPEN}A{SENTINEL_CLOSE}. This"
+            ),
+            bbox=(108.0, 691.0, 504.0, 701.0),
+            spans=[
+                _span("(S, A, R, P, T, dE)", (108.0, 691.0, 178.0, 701.0)),
+                _span(
+                    " are different from every policy acting on ",
+                    (178.0, 691.0, 329.0, 701.0),
+                ),
+                _span("(S, A, R, P, T, dA)", (329.0, 691.0, 402.0, 701.0)),
+                _span(" as soon as dE ̸= dA. This", (402.0, 691.0, 504.0, 701.0)),
+            ],
+        )
+        continuation = _LineRec(
+            text="guarantees that the distance respects the identity of indiscernibles.",
+            bbox=(108.0, 701.0, 422.0, 710.0),
+            spans=[
+                _span(
+                    "guarantees that the distance respects the identity of indiscernibles.",
+                    (108.0, 701.0, 422.0, 710.0),
+                )
+            ],
+        )
+        record = _RawBlockRec(lines=[first, formula_sentence, continuation])
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("are different from every policy", segments[0].text)
+        self.assertIn("guarantees that the distance", segments[0].text)
+
+    def test_equation_record_keeps_short_formula_label_tail(self):
+        formula_label = _LineRec(
+            text=(
+                f"{SENTINEL_OPEN}e{SENTINEL_CLOSE}{SENTINEL_OPEN}l{SENTINEL_CLOSE}, "
+                f"{SENTINEL_OPEN}e{SENTINEL_CLOSE}{SENTINEL_OPEN}g{SENTINEL_CLOSE}, "
+                f"{SENTINEL_OPEN}e{SENTINEL_CLOSE}{SENTINEL_OPEN}o{SENTINEL_CLOSE} = "
+                f"{SENTINEL_OPEN}T{SENTINEL_CLOSE}(... ) "
+                "(Fig. 2, top); and readout heads"
+            ),
+            bbox=(49.0, 94.0, 300.0, 105.0),
+            spans=[
+                _span("el, eg, eo = T(...)", (49.0, 94.0, 153.0, 105.0)),
+                _span(" (Fig. 2, top); and", (153.0, 94.0, 232.0, 105.0)),
+                _span(" readout heads", (232.0, 94.0, 300.0, 105.0), flags=5),
+            ],
+        )
+        record = _RawBlockRec(lines=[formula_label])
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("readout heads", segments[0].text)
+
+    def test_equation_record_does_not_split_same_baseline_formula_chunks(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=(
+                        f"language instructions{SENTINEL_OPEN}ℓ{SENTINEL_CLOSE}, "
+                        f"goals{SENTINEL_OPEN}g{SENTINEL_CLOSE}, and observation sequences"
+                    ),
+                    bbox=(49.0, 58.0, 300.0, 68.0),
+                    spans=[_span("language instructions ℓ, goals g", (49.0, 58.0, 180.0, 68.0))],
+                ),
+                _LineRec(
+                    text=(
+                        f"{SENTINEL_OPEN}o{SENTINEL_CLOSE}1"
+                        f"{SENTINEL_OPEN}, . . . , o{SENTINEL_CLOSE}"
+                        f"{SENTINEL_OPEN}H{SENTINEL_CLOSE} into tokens"
+                    ),
+                    bbox=(49.0, 70.0, 138.0, 82.0),
+                    spans=[_span("o1, . . . , oH into tokens", (49.0, 70.0, 138.0, 82.0))],
+                ),
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}\x02{SENTINEL_CLOSE}",
+                    bbox=(141.0, 69.0, 145.0, 79.0),
+                    spans=[_span("\x02", (141.0, 69.0, 145.0, 79.0), font="CMEX10")],
+                ),
+                _LineRec(
+                    text=(
+                        f"{SENTINEL_OPEN}T{SENTINEL_CLOSE}{SENTINEL_OPEN}l{SENTINEL_CLOSE}"
+                        f"{SENTINEL_OPEN},{SENTINEL_CLOSE}"
+                        f"{SENTINEL_OPEN}T{SENTINEL_CLOSE}{SENTINEL_OPEN}g{SENTINEL_CLOSE}"
+                        f"{SENTINEL_OPEN},{SENTINEL_CLOSE}"
+                        f"{SENTINEL_OPEN}T{SENTINEL_CLOSE}{SENTINEL_OPEN}o{SENTINEL_CLOSE}"
+                    ),
+                    bbox=(145.0, 70.0, 182.0, 87.0),
+                    spans=[_span("Tl,Tg,To", (145.0, 70.0, 182.0, 87.0), font="CMSY10")],
+                ),
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}\x03{SENTINEL_CLOSE}",
+                    bbox=(183.0, 69.0, 187.0, 79.0),
+                    spans=[_span("\x03", (183.0, 69.0, 187.0, 79.0), font="CMEX10")],
+                ),
+                _LineRec(
+                    text="(Fig. 2, left); a transformer backbone",
+                    bbox=(189.0, 70.0, 300.0, 92.0),
+                    spans=[
+                        _span(
+                            "(Fig. 2, left); a transformer backbone",
+                            (189.0, 70.0, 300.0, 92.0),
+                        )
+                    ],
+                ),
+            ]
+        )
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("observation sequences", segments[0].text)
+        self.assertIn("a transformer backbone", segments[0].text)
+
+    def test_multiline_segments_redact_per_source_line(self):
+        first = _LineRec(
+            text="Here, a proximal term based on Kullback-Leibler (KL) di-",
+            bbox=(55.4, 180.9, 291.1, 190.9),
+            spans=[
+                _span(
+                    "Here, a proximal term based on Kullback-Leibler (KL) di-",
+                    (55.4, 180.9, 291.1, 190.9),
+                )
+            ],
+        )
+        second = _LineRec(
+            text=(
+                f"vergence, KL({SENTINEL_OPEN}T∥T ⁽ⁿ⁾{SENTINEL_CLOSE}) = "
+                f"{SENTINEL_OPEN}P{SENTINEL_CLOSE}"
+            ),
+            bbox=(55.2, 193.0, 175.2, 211.4),
+            spans=[
+                _span("vergence, KL(", (55.2, 193.0, 114.0, 211.4)),
+                _span("T∥T ⁽ⁿ⁾", (114.0, 193.0, 146.0, 211.4), font="CMMIB10"),
+                _span(") = P", (146.0, 193.0, 175.2, 211.4)),
+            ],
+        )
+        record = _RawBlockRec(lines=[first, second])
+
+        segments = segments_from_record(0, record)
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0].redact_bboxes, [first.bbox, second.bbox])
+        self.assertLess(segments[0].redact_bboxes[1][2], segments[0].bbox[2])
+
 
 class PreserveGraphicsTextTests(unittest.TestCase):
     def test_merge_stops_before_crossing_graphic_region(self):
@@ -520,6 +744,100 @@ class TestDetectImageZones(unittest.TestCase):
 
 
 class TestTranslationVerification(unittest.TestCase):
+    def test_overlap_detector_exempts_formula_code_and_table_cells(self):
+        self.assertTrue(_looks_like_overlap_exempt_text("minT ∈Π(µs,µt)⟨L(Cs(X(m)"))
+        self.assertTrue(
+            _looks_like_overlap_exempt_text(
+                "def policy(graph): mem = graph.task_memory.setdefault('swap_cups', {})"
+            )
+        )
+        self.assertTrue(_looks_like_overlap_exempt_text("1,50010−5"))
+        self.assertTrue(
+            _looks_like_overlap_exempt_text(
+                "PnP OnceSuccess RateDrop CubeSuccess RateStage CupSuccess Rate"
+            )
+        )
+        self.assertTrue(
+            _looks_like_overlap_exempt_text(
+                "\x07\x08\x06\x05\x07\x04\x03\x01\x08 \x00\x02 \x1b synthetic glyph run"
+            )
+        )
+
+    def test_overlap_detector_keeps_body_prose(self):
+        self.assertFalse(
+            _looks_like_overlap_exempt_text(
+                "本文提出一种用于长时程操作任务的结构化场景记忆方法。"
+            )
+        )
+        self.assertFalse(
+            _looks_like_overlap_exempt_text(
+                "The proposed model improves retrieval quality across multiple tasks."
+            )
+        )
+
+    def test_untranslated_detector_ignores_expected_english_fragments(self):
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Anthony Brohan∗, Noah Brown∗, Justice Carbajal∗, Yevgen Chebotar∗, "
+                "Joseph Dabis∗, Chelsea Finn∗"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, "
+                "Chelsea Finn, Niccolo Fusai, Lachy Groom"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Theodor Wulff* Federico Tavella Rahul Singh Maharjan Manith Adikari "
+                "Angelo Cangelosi"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english("Hao Liu1Yanni Ma2Yan Liu2Haihong Xiao3Ying He1")
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "language-action models transfer web knowledge to robotic control, "
+                "in CoRL, 2023, pp. 2165-2183."
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Pieter Abbeel and Andrew Y Ng. Apprenticeship learning via inverse "
+                "reinforcement learning. In"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "def policy(graph): mem = graph.task_memory.setdefault('swap_cups', {})"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "ϕ : supp[ρπE] supp[ρπA] satisfies the metric relation"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "PnP OnceSuccess RateDrop CubeSuccess RateStage CupSuccess Rate"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "MVT [21]VoteNetScanReferViewRefer [18]VoteNetScanRefer3D-SPS [29]VoteNetScanRefer"
+            )
+        )
+
+    def test_untranslated_detector_still_flags_body_prose(self):
+        self.assertTrue(
+            _looks_like_untranslated_english(
+                "The proposed model improves retrieval quality substantially across "
+                "multiple long horizon manipulation tasks."
+            )
+        )
+
     def test_flags_untranslated_body_but_ignores_reference_entry(self):
         original = fitz.open()
         page = original.new_page(width=300, height=300)
@@ -583,6 +901,46 @@ class TestTranslationVerification(unittest.TestCase):
         english_issues = [issue for issue in issues if issue.code == "untranslated_english"]
         self.assertEqual(len(english_issues), 1)
         self.assertIn("1 block", english_issues[0].message)
+
+    def test_ignores_reference_continuation_on_following_page(self):
+        original = fitz.open()
+        page = original.new_page(width=360, height=360)
+        page.insert_text((30, 40), "The proposed model improves retrieval quality substantially.")
+        page.insert_text((30, 180), "References", fontsize=12)
+        page.insert_text((30, 205), "[1] Smith et al. Learning representations. 2024.")
+        page = original.new_page(width=360, height=360)
+        page.insert_text(
+            (30, 40),
+            "Brown Lee Patel. 2023. Visual graph imitation learning benchmark.",
+        )
+
+        translated = fitz.open()
+        page = translated.new_page(width=360, height=360)
+        page.insert_text((30, 40), "The proposed model improves retrieval quality substantially.")
+        page.insert_text((30, 180), "参考文献", fontsize=12)
+        page.insert_text((30, 205), "[1] Smith et al. Learning representations. 2024.")
+        page = translated.new_page(width=360, height=360)
+        page.insert_text(
+            (30, 40),
+            "Brown Lee Patel. 2023. Visual graph imitation learning benchmark.",
+        )
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        english_issues = [issue for issue in issues if issue.code == "untranslated_english"]
+        self.assertEqual(len(english_issues), 1)
+        self.assertEqual(english_issues[0].page, 1)
 
     def test_flags_short_untranslated_english_caption(self):
         original = fitz.open()
@@ -659,6 +1017,78 @@ class TestTranslationVerification(unittest.TestCase):
         original.close()
         translated.close()
         self.assertTrue(any(issue.code == "caption_overlap" for issue in issues))
+
+    def test_ignores_caption_overlap_when_still_in_source_caption_area(self):
+        original = fitz.open()
+        page = original.new_page(width=300, height=260)
+        page.draw_rect(fitz.Rect(50, 50, 240, 190))
+        page.insert_text((50, 166), "Figure 1: Overview of the system.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=300, height=260)
+        page.draw_rect(fitz.Rect(50, 50, 240, 190))
+        page.insert_text((50, 166), "图1：系统概览。")
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertFalse(any(issue.code == "caption_overlap" for issue in issues))
+
+    def test_flags_missing_visible_image_blocks(self):
+        original = fitz.open()
+        page = original.new_page(width=300, height=220)
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 20), False)
+        pixmap.clear_with(0x00FF00)
+        page.insert_image(fitz.Rect(40, 50, 180, 130), pixmap=pixmap)
+        page.insert_text((30, 170), "This method improves the visual policy.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=300, height=220)
+        page.insert_text((30, 170), "该方法改进了视觉策略。")
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "missing_image" for issue in issues))
+
+    def test_visible_image_stats_uses_displayed_image_blocks(self):
+        document = fitz.open()
+        page = document.new_page(width=300, height=220)
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 20), False)
+        pixmap.clear_with(0x0000FF)
+        page.insert_image(fitz.Rect(40, 50, 180, 130), pixmap=pixmap)
+
+        count, area = _visible_image_stats(page)
+
+        document.close()
+        self.assertEqual(count, 1)
+        self.assertGreater(area, 10000.0)
+
+    def test_formula_fragment_compare_normalizes_fullwidth_punctuation(self):
+        self.assertEqual(
+            _normalize_formula_fragment_for_compare("(b) K-NN：|Vs| = 100"),
+            "(b)K-NN:|Vs|=100",
+        )
 
 
 class TestBlockInZone(unittest.TestCase):

@@ -39,6 +39,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_golden_discover(args)
     if args.command == "golden-eval":
         return run_golden_eval(args)
+    if args.command == "layout-learn":
+        return run_layout_learn(args)
 
     parser.print_help()
     return 2
@@ -314,6 +316,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     golden_eval.add_argument("manifest", type=Path)
 
+    layout_learn = subparsers.add_parser(
+        "layout-learn",
+        help="Learn a template-level layout profile from representative PDFs.",
+    )
+    layout_learn.add_argument("template_name")
+    layout_learn.add_argument("output_json", type=Path)
+    layout_learn.add_argument("pdfs", type=Path, nargs="+")
+    layout_learn.add_argument("--max-pages-per-pdf", type=int, default=6)
+
     return parser
 
 
@@ -456,6 +467,31 @@ def run_golden_eval(args: argparse.Namespace) -> int:
     if risky:
         print("Visual risk cases: %d" % risky)
     return 0 if result.ready_for_release else 1
+
+
+def run_layout_learn(args: argparse.Namespace) -> int:
+    from .layout_profiles import write_learned_layout_template
+
+    missing = [path for path in args.pdfs if not path.exists()]
+    if missing:
+        print("Input PDF does not exist: %s" % missing[0], file=sys.stderr)
+        return 1
+    profile = write_learned_layout_template(
+        args.pdfs,
+        args.output_json,
+        template_name=args.template_name,
+        max_pages_per_pdf=args.max_pages_per_pdf,
+    )
+    print(
+        "Learned layout template %s from %d PDF%s -> %s"
+        % (
+            profile["template_name"],
+            profile["_metadata"]["source_count"],
+            "" if profile["_metadata"]["source_count"] == 1 else "s",
+            args.output_json,
+        )
+    )
+    return 0
 
 
 def run_translate(args: argparse.Namespace) -> int:
