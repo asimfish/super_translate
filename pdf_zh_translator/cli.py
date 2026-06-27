@@ -43,6 +43,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_layout_learn(args)
     if args.command == "figure-ppt-prepare":
         return run_figure_ppt_prepare(args)
+    if args.command == "figure-ppt-extract":
+        return run_figure_ppt_extract(args)
+    if args.command == "figure-ppt-batch-prepare":
+        return run_figure_ppt_batch_prepare(args)
     if args.command == "figure-ppt-register":
         return run_figure_ppt_register(args)
     if args.command == "figure-ppt-audit":
@@ -344,6 +348,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not pass --no-text-hints to editppt prepare.",
     )
 
+    figure_extract = subparsers.add_parser(
+        "figure-ppt-extract",
+        help="Extract PDF figure regions into image-to-editable-ppt source folders.",
+    )
+    figure_extract.add_argument("input_pdf", type=Path)
+    figure_extract.add_argument("output_root", type=Path)
+    figure_extract.add_argument("--paper-id")
+    figure_extract.add_argument("--min-width", type=float, default=24.0)
+    figure_extract.add_argument("--min-height", type=float, default=24.0)
+    figure_extract.add_argument("--min-area", type=float, default=1000.0)
+    figure_extract.add_argument("--max-figures", type=int)
+    figure_extract.add_argument("--dpi", type=int, default=200)
+
+    figure_batch_prepare = subparsers.add_parser(
+        "figure-ppt-batch-prepare",
+        help="Run editppt prepare for every extracted figure in a source manifest.",
+    )
+    figure_batch_prepare.add_argument("source_manifest", type=Path)
+    figure_batch_prepare.add_argument("--limit", type=int)
+    figure_batch_prepare.add_argument(
+        "--with-text-hints",
+        action="store_true",
+        help="Do not pass --no-text-hints to editppt prepare.",
+    )
+
     figure_register = subparsers.add_parser(
         "figure-ppt-register",
         help="Register an editppt-finalized figure PPTX with provenance.",
@@ -549,6 +578,64 @@ def run_figure_ppt_prepare(args: argparse.Namespace) -> int:
         return 1
     print("Prepared image-to-editable-ppt run: %s" % run_dir)
     print("Next: reconstruct pages with editppt, then run figure-ppt-register.")
+    return 0
+
+
+def run_figure_ppt_extract(args: argparse.Namespace) -> int:
+    from .editable_figures import SOURCE_FIGURES_MANIFEST_FILENAME, extract_pdf_figures
+
+    try:
+        manifest = extract_pdf_figures(
+            args.input_pdf,
+            args.output_root,
+            paper_id=args.paper_id,
+            min_width=args.min_width,
+            min_height=args.min_height,
+            min_area=args.min_area,
+            max_figures=args.max_figures,
+            dpi=args.dpi,
+        )
+    except Exception as exc:
+        print("Figure PPT extract failed: %s" % exc, file=sys.stderr)
+        return 1
+    manifest_path = (
+        args.output_root
+        / manifest["paper_id"]
+        / SOURCE_FIGURES_MANIFEST_FILENAME
+    )
+    print(
+        "Extracted %d figure source%s -> %s"
+        % (
+            manifest["figure_count"],
+            "" if manifest["figure_count"] == 1 else "s",
+            manifest_path,
+        )
+    )
+    print("Next: run figure-ppt-batch-prepare on the source manifest.")
+    return 0 if manifest["figure_count"] else 1
+
+
+def run_figure_ppt_batch_prepare(args: argparse.Namespace) -> int:
+    from .editable_figures import prepare_extracted_figures
+
+    try:
+        manifest = prepare_extracted_figures(
+            args.source_manifest,
+            no_text_hints=not args.with_text_hints,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        print("Figure PPT batch prepare failed: %s" % exc, file=sys.stderr)
+        return 1
+    print(
+        "Prepared %d/%d extracted figure%s."
+        % (
+            manifest.get("prepared_count", 0),
+            manifest.get("figure_count", 0),
+            "" if manifest.get("figure_count", 0) == 1 else "s",
+        )
+    )
+    print("Next: reconstruct/finalize each editppt run, then run figure-ppt-register.")
     return 0
 
 

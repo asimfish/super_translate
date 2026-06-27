@@ -9,8 +9,11 @@ import pytest
 from pdf_zh_translator.editable_figures import (
     SKILL_NAME,
     SKILL_SOURCE_URL,
+    SOURCE_FIGURES_MANIFEST_FILENAME,
     audit_editable_figure_manifests,
+    extract_pdf_figures,
     prepare_editable_figure_run,
+    prepare_extracted_figures,
     register_editable_figure,
     validate_editppt_run,
 )
@@ -122,3 +125,62 @@ def test_validate_rejects_unfinalized_editppt_run(tmp_path):
 
     with pytest.raises(ValueError, match="not finalized"):
         validate_editppt_run(run_dir)
+
+
+def test_extract_pdf_figures_writes_source_manifest(tmp_path):
+    import fitz
+
+    pdf_path = tmp_path / "paper.pdf"
+    document = fitz.open()
+    page = document.new_page(width=300, height=240)
+    page.draw_rect(fitz.Rect(60, 50, 210, 150), color=(0, 0, 0), fill=(0.85, 0.85, 0.85))
+    page.insert_text((60, 175), "Figure 1: Architecture overview.", fontsize=10)
+    document.save(pdf_path)
+    document.close()
+
+    manifest = extract_pdf_figures(pdf_path, tmp_path / "editable", paper_id="Test Paper")
+    manifest_path = tmp_path / "editable" / "Test-Paper" / SOURCE_FIGURES_MANIFEST_FILENAME
+    figure = manifest["figures"][0]
+
+    assert manifest["figure_count"] == 1
+    assert manifest_path.exists()
+    assert figure["status"] == "source-extracted"
+    assert Path(figure["image_path"]).exists()
+    assert figure["image_sha256"]
+    assert figure["source_pdf_sha256"] == manifest["source_pdf_sha256"]
+
+
+def test_prepare_extracted_figures_updates_manifest(tmp_path):
+    source = tmp_path / "editable" / "paper" / "figures" / "paper_p001_fig001" / "source.png"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"png")
+    manifest_path = tmp_path / "editable" / "paper" / SOURCE_FIGURES_MANIFEST_FILENAME
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "paper_id": "paper",
+                "figure_count": 1,
+                "figures": [
+                    {
+                        "figure_id": "paper_p001_fig001",
+                        "image_path": str(source),
+                        "status": "source-extracted",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with (
+        patch("pdf_zh_translator.editable_figures.shutil.which", return_value="/bin/editppt"),
+        patch("pdf_zh_translator.editable_figures.subprocess.run") as run,
+    ):
+        manifest = prepare_extracted_figures(manifest_path)
+
+    figure = manifest["figures"][0]
+    assert manifest["prepared_count"] == 1
+    assert figure["status"] == "prepared"
+    assert figure["editppt_run"].endswith("paper_p001_fig001/editppt-run")
+    run.assert_called_once()

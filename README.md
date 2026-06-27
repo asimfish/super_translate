@@ -104,7 +104,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (568 tests)
+└── tests/            # Test suite (575 tests)
 ```
 
 ## Development
@@ -126,6 +126,8 @@ super_translate/
 .venv/bin/python -m pdf_zh_translator layout-learn ieee data/layout-profiles/ieee.json samples/*.pdf
 
 # Prepare/register/audit editable figure PPT assets
+.venv/bin/python -m pdf_zh_translator figure-ppt-extract papers/example.pdf data/editable_figures --paper-id example
+.venv/bin/python -m pdf_zh_translator figure-ppt-batch-prepare data/editable_figures/example/figure_sources_manifest.json
 .venv/bin/python -m pdf_zh_translator figure-ppt-prepare figures/fig1.png data/editable_figures --figure-id fig1
 .venv/bin/python -m pdf_zh_translator figure-ppt-register fig1 figures/fig1.png data/editable_figures/fig1/editppt-run data/editable_figures/fig1
 .venv/bin/python -m pdf_zh_translator figure-ppt-audit data/editable_figures

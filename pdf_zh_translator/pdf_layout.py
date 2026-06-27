@@ -2919,7 +2919,7 @@ def can_merge_blocks(
     graphic_regions: Sequence[BBox] = (),
 ) -> bool:
     if prev.nowrap or nxt.nowrap:
-        return False
+        return can_merge_fixed_width_prose_blocks(prev, nxt, graphic_regions)
     if prev.no_merge or nxt.no_merge:
         return False
     if sentence_final_text(prev.text) and nxt.starts_bold:
@@ -2940,6 +2940,71 @@ def can_merge_blocks(
         union_bbox([prev.bbox, nxt.bbox]),
         graphic_regions,
     ):
+        return False
+    return True
+
+
+def can_merge_fixed_width_prose_blocks(
+    prev: TextBlock,
+    nxt: TextBlock,
+    graphic_regions: Sequence[BBox] = (),
+) -> bool:
+    if prev.no_merge or nxt.no_merge:
+        return False
+    if prev.page_index != nxt.page_index:
+        return False
+    if abs(prev.font_size - nxt.font_size) > PARAGRAPH_SIZE_TOLERANCE:
+        return False
+    if not _looks_like_fixed_width_prose_fragment(prev):
+        return False
+    if not _looks_like_fixed_width_prose_fragment(nxt):
+        return False
+
+    reference = max(prev.font_size, nxt.font_size, 1.0)
+    gap = nxt.bbox[1] - prev.bbox[3]
+    if gap > reference * 0.85 or gap < -reference * 0.2:
+        return False
+
+    prev_width = prev.bbox[2] - prev.bbox[0]
+    nxt_width = nxt.bbox[2] - nxt.bbox[0]
+    narrower = min(prev_width, nxt_width)
+    if narrower < 150.0:
+        return False
+    overlap = min(prev.bbox[2], nxt.bbox[2]) - max(prev.bbox[0], nxt.bbox[0])
+    if overlap <= 0 or overlap / narrower < 0.72:
+        return False
+    left_delta = abs(prev.bbox[0] - nxt.bbox[0])
+    right_delta = abs(prev.bbox[2] - nxt.bbox[2])
+    if left_delta > 28.0 and right_delta > 14.0:
+        return False
+    if graphic_regions and bbox_crosses_graphic_region(
+        union_bbox([prev.bbox, nxt.bbox]),
+        graphic_regions,
+    ):
+        return False
+    return True
+
+
+def _looks_like_fixed_width_prose_fragment(block: TextBlock) -> bool:
+    if block.block_type != "body":
+        return False
+    if block.bold or block.starts_bold:
+        return False
+    if block.nowrap:
+        if block.source_lines != 1:
+            return False
+    elif block.source_lines <= 1:
+        return False
+
+    plain = strip_sentinels(block.text).strip()
+    if len(plain) < 35:
+        return False
+    if block.bbox[2] - block.bbox[0] < 150.0:
+        return False
+    words = _PROSE_WORD_RE.findall(plain)
+    if len(words) < 5:
+        return False
+    if _looks_like_code_or_symbolic_text(plain) or looks_like_math(plain):
         return False
     return True
 

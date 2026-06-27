@@ -589,6 +589,57 @@ class PreserveGraphicsTextTests(unittest.TestCase):
             2,
         )
 
+    def test_merges_fixed_width_body_line_fragments(self):
+        blocks = [
+            TextBlock(
+                page_index=0,
+                bbox=(312.0, 565.0 + index * 12.0, 563.0, 575.0 + index * 12.0),
+                text=text,
+                font_size=10.0,
+                color=(0.0, 0.0, 0.0),
+                nowrap=True,
+                source_lines=1,
+            )
+            for index, text in enumerate(
+                [
+                    "To test our hypotheses, we extract activations from the 33",
+                    "hidden layers of OpenVLA's Llama 2 7B backbone. Each",
+                    "hidden-layer embedding is a 4096-dimensional vector. We then",
+                ]
+            )
+        ]
+
+        merged = merge_paragraph_blocks(blocks)
+
+        self.assertEqual(len(merged), 1)
+        self.assertFalse(merged[0].nowrap)
+        self.assertEqual(merged[0].source_lines, 3)
+        self.assertIn("hidden-layer embedding", merged[0].text)
+
+    def test_does_not_merge_narrow_fixed_width_table_cells(self):
+        blocks = [
+            TextBlock(
+                page_index=0,
+                bbox=(312.0, 637.0 + index * 12.0, 390.0, 647.0 + index * 12.0),
+                text=text,
+                font_size=10.0,
+                color=(0.0, 0.0, 0.0),
+                nowrap=True,
+                source_lines=1,
+            )
+            for index, text in enumerate(
+                [
+                    "behind(tabletop-object1,",
+                    "of(tabletop-object1,",
+                    "on(tabletop-object1,",
+                ]
+            )
+        ]
+
+        merged = merge_paragraph_blocks(blocks)
+
+        self.assertEqual(len(merged), 3)
+
     def test_prepare_units_skips_text_inside_drawing_region(self):
         document = fitz.open()
         page = document.new_page(width=300, height=300)
