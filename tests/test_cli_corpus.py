@@ -69,6 +69,23 @@ def test_corpus_stats_command_prints_total(capsys):
     assert "neurips_icml_iclr:" in output
 
 
+def test_corpus_lint_command_reports_clean_packaged_corpus(capsys):
+    code = main(["corpus-lint"])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "Conflicts: 0" in output
+    assert "Corpus lint: clean" in output
+
+
+def test_corpus_lint_strict_flag_is_accepted():
+    parser = build_parser()
+    args = parser.parse_args(["corpus-lint", "--json", "--strict"])
+    assert args.command == "corpus-lint"
+    assert args.json is True
+    assert args.strict is True
+
+
 def test_corpus_health_reports_candidates(tmp_path, capsys):
     candidates = tmp_path / "terminology_candidates.jsonl"
     candidates.write_text(

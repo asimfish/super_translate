@@ -23,6 +23,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_corpus_add(args)
     if args.command == "corpus-stats":
         return run_corpus_stats(args)
+    if args.command == "corpus-lint":
+        return run_corpus_lint(args)
     if args.command == "corpus-health":
         return run_corpus_health(args)
     if args.command == "corpus-review":
@@ -251,7 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     corpus_add.add_argument(
         "terms",
         nargs="+",
-        help="Approved term pair in English=中文 format. May be repeated.",
+        help="Approved term pair in English=?? format. May be repeated.",
     )
     corpus_add.add_argument("--source", default="cli", help="Source label for metadata.")
     corpus_add.add_argument(
@@ -261,6 +263,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers.add_parser("corpus-stats", help="Print terminology counts by field.")
+
+    corpus_lint = subparsers.add_parser(
+        "corpus-lint",
+        help="Lint the corpus for cross-field translation conflicts and quality issues.",
+    )
+    corpus_lint.add_argument("--json", action="store_true", help="Print JSON report.")
+    corpus_lint.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero when any conflict/empty/untranslated entry is found.",
+    )
 
     corpus_health = subparsers.add_parser(
         "corpus-health",
@@ -427,7 +440,7 @@ def run_corpus_add(args: argparse.Namespace) -> int:
     pairs: dict[str, str] = {}
     for item in args.terms:
         if "=" not in item:
-            print("Invalid term pair, expected English=中文: %s" % item, file=sys.stderr)
+            print("Invalid term pair, expected English=??: %s" % item, file=sys.stderr)
             return 1
         english, chinese = item.split("=", 1)
         english = english.strip()
@@ -453,6 +466,30 @@ def run_corpus_stats(args: argparse.Namespace) -> int:
     stats = corpus_stats()
     for field, count in sorted(stats.items()):
         print(f"{field}: {count}")
+    return 0
+
+
+def run_corpus_lint(args: argparse.Namespace) -> int:
+    import json
+
+    from .corpus import corpus_lint
+
+    report = corpus_lint()
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print("Total terms: %s" % report["total_terms"])
+        print("Conflicts: %s" % report["conflict_count"])
+        for conflict in report["conflicts"][:20]:
+            variants = ", ".join(f"{t['field']}={t['zh']}" for t in conflict["translations"])
+            print(f"  {conflict['term']} -> [{variants}] (effective: {conflict['effective']})")
+        print("Empty fields: %s" % (", ".join(report["empty_fields"]) or "none"))
+        print("Empty values: %s" % report["empty_value_count"])
+        print("Untranslated entries: %s" % report["untranslated_count"])
+        if report["clean"]:
+            print("Corpus lint: clean")
+    if args.strict and not report["clean"]:
+        return 1
     return 0
 
 

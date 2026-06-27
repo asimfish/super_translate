@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-588%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-596%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -20,7 +20,7 @@ Super Translate is a web-based system for translating English academic papers in
 - **Durable Translation Jobs** — Tracks each translation run with job history, cancellation state, heartbeat, progress, and restart failure recovery
 - **Post-translation QA** — Supports single-pass or iterative checks for untranslated English, missing images, empty pages, text overlap, visual layout regressions, and machine-readable `*.qa.json` reports
 - **OCR Fallback** — Optional scanned-PDF OCR path for image-only papers before translation
-- **Conference Terminology Corpus** — 1000+ curated AI conference terms across NeurIPS, ICML, ICLR, CVPR, ACL, systems, agents, and safety tracks
+- **Conference Terminology Corpus** — 1000+ curated AI conference terms across NeurIPS, ICML, ICLR, CVPR, ACL, systems, agents, and safety tracks, with a `corpus-lint` consistency gate and post-translation terminology adherence checks
 - **Golden Regression Evaluation** — Build and run PDF layout/quality regression sets for large paper batches
 - **Template Layout Learning** — Learn ACM/IEEE/Springer/ACL-style layout profiles from representative PDFs
 - **Editable Figure PPT Provenance** — Figure PPT assets must be finalized by `image-to-editable-ppt`/`editppt` and registered with auditable hashes
@@ -104,7 +104,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (588 tests)
+└── tests/            # Test suite (596 tests)
 ```
 
 ## Deployment Notes
@@ -136,6 +136,9 @@ Super Translate targets local / single-machine / small-team use:
 
 # Lint check
 .venv/bin/ruff check app/ tests/
+
+# Lint the terminology corpus for cross-field conflicts (CI gate)
+.venv/bin/python -m pdf_zh_translator corpus-lint --strict
 
 # Discover a 100-paper golden regression manifest
 .venv/bin/python -m pdf_zh_translator golden-discover data/golden data/golden/manifest.json

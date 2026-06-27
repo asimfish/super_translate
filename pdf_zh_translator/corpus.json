@@ -181,7 +181,7 @@
     "multi-head attention": "多头注意力",
     "self-attention": "自注意力",
     "cross-attention": "交叉注意力",
-    "diffusion transformer": "扩散变换器",
+    "diffusion transformer": "扩散 Transformer",
     "representation learning": "表示学习",
     "contrastive pretraining": "对比预训练",
     "self-supervised pretraining": "自监督预训练",

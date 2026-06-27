@@ -1344,6 +1344,7 @@ def _run_post_translation_qa(
         _append_log(paper_id, loop, "正在检查译文和版面")
         _set_translation_stage(paper_id, loop, "译后检查")
         _record_terminology_candidates(paper_id, loop, input_path)
+        _audit_terminology_usage(paper_id, loop, input_path, mono_path)
         passes = max(1, max_passes if qa_mode == "iterative" else 1)
         issues = []
         passes_run = 0
@@ -1493,20 +1494,9 @@ def _record_terminology_candidates(
 ) -> None:
     """Record candidate AI/ML terms for later reviewed corpus updates."""
     try:
-        import fitz
-
         from pdf_zh_translator.corpus import record_candidate_terms
 
-        texts: list[str] = []
-        document = fitz.open(str(input_path))
-        try:
-            for page in document:
-                page_text = page.get_text("text").strip()
-                if page_text:
-                    texts.append(page_text)
-        finally:
-            document.close()
-
+        texts = _read_pdf_texts(input_path)
         candidates_path = settings.base_dir / settings.data_dir / "terminology_candidates.jsonl"
         added = record_candidate_terms(
             texts,
@@ -1550,6 +1540,53 @@ def _set_translation_stage(
 
     with contextlib.suppress(Exception):
         asyncio.run_coroutine_threadsafe(_update(), loop)
+
+
+def _read_pdf_texts(path: Path) -> list[str]:
+    """Read non-empty page texts from a PDF (best-effort)."""
+    import fitz
+
+    texts: list[str] = []
+    document = fitz.open(str(path))
+    try:
+        for page in document:
+            page_text = page.get_text("text").strip()
+            if page_text:
+                texts.append(page_text)
+    finally:
+        document.close()
+    return texts
+
+
+def _audit_terminology_usage(
+    paper_id: str,
+    loop: asyncio.AbstractEventLoop,
+    input_path: Path,
+    mono_path: Path | None,
+) -> None:
+    """Log corpus-term adherence drift between source and translated PDFs.
+
+    Advisory only: terminology is a soft prompt constraint, so this surfaces
+    professional-consistency drift without failing the translation.
+    """
+    if mono_path is None:
+        return
+    try:
+        from pdf_zh_translator.corpus import audit_terminology_usage
+
+        violations = audit_terminology_usage(
+            _read_pdf_texts(input_path),
+            _read_pdf_texts(mono_path),
+        )
+        if violations:
+            sample = "、".join(f"{v['en']}→{v['expected_zh']}" for v in violations[:5])
+            _append_log(
+                paper_id,
+                loop,
+                f"术语一致性提示: {len(violations)} 个术语可能未用标准译法 ({sample})",
+            )
+    except Exception as e:
+        logger.debug("Terminology audit skipped for %s: %s", paper_id, e)
 
 
 def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) -> None:

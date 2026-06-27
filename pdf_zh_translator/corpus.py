@@ -29,6 +29,11 @@ _COMMON_CANDIDATE_WORDS = frozenset(
     "abstract introduction related work experiment experiments conclusion appendix "
     "figure table algorithm theorem proof this paper our method".split()
 )
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _has_cjk(text: str) -> bool:
+    return bool(_CJK_RE.search(text))
 TOP_CONFERENCE_FIELDS = (
     "neurips_icml_iclr",
     "neurips_foundations_theory",
@@ -303,6 +308,96 @@ def corpus_stats() -> Dict[str, int]:
     stats = {field: len(terms) for field, terms in corpus.items()}
     stats["_total"] = sum(stats.values())
     return stats
+
+
+def corpus_lint(corpus: Optional[Dict[str, Dict[str, str]]] = None) -> dict:
+    """Lint the merged corpus for quality problems.
+
+    The flattened lookup silently lets the last field win when the same English
+    term maps to different Chinese in multiple fields, which is how inconsistent
+    terminology sneaks in. This surfaces those conflicts plus empty fields,
+    blank values, and entries left untranslated (Chinese identical to English).
+
+    Accepts an explicit ``corpus`` mapping for testing; defaults to the live one.
+    """
+    if corpus is None:
+        corpus = _load_corpus()
+
+    by_key: Dict[str, List[Tuple[str, str, str]]] = {}
+    empty_fields: List[str] = []
+    empty_values: List[dict] = []
+    untranslated: List[dict] = []
+    total = 0
+
+    for field, terms in corpus.items():
+        if not terms:
+            empty_fields.append(field)
+            continue
+        for en, zh in terms.items():
+            total += 1
+            en_str = str(en).strip()
+            zh_str = str(zh).strip()
+            if not en_str or not zh_str:
+                empty_values.append({"field": field, "en": en, "zh": zh})
+                continue
+            # Iteration order matches _load_corpus, so the last entry is the one
+            # that wins in the flattened lookup.
+            by_key.setdefault(en_str.lower(), []).append((field, en_str, zh_str))
+            if zh_str.lower() == en_str.lower():
+                untranslated.append({"field": field, "en": en_str, "zh": zh_str})
+
+    conflicts: List[dict] = []
+    for key, entries in by_key.items():
+        if len({zh for _, _, zh in entries}) > 1:
+            conflicts.append(
+                {
+                    "term": key,
+                    "effective": entries[-1][2],
+                    "translations": [{"field": f, "en": e, "zh": z} for f, e, z in entries],
+                }
+            )
+
+    conflicts.sort(key=lambda c: c["term"])
+    return {
+        "total_terms": total,
+        "conflict_count": len(conflicts),
+        "conflicts": conflicts,
+        "empty_field_count": len(empty_fields),
+        "empty_fields": sorted(empty_fields),
+        "empty_value_count": len(empty_values),
+        "empty_values": empty_values,
+        "untranslated_count": len(untranslated),
+        "untranslated": untranslated,
+        # "untranslated" (Chinese identical to English) is advisory: model names
+        # like "Toolformer" are legitimately kept as-is, so it doesn't fail clean.
+        "clean": not (conflicts or empty_fields or empty_values),
+    }
+
+
+def audit_terminology_usage(
+    source_texts: List[str],
+    translated_texts: List[str],
+    *,
+    max_violations: int = 50,
+) -> List[dict]:
+    """Check that corpus terms in the source were rendered with the standard zh.
+
+    Terminology is a soft prompt constraint, so the LLM can drift to a synonym.
+    For each corpus term present in the source whose standard Chinese is absent
+    from the translation, report a (best-effort, advisory) violation.
+    """
+    relevant = get_relevant_terms(source_texts, max_terms=200)
+    if not relevant:
+        return []
+    translated_blob = "\n".join(translated_texts)
+    violations: List[dict] = []
+    for en, zh in sorted(relevant.items()):
+        if len(violations) >= max_violations:
+            break
+        zh_str = str(zh).strip()
+        if zh_str and _has_cjk(zh_str) and zh_str not in translated_blob:
+            violations.append({"en": en, "expected_zh": zh_str})
+    return violations
 
 
 def corpus_health(candidate_path: Optional[Path] = None) -> dict:

@@ -10,3 +10,4 @@ data/
 htmlcov/
 .pytest_cache/
 .gitnexus
+qa_render/
