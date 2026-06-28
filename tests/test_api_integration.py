@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1699,8 +1700,78 @@ class TestRunTranslation:
 
         assert paper.translation_status == "completed"
 
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_progress_callback_runs_before_translation_returns(
+        self, mock_settings, mock_translate, tmp_path
+    ):
+        """Progress DB writes must run while the sync translator is still busy."""
+        from app.api.papers import _do_translate
+        from app.services.translator import TranslationConfig, TranslationResult
+
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.title = "Test Paper"
+        paper.stored_filename = "test.pdf"
+        paper.translated_filename = None
+        paper.dual_filename = None
+        paper.translation_status = "translating"
+        paper.page_count = 1
+        paper.file_size = 1024
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+
+        self._write_valid_pdf(papers_dir / "test.pdf", "Original paper content.")
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+
+        progress_requested = threading.Event()
+        progress_written = threading.Event()
+
+        async def execute_side_effect(statement, *args, **kwargs):
+            if progress_requested.is_set() and "translation_progress" in str(statement):
+                progress_written.set()
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = paper
+            mock_result.scalar.return_value = ""
+            return mock_result
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=execute_side_effect)
+        db.commit = AsyncMock()
+
+        def fake_translate(input_path, output_dir, config, progress_callback=None):
+            self._write_valid_pdf(mono_path, "译文内容。")
+            progress_requested.set()
+            if progress_callback:
+                progress_callback(0.5)
+            if not progress_written.wait(timeout=2.0):
+                raise AssertionError("progress update did not run before translation returned")
+            return TranslationResult(mono_path=mono_path)
+
+        mock_translate.side_effect = fake_translate
+
+        with (
+            patch("app.core.database.async_session", self._make_async_session_mock(db)),
+            patch("app.api.papers._run_post_translation_qa", return_value=[]),
+        ):
+            asyncio.run(
+                _do_translate(
+                    "paper123",
+                    TranslationConfig(backend="google"),
+                    "fast",
+                )
+            )
+
+        assert progress_written.is_set()
+        assert paper.translation_status == "completed"
+
     def test_progress_callback_throttled(self):
-        """Test that progress callback throttles DB writes to 5% increments."""
+        """Test that progress callback throttles DB writes to 1% increments."""
         from app.api.papers import _create_progress_handler
 
         # Track how many times the handler passes the throttle and schedules
@@ -1716,16 +1787,18 @@ class TestRunTranslation:
         handler = _create_progress_handler("paper123", MagicMock())
 
         with patch.object(asyncio, "run_coroutine_threadsafe", counting_run):
-            # Many small increments within 5% — all throttled
-            for i in range(1, 50):
-                handler(i / 1000.0)  # 0.001, 0.002, ..., 0.049
-            # This crosses 5% threshold — should fire
-            handler(0.06)
+            # Many small increments within 1% — all throttled
+            for i in range(1, 10):
+                handler(i / 1000.0)  # 0.001, 0.002, ..., 0.009
+            # These cross 1% thresholds — should fire
+            handler(0.012)
+            handler(0.018)
+            handler(0.024)
             # Final 100% — should always fire
             handler(1.0)
 
-        # 0.06 (progress), 1.0 (progress), 1.0 (log milestone at 100%)
-        assert fire_count[0] == 3
+        # 0.012, 0.024, 1.0 progress update, plus 1.0 log milestone
+        assert fire_count[0] == 4
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")

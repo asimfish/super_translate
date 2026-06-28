@@ -887,13 +887,20 @@ function pollTranslationStatus(paperId) {
 
   // Start elapsed time timer
   const startTime = Date.now();
+  if (fill) {
+    fill.style.width = '3%';
+    fill.style.background = '';
+    fill.classList.add('progress-fill-active', 'progress-fill-pending');
+  }
+  if (percentEl) percentEl.textContent = '0%';
+  if (statusEl) statusEl.textContent = '准备翻译... 0s · 等待首批进度';
 
   // Show paper title in progress panel
   if (titleEl && currentPaper) {
     titleEl.textContent = currentPaper.title;
   }
   if (logEl) logEl.innerHTML = '';
-  addTransLog('开始翻译...');
+  addTransLog('已提交翻译任务，正在等待首批进度...');
 
   const MAX_POLLS = 300; // 10 minutes at 2s intervals
   const MAX_CONSECUTIVE_ERRORS = 10; // stop after 20s of consecutive failures
@@ -903,13 +910,14 @@ function pollTranslationStatus(paperId) {
   let lastPctTime = startTime;
   let smoothedRate = 0;
 
-  translationPollId = setInterval(async () => {
+  async function refreshTranslationStatus() {
     pollCount++;
     if (pollCount > MAX_POLLS) {
       clearInterval(translationPollId);
       translationPollId = null;
       statusEl.textContent = '翻译超时';
       addTransLog('翻译超时，请稍后重试', 'error');
+      fill.classList.remove('progress-fill-active', 'progress-fill-pending');
       fill.style.background = 'var(--error)';
       loadPapers();
       return;
@@ -918,8 +926,14 @@ function pollTranslationStatus(paperId) {
     try {
       const paper = await api.getPaper(paperId);
       consecutiveErrors = 0;
-      const pct = Math.round(Math.max(0, Math.min(1, paper.translation_progress)) * 100);
-      fill.style.width = `${pct}%`;
+      const progress = Math.max(0, Math.min(1, Number(paper.translation_progress) || 0));
+      const pct = Math.round(progress * 100);
+      const isTranslating = paper.translation_status === 'translating';
+      const waitingForProgress = isTranslating && pct <= 0;
+      const visiblePct = waitingForProgress ? 3 : pct;
+      fill.style.width = `${visiblePct}%`;
+      fill.classList.toggle('progress-fill-active', isTranslating);
+      fill.classList.toggle('progress-fill-pending', waitingForProgress);
       if (percentEl) percentEl.textContent = `${pct}%`;
 
       // Display server-side translation log
@@ -953,6 +967,8 @@ function pollTranslationStatus(paperId) {
       if (paper.translation_status === 'completed') {
         clearInterval(translationPollId);
         translationPollId = null;
+        fill.classList.remove('progress-fill-active', 'progress-fill-pending');
+        fill.style.width = '100%';
         statusEl.textContent = `翻译完成 (${elapsedStr})`;
         setTimeout(() => {
           prog.classList.add('hidden');
@@ -964,12 +980,14 @@ function pollTranslationStatus(paperId) {
       } else if (paper.translation_status === 'failed') {
         clearInterval(translationPollId);
         translationPollId = null;
+        fill.classList.remove('progress-fill-active', 'progress-fill-pending');
         statusEl.textContent = `翻译失败 (${elapsedStr})`;
         fill.style.background = 'var(--error)';
         loadPapers();
       } else {
-        const stage = paper.translation_stage || '翻译中';
-        statusEl.textContent = `${stage}... ${elapsedStr}${etaStr}`;
+        const stage = paper.translation_stage || (waitingForProgress ? '准备翻译' : '翻译中');
+        const pendingHint = waitingForProgress ? ' · 等待首批进度' : '';
+        statusEl.textContent = `${stage}... ${elapsedStr}${pendingHint}${etaStr}`;
       }
     } catch (e) {
       consecutiveErrors++;
@@ -978,11 +996,15 @@ function pollTranslationStatus(paperId) {
         translationPollId = null;
         statusEl.textContent = '连接中断';
         addTransLog('无法连接服务器，请检查网络后重试', 'error');
+        fill.classList.remove('progress-fill-active', 'progress-fill-pending');
         fill.style.background = 'var(--error)';
         loadPapers();
       }
     }
-  }, 2000);
+  }
+
+  refreshTranslationStatus();
+  translationPollId = setInterval(refreshTranslationStatus, 1000);
 }
 
 function formatEta(seconds) {

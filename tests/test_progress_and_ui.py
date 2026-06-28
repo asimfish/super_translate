@@ -63,6 +63,7 @@ def test_reader_sync_scroll_defers_mirror_render_to_avoid_jank():
 def test_translation_progress_ui_has_client_eta_smoothing():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
 
     assert "let smoothedRate = 0;" in js
     assert "预计剩余" in js
@@ -70,6 +71,13 @@ def test_translation_progress_ui_has_client_eta_smoothing():
     assert "paper.translation_stage" in js
     assert "function formatEta(seconds)" in js
     assert 'id="trans-percent"' in html
+    assert "async function refreshTranslationStatus()" in js
+    assert "refreshTranslationStatus();" in js
+    assert "setInterval(refreshTranslationStatus, 1000)" in js
+    assert "等待首批进度" in js
+    assert "progress-fill-pending" in js
+    assert ".progress-fill-active" in css
+    assert "@keyframes progress-stripes" in css
 
 
 def test_translation_ui_exposes_qa_and_ocr_controls():

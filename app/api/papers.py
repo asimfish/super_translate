@@ -74,7 +74,7 @@ _MAX_TITLE_LEN = 500
 _MAX_TAGS_LEN = 1000
 _MAX_NOTES_LEN = 10_000
 _MAX_SEARCH_LEN = 200
-_PROGRESS_THROTTLE = 0.05
+_PROGRESS_THROTTLE = 0.01
 _PROGRESS_LOG_STEP = 10
 _VALID_QA_MODES = {"single", "iterative"}
 _VALID_OCR_MODES = {"off", "auto", "force"}
@@ -1269,7 +1269,13 @@ async def _do_translate(
     on_progress = _create_progress_handler(paper_id, loop, job_id=job_id)
 
     try:
-        trans_result = translate_pdf_sync(input_path, output_dir, config, on_progress)
+        trans_result = await asyncio.to_thread(
+            translate_pdf_sync,
+            input_path,
+            output_dir,
+            config,
+            on_progress,
+        )
     except TranslationCancelledError:
         await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)
         return
@@ -1297,7 +1303,8 @@ async def _do_translate(
 
     if trans_result.success and trans_result.mono_path:
         try:
-            unresolved_issues = _run_post_translation_qa(
+            unresolved_issues = await asyncio.to_thread(
+                _run_post_translation_qa,
                 paper_id,
                 loop,
                 input_path,
