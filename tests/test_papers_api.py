@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import MagicMock
 
-from app.api.papers import _paper_to_response
+from app.api.papers import _estimate_translation_eta_seconds, _paper_to_response
 
 
 class TestPaperToResponse(unittest.TestCase):
@@ -115,6 +115,41 @@ class TestPaperToResponse(unittest.TestCase):
         resp = _paper_to_response(paper)
         self.assertEqual(resp.created_at, "")
         self.assertEqual(resp.updated_at, "")
+
+
+class TestProgressEtaEstimator(unittest.TestCase):
+    """Test backend ETA smoothing used by translation progress callbacks."""
+
+    def test_uses_recent_progress_velocity(self):
+        last_sample = [(0.0, 0.0)]
+        smoothed_rate = [0.0]
+
+        eta = _estimate_translation_eta_seconds(
+            0.25,
+            10.0,
+            started_at=0.0,
+            last_sample=last_sample,
+            smoothed_rate=smoothed_rate,
+        )
+
+        self.assertEqual(eta, 30)
+        self.assertEqual(last_sample[0], (0.25, 10.0))
+        self.assertGreater(smoothed_rate[0], 0.0)
+
+    def test_keeps_smoothed_rate_when_progress_does_not_advance(self):
+        last_sample = [(0.5, 20.0)]
+        smoothed_rate = [0.025]
+
+        eta = _estimate_translation_eta_seconds(
+            0.5,
+            40.0,
+            started_at=0.0,
+            last_sample=last_sample,
+            smoothed_rate=smoothed_rate,
+        )
+
+        self.assertEqual(eta, 20)
+        self.assertEqual(last_sample[0], (0.5, 20.0))
 
 
 class TestGenerateId(unittest.TestCase):

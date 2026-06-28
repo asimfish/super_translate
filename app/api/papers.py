@@ -1706,6 +1706,8 @@ def _create_progress_handler(
     _last_pct: list[float] = [0.0]
     _last_milestone: list[int] = [-1]
     started_at = time.monotonic()
+    _last_eta_sample: list[tuple[float, float]] = [(0.0, started_at)]
+    _smoothed_rate: list[float] = [0.0]
 
     def _on_progress(pct: float) -> None:
         # Check for cancellation at every progress callback
@@ -1717,11 +1719,17 @@ def _create_progress_handler(
             return
         _last_pct[0] = pct
         pct_display = int(pct * 100)
-        elapsed = max(0.0, time.monotonic() - started_at)
+        now = time.monotonic()
         eta_seconds: int | None = None
         eta_text = ""
         if pct > 0.02 and pct < 1.0:
-            eta_seconds = max(0, int((elapsed / pct) - elapsed))
+            eta_seconds = _estimate_translation_eta_seconds(
+                pct,
+                now,
+                started_at=started_at,
+                last_sample=_last_eta_sample,
+                smoothed_rate=_smoothed_rate,
+            )
             eta_text = f"，预计剩余 {_format_duration(eta_seconds)}"
 
         async def _update():
@@ -1760,6 +1768,38 @@ def _create_progress_handler(
             _append_log(paper_id, loop, f"翻译进度: {pct_display}%{eta_text}")
 
     return _on_progress
+
+
+def _estimate_translation_eta_seconds(
+    pct: float,
+    now: float,
+    *,
+    started_at: float,
+    last_sample: list[tuple[float, float]],
+    smoothed_rate: list[float],
+) -> int:
+    """Estimate remaining translation time from recent progress velocity."""
+    pct = max(0.0, min(1.0, pct))
+    if pct <= 0.0 or pct >= 1.0:
+        return 0
+
+    last_pct, last_time = last_sample[0]
+    delta_pct = pct - last_pct
+    delta_time = max(0.0, now - last_time)
+    if delta_pct > 0.0 and delta_time >= 0.5:
+        instant_rate = delta_pct / delta_time
+        if smoothed_rate[0] <= 0.0:
+            smoothed_rate[0] = instant_rate
+        else:
+            smoothed_rate[0] = smoothed_rate[0] * 0.65 + instant_rate * 0.35
+        last_sample[0] = (pct, now)
+
+    elapsed = max(0.0, now - started_at)
+    average_rate = pct / elapsed if elapsed > 0.0 else 0.0
+    rate = smoothed_rate[0] if smoothed_rate[0] > 0.0 else average_rate
+    if rate <= 0.0:
+        return 0
+    return max(0, int((1.0 - pct) / rate))
 
 
 def _format_duration(seconds: int) -> str:
