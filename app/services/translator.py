@@ -361,6 +361,16 @@ def _prepare_ocr_source(input_path: Path, output_dir: Path, config: TranslationC
         report.text_pages_before,
         report.text_pages_after,
     )
+    if report.text_pages_after <= 0:
+        raise RuntimeError(
+            "OCR completed but produced no searchable text. "
+            "Check Tesseract language data, OCR language, and PDF scan quality."
+        )
+    if report.text_pages_after < report.text_pages_before:
+        raise RuntimeError(
+            "OCR output has fewer searchable text pages than the original PDF. "
+            "Check OCR language and scan quality before translating."
+        )
     return ocr_path
 
 

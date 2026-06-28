@@ -755,6 +755,45 @@ class TestTranslatePdfSync(unittest.TestCase):
 
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
+    def test_pdf2zh_auto_ocr_rejects_unsearchable_result(
+        self, mock_get_model, mock_translate
+    ):
+        """OCR should fail fast when it does not create selectable text."""
+        import tempfile
+        from types import SimpleNamespace
+
+        mock_get_model.return_value = MagicMock()
+
+        def fake_ocr(input_pdf, output_pdf, **kwargs):
+            output_pdf.parent.mkdir(parents=True, exist_ok=True)
+            output_pdf.write_bytes(b"%PDF-1.4 still-image-only")
+            return SimpleNamespace(text_pages_before=0, text_pages_after=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            input_pdf = tmp_path / "paper.pdf"
+            input_pdf.write_bytes(b"%PDF-1.4 fake")
+            output_dir = tmp_path / "output"
+            output_dir.mkdir()
+            config = TranslationConfig(
+                backend="google",
+                quality=QualityPreset.FAST,
+                max_retries=0,
+                ocr_mode="auto",
+            )
+
+            with (
+                patch("pdf_zh_translator.ocr.is_scanned_pdf", return_value=True),
+                patch("pdf_zh_translator.ocr.ocr_pdf_to_searchable", side_effect=fake_ocr),
+            ):
+                result = translate_pdf_sync(input_pdf, output_dir, config)
+
+        self.assertFalse(result.success)
+        self.assertIn("produced no searchable text", result.error)
+        mock_translate.assert_not_called()
+
+    @patch("pdf2zh.translate")
+    @patch("app.services.translator.get_model")
     def test_callback_with_two_args(self, mock_get_model, mock_translate):
         """Test pdf2zh callback with (current, total) arguments."""
         import tempfile

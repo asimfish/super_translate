@@ -187,6 +187,34 @@ class TranslateSyncNativeTests(unittest.TestCase):
         self.assertEqual(seen["ocr"][2]["dpi"], 200)
         self.assertEqual(seen["translate_input"].name, "paper-ocr.pdf")
 
+    def test_auto_ocr_rejects_unsearchable_result(self):
+        config = TranslationConfig(
+            backend="deepseek",
+            api_key="test-key",
+            max_retries=0,
+            ocr_mode="auto",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_pdf = tmp_path / "paper.pdf"
+            input_pdf.write_bytes(b"%PDF-1.4 fake")
+            output_dir = tmp_path / "out"
+            output_dir.mkdir()
+
+            def fake_ocr(input_pdf, output_pdf, **kwargs):
+                output_pdf.write_bytes(b"%PDF-1.4 still-image-only")
+                return SimpleNamespace(text_pages_before=0, text_pages_after=0)
+
+            with (
+                patch("pdf_zh_translator.ocr.is_scanned_pdf", return_value=True),
+                patch("pdf_zh_translator.ocr.ocr_pdf_to_searchable", side_effect=fake_ocr),
+                patch("pdf_zh_translator.pdf_layout.translate_pdf") as translate_pdf,
+                self.assertRaisesRegex(RuntimeError, "produced no searchable text"),
+            ):
+                _translate_sync_native(input_pdf, output_dir, config)
+
+            translate_pdf.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
