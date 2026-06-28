@@ -12,6 +12,7 @@ from pdf_zh_translator.pdf_layout import (
     FontPack,
     TextBlock,
     _clip_block_bbox_against_floats,
+    _formula_fragment_present,
     _LineRec,
     _looks_like_formula_fragment,
     _looks_like_overlap_exempt_text,
@@ -21,9 +22,11 @@ from pdf_zh_translator.pdf_layout import (
     _RawBlockRec,
     _visible_image_stats,
     _visual_min_zone_intersects_graphics,
+    classify_blocks,
     clean_translation,
     collect_text_blocks,
     fragmented_prose_warnings_from_units,
+    graphic_regions_for_page,
     insert_translated_text,
     is_math_span,
     mark_bibliography_blocks,
@@ -34,6 +37,7 @@ from pdf_zh_translator.pdf_layout import (
     segments_from_record,
     should_preserve_original_block,
     strip_sentinels,
+    trim_redact_bbox_against_formula_lines,
     verify_translation,
     verify_translation_issues,
 )
@@ -85,6 +89,22 @@ class PreserveOriginalBlockTests(unittest.TestCase):
 
         self.assertFalse(should_preserve_original_block(block, []))
 
+    def test_translates_equation_table_prose_even_when_math_heavy(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(207.3, 513.8, 396.8, 525.6),
+            text=f"Regularization weight balancing{SENTINEL_OPEN}L{SENTINEL_CLOSE}SIG "
+            f"and{SENTINEL_OPEN}L{SENTINEL_CLOSE}inv",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            nowrap=True,
+            no_merge=True,
+            block_type="table",
+        )
+
+        self.assertTrue(math_heavy_block(block))
+        self.assertFalse(should_preserve_original_block(block, []))
+
     def test_skips_math_heavy_short_block(self):
         block = TextBlock(
             page_index=0,
@@ -97,17 +117,65 @@ class PreserveOriginalBlockTests(unittest.TestCase):
 
         self.assertTrue(should_preserve_original_block(block, []))
 
-    def test_preserves_block_crossing_graphic_region(self):
+    def test_preserves_short_block_crossing_graphic_region(self):
         block = TextBlock(
             page_index=0,
             bbox=(10.0, 10.0, 260.0, 120.0),
-            text="A long text block whose rectangular bbox crosses a figure region.",
+            text="latent axis",
             font_size=10.0,
             color=(0.0, 0.0, 0.0),
-            source_lines=5,
+            source_lines=1,
         )
 
         self.assertTrue(should_preserve_original_block(block, [(170.0, 20.0, 280.0, 100.0)]))
+
+    def test_translates_theorem_text_inside_background_region(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(117.6, 626.4, 494.4, 648.8),
+            text=(
+                "Consider any world satisfying Assumptions 3.1. Suppose every "
+                "minimizer of (3) with Cov(h(z)) = In is linear, h(z) = Qz. "
+                "Then z is Gaussian."
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+        )
+
+        self.assertFalse(
+            should_preserve_original_block(block, [(96.0, 592.2, 516.0, 667.0)])
+        )
+
+    def test_translates_theorem_heading_inside_background_region(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(117.6, 120.2, 317.4, 130.2),
+            text="Theorem 5 (Identifiability via Dirichlet energy)",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        self.assertFalse(
+            should_preserve_original_block(block, [(96.0, 105.4, 516.0, 181.5)])
+        )
+
+    def test_translates_enumerated_assumption_inside_background_region(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(129.6, 537.2, 409.1, 566.0),
+            text=(
+                "(ii) Stationarity. Both views share the same marginal: p(z) = p(z'). "
+                "(iii) Additive noise. z' i = mi(zi) + eta i with eta i independent of zi."
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+        )
+
+        self.assertFalse(
+            should_preserve_original_block(block, [(96.0, 487.5, 516.0, 583.4)])
+        )
 
     def test_caption_over_graphic_region_is_still_translated(self):
         block = TextBlock(
@@ -230,6 +298,100 @@ class TableDetectionTests(unittest.TestCase):
 
         segments = segments_from_record(0, record)
         self.assertTrue(all(segment.nowrap for segment in segments))
+        self.assertTrue(all(segment.no_merge for segment in segments))
+        self.assertTrue(all(segment.block_type == "table" for segment in segments))
+
+    def test_equation_table_rows_do_not_merge_over_formula_column(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}H_k(x){SENTINEL_CLOSE}",
+                    bbox=(152.7, 544.0, 182.9, 554.8),
+                    spans=[_span("H_k(x)", (152.7, 544.0, 182.9, 554.8), font="CMMI10")],
+                ),
+                _line(
+                    "Probabilist Hermite polynomial of degree k",
+                    (207.3, 544.0, 387.5, 554.2),
+                ),
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}c_alpha{SENTINEL_CLOSE}",
+                    bbox=(160.9, 595.1, 174.2, 607.9),
+                    spans=[
+                        _span(
+                            "c_alpha",
+                            (160.9, 595.1, 174.2, 607.9),
+                            font="CMMI10",
+                        )
+                    ],
+                ),
+                _line(
+                    "Hermite coefficient of hi at multi-index alpha",
+                    (207.3, 598.0, 374.0, 609.6),
+                ),
+                _line(
+                    "Variance fraction of hi at degree d: P",
+                    (207.3, 611.8, 360.6, 629.3),
+                ),
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}|alpha|=d(c_alpha)^2{SENTINEL_CLOSE}",
+                    bbox=(360.6, 609.3, 406.9, 624.4),
+                    spans=[
+                        _span(
+                            "|alpha|=d(c_alpha)^2",
+                            (360.6, 609.3, 406.9, 624.4),
+                            font="CMMI10",
+                        )
+                    ],
+                ),
+            ]
+        )
+
+        self.assertTrue(record_is_table(record))
+
+        segments = segments_from_record(0, record, equation_record=True)
+        merged = merge_paragraph_blocks(segments)
+
+        self.assertEqual(len(segments), 3)
+        self.assertEqual(len(merged), 3)
+        self.assertTrue(all(segment.nowrap and segment.no_merge for segment in segments))
+        self.assertTrue(all(segment.block_type == "table" for segment in segments))
+        self.assertTrue(all(segment.bbox[2] <= 387.5 for segment in segments))
+        self.assertIn("Variance fraction", segments[-1].text)
+        assert segments[-1].redact_bboxes is not None
+        self.assertAlmostEqual(segments[-1].redact_bboxes[0][2], 359.4)
+
+    def test_redaction_trims_above_nearby_display_formula(self):
+        formula = _LineRec(
+            text=f"{SENTINEL_OPEN}h(z + sqrt(eps eta)){SENTINEL_CLOSE}",
+            bbox=(208.8, 302.6, 403.2, 321.2),
+            spans=[],
+        )
+
+        trimmed = trim_redact_bbox_against_formula_lines(
+            (108.0, 294.0, 249.8, 304.0),
+            [formula],
+        )
+
+        self.assertEqual(trimmed[:3], (108.0, 294.0, 249.8))
+        self.assertAlmostEqual(trimmed[3], 301.4)
+
+    def test_classification_preserves_equation_table_rows(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(207.3, 513.8, 396.8, 525.6),
+            text=f"Regularization weight balancing{SENTINEL_OPEN}L{SENTINEL_CLOSE}SIG "
+            f"and{SENTINEL_OPEN}L{SENTINEL_CLOSE}inv",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            nowrap=True,
+            no_merge=True,
+            block_type="table",
+        )
+
+        classify_blocks([block], page_index=0, page_height=720.0, image_zones=[])
+
+        self.assertEqual(block.block_type, "table")
+        self.assertTrue(block.should_translate)
 
 
 class FragmentedProseWarningTests(unittest.TestCase):
@@ -320,6 +482,39 @@ class FragmentedProseWarningTests(unittest.TestCase):
                     bbox=(160.0, 100.0 + index * 12.0, 500.0, 110.0 + index * 12.0),
                     text=text,
                     font_size=9.0,
+                    color=(0.0, 0.0, 0.0),
+                    nowrap=True,
+                    source_lines=1,
+                ),
+                text,
+                {},
+            )
+            for index, text in enumerate(snippets)
+        ]
+
+        warnings = fragmented_prose_warnings_from_units(units)
+
+        self.assertEqual(warnings, [])
+
+    def test_ignores_prompt_template_table_fragments(self):
+        snippets = [
+            "Your task is to judge whether the edited image successfully transforms the human hand",
+            "Please assign four 1-5 sub-scores:",
+            "Target-embodiment match",
+            "Interaction preservation",
+            "Scene preservation",
+            "Use the following scale for each sub-score: 1 = failure, 2 = incorrect",
+            "Output a concise rationale and the following numeric fields:",
+            "integer score from 1 to 5",
+            "brief explanation",
+        ]
+        units = [
+            (
+                TextBlock(
+                    page_index=0,
+                    bbox=(115.0, 100.0 + index * 12.0, 512.0, 110.0 + index * 12.0),
+                    text=text,
+                    font_size=10.0,
                     color=(0.0, 0.0, 0.0),
                     nowrap=True,
                     source_lines=1,
@@ -476,7 +671,218 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(len(segments), 1)
         self.assertIn("or the pair is", segments[0].text)
         self.assertIn("already well-constrained", segments[0].text)
-        self.assertEqual(segments[0].redact_bboxes, [segments[0].bbox])
+        self.assertEqual(segments[0].redact_bboxes, [first.bbox, tail.bbox, second.bbox])
+
+    def test_inline_formula_bridge_redacts_spans_not_next_display_formula(self):
+        first = _LineRec(
+            text=f"We now proceed to bound{SENTINEL_OPEN}H^{1}{SENTINEL_CLOSE}",
+            bbox=(88.9, 155.8, 255.3, 168.4),
+            spans=[
+                _span("We now proceed to bound", (88.9, 155.8, 230.0, 168.4)),
+                _span("H^1", (230.0, 155.8, 255.3, 168.4), font="CMMI10"),
+            ],
+        )
+        formula_tail = _LineRec(
+            text=f"{SENTINEL_OPEN}w∈D'(x;t,δ){SENTINEL_CLOSE}",
+            bbox=(255.3, 155.8, 379.5, 169.3),
+            spans=[_span("w∈D'(x;t,δ)", (255.3, 155.8, 379.5, 169.3), font="CMMI10")],
+        )
+        prose_tail = _LineRec(
+            text=f". For any{SENTINEL_OPEN}w'{SENTINEL_CLOSE}, we",
+            bbox=(392.9, 153.4, 540.0, 168.4),
+            spans=[
+                _span(". For any", (392.9, 153.4, 448.0, 168.4)),
+                _span("w'", (448.0, 153.4, 460.0, 168.4), font="CMMI10"),
+                _span(", we", (460.0, 153.4, 540.0, 168.4)),
+            ],
+        )
+        define = _LineRec(
+            text="define",
+            bbox=(72.0, 171.1, 99.9, 182.0),
+            spans=[_span("define", (72.0, 171.1, 99.9, 182.0))],
+        )
+        next_formula_bbox = (170.2, 176.4, 540.0, 207.8)
+        record = _RawBlockRec(lines=[first, formula_tail, prose_tail, define])
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(len(segments), 1)
+        assert segments[0].redact_bboxes is not None
+        self.assertGreater(len(segments[0].redact_bboxes), 1)
+        self.assertNotEqual(segments[0].redact_bboxes, [segments[0].bbox])
+        self.assertFalse(
+            any(
+                max(bbox[0], next_formula_bbox[0]) < min(bbox[2], next_formula_bbox[2])
+                and max(bbox[1], next_formula_bbox[1]) < min(bbox[3], next_formula_bbox[3])
+                for bbox in segments[0].redact_bboxes
+            )
+        )
+
+    def test_formula_prefix_tail_translates_on_following_prose_line(self):
+        formula_prefix = _LineRec(
+            text=(
+                f"2{SENTINEL_OPEN}D{SENTINEL_CLOSE} "
+                f"{SENTINEL_OPEN}≥{SENTINEL_CLOSE}"
+                f"{SENTINEL_OPEN}c{SENTINEL_CLOSE}. As"
+            ),
+            bbox=(487.2, 545.7, 540.0, 560.4),
+            spans=[
+                _span("2", (487.2, 551.9, 491.4, 559.9), size=8.0),
+                _span("D", (491.4, 551.9, 498.4, 559.9), size=8.0, font="CMMI8"),
+                _span(" ", (498.4, 549.5, 503.5, 560.4), font="CMSY10"),
+                _span("≥", (503.5, 545.7, 512.0, 556.6), font="CMSY10"),
+                _span("c", (515.0, 545.9, 519.7, 556.8), font="CMMI10"),
+                _span(". As", (519.7, 545.9, 540.0, 556.8)),
+            ],
+        )
+        prose = _LineRec(
+            text=(
+                f"{SENTINEL_OPEN}ε{SENTINEL_CLOSE} is sufficiently small, by (5.188), "
+                f"{SENTINEL_OPEN}⟨V(y),a⟩≥c{SENTINEL_CLOSE}."
+            ),
+            bbox=(72.0, 560.8, 531.2, 573.0),
+            spans=[
+                _span("ε", (72.0, 560.8, 78.0, 573.0), font="CMMI10"),
+                _span(
+                    " is sufficiently small, by (5.188), ",
+                    (78.0, 560.8, 260.0, 573.0),
+                ),
+                _span("⟨V(y),a⟩≥c", (260.0, 560.8, 360.0, 573.0), font="CMMI10"),
+                _span(".", (360.0, 560.8, 365.0, 573.0)),
+            ],
+        )
+        next_formula = _LineRec(
+            text=f"{SENTINEL_OPEN}t−⟨y,a⟩−b{SENTINEL_CLOSE}",
+            bbox=(115.2, 584.3, 206.1, 603.0),
+            spans=[_span("t−⟨y,a⟩−b", (115.2, 584.3, 206.1, 603.0), font="CMMI10")],
+        )
+        record = _RawBlockRec(lines=[formula_prefix, prose, next_formula])
+
+        segments = segments_from_record(0, record)
+
+        self.assertEqual(len(segments), 1)
+        self.assertNotIn("2D", strip_sentinels(segments[0].text))
+        self.assertTrue(segments[0].text.startswith("As"))
+        self.assertEqual(segments[0].bbox, prose.bbox)
+        self.assertEqual(
+            segments[0].redact_bboxes,
+            [(529.85, 545.9, 540.0, 556.8), prose.bbox],
+        )
+
+    def test_equation_record_keeps_short_formula_prose_connector(self):
+        first = _LineRec(
+            text=(
+                f"We define the distance between {SENTINEL_OPEN}T{SENTINEL_CLOSE} "
+                f"and {SENTINEL_OPEN}T'{SENTINEL_CLOSE}"
+            ),
+            bbox=(72.0, 346.7, 540.0, 359.4),
+            spans=[_span("We define the distance between T and T'", (72.0, 346.7, 540.0, 359.4))],
+        )
+        connector = _LineRec(
+            text=(
+                f"between{SENTINEL_OPEN}T{SENTINEL_CLOSE} "
+                f"and{SENTINEL_OPEN}T'{SENTINEL_CLOSE} to be"
+            ),
+            bbox=(72.0, 358.1, 185.7, 372.9),
+            spans=[
+                _span("between", (72.0, 358.1, 105.0, 372.9)),
+                _span("T", (105.0, 358.1, 114.0, 372.9), font="CMMI10"),
+                _span(" and", (114.0, 358.1, 136.0, 372.9)),
+                _span("T'", (136.0, 358.1, 148.0, 372.9), font="CMMI10"),
+                _span(" to be", (148.0, 358.1, 185.7, 372.9)),
+            ],
+        )
+        formula = _LineRec(
+            text=f"{SENTINEL_OPEN}p{SENTINEL_CLOSE}",
+            bbox=(189.4, 360.5, 200.3, 371.4),
+            spans=[_span("p", (189.4, 360.5, 200.3, 371.4), font="CMMI10")],
+        )
+        record = _RawBlockRec(lines=[first, connector, formula])
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("to be", segments[0].text)
+        self.assertEqual(segments[0].redact_bboxes, [first.bbox, connector.bbox])
+
+    def test_equation_record_keeps_pushforward_connector(self):
+        first = _LineRec(
+            text="Define Q to",
+            bbox=(72.0, 693.8, 540.0, 711.6),
+            spans=[_span("Define Q to", (72.0, 693.8, 540.0, 711.6))],
+        )
+        connector = _LineRec(
+            text=f"be the pushforward of{SENTINEL_OPEN}γ'{SENTINEL_CLOSE}",
+            bbox=(72.0, 709.7, 190.3, 722.4),
+            spans=[
+                _span("be the pushforward of", (72.0, 709.7, 177.0, 722.4)),
+                _span("γ'", (177.0, 709.7, 190.3, 722.4), font="CMMI10"),
+            ],
+        )
+        continuation = _LineRec(
+            text=f"{SENTINEL_OPEN}0{SENTINEL_CLOSE} by r. Note that Q is Borel",
+            bbox=(187.4, 707.4, 540.0, 725.3),
+            spans=[
+                _span("0", (187.4, 707.4, 194.0, 725.3), font="CMMI10"),
+                _span(" by r. Note that Q is Borel", (194.0, 707.4, 540.0, 725.3)),
+            ],
+        )
+        record = _RawBlockRec(lines=[first, connector, continuation])
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("pushforward", segments[0].text)
+        self.assertIn("Note that Q is Borel", segments[0].text)
+
+    def test_equation_record_keeps_short_where_use_fragment(self):
+        where_line = _LineRec(
+            text="where we use",
+            bbox=(72.0, 298.5, 136.0, 309.4),
+            spans=[_span("where we use", (72.0, 298.5, 136.0, 309.4))],
+        )
+        integral = _LineRec(
+            text=f"{SENTINEL_OPEN}R{SENTINEL_CLOSE}",
+            bbox=(140.2, 297.5, 145.4, 308.4),
+            spans=[_span("R", (140.2, 297.5, 145.4, 308.4), font="CMEX10")],
+        )
+        record = _RawBlockRec(lines=[where_line, integral])
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0].text, "where we use")
+
+    def test_equation_record_keeps_short_by_replacement_fragment(self):
+        first = _LineRec(
+            text="using (3.8) with x replaced",
+            bbox=(216.7, 622.9, 540.0, 637.8),
+            spans=[_span("using (3.8) with x replaced", (216.7, 622.9, 540.0, 637.8))],
+        )
+        by_fragment = _LineRec(
+            text=f"by{SENTINEL_OPEN}x0, x'{SENTINEL_CLOSE}",
+            bbox=(72.0, 636.4, 111.5, 650.1),
+            spans=[
+                _span("by", (72.0, 636.4, 84.0, 650.1)),
+                _span("x0, x'", (84.0, 636.4, 111.5, 650.1), font="CMMI10"),
+            ],
+        )
+        continuation = _LineRec(
+            text=f"{SENTINEL_OPEN}0, z{SENTINEL_CLOSE}), we have",
+            bbox=(109.2, 638.2, 172.8, 651.4),
+            spans=[
+                _span("0, z", (109.2, 638.2, 132.0, 651.4), font="CMMI10"),
+                _span("), we have", (132.0, 638.2, 172.8, 651.4)),
+            ],
+        )
+        record = _RawBlockRec(lines=[first, by_fragment, continuation])
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("by", segments[0].text)
+        assert segments[0].redact_bboxes is not None
+        self.assertIn(by_fragment.bbox, segments[0].redact_bboxes)
 
     def test_equation_record_keeps_math_wrapped_sentence(self):
         first = _LineRec(
@@ -679,6 +1085,21 @@ class FormulaTailProseTests(unittest.TestCase):
 
 
 class PreserveGraphicsTextTests(unittest.TestCase):
+    def test_wide_shallow_background_rule_is_not_graphic_region(self):
+        document = fitz.open()
+        page = document.new_page(width=410, height=620)
+        page.draw_rect(fitz.Rect(-160, 443, 407, 455), color=None, fill=(0.95, 0.95, 0.95))
+        page.draw_rect(fitz.Rect(60, 80, 220, 180))
+
+        regions = graphic_regions_for_page(page)
+
+        document.close()
+        self.assertTrue(all(region[0] < region[2] and region[1] < region[3] for region in regions))
+        self.assertTrue(any(region[0] <= 60 and region[2] >= 220 for region in regions))
+        self.assertFalse(
+            any(region[1] <= 443 and region[3] >= 455 and region[0] <= 1 for region in regions)
+        )
+
     def test_merge_stops_before_crossing_graphic_region(self):
         first = TextBlock(
             page_index=0,
@@ -1132,6 +1553,56 @@ class TestTranslationVerification(unittest.TestCase):
         )
         self.assertFalse(
             _looks_like_untranslated_english(
+                "DKimCatching Objects in Flight [19]5IrregularACDHuangDynamic "
+                "Handover [18]26RegularGA"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "DKim5IrregularACDHuang26RegularGADHuModular NN Catching "
+                "[17]18RegularGADZhangCatch It! [42]27RegularGA"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "GPT-Image-2 [77]Nano-Banana-2 [78]GPT-Image-1.5 [79]"
+                "Seedream-4.5 [80]Flux-2-Pro [81]HunyuanImage-3.0 [82]"
+                "Nano-Banana [83]Qwen-Image-Edit-2511 [84]"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "robotnesstarget_embodiment_matchinteraction_preservationscene_"
+                "preservationreasoning"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Car locomotionInput command 3;actuator targets 8 = 4steer +4 drive."
+                "B2 locomotion"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "3Projected gravitygbase = Rb ez3Locomotion commandct = [vcmd"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english("zero.Humanoid locomotion12 leg actions.")
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Intercept tracking1¬near exp(−5dI)4.0Approach-to-ballexp(−5d)0.5"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "3v3/5v583v3/5v5Ball state[p−p , 0.2v, 1[h = i], pball]"
+                "83v3/5v5Teammate states"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
                 "Dai, T., Vijayakrishnan, S., Szczypi´nski, F. T., Ayme, J.-"
             )
         )
@@ -1155,6 +1626,16 @@ class TestTranslationVerification(unittest.TestCase):
         self.assertFalse(_looks_like_formula_fragment('"score":<1-5>,602'))
         self.assertFalse(_looks_like_formula_fragment("cr1=0.0556"))
         self.assertFalse(_looks_like_formula_fragment("u=fuel_uo2612"))
+        self.assertFalse(_looks_like_formula_fragment("4,0±305305π,0±π"))
+        self.assertFalse(_looks_like_formula_fragment("Svlm=√"))
+        self.assertFalse(_looks_like_formula_fragment("6\x11andδ′∈\x000,1"))
+        self.assertFalse(_looks_like_formula_fragment("If⟨V(x),a−z⟩≤0,by(4.4),wehave"))
+        self.assertFalse(
+            _looks_like_formula_fragment(
+                "hence∥x−y−⟨x−y,Ui,j⟩Ui,j∥≤2(∥x−ci∥+∥y−c′j∥)≤4δ2√"
+            )
+        )
+        self.assertFalse(_looks_like_formula_fragment("T∗1f(x)1A(x)dx="))
         self.assertFalse(
             _looks_like_formula_fragment("Handover47/7714/6550/7915/6852/8016/6955/8118/72")
         )
@@ -1523,6 +2004,21 @@ class TestTranslationVerification(unittest.TestCase):
         self.assertEqual(
             _normalize_formula_fragment_for_compare("(b) K-NN：|Vs| = 100"),
             "(b)K-NN:|Vs|=100",
+        )
+
+    def test_formula_fragment_compare_allows_missing_trailing_label(self):
+        translated = _normalize_formula_fragment_for_compare("2⟨F(x)(w+w′),w′−w⟩")
+
+        self.assertTrue(_formula_fragment_present("2⟨F(x)(w+w′),w′−w⟩.", translated))
+        self.assertTrue(_formula_fragment_present("|α|=d(c(i)α)2:", "|α|=d(c(i)α)2"))
+        self.assertTrue(
+            _formula_fragment_present("1−ρ2:", _normalize_formula_fragment_for_compare("1−ρ2"))
+        )
+        self.assertTrue(
+            _formula_fragment_present(
+                "A∩T∗1f(x)dx=µ(A).(4.58)",
+                _normalize_formula_fragment_for_compare("A∩T∗1f(x)dx=µ(A)"),
+            )
         )
 
     def test_clip_block_bbox_against_right_side_float(self):

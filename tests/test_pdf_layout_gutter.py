@@ -19,6 +19,9 @@ class IsLineNumberSpanTests(unittest.TestCase):
     def test_isolated_small_digit_is_line_number(self):
         self.assertTrue(is_line_number_span("129", 6.0, 10.0, isolated=True))
 
+    def test_single_isolated_digit_can_be_formula_numerator(self):
+        self.assertFalse(is_line_number_span("1", 6.0, 10.0, isolated=True))
+
     def test_glued_digit_is_formula_subscript(self):
         # The 0 in X_0 set in CMR7: same size as a gutter number but glued
         # to its base glyphs, so it must never be erased.

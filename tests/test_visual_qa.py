@@ -45,6 +45,16 @@ def test_visual_score_is_high_for_identical_pages(tmp_path):
     assert score.pages[0].page == 1
 
 
+def test_visual_score_average_uses_sampled_pages(tmp_path):
+    source = tmp_path / "source.pdf"
+    _save_paged_pdf(source, pages=12)
+
+    score = score_visual_layout(source, source, max_pages=4)
+
+    assert len(score.pages) == 4
+    assert score.overall_score > 0.98
+
+
 def test_visual_score_is_low_when_translation_is_blank(tmp_path):
     original = tmp_path / "original.pdf"
     translated = tmp_path / "translated.pdf"

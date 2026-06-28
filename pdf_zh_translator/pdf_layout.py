@@ -69,6 +69,7 @@ GRAPHIC_REGION_MIN_SIDE = 8.0
 GRAPHIC_BLOCK_OVERLAP_RATIO = 0.20
 MATH_HEAVY_RATIO = 0.18
 MATH_SHORT_BLOCK_RATIO = 0.05
+EQUATION_TABLE_REDACT_GAP = 1.2
 
 MATH_SYMBOLS = set(
     "=+\u2212\u00b1\u00d7\u00f7*/^_|\\<>~\u221e\u221a\u2202\u2207\u2211\u220f\u222b\u2208\u2209\u2282\u2286\u2283\u2287\u222a\u2229\u2227\u2228\u00ac\u2200\u2203\u2248\u2243\u2245\u2260\u2264\u2265\u226a\u226b\u221d\u2192\u2190\u2194\u21d2\u21d0\u21d4\u27e8\u27e9\u2032\u2033\u22a4\u22a5\u2225\u2295\u2297\u2299"
@@ -87,6 +88,11 @@ _FORMULA_EXPLANATION_RE = re.compile(
     r"^(?:where|with|here|for all|such that|subject to)\b",
     re.IGNORECASE,
 )
+_ACADEMIC_BOX_PROSE_RE = re.compile(
+    r"^(?:Theorem|Lemma|Assumption|Definition|Proposition|Corollary|Remark|Proof)\b",
+    re.IGNORECASE,
+)
+_ENUMERATED_ACADEMIC_BOX_RE = re.compile(r"^\(?[ivx]{1,4}\)\s+[A-Z]", re.IGNORECASE)
 # Heading patterns: "1 Introduction", "2.1 Background", "A. Appendix"
 _HEADING_RE = re.compile(
     r"^(?:\d+(?:\.\d+)*\.?\s|[A-Z]\.\s)",
@@ -728,7 +734,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             missing_formulas = [
                 fragment
                 for fragment in formula_fragments
-                if _normalize_formula_fragment_for_compare(fragment) not in trans_compact
+                if not _formula_fragment_present(fragment, trans_compact)
             ]
             if missing_formulas:
                 issues.append(
@@ -924,6 +930,12 @@ def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 35 or _is_reference_or_formula_text(compact):
         return False
+    if _looks_like_model_or_identifier_list_text(compact):
+        return False
+    if _looks_like_prompt_output_field_list(compact):
+        return False
+    if _looks_like_compact_control_table_row(compact):
+        return False
     if _looks_like_author_or_affiliation_text(compact):
         return False
     words = _ASCII_WORD_DETECT_RE.findall(compact)
@@ -934,6 +946,73 @@ def _looks_like_untranslated_english(text: str) -> bool:
         return False
     ascii_letters = sum(1 for char in compact if char.isascii() and char.isalpha())
     return ascii_letters / max(len(compact), 1) >= 0.45
+
+
+def _looks_like_model_or_identifier_list_text(text: str) -> bool:
+    """Model-name stacks in tables are identifiers, not untranslated prose."""
+    compact = " ".join(text.split())
+    refs = re.findall(r"\[\d+\]", compact)
+    if len(refs) < 4:
+        return False
+    without_refs = re.sub(r"\[\d+\]", " ", compact)
+    if re.search(r"[。！？;；:：]", without_refs):
+        return False
+    words = _ASCII_WORD_DETECT_RE.findall(without_refs)
+    if len(words) < max(4, len(refs) // 2):
+        return False
+    lowercase_words = [word for word in words if word.islower() and len(word) > 2]
+    return len(lowercase_words) <= max(1, len(words) // 8)
+
+
+def _looks_like_prompt_output_field_list(text: str) -> bool:
+    """Prompt templates often preserve literal output field identifiers."""
+    normalized = re.sub(r"[^a-z_]", "", text.lower())
+    if not normalized:
+        return False
+    semantic_fields = (
+        "robotness",
+        "target_embodiment_match",
+        "targetembodimentmatch",
+        "interaction_preservation",
+        "interactionpreservation",
+        "scene_preservation",
+        "scenepreservation",
+    )
+    perceptual_fields = (
+        "naturalness",
+        "artifact_absence",
+        "artifactabsence",
+        "local_coherence",
+        "localcoherence",
+    )
+    semantic_hits = sum(1 for field in semantic_fields if field in normalized)
+    perceptual_hits = sum(1 for field in perceptual_fields if field in normalized)
+    return "reasoning" in normalized and (semantic_hits >= 3 or perceptual_hits >= 2)
+
+
+def _looks_like_compact_control_table_row(text: str) -> bool:
+    """Dense robotics/reward table rows are mostly identifiers and formulas."""
+    compact = " ".join(text.split())
+    lower = compact.lower()
+    if len(compact) > 180:
+        return False
+    if not re.search(
+        r"(?:locomotion|actuator|gravity|command|tracking|approach|ctrl|"
+        r"court|ball\s*state|teammate\s*states|action\s*penalty|reward)",
+        lower,
+    ):
+        return False
+    if not (
+        any(token in compact for token in ("=", "[", "]", "¬", "−", "+", "×"))
+        or "exp(" in lower
+        or re.search(r"(?:\d[A-Za-z]|[A-Za-z]\d)", compact)
+    ):
+        return False
+    words = _ASCII_WORD_DETECT_RE.findall(compact)
+    if len(words) > 24:
+        return False
+    body_cues = ("propose", "proposed", "show", "shows", "evaluate", "evaluates", "however")
+    return not any(cue in lower for cue in body_cues)
 
 
 def _looks_like_author_or_affiliation_text(text: str) -> bool:
@@ -1023,6 +1102,18 @@ def _looks_like_code_or_symbolic_text(text: str) -> bool:
     if re.search(r"\[[0-9]+\]", compact) and len(words) <= 16:
         if re.search(r"\b(?:VoteNet|ScanRefer|ViewRefer|Success|Rate|Drop|Stage)\b", compact):
             return True
+    if (
+        re.search(r"\[[0-9]+\]", compact)
+        and len(words) <= 30
+        and (
+            re.search(r"\b(?:Objects?|Geometry|Geom|Prior)\b", compact)
+            or (
+                ("Regular" in compact or "Irregular" in compact)
+                and ("AC" in compact or "GA" in compact)
+            )
+        )
+    ):
+        return True
     camel_tokens = re.findall(r"\b[A-Z][A-Za-z0-9]*(?:[A-Z][a-z0-9]+)+\b", compact)
     if len(camel_tokens) >= 2 and len(words) <= 16 and not re.search(r"[.!?。！？]", compact):
         return True
@@ -1447,9 +1538,35 @@ def _normalize_formula_fragment_for_compare(text: str) -> str:
     )
 
 
+def _strip_formula_compare_tail(text: str) -> str:
+    previous = None
+    current = text
+    while current != previous:
+        previous = current
+        current = re.sub(r"[.,;:，。；：]+$", "", current)
+        current = re.sub(r"\(\d{1,3}(?:\.\d+)?\)$", "", current)
+    return current
+
+
+def _formula_fragment_present(fragment: str, translated_compact: str) -> bool:
+    normalized = _normalize_formula_fragment_for_compare(fragment)
+    if normalized in translated_compact:
+        return True
+    stripped = _strip_formula_compare_tail(normalized)
+    if len(stripped) >= 6 and stripped in translated_compact:
+        return True
+    return (
+        len(stripped) >= 4
+        and bool(re.search(r"[\d=+\-*/^_≤≥<>∥ρϵηαβγδ]", stripped))
+        and stripped in translated_compact
+    )
+
+
 def _looks_like_formula_fragment(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 3 or _REFERENCE_ENTRY_RE.search(compact):
+        return False
+    if any(ord(char) < 32 for char in text):
         return False
     if _looks_like_reference_entry_text(compact) or _looks_like_author_or_affiliation_text(compact):
         return False
@@ -1470,11 +1587,23 @@ def _looks_like_formula_fragment(text: str) -> bool:
         return False
     if re.search(r"^\s*\d+\s*:\s*[A-Za-z]", compact):
         return False
+    if re.search(
+        r"(?i)(?:^|[^a-z])(?:if|and|by|wehave|where|then|for|with|recall|hence|"
+        r"similarly|moreover|therefore)(?:[^a-z]|$)",
+        compact,
+    ):
+        return False
     if re.search(r"\bHandover\d+(?:/\d+){3,}", compact):
         return False
     compact_no_space = re.sub(r"\s+", "", compact)
+    if compact_no_space[-1:] in {"=", "+", "−", "-", "≤", "≥", "<", ">", "∈", "∩", "×"}:
+        return False
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*=√", compact_no_space):
+        return False
     digit_chars = sum(1 for char in compact_no_space if char.isdigit())
     slash_chars = compact_no_space.count("/")
+    if re.search(r"\d{3}\d{3}", compact_no_space) and "=" not in compact_no_space:
+        return False
     if slash_chars >= 3 and digit_chars / max(len(compact_no_space), 1) >= 0.35:
         return False
     words = _ASCII_WORD_DETECT_RE.findall(compact)
@@ -1776,6 +1905,14 @@ def _looks_like_small_fixed_width_table_fragment(block: TextBlock, text: str) ->
         return True
     if _looks_like_code_or_symbolic_text(compact) or looks_like_math(compact):
         return True
+    if block.font_size <= 10.5 and re.search(
+        r"\b(?:prompt template|your task is|please assign|use the following scale|"
+        r"output a concise rationale|integer score from|brief explanation|"
+        r"target-embodiment match|interaction preservation|scene preservation|"
+        r"robotness|naturalness|artifact absence|local coherence)\b",
+        lower,
+    ):
+        return True
     if re.search(r"\b(?:CR1|CR2|ICD|K-NN|BA:|Dataset|Success Rate)\b", compact):
         return True
     if any(marker in compact for marker in ("↔", "✓", "✗")):
@@ -1955,6 +2092,8 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
         if not isinstance(rect, fitz.Rect):
             continue
         bbox = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+        if _looks_like_page_background_rule(bbox, page_rect):
+            continue
         if bbox_is_graphic_candidate(bbox, page_rect):
             candidates.append(bbox)
 
@@ -1968,14 +2107,30 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
 
 
 def bbox_is_graphic_candidate(bbox: BBox, page_rect: object) -> bool:
+    page_width = float(page_rect.width)
+    page_height = float(page_rect.height)
+    if bbox[2] <= 0 or bbox[0] >= page_width or bbox[3] <= 0 or bbox[1] >= page_height:
+        return False
     width = bbox[2] - bbox[0]
     height = bbox[3] - bbox[1]
     if width < GRAPHIC_REGION_MIN_SIDE or height < GRAPHIC_REGION_MIN_SIDE:
         return False
     if bbox_area(bbox) < GRAPHIC_REGION_MIN_AREA:
         return False
-    page_area = max(float(page_rect.width) * float(page_rect.height), 1.0)
+    page_area = max(page_width * page_height, 1.0)
     return bbox_area(bbox) <= page_area * 0.85
+
+
+def _looks_like_page_background_rule(bbox: BBox, page_rect: object) -> bool:
+    page_width = max(float(page_rect.width), 1.0)
+    page_height = max(float(page_rect.height), 1.0)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    return (
+        width >= page_width * 0.90
+        and height <= max(14.0, page_height * 0.025)
+        and (bbox[0] <= page_width * 0.02 or bbox[2] >= page_width * 0.98)
+    )
 
 
 def merge_nearby_bboxes(bboxes: Sequence[BBox], gap: float) -> List[BBox]:
@@ -2005,13 +2160,33 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
         return True
     if block.block_type == "caption" or _CAPTION_RE.match(plain):
         return False
+    if block.block_type == "table" and block.nowrap and block.no_merge:
+        return False
     if block_overlaps_graphic_region(block.bbox, graphic_regions):
+        if looks_like_translatable_graphic_prose(block, plain):
+            return False
         return True
     if math_heavy_block(block):
         return True
     if short_graphic_label_block(block, plain):
         return True
     return False
+
+
+def looks_like_translatable_graphic_prose(block: TextBlock, plain: str) -> bool:
+    if block.nowrap:
+        return False
+    if _ACADEMIC_BOX_PROSE_RE.match(plain):
+        return True
+    if _ENUMERATED_ACADEMIC_BOX_RE.match(plain):
+        return True
+    if block.source_lines < 2:
+        return False
+    if substantial_prose_word_count(plain) < 8:
+        return False
+    if _looks_like_code_or_symbolic_text(plain):
+        return False
+    return True
 
 
 def block_overlaps_graphic_region(bbox: BBox, regions: Sequence[BBox]) -> bool:
@@ -2087,10 +2262,28 @@ def collect_text_blocks(document: object) -> Tuple[List[TextBlock], Dict[int, Li
             if record is not None:
                 records.append(record)
         equation_flags = mark_equation_blocks(records)
+        formula_lines = [
+            line
+            for record, is_equation in zip(records, equation_flags)
+            if is_equation
+            for line in record.lines
+            if not line_is_prose(line)
+        ]
         for record, is_equation in zip(records, equation_flags):
             if record_is_algorithm(record):
                 continue
-            blocks.extend(segments_from_record(page_index, record, equation_record=is_equation))
+            record_segments = segments_from_record(
+                page_index, record, equation_record=is_equation
+            )
+            for block in record_segments:
+                redacts = block.redact_bboxes or [block.bbox]
+                trimmed_redacts = [
+                    trim_redact_bbox_against_formula_lines(redact, formula_lines)
+                    for redact in redacts
+                ]
+                if trimmed_redacts != redacts:
+                    block.redact_bboxes = trimmed_redacts
+            blocks.extend(record_segments)
     return blocks, gutter_rects
 
 
@@ -2203,6 +2396,10 @@ def classify_blocks(
     for block in blocks:
         text = block.text.strip()
         x0, y0, x1, y1 = block.bbox
+
+        if block.block_type == "table" and block.nowrap and block.no_merge:
+            block.should_translate = True
+            continue
 
         # Already classified as equation by native engine
         if getattr(block, "_equation_zone", False):
@@ -2636,6 +2833,16 @@ _SHORT_PROSE_WORDS = frozenset(
 _FORMULA_CONTEXT_WORDS = frozenset(
     "fig figure table panel top bottom left right middle row column".split()
 )
+_FORMULA_PROSE_FRAGMENT_CUE_RE = re.compile(
+    r"(?i)(?:\bproof\b|\bwhere\w*|\bif\w*|\bthen\b|\bhence\b|\btherefore\b|"
+    r"\bimplies?\b|\bestablish(?:es|ed)?\b|\bnote\b|\bbelow\b|\bfinally\b|"
+    r"\brecall\b|\bdefine[sd]?\b|\bbetween\w*|\brestricted\b|\bpushforward\b|"
+    r"\binequality\b|\bby\w*|\bwe\s*(?:have|use)\b|\bhave\w*|\bfor\s*all\w*|"
+    r"\bsuch\s*that\b|\bto\s*be\b)"
+)
+_FORMULA_PREFIX_PROSE_TAIL_RE = re.compile(
+    r"(?i)^[\s\.,;:)]+(?:as|hence|therefore|thus|consequently|moreover|then|so)\b"
+)
 
 
 def _text_outside_sentinels(text: str) -> str:
@@ -2670,6 +2877,78 @@ def line_has_translatable_formula_tail(line: _LineRec) -> bool:
     return len(words) >= 2
 
 
+def line_has_short_formula_prose_fragment(line: _LineRec) -> bool:
+    """Short prose connectors split away from nearby formula spans.
+
+    Math-heavy PDFs often split phrases like ``between T and T' to be`` or
+    ``we have`` into their own physical line. They are too short for the normal
+    prose detector but must still be translated and redacted with the sentence.
+    """
+    bare = strip_sentinels(line.text)
+    compact = "".join(bare.split())
+    if not compact or EQUATION_NUMBER_RE.fullmatch(compact):
+        return False
+    if any(ord(char) < 32 or char in _BIG_OPERATOR_CHARS for char in compact):
+        return False
+    if sentinel_char_count(line.text) / len(compact) >= 0.80:
+        return False
+    words = [word for word in _PROSE_WORD_RE.findall(bare) if word.lower() not in _MATH_WORDS]
+    if not words:
+        return False
+    return bool(_FORMULA_PROSE_FRAGMENT_CUE_RE.search(bare))
+
+
+def line_formula_prefix_prose_tail(line: _LineRec) -> Optional[_LineRec]:
+    """Return the prose tail when a physical line starts with display math.
+
+    Fraction layouts sometimes produce a line such as ``2D >= c. As`` whose
+    formula prefix vertically overlaps a neighbouring numerator. Redacting the
+    whole line erases the numerator; only the prose tail should be translated.
+    """
+    if len(line.spans) < 2:
+        return None
+    line_width = line.bbox[2] - line.bbox[0]
+    if line.bbox[0] < 300.0 or line_width > 140.0:
+        return None
+    span_sizes = [float(span.get("size", 0.0)) for span in line.spans]
+    line_max_size = max(span_sizes) if span_sizes else 0.0
+    for index in range(1, len(line.spans)):
+        tail_spans = list(line.spans[index:])
+        tail_text = "".join(normalize_span_text(span.get("text", "")) for span in tail_spans)
+        if not _FORMULA_PREFIX_PROSE_TAIL_RE.search(tail_text):
+            continue
+        prefix_spans = line.spans[:index]
+        prefix_text = "".join(normalize_span_text(span.get("text", "")) for span in prefix_spans)
+        prefix_has_math = any(
+            is_math_span(
+                span.get("font", ""),
+                int(span.get("flags", 0)),
+                normalize_span_text(span.get("text", "")),
+                float(span.get("size", line_max_size)),
+                line_max_size,
+            )
+            for span in prefix_spans
+        ) or any(char in MATH_SYMBOLS for char in prefix_text)
+        if not prefix_has_math:
+            continue
+        boxes = [
+            tuple(float(value) for value in span["bbox"]) for span in tail_spans if "bbox" in span
+        ]
+        if not boxes:
+            continue
+        leading_match = re.match(r"^[\s\.,;:)]+", tail_text)
+        cleaned = re.sub(r"^[\s\.,;:)]+", "", tail_text).strip()
+        if not cleaned:
+            continue
+        bbox = union_bbox(boxes)
+        if leading_match:
+            consumed = len(leading_match.group(0))
+            ratio = min(0.75, consumed / max(len(tail_text), 1))
+            bbox = (bbox[0] + (bbox[2] - bbox[0]) * ratio, bbox[1], bbox[2], bbox[3])
+        return _LineRec(text=cleaned, bbox=bbox, spans=tail_spans)
+    return None
+
+
 def line_is_prose(line: _LineRec) -> bool:
     """Inside an equation zone, full English sentences (e.g. a Remark line or
     a short connective like 'the forward equation is' that PyMuPDF glued onto
@@ -2677,14 +2956,15 @@ def line_is_prose(line: _LineRec) -> bool:
     bare = strip_sentinels(line.text)
     words = [word for word in _PROSE_WORD_RE.findall(bare) if word.lower() not in _MATH_WORDS]
     has_formula_tail = line_has_translatable_formula_tail(line)
+    has_short_fragment = line_has_short_formula_prose_fragment(line)
     if len(words) < 3 and not has_formula_tail:
-        return False
+        return has_short_fragment
     compact = "".join(bare.split())
     if not compact:
         return False
     if sentinel_char_count(line.text) / len(compact) < 0.35:
         return True
-    return has_formula_tail
+    return has_formula_tail or has_short_fragment
 
 
 def line_is_short_prose_prefix(line: _LineRec, next_line: _LineRec) -> bool:
@@ -2719,14 +2999,94 @@ def line_continues_inline_formula_tail(line: _LineRec, current: "_SegmentAccumul
     compact = "".join(bare.split())
     if EQUATION_NUMBER_RE.fullmatch(compact):
         return False
-    if re.search(r"[A-Za-z]|[),.;:]", bare):
+    outside = _text_outside_sentinels(line.text)
+    if re.search(r"[A-Za-z]|[),.;:]", outside):
         return True
+    if current_expects_preserved_formula_tail(current):
+        return False
     gap = line.bbox[0] - previous[2]
     return (
         sentinel_char_count(line.text) > 0
         and len(compact) <= 40
         and -2.0 <= gap <= max(12.0, min_height * 2.5)
     )
+
+
+def current_expects_preserved_formula_tail(current: "_SegmentAccumulator") -> bool:
+    if not current.lines:
+        return False
+    tail = re.sub(r"\s+", " ", strip_sentinels(current.lines[-1]).strip().lower())
+    if not tail:
+        return False
+    if tail.endswith(("+", "=", ":=", ",")):
+        return True
+    return bool(
+        re.search(
+            r"(?:\bto be\b|\bwhere we use\b|\bwe have\b|\bfor all\w*\b|\band)$",
+            tail,
+        )
+    )
+
+
+def formula_prefix_tail_block(
+    page_index: int, tail_line: _LineRec, next_line: _LineRec
+) -> Optional[TextBlock]:
+    accumulator = _SegmentAccumulator()
+    _accumulate_line(accumulator, tail_line)
+    _accumulate_line(accumulator, next_line)
+    block = accumulator.flush(page_index)
+    if block is None:
+        return None
+    block.bbox = next_line.bbox
+    block.redact_bboxes = [tail_line.bbox, next_line.bbox]
+    block.no_merge = True
+    return block
+
+
+def equation_table_prose_redact_bbox(line: _LineRec, lines: Sequence[_LineRec]) -> BBox:
+    """Keep redaction for equation-table prose from expanding into formula cells."""
+    formula_lines = [
+        other
+        for other in lines
+        if other is not line and lines_share_y_band(line, other) and not line_is_prose(other)
+    ]
+    return trim_redact_bbox_against_formula_lines(line.bbox, formula_lines)
+
+
+def trim_redact_bbox_against_formula_lines(
+    redact_bbox: BBox, formula_lines: Sequence[_LineRec]
+) -> BBox:
+    x0, y0, x1, y1 = redact_bbox
+    for formula_line in formula_lines:
+        ox0, oy0, ox1, oy1 = formula_line.bbox
+        if bbox_share_y_band(redact_bbox, formula_line.bbox):
+            if ox0 >= x1 - 0.6 and ox0 - x1 <= 4.0:
+                x1 = min(x1, ox0 - EQUATION_TABLE_REDACT_GAP)
+            if ox1 <= x0 + 0.6 and x0 - ox1 <= 4.0:
+                x0 = max(x0, ox1 + EQUATION_TABLE_REDACT_GAP)
+            continue
+
+        x_overlap = min(x1, ox1) - max(x0, ox0)
+        if x_overlap <= 0:
+            continue
+        near_gap = EQUATION_TABLE_REDACT_GAP + 1.0
+        if oy0 >= y0 and oy0 - y1 <= near_gap:
+            y1 = min(y1, oy0 - EQUATION_TABLE_REDACT_GAP)
+        elif oy1 <= y1 and y0 - oy1 <= near_gap:
+            y0 = max(y0, oy1 + EQUATION_TABLE_REDACT_GAP)
+    if x1 <= x0 or y1 <= y0:
+        return redact_bbox
+    return (x0, y0, x1, y1)
+
+
+def bbox_share_y_band(first: BBox, second: BBox) -> bool:
+    first_height = first[3] - first[1]
+    second_height = second[3] - second[1]
+    min_height = min(first_height, second_height)
+    if min_height <= 0:
+        return False
+    overlap = min(first[3], second[3]) - max(first[1], second[1])
+    return overlap >= 0.5 * min_height
 
 
 def segments_from_formula_tail_prose(
@@ -2838,13 +3198,31 @@ def segments_from_record(
         return formula_tail_segments
 
     segments: List[TextBlock] = []
-    if not equation_record and record_is_table(record):
+    table_record = record_is_table(record)
+    if equation_record and table_record:
+        for line in record.lines:
+            if not line_is_prose(line):
+                continue
+            cell = _SegmentAccumulator()
+            _accumulate_line(cell, line)
+            block = cell.flush(page_index)
+            if block is not None:
+                block.nowrap = True
+                block.no_merge = True
+                block.block_type = "table"
+                block.redact_bboxes = [equation_table_prose_redact_bbox(line, record.lines)]
+                segments.append(block)
+        return segments
+
+    if not equation_record and table_record:
         for line in record.lines:
             cell = _SegmentAccumulator()
             _accumulate_line(cell, line)
             block = cell.flush(page_index)
             if block is not None:
                 block.nowrap = True
+                block.no_merge = True
+                block.block_type = "table"
                 segments.append(block)
         return segments
 
@@ -2856,14 +3234,31 @@ def segments_from_record(
         block = current.flush(page_index)
         if block is not None:
             if current_has_inline_tail:
-                # Same redaction area, but prevents paragraph merging across a
-                # reconstructed inline-equation sentence.
-                block.redact_bboxes = [block.bbox]
+                # Keep the redaction tied to physical text spans. A single
+                # union rectangle can erase nearby display-equation glyphs when
+                # PyMuPDF vertically overlaps a prose tail and the next formula.
+                block.redact_bboxes = list(current.line_bboxes)
             segments.append(block)
         current = _SegmentAccumulator()
         current_has_inline_tail = False
 
+    skip_line_index: Optional[int] = None
     for line_index, line in enumerate(record.lines):
+        if skip_line_index == line_index:
+            continue
+        prose_tail = line_formula_prefix_prose_tail(line)
+        if prose_tail is not None:
+            next_line = (
+                record.lines[line_index + 1] if line_index + 1 < len(record.lines) else None
+            )
+            if next_line is not None and line_is_prose(next_line):
+                flush_current()
+                block = formula_prefix_tail_block(page_index, prose_tail, next_line)
+                if block is not None:
+                    segments.append(block)
+                    skip_line_index = line_index + 1
+                    continue
+            line = prose_tail
         if equation_record:
             if not line_is_prose(line):
                 next_line = (
@@ -3122,6 +3517,8 @@ def is_line_number_span(
     (e.g. the 0 in X_0 set in CMR7) and must never be dropped."""
     stripped = text.strip()
     if not stripped.isdigit() or len(stripped) > 3:
+        return False
+    if len(stripped) == 1:
         return False
     if not isolated:
         return False

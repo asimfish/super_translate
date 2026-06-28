@@ -108,8 +108,7 @@ def score_visual_layout(
             page_count_similarity=page_count_similarity,
             min_page_size_similarity=0.0,
         )
-    denominator = max(original_pages, translated_pages, len(pages), 1)
-    overall = sum(page.score for page in pages) / denominator
+    overall = sum(page.score for page in pages) / len(pages)
     min_page_score = min(page.score for page in pages)
     min_zone_score = min(page.min_zone_score for page in pages)
     min_page_size_similarity = min(page.page_size_similarity for page in pages)
