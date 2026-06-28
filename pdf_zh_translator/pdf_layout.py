@@ -1427,6 +1427,12 @@ def _looks_like_formula_fragment(text: str) -> bool:
         return False
     if re.search(r"^[A-Za-z]\s*=\s*\[[^\]]+\]\s*,?\d*$", compact):
         return False
+    if re.search(r'^"[^"]+"\s*:\s*<[^>]+>\s*,?\d*$', compact):
+        return False
+    if re.search(r"^[A-Za-z_][A-Za-z0-9_]*\s*=\s*[-+]?\d+(?:\.\d+)?\d*$", compact):
+        return False
+    if re.search(r"^[A-Za-z_][A-Za-z0-9_]*\s*=\s*[A-Za-z_][A-Za-z0-9_]*\d*$", compact):
+        return False
     if re.search(r"^\s*\d+\s*:\s*[A-Za-z]", compact):
         return False
     if re.search(r"\bHandover\d+(?:/\d+){3,}", compact):

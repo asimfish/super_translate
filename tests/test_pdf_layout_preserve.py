@@ -1096,6 +1096,9 @@ class TestTranslationVerification(unittest.TestCase):
     def test_formula_fragment_detector_ignores_code_and_table_rows(self):
         self.assertFalse(_looks_like_formula_fragment("nu_p=np.array([1.2]))462"))
         self.assertFalse(_looks_like_formula_fragment("x=[0.0,4.0],486"))
+        self.assertFalse(_looks_like_formula_fragment('"score":<1-5>,602'))
+        self.assertFalse(_looks_like_formula_fragment("cr1=0.0556"))
+        self.assertFalse(_looks_like_formula_fragment("u=fuel_uo2612"))
         self.assertFalse(
             _looks_like_formula_fragment("Handover47/7714/6550/7915/6852/8016/6955/8118/72")
         )

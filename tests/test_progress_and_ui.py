@@ -21,8 +21,30 @@ def test_reader_sync_scroll_maps_page_fraction_and_renders_target_panel():
     assert "function targetScrollTop(panel, pageIdx, fraction)" in js
     assert "const fraction = pageHeight > 0" in js
     assert "otherContainer.scrollTop = targetScrollTop(otherPanel, pageIdx, fraction);" in js
-    assert "releaseScrollSyncAfterPaint(token);" in js
+    assert "releaseScrollSyncAfterPaint(token, otherPanel);" in js
     assert "requestAnimationFrame(() => syncScrollFromPanel('original'));" in js
+
+
+def test_reader_sync_scroll_does_not_lock_source_panel_during_mirror_update():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "let scrollSyncTargetPanel = null;" in js
+    assert "scrollSyncTargetPanel === panel" in js
+    assert "scrollSyncTargetPanel = otherPanel;" in js
+    assert "scrollSyncTargetPanel = null;" in js
+    assert "let scrollSyncing = false;" not in js
+    assert "scrollSyncing = true;" not in js
+    assert "|| scrollSyncing" not in js
+
+
+def test_reader_sync_scroll_clamps_target_scroll_top_to_panel_bounds():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+
+    assert (
+        "const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);"
+        in js
+    )
+    assert "return Math.max(0, Math.min(maxScrollTop, rawScrollTop));" in js
 
 
 def test_reader_sync_scroll_defers_mirror_render_to_avoid_jank():

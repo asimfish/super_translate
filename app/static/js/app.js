@@ -433,7 +433,6 @@ async function doUpload() {
 // === Reader (PDF.js with Virtual Scrolling) ===
 let syncScrollEnabled = true;
 let pdfDocs = { original: null, translated: null };
-let scrollSyncing = false;
 let pageMetrics = { original: [], translated: [] }; // cached {top, height} per page
 let renderedPages = { original: new Set(), translated: new Set() };
 let pageWrappers = { original: [], translated: [] };
@@ -710,6 +709,7 @@ async function renderPage(panel, idx) {
 // Scroll sync with page-based alignment
 let scrollRafId = null;
 let syncRenderTimer = null;
+let scrollSyncTargetPanel = null;
 
 // Render the mirrored panel only after scrolling settles. Rendering PDF pages
 // is CPU/GPU heavy; doing it on every scroll frame was the main cause of the
@@ -728,7 +728,7 @@ function setupSmoothScrollSync(panel) {
 
   const listener = () => {
     updatePageInfo(panel, container.scrollTop);
-    if (!syncScrollEnabled || scrollSyncing) return;
+    if (!syncScrollEnabled || scrollSyncTargetPanel === panel) return;
 
     if (scrollRafId) return;
     scrollRafId = requestAnimationFrame(() => {
@@ -765,13 +765,19 @@ function targetScrollTop(panel, pageIdx, fraction) {
   const metrics = pageMetrics[panel];
   if (!metrics?.length) return 0;
   const idx = Math.min(pageIdx, metrics.length - 1);
-  return metrics[idx].top + fraction * metrics[idx].height;
+  const container = document.getElementById(`pdf-container-${panel}`);
+  const rawScrollTop = metrics[idx].top + fraction * metrics[idx].height;
+  if (!container) return rawScrollTop;
+  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+  return Math.max(0, Math.min(maxScrollTop, rawScrollTop));
 }
 
-function releaseScrollSyncAfterPaint(token) {
+function releaseScrollSyncAfterPaint(token, targetPanel) {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      if (scrollSyncToken === token) scrollSyncing = false;
+      if (scrollSyncToken === token && scrollSyncTargetPanel === targetPanel) {
+        scrollSyncTargetPanel = null;
+      }
     });
   });
 }
@@ -788,12 +794,12 @@ function syncScrollFromPanel(panel) {
   if (otherContainer.classList.contains('hidden') || otherContainer.clientHeight <= 0) return;
 
   const { pageIdx, fraction } = pageScrollPosition(panel, container.scrollTop);
-  scrollSyncing = true;
   const token = ++scrollSyncToken;
+  scrollSyncTargetPanel = otherPanel;
   otherContainer.scrollTop = targetScrollTop(otherPanel, pageIdx, fraction);
   updatePageInfo(otherPanel, otherContainer.scrollTop);
   scheduleOtherPanelRender(otherPanel, otherContainer);
-  releaseScrollSyncAfterPaint(token);
+  releaseScrollSyncAfterPaint(token, otherPanel);
 }
 
 function updatePageInfo(panel, scrollTop) {
