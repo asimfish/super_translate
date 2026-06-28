@@ -1,29 +1,158 @@
 """CLI tests for editable figure PPT provenance."""
 
+import hashlib
 import json
 from pathlib import Path
 
 from pdf_zh_translator.cli import main
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _write_completed_editppt_run(root: Path) -> Path:
     run_dir = root / "editppt-run"
     final_dir = run_dir / "final"
+    page_dir = run_dir / "pages" / "page_001"
     final_dir.mkdir(parents=True)
+    page_dir.mkdir(parents=True)
     pptx = final_dir / "figure_edited.pptx"
     pptx.write_bytes(b"fake-pptx")
+    page_outputs = {
+        "page_manifest": page_dir / "manifest.json",
+        "imagegen_jobs": page_dir / "imagegen-jobs.json",
+        "page_pptx": page_dir / "page.pptx",
+        "preview": page_dir / "preview.png",
+        "contact_sheet": page_dir / "split_assets_contact.png",
+        "validation": page_dir / "validation.json",
+        "page_result": page_dir / "page_result.json",
+    }
+    (page_dir / "source.png").write_bytes(b"source-page")
+    (page_dir / "page_request.json").write_text(
+        json.dumps(
+            {
+                "page_id": "page_001",
+                "page_dir": "pages/page_001",
+                "source": "pages/page_001/source.png",
+                "slide": {"width": 10, "height": 7.5},
+                "content_box": [0, 0, 100, 75],
+            }
+        ),
+        encoding="utf-8",
+    )
+    page_outputs["page_manifest"].write_text(
+        json.dumps(
+            {
+                "slide": {"width": 10, "height": 7.5},
+                "content_box": [0, 0, 100, 75],
+                "source": {"width_px": 100, "height_px": 75},
+                "text_inventory": [],
+                "visual_inventory": [],
+                "background_strategy": {"mode": "native-or-script"},
+                "quality_checks": {
+                    "font_size_calibrated": True,
+                    "visual_inventory_matched": True,
+                    "background_strategy_checked": True,
+                    "shape_corner_geometry_checked": True,
+                },
+                "text_boxes": [],
+                "shapes": [],
+                "images": [],
+                "asset_provenance": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    page_outputs["imagegen_jobs"].write_text(json.dumps({"jobs": []}), encoding="utf-8")
+    page_outputs["page_pptx"].write_bytes(b"page-pptx")
+    page_outputs["preview"].write_bytes(b"preview")
+    page_outputs["contact_sheet"].write_bytes(b"contact-sheet")
+    page_outputs["validation"].write_text(json.dumps({"passed": True}), encoding="utf-8")
+    page_outputs["page_result"].write_text(
+        json.dumps(
+            {
+                "page_manifest": "manifest.json",
+                "imagegen_jobs": "imagegen-jobs.json",
+                "page_pptx": "page.pptx",
+                "preview": "preview.png",
+                "contact_sheet": "split_assets_contact.png",
+                "validation": "validation.json",
+                "page_result": "page_result.json",
+            }
+        ),
+        encoding="utf-8",
+    )
     (final_dir / "validation.json").write_text(json.dumps({"passed": True}), encoding="utf-8")
+    (final_dir / "run_summary.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": "editppt-run",
+                "status": "complete",
+                "page_count": 1,
+                "output": str(pptx),
+                "validation": str(final_dir / "validation.json"),
+                "completed_at": "2026-06-27T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
     (run_dir / "deck_manifest.json").write_text(
-        json.dumps({"output": "final/figure_edited.pptx", "completed_at": "2026-06-27T00:00:00Z"}),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": "editppt-run",
+                "input_type": "image",
+                "page_count": 1,
+                "output": "final/figure_edited.pptx",
+                "page_jobs": "page_jobs.json",
+                "run_state": "run_state.json",
+                "pages": [
+                    {
+                        "page_id": "page_001",
+                        "page_dir": "pages/page_001",
+                        "page_request": "pages/page_001/page_request.json",
+                        "source": "pages/page_001/source.png",
+                    }
+                ],
+                "completed_at": "2026-06-27T00:00:00Z",
+            }
+        ),
         encoding="utf-8",
     )
     (run_dir / "page_jobs.json").write_text(
         json.dumps(
             {
+                "schema_version": 1,
+                "run_id": "editppt-run",
                 "run_status": "complete",
-                "pages": [{"page_id": "page_001", "status": "accepted", "accepted": True}],
+                "pages": [
+                    {
+                        "page_id": "page_001",
+                        "status": "accepted",
+                        "accepted": True,
+                        "page_dir": "pages/page_001",
+                        "page_request": "pages/page_001/page_request.json",
+                        "source": "pages/page_001/source.png",
+                        "result": {
+                            "agent_id": "main",
+                            "record_mode": "local-main-agent",
+                            "outputs": {
+                                key: str(path.relative_to(run_dir))
+                                for key, path in page_outputs.items()
+                            },
+                            "hashes": {key: _sha256(path) for key, path in page_outputs.items()},
+                            "validation_passed": True,
+                        },
+                    }
+                ],
             }
         ),
+        encoding="utf-8",
+    )
+    (run_dir / "run_state.json").write_text(
+        json.dumps({"status": "complete", "history": []}),
         encoding="utf-8",
     )
     return run_dir

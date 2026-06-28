@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-622%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-626%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -23,7 +23,7 @@ Super Translate is a web-based system for translating English academic papers in
 - **Conference Terminology Corpus** — 1000+ curated AI conference terms across NeurIPS, ICML, ICLR, CVPR, ACL, systems, agents, and safety tracks, with a `corpus-lint` consistency gate and post-translation terminology adherence checks
 - **Golden Regression Evaluation** — Build and run PDF layout/quality regression sets for large paper batches
 - **Template Layout Learning** — Learn ACM/IEEE/Springer/ACL-style layout profiles from representative PDFs
-- **Editable Figure PPT Provenance** — Figure PPT assets must be finalized by `image-to-editable-ppt`/`editppt` and registered with auditable hashes
+- **Editable Figure PPT Provenance** — Figure PPT assets must be finalized by `image-to-editable-ppt`/`editppt` and registered with auditable run, page, validation, and hash evidence
 - **Dual View** — Side-by-side PDF viewer with synchronized scrolling and adjustable split
 - **Batch Processing** — Translate multiple papers simultaneously
 - **Feishu Notifications** — Get notified via Feishu/Lark webhook when translation completes
@@ -112,7 +112,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (622 tests)
+└── tests/            # Test suite (626 tests)
 ```
 
 ## Deployment Notes

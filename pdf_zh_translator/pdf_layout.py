@@ -931,6 +931,12 @@ def _looks_like_author_or_affiliation_text(text: str) -> bool:
         return True
     if (
         len(compact) <= 220
+        and compact.count(",") >= 3
+        and re.search(r"\b[A-Z][A-Za-z´'’.-]+,\s*[A-Z]\.?", compact)
+    ):
+        return not any(verb in lower for verb in body_verbs)
+    if (
+        len(compact) <= 220
         and len(title_tokens) >= 5
         and len(lowercase_words) <= 1
         and not re.search(r"[.!?。！？]", compact)
@@ -944,11 +950,41 @@ def _looks_like_author_or_affiliation_text(text: str) -> bool:
 def _looks_like_code_or_symbolic_text(text: str) -> bool:
     compact = " ".join(text.split())
     lower = compact.lower()
-    if re.search(r"\bdef\s+\w+\s*\(", compact):
+    words = _ASCII_WORD_DETECT_RE.findall(compact)
+    if re.search(r"^(?:#|>>>|\.\.\.)\s*", compact):
+        return True
+    if re.search(r"\b(?:def|class)\s+\w+\s*\(", compact):
+        return True
+    if re.search(r"^\s*(?:import|from)\s+[A-Za-z_][\w.]*", compact):
+        return True
+    if re.search(r"\b(?:np|numpy|mcdc|h5py)\s*\.", compact):
+        return True
+    if re.search(
+        r"\b(?:MaterialMG|Surface|Cell|Universe|Source|Tally|MeshTally|array)\s*\(",
+        compact,
+    ):
+        return True
+    if re.search(r"\b[a-z][a-z0-9]*_[a-z0-9_]*\b", compact):
+        if any(marker in compact for marker in (":", "=", "-", "(", ")", "[", "]")):
+            return True
+    if re.search(r"^\s*\d+\s*:\s*[A-Za-z]", compact):
+        return True
+    if (
+        re.search(r"^\s*(?:Require|Ensure|Input|Output)\s*:", compact, re.IGNORECASE)
+        and len(words) <= 14
+        and not re.search(r"[.!?。！？]", compact)
+    ):
+        return True
+    if (
+        re.search(r"\b[a-z_][\w-]*\s*:\s*", lower)
+        and compact.count(":") >= 2
+        and not re.search(r"[.!?。！？]", compact)
+    ):
+        return True
+    if any(token in compact for token in ("✓", "——", "———")):
         return True
     if any(token in compact for token in (":=", "setdefault(", "supp[", "ρ", "π", "ϕ", "χ", "ξ")):
         return True
-    words = _ASCII_WORD_DETECT_RE.findall(compact)
     if re.search(r"\[[0-9]+\]", compact) and len(words) <= 16:
         if re.search(r"\b(?:VoteNet|ScanRefer|ViewRefer|Success|Rate|Drop|Stage)\b", compact):
             return True
@@ -957,7 +993,16 @@ def _looks_like_code_or_symbolic_text(text: str) -> bool:
         return True
     greek_chars = sum(1 for char in compact if "\u0370" <= char <= "\u03ff")
     math_chars = sum(1 for char in compact if char in MATH_SYMBOLS)
+    if math_chars >= 2 and len(words) <= 18 and re.search(r"\b(?:for|return|end|do)\b", lower):
+        return True
     if greek_chars >= 2 and (math_chars >= 1 or "supp" in lower):
+        return True
+    if greek_chars >= 2 and len(words) <= 12 and re.search(
+        r"\b(?:dataset|error|rate|lrt|gap|centroid|feat|diff)\b",
+        lower,
+    ):
+        return True
+    if greek_chars >= 2 and len(words) <= 12 and not re.search(r"[.!?。！？]", compact):
         return True
     return False
 
@@ -1370,6 +1415,26 @@ def _normalize_formula_fragment_for_compare(text: str) -> str:
 def _looks_like_formula_fragment(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 3 or _REFERENCE_ENTRY_RE.search(compact):
+        return False
+    if _looks_like_reference_entry_text(compact) or _looks_like_author_or_affiliation_text(compact):
+        return False
+    if re.search(
+        r"\b(?:import|np\.|numpy\.|mcdc\.|h5py|MaterialMG|Surface|Cell|Universe)\b",
+        compact,
+    ):
+        return False
+    if re.search(r"\b[a-z][a-z0-9]*_[a-z0-9_]*\s*=", compact):
+        return False
+    if re.search(r"^[A-Za-z]\s*=\s*\[[^\]]+\]\s*,?\d*$", compact):
+        return False
+    if re.search(r"^\s*\d+\s*:\s*[A-Za-z]", compact):
+        return False
+    if re.search(r"\bHandover\d+(?:/\d+){3,}", compact):
+        return False
+    compact_no_space = re.sub(r"\s+", "", compact)
+    digit_chars = sum(1 for char in compact_no_space if char.isdigit())
+    slash_chars = compact_no_space.count("/")
+    if slash_chars >= 3 and digit_chars / max(len(compact_no_space), 1) >= 0.35:
         return False
     words = _ASCII_WORD_DETECT_RE.findall(compact)
     math_chars = sum(1 for char in compact if char in MATH_SYMBOLS)

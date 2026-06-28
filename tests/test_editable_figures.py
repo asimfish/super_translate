@@ -1,5 +1,6 @@
 """Tests for editable figure PPT provenance."""
 
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -21,20 +22,118 @@ from pdf_zh_translator.editable_figures import (
 )
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _write_completed_editppt_run(root: Path) -> tuple[Path, Path]:
     run_dir = root / "editppt-run"
     final_dir = run_dir / "final"
+    page_dir = run_dir / "pages" / "page_001"
     final_dir.mkdir(parents=True)
+    page_dir.mkdir(parents=True)
     pptx = final_dir / "figure_edited.pptx"
     pptx.write_bytes(b"fake-pptx-for-provenance-tests")
+    page_outputs = {
+        "page_manifest": page_dir / "manifest.json",
+        "imagegen_jobs": page_dir / "imagegen-jobs.json",
+        "page_pptx": page_dir / "page.pptx",
+        "preview": page_dir / "preview.png",
+        "contact_sheet": page_dir / "split_assets_contact.png",
+        "validation": page_dir / "validation.json",
+        "page_result": page_dir / "page_result.json",
+    }
+    (page_dir / "source.png").write_bytes(b"source-page")
+    (page_dir / "page_request.json").write_text(
+        json.dumps(
+            {
+                "page_id": "page_001",
+                "page_dir": "pages/page_001",
+                "source": "pages/page_001/source.png",
+                "slide": {"width": 10, "height": 7.5},
+                "content_box": [0, 0, 100, 75],
+            }
+        ),
+        encoding="utf-8",
+    )
+    page_outputs["page_manifest"].write_text(
+        json.dumps(
+            {
+                "slide": {"width": 10, "height": 7.5},
+                "content_box": [0, 0, 100, 75],
+                "source": {"width_px": 100, "height_px": 75},
+                "text_inventory": [],
+                "visual_inventory": [],
+                "background_strategy": {"mode": "native-or-script"},
+                "quality_checks": {
+                    "font_size_calibrated": True,
+                    "visual_inventory_matched": True,
+                    "background_strategy_checked": True,
+                    "shape_corner_geometry_checked": True,
+                },
+                "text_boxes": [],
+                "shapes": [],
+                "images": [],
+                "asset_provenance": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    page_outputs["imagegen_jobs"].write_text(json.dumps({"jobs": []}), encoding="utf-8")
+    page_outputs["page_pptx"].write_bytes(b"page-pptx")
+    page_outputs["preview"].write_bytes(b"preview")
+    page_outputs["contact_sheet"].write_bytes(b"contact-sheet")
+    page_outputs["validation"].write_text(json.dumps({"passed": True}), encoding="utf-8")
+    page_outputs["page_result"].write_text(
+        json.dumps(
+            {
+                "page_manifest": "manifest.json",
+                "imagegen_jobs": "imagegen-jobs.json",
+                "page_pptx": "page.pptx",
+                "preview": "preview.png",
+                "contact_sheet": "split_assets_contact.png",
+                "validation": "validation.json",
+                "page_result": "page_result.json",
+            }
+        ),
+        encoding="utf-8",
+    )
     (final_dir / "validation.json").write_text(
         json.dumps({"passed": True}),
+        encoding="utf-8",
+    )
+    (final_dir / "run_summary.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": "editppt-run",
+                "status": "complete",
+                "page_count": 1,
+                "output": str(pptx),
+                "validation": str(final_dir / "validation.json"),
+                "completed_at": "2026-06-27T00:00:00Z",
+            }
+        ),
         encoding="utf-8",
     )
     (run_dir / "deck_manifest.json").write_text(
         json.dumps(
             {
+                "schema_version": 1,
+                "run_id": "editppt-run",
+                "input_type": "image",
+                "page_count": 1,
                 "output": "final/figure_edited.pptx",
+                "page_jobs": "page_jobs.json",
+                "run_state": "run_state.json",
+                "pages": [
+                    {
+                        "page_id": "page_001",
+                        "page_dir": "pages/page_001",
+                        "page_request": "pages/page_001/page_request.json",
+                        "source": "pages/page_001/source.png",
+                    }
+                ],
                 "completed_at": "2026-06-27T00:00:00Z",
             }
         ),
@@ -43,16 +142,35 @@ def _write_completed_editppt_run(root: Path) -> tuple[Path, Path]:
     (run_dir / "page_jobs.json").write_text(
         json.dumps(
             {
+                "schema_version": 1,
+                "run_id": "editppt-run",
                 "run_status": "complete",
                 "pages": [
                     {
                         "page_id": "page_001",
                         "status": "accepted",
                         "accepted": True,
+                        "page_dir": "pages/page_001",
+                        "page_request": "pages/page_001/page_request.json",
+                        "source": "pages/page_001/source.png",
+                        "result": {
+                            "agent_id": "main",
+                            "record_mode": "local-main-agent",
+                            "outputs": {
+                                key: str(path.relative_to(run_dir))
+                                for key, path in page_outputs.items()
+                            },
+                            "hashes": {key: _sha256(path) for key, path in page_outputs.items()},
+                            "validation_passed": True,
+                        },
                     }
                 ],
             }
         ),
+        encoding="utf-8",
+    )
+    (run_dir / "run_state.json").write_text(
+        json.dumps({"status": "complete", "history": []}),
         encoding="utf-8",
     )
     return run_dir, pptx
@@ -126,6 +244,55 @@ def test_validate_rejects_unfinalized_editppt_run(tmp_path):
     (run_dir / "page_jobs.json").write_text(json.dumps(jobs), encoding="utf-8")
 
     with pytest.raises(ValueError, match="not finalized"):
+        validate_editppt_run(run_dir)
+
+
+def test_validate_rejects_run_without_skill_final_summary(tmp_path):
+    run_dir, _pptx = _write_completed_editppt_run(tmp_path)
+    (run_dir / "final" / "run_summary.json").unlink()
+
+    with pytest.raises(ValueError, match="run_summary"):
+        validate_editppt_run(run_dir)
+
+
+def test_validate_rejects_page_artifact_hash_mismatch(tmp_path):
+    run_dir, _pptx = _write_completed_editppt_run(tmp_path)
+    manifest_path = run_dir / "pages" / "page_001" / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "slide": {"width": 10, "height": 7.5},
+                "content_box": [0, 0, 100, 75],
+                "source": {"width_px": 100, "height_px": 75},
+                "text_inventory": [],
+                "visual_inventory": [],
+                "background_strategy": {"mode": "changed"},
+                "quality_checks": {"font_size_calibrated": True},
+                "text_boxes": [],
+                "shapes": [],
+                "images": [],
+                "asset_provenance": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        validate_editppt_run(run_dir)
+
+
+def test_validate_rejects_page_manifest_without_required_contract(tmp_path):
+    run_dir, _pptx = _write_completed_editppt_run(tmp_path)
+    manifest_path = run_dir / "pages" / "page_001" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("asset_provenance")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    jobs_path = run_dir / "page_jobs.json"
+    jobs = json.loads(jobs_path.read_text(encoding="utf-8"))
+    jobs["pages"][0]["result"]["hashes"]["page_manifest"] = _sha256(manifest_path)
+    jobs_path.write_text(json.dumps(jobs), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="manifest.json is missing required field"):
         validate_editppt_run(run_dir)
 
 

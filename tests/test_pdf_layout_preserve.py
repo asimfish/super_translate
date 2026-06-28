@@ -13,6 +13,7 @@ from pdf_zh_translator.pdf_layout import (
     TextBlock,
     _clip_block_bbox_against_floats,
     _LineRec,
+    _looks_like_formula_fragment,
     _looks_like_overlap_exempt_text,
     _looks_like_untranslated_english,
     _normalize_formula_fragment_for_compare,
@@ -1045,6 +1046,44 @@ class TestTranslationVerification(unittest.TestCase):
                 "MVT [21]VoteNetScanReferViewRefer [18]VoteNetScanRefer3D-SPS [29]VoteNetScanRefer"
             )
         )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Require: Prompt context St, base ensemble models, candidate query pool"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "23:Move selected candidates from Vque to Vref; update hi ←yi24: end for25: "
+                "return top-k candidates"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "# 设置材料pure_f = mcdc.MaterialMG(fission=np.array([0.0, 1.0]), "
+                "nu_p=np.array([1.2]))"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "runtime_contract: execution_class: 内联 affects_current_frame: 真 "
+                "output_shape:(201, B, 256)"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "DatasetError rateˆβ1 (gap)ˆβ2 (centroid)ˆβ3 (feat. diff.)LRT"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Dai, T., Vijayakrishnan, S., Szczypi´nski, F. T., Ayme, J.-"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Darvish, K., Skreta, M., Zhao, Y., Yoshikawa, N., Som, S.,"
+            )
+        )
 
     def test_untranslated_detector_still_flags_body_prose(self):
         self.assertTrue(
@@ -1053,6 +1092,14 @@ class TestTranslationVerification(unittest.TestCase):
                 "multiple long horizon manipulation tasks."
             )
         )
+
+    def test_formula_fragment_detector_ignores_code_and_table_rows(self):
+        self.assertFalse(_looks_like_formula_fragment("nu_p=np.array([1.2]))462"))
+        self.assertFalse(_looks_like_formula_fragment("x=[0.0,4.0],486"))
+        self.assertFalse(
+            _looks_like_formula_fragment("Handover47/7714/6550/7915/6852/8016/6955/8118/72")
+        )
+        self.assertTrue(_looks_like_formula_fragment("α+β=γ"))
 
     def test_flags_untranslated_body_but_ignores_reference_entry(self):
         original = fitz.open()

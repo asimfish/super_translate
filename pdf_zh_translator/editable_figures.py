@@ -22,6 +22,29 @@ SKILL_SOURCE_URL = "https://github.com/ningzimu/image-to-editable-ppt-skill"
 MANIFEST_FILENAME = "editable_figure_manifest.json"
 SOURCE_FIGURES_MANIFEST_FILENAME = "figure_sources_manifest.json"
 REQUIRED_RUN_FILES = ("deck_manifest.json", "page_jobs.json")
+FINALIZED_RUN_FILES = REQUIRED_RUN_FILES + ("run_state.json",)
+REQUIRED_PAGE_OUTPUTS = {
+    "page_manifest": "manifest.json",
+    "imagegen_jobs": "imagegen-jobs.json",
+    "page_pptx": "page.pptx",
+    "preview": "preview.png",
+    "contact_sheet": "split_assets_contact.png",
+    "validation": "validation.json",
+    "page_result": "page_result.json",
+}
+REQUIRED_PAGE_MANIFEST_FIELDS = {
+    "slide",
+    "content_box",
+    "source",
+    "text_inventory",
+    "visual_inventory",
+    "background_strategy",
+    "quality_checks",
+    "text_boxes",
+    "shapes",
+    "images",
+    "asset_provenance",
+}
 
 
 @dataclass(frozen=True)
@@ -304,7 +327,10 @@ def register_editable_figure(
         "pptx_sha256": sha256_file(final_pptx),
         "deck_manifest": str(run_info["deck_manifest_path"]),
         "page_jobs": str(run_info["page_jobs_path"]),
-        "validation": str(run_info["validation_path"]) if run_info.get("validation_path") else "",
+        "run_state": str(run_info["run_state_path"]),
+        "validation": str(run_info["validation_path"]),
+        "run_summary": str(run_info["run_summary_path"]),
+        "page_artifacts": run_info["page_artifacts"],
         "page_count": run_info["page_count"],
         "status": "accepted",
     }
@@ -321,15 +347,26 @@ def validate_editppt_run(editppt_run: Path, *, pptx_path: Path | None = None) ->
     run_dir = editppt_run.resolve()
     deck_path = run_dir / "deck_manifest.json"
     jobs_path = run_dir / "page_jobs.json"
-    missing = [name for name in REQUIRED_RUN_FILES if not (run_dir / name).exists()]
+    state_path = run_dir / "run_state.json"
+    missing = [name for name in FINALIZED_RUN_FILES if not (run_dir / name).exists()]
     if missing:
         raise ValueError("editppt run is missing required file(s): " + ", ".join(missing))
 
     deck = _read_json(deck_path)
     jobs = _read_json(jobs_path)
+    state = _read_json(state_path)
+    if deck.get("schema_version") != 1:
+        raise ValueError("editppt deck_manifest.json schema_version must be 1")
+    if jobs.get("schema_version") != 1:
+        raise ValueError("editppt page_jobs.json schema_version must be 1")
+    if state.get("status") != "complete":
+        raise ValueError("editppt run_state status must be complete")
     pages = jobs.get("pages", [])
     if not pages:
         raise ValueError("editppt page_jobs.json does not list pages")
+    deck_pages = deck.get("pages", [])
+    if isinstance(deck_pages, list) and deck_pages and len(deck_pages) != len(pages):
+        raise ValueError("editppt deck/page_jobs page counts do not match")
     not_accepted = [
         str(page.get("page_id", "unknown"))
         for page in pages
@@ -348,17 +385,41 @@ def validate_editppt_run(editppt_run: Path, *, pptx_path: Path | None = None) ->
     if final_pptx is None or not final_pptx.exists() or final_pptx.suffix.lower() != ".pptx":
         raise ValueError("editppt final PPTX is missing")
     validation_path = final_pptx.parent / "validation.json"
-    if validation_path.exists():
-        validation = _read_json(validation_path)
-        if validation.get("passed") is not True:
-            raise ValueError("editppt final validation did not pass")
+    if not validation_path.exists():
+        raise ValueError("editppt final validation.json is missing")
+    validation = _read_json(validation_path)
+    if validation.get("passed") is not True:
+        raise ValueError("editppt final validation did not pass")
+
+    summary_path = final_pptx.parent / "run_summary.json"
+    if not summary_path.exists():
+        raise ValueError("editppt final run_summary.json is missing")
+    summary = _read_json(summary_path)
+    if summary.get("status") != "complete":
+        raise ValueError("editppt final run_summary status must be complete")
+    if summary.get("page_count") != len(pages):
+        raise ValueError("editppt final run_summary page_count does not match page_jobs")
+    summary_output = _resolve_run_path(run_dir, str(summary.get("output", "")))
+    if summary_output is None or summary_output.resolve() != final_pptx.resolve():
+        raise ValueError("editppt final run_summary output does not match PPTX")
+
+    page_artifacts = [
+        _validate_recorded_page_artifacts(run_dir, page)
+        for page in pages
+        if isinstance(page, dict)
+    ]
+    if len(page_artifacts) != len(pages):
+        raise ValueError("editppt page_jobs.json contains invalid page entries")
 
     return {
         "deck_manifest_path": deck_path,
         "page_jobs_path": jobs_path,
+        "run_state_path": state_path,
         "pptx_path": final_pptx,
-        "validation_path": validation_path if validation_path.exists() else None,
+        "validation_path": validation_path,
+        "run_summary_path": summary_path,
         "page_count": len(pages),
+        "page_artifacts": page_artifacts,
     }
 
 
@@ -503,6 +564,73 @@ def _audit_manifest(manifest_path: Path) -> None:
     if manifest.get("pptx_sha256") != sha256_file(pptx):
         raise ValueError("PPTX hash mismatch")
     validate_editppt_run(run_dir, pptx_path=pptx)
+
+
+def _validate_recorded_page_artifacts(run_dir: Path, page: dict[str, Any]) -> dict[str, Any]:
+    page_id = str(page.get("page_id", "unknown"))
+    result = page.get("result")
+    if not isinstance(result, dict):
+        raise ValueError(f"{page_id} is missing editppt record result")
+    if result.get("validation_passed") is not True:
+        raise ValueError(f"{page_id} record result validation_passed must be true")
+    outputs = result.get("outputs")
+    if not isinstance(outputs, dict):
+        raise ValueError(f"{page_id} record result outputs must be a JSON object")
+    hashes = result.get("hashes")
+    if not isinstance(hashes, dict):
+        raise ValueError(f"{page_id} record result hashes must be a JSON object")
+
+    resolved: dict[str, Path] = {}
+    for key, default_name in REQUIRED_PAGE_OUTPUTS.items():
+        output_value = str(outputs.get(key) or "")
+        if not output_value:
+            page_dir = _resolve_run_path(run_dir, str(page.get("page_dir", "")))
+            output_path = page_dir / default_name if page_dir else None
+        else:
+            output_path = _resolve_run_path(run_dir, output_value)
+        if output_path is None or not output_path.exists():
+            raise ValueError(f"{page_id} required page output is missing: {key}")
+        expected_hash = str(hashes.get(key, ""))
+        if not expected_hash:
+            raise ValueError(f"{page_id} is missing hash for page output: {key}")
+        if sha256_file(output_path) != expected_hash:
+            raise ValueError(f"{page_id} hash mismatch for page output: {key}")
+        resolved[key] = output_path
+
+    page_result = _read_json(resolved["page_result"])
+    missing_result_fields = [
+        key for key in REQUIRED_PAGE_OUTPUTS if not str(page_result.get(key, "")).strip()
+    ]
+    if missing_result_fields:
+        raise ValueError(
+            f"{page_id} page_result.json is missing required field(s): "
+            + ", ".join(missing_result_fields)
+        )
+
+    validation = _read_json(resolved["validation"])
+    if validation.get("passed") is not True:
+        raise ValueError(f"{page_id} validation.json did not pass")
+
+    page_manifest = _read_json(resolved["page_manifest"])
+    missing_manifest_fields = sorted(REQUIRED_PAGE_MANIFEST_FIELDS.difference(page_manifest))
+    if missing_manifest_fields:
+        raise ValueError(
+            f"{page_id} manifest.json is missing required field(s): "
+            + ", ".join(missing_manifest_fields)
+        )
+    quality_checks = page_manifest.get("quality_checks")
+    if not isinstance(quality_checks, dict):
+        raise ValueError(f"{page_id} manifest.json quality_checks must be a JSON object")
+    failed_checks = [key for key, value in quality_checks.items() if value is False]
+    if failed_checks:
+        raise ValueError(f"{page_id} manifest quality check failed: " + ", ".join(failed_checks))
+
+    return {
+        "page_id": page_id,
+        "record_mode": str(result.get("record_mode", "")),
+        "outputs": {key: str(path) for key, path in resolved.items()},
+        "hashes": {key: str(hashes[key]) for key in REQUIRED_PAGE_OUTPUTS},
+    }
 
 
 def _audit_source_figure(
