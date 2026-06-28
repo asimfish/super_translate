@@ -643,15 +643,13 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 continue
             if _block_in_reference_section(block, reference_y):
                 continue
-            text = _extract_text_from_block(block)
-            if (
-                len(text.strip()) < 4
-                or _is_reference_or_formula_text(text)
-                or _looks_like_overlap_exempt_text(text)
-            ):
-                continue
-            bbox = block.get("bbox")
-            if bbox:
+            for bbox, text in _overlap_text_entries_from_block(block):
+                if (
+                    len(text.strip()) < 4
+                    or _is_reference_or_formula_text(text)
+                    or _looks_like_overlap_exempt_text(text)
+                ):
+                    continue
                 text_bboxes.append((bbox, text))
 
         for i in range(len(text_bboxes)):
@@ -844,6 +842,28 @@ def _extract_text_from_block(block: dict) -> str:
         for span in line.get("spans", []):
             text += span.get("text", "")
     return text.strip()
+
+
+def _overlap_text_entries_from_block(block: dict) -> List[Tuple[BBox, str]]:
+    """Return line-level text bboxes for overlap QA.
+
+    PyMuPDF may group table/grid text from several rows and columns into one
+    text block. Using the outer block bbox then creates false overlaps even
+    when no glyphs touch, so overlap QA works at physical-line granularity.
+    """
+    entries: List[Tuple[BBox, str]] = []
+    for line in block.get("lines", []):
+        line_text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+        bbox = line.get("bbox")
+        if line_text and bbox:
+            entries.append((tuple(float(value) for value in bbox), line_text))
+    if entries:
+        return entries
+    bbox = block.get("bbox")
+    text = _extract_text_from_block(block)
+    if text and bbox:
+        return [(tuple(float(value) for value in bbox), text)]
+    return []
 
 
 def _is_reference_or_formula_text(text: str) -> bool:
@@ -3035,7 +3055,13 @@ def can_merge_blocks(
         return False
     reference = max(prev.font_size, nxt.font_size, 1.0)
     gap = nxt.bbox[1] - prev.bbox[3]
-    if gap > reference * PARAGRAPH_GAP_FACTOR or gap < -reference:
+    if gap > reference * PARAGRAPH_GAP_FACTOR:
+        return False
+    if gap < -reference and not _looks_like_overlapping_formula_tail_continuation(
+        prev, nxt, gap, reference
+    ):
+        return False
+    if _looks_like_float_wrap_boundary(prev, nxt):
         return False
     overlap = min(prev.bbox[2], nxt.bbox[2]) - max(prev.bbox[0], nxt.bbox[0])
     narrower = min(prev.bbox[2] - prev.bbox[0], nxt.bbox[2] - nxt.bbox[0])
@@ -3047,6 +3073,41 @@ def can_merge_blocks(
     ):
         return False
     return True
+
+
+def _looks_like_overlapping_formula_tail_continuation(
+    prev: TextBlock, nxt: TextBlock, gap: float, reference: float
+) -> bool:
+    """Merge prose split by a same-line formula tail with overlapping bboxes."""
+    if gap < -reference * 1.35:
+        return False
+    if sentence_final_text(prev.text):
+        return False
+    if not nxt.text.lstrip().startswith(SENTINEL_OPEN):
+        return False
+    bare = strip_sentinels(nxt.text).lstrip()
+    if not re.match(r"^(?:[<>=≤≥+\-−]\s*)?\d*(?:\.\d+)?\s*(?:be|is|are)\b", bare):
+        return False
+    words = _PROSE_WORD_RE.findall(bare)
+    return len(words) >= 5
+
+
+def _looks_like_float_wrap_boundary(prev: TextBlock, nxt: TextBlock) -> bool:
+    """Stop merging when a paragraph leaves a side float and resumes full width."""
+    if prev.source_lines < 4:
+        return False
+    if prev.block_type != "body" or nxt.block_type != "body":
+        return False
+    if sentence_final_text(prev.text):
+        return False
+    prev_width = prev.bbox[2] - prev.bbox[0]
+    nxt_width = nxt.bbox[2] - nxt.bbox[0]
+    if prev_width > 260.0 or nxt_width < 320.0:
+        return False
+    if abs(prev.bbox[0] - nxt.bbox[0]) > 12.0:
+        return False
+    right_growth = nxt.bbox[2] - prev.bbox[2]
+    return right_growth >= max(120.0, prev_width * 0.55) and nxt_width >= prev_width * 1.45
 
 
 def can_merge_fixed_width_prose_blocks(

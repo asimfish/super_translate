@@ -16,6 +16,7 @@ from pdf_zh_translator.pdf_layout import (
     _looks_like_overlap_exempt_text,
     _looks_like_untranslated_english,
     _normalize_formula_fragment_for_compare,
+    _overlap_text_entries_from_block,
     _RawBlockRec,
     _visible_image_stats,
     _visual_min_zone_intersects_graphics,
@@ -47,6 +48,28 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         )
 
         self.assertFalse(should_preserve_original_block(block, []))
+
+    def test_overlap_entries_use_line_bboxes_not_outer_table_block(self):
+        block = {
+            "bbox": (100.0, 100.0, 500.0, 160.0),
+            "lines": [
+                {
+                    "bbox": (100.0, 100.0, 180.0, 112.0),
+                    "spans": [{"text": "字段"}],
+                },
+                {
+                    "bbox": (220.0, 124.0, 500.0, 136.0),
+                    "spans": [{"text": "较长的字段说明"}],
+                },
+            ],
+        }
+
+        entries = _overlap_text_entries_from_block(block)
+
+        self.assertEqual(
+            [bbox for bbox, _ in entries],
+            [(100.0, 100.0, 180.0, 112.0), (220.0, 124.0, 500.0, 136.0)],
+        )
 
     def test_translates_nowrap_prose_outside_graphic_regions(self):
         block = TextBlock(
@@ -652,6 +675,87 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         self.assertFalse(merged[0].nowrap)
         self.assertEqual(merged[0].source_lines, 3)
         self.assertIn("hidden-layer embedding", merged[0].text)
+
+    def test_stops_merge_when_wrapped_float_text_resumes_full_width(self):
+        blocks = [
+            TextBlock(
+                page_index=0,
+                bbox=(108.0, 96.0 + index * 11.0, 296.0, 106.0 + index * 11.0),
+                text=text,
+                font_size=10.0,
+                color=(0.0, 0.0, 0.0),
+            )
+            for index, text in enumerate(
+                [
+                    "Table 4 evaluates the effect of LLM backbone ca-",
+                    "pability on closed-loop discovery. We keep the",
+                    "Qwen2.5-7B-Instruct as the smaller local ensem-",
+                    "ble model but vary the primary model driving",
+                    "the experiments. Model scale is most benefi-",
+                    "cial on the more compositional and structured",
+                    "benchmarks. ActiveSciBench-Chem improves",
+                    "consistently from Qwen3-4B to Qwen3-32B",
+                    "across SA, exact accuracy, and RMSLE, while",
+                    "ActiveSciBench-GRN shows clear gains in edge",
+                ]
+            )
+        ]
+        blocks.extend(
+            [
+                TextBlock(
+                    page_index=0,
+                    bbox=(108.0, 206.0, 504.0, 216.0),
+                    text="F1 and exact graph accuracy. This suggests that stronger backbones",
+                    font_size=10.0,
+                    color=(0.0, 0.0, 0.0),
+                ),
+                TextBlock(
+                    page_index=0,
+                    bbox=(108.0, 217.0, 504.0, 227.0),
+                    text="provide better mechanistic priors for selecting relevant variables.",
+                    font_size=10.0,
+                    color=(0.0, 0.0, 0.0),
+                ),
+            ]
+        )
+
+        merged = merge_paragraph_blocks(blocks)
+
+        self.assertEqual(len(merged), 2)
+        self.assertLess(merged[0].bbox[2], 300.0)
+        self.assertEqual(merged[0].source_lines, 10)
+        self.assertEqual(merged[1].source_lines, 2)
+        self.assertGreater(merged[1].bbox[2], 500.0)
+
+    def test_merges_overlapping_formula_tail_continuation(self):
+        first = TextBlock(
+            page_index=0,
+            bbox=(108.0, 388.0, 504.0, 498.0),
+            text=(
+                f"Reward design. For Driving Score. Let {SENTINEL_OPEN}"
+                f"ell_comp_t{SENTINEL_CLOSE}"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=10,
+        )
+        second = TextBlock(
+            page_index=0,
+            bbox=(108.0, 486.9, 504.0, 518.9),
+            text=(
+                f"{SENTINEL_OPEN}>{SENTINEL_CLOSE} 0 be the theoretical compute "
+                "latency of frame t in seconds."
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+        )
+
+        merged = merge_paragraph_blocks([first, second])
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].source_lines, 13)
+        self.assertIn("theoretical compute latency", merged[0].text)
 
     def test_does_not_merge_narrow_fixed_width_table_cells(self):
         blocks = [
