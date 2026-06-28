@@ -1404,6 +1404,58 @@ class TestTranslationVerification(unittest.TestCase):
         translated.close()
         self.assertTrue(any(issue.code == "missing_image" for issue in issues))
 
+    def test_flags_translated_page_count_mismatch(self):
+        original = fitz.open()
+        page = original.new_page(width=300, height=220)
+        page.insert_text((30, 80), "The first page describes the proposed model.")
+        page = original.new_page(width=300, height=220)
+        page.insert_text((30, 80), "The second page contains evaluation details.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=300, height=220)
+        page.insert_text((30, 80), "第一页介绍所提出的模型。")
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "page_count_mismatch" for issue in issues))
+
+    def test_flags_translated_page_size_mismatch(self):
+        original = fitz.open()
+        page = original.new_page(width=300, height=220)
+        page.draw_rect(fitz.Rect(40, 40, 260, 130), color=(0, 0, 0))
+        page.insert_text((30, 170), "The model improves visual policy learning.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=150, height=220)
+        page.draw_rect(fitz.Rect(20, 40, 130, 130), color=(0, 0, 0))
+        page.insert_text((20, 170), "该模型改进了视觉策略学习。")
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "page_size_mismatch" for issue in issues))
+
     def test_visible_image_stats_uses_displayed_image_blocks(self):
         document = fitz.open()
         page = document.new_page(width=300, height=220)

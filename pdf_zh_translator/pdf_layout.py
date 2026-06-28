@@ -755,6 +755,39 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         from .visual_qa import score_visual_layout
 
         visual = score_visual_layout(original_pdf, translated_pdf)
+        if getattr(visual, "page_count_delta", 0) != 0:
+            issues.append(
+                TranslationIssue(
+                    page=0,
+                    code="page_count_mismatch",
+                    message=(
+                        "Translated PDF page count differs from original "
+                        f"({visual.translated_pages}/{visual.original_pages})"
+                    ),
+                    severity="error",
+                )
+            )
+        if getattr(visual, "min_page_size_similarity", 1.0) < 0.85:
+            worst = (
+                min(
+                    visual.pages,
+                    key=lambda page: getattr(page, "page_size_similarity", 1.0),
+                )
+                if visual.pages
+                else None
+            )
+            page_num = worst.page if worst else 0
+            issues.append(
+                TranslationIssue(
+                    page=page_num,
+                    code="page_size_mismatch",
+                    message=(
+                        "Rendered page size differs from original "
+                        f"(similarity={visual.min_page_size_similarity:.2f})"
+                    ),
+                    severity="error",
+                )
+            )
         if visual.overall_score < 0.35:
             worst = min(visual.pages, key=lambda page: page.score) if visual.pages else None
             page_num = worst.page if worst else 0

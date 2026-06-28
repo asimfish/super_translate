@@ -14,6 +14,7 @@ class PageVisualScore:
     translated_ink_ratio: float
     zone_scores: tuple[float, ...] = ()
     min_zone_score: float = 1.0
+    page_size_similarity: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,11 @@ class VisualLayoutScore:
     min_page_score: float = 1.0
     min_zone_score: float = 1.0
     risk_level: str = "low"
+    original_pages: int = 0
+    translated_pages: int = 0
+    page_count_delta: int = 0
+    page_count_similarity: float = 1.0
+    min_page_size_similarity: float = 1.0
 
 
 def score_visual_layout(
@@ -45,9 +51,14 @@ def score_visual_layout(
     original = fitz.open(str(original_pdf))
     translated = fitz.open(str(translated_pdf))
     pages: list[PageVisualScore] = []
+    original_pages = original.page_count
+    translated_pages = translated.page_count
+    page_count_delta = translated_pages - original_pages
+    page_count_similarity = _count_similarity(original_pages, translated_pages)
     try:
         page_count = min(original.page_count, translated.page_count, max_pages)
         for index in range(page_count):
+            page_size_similarity = _page_size_similarity(original[index], translated[index])
             orig_ratio, orig_zones = _page_ink_profile(
                 original[index], dpi=dpi, grid_rows=grid_rows, grid_cols=grid_cols
             )
@@ -64,9 +75,10 @@ def score_visual_layout(
             )
             min_zone_score = min(zone_scores) if zone_scores else global_score
             score = (
-                global_score * 0.65
-                + mean_zone_score * 0.25
-                + min_zone_score * 0.10
+                global_score * 0.55
+                + mean_zone_score * 0.22
+                + min_zone_score * 0.08
+                + page_size_similarity * 0.15
             )
             pages.append(
                 PageVisualScore(
@@ -76,6 +88,7 @@ def score_visual_layout(
                     translated_ink_ratio=trans_ratio,
                     zone_scores=zone_scores,
                     min_zone_score=max(0.0, min(1.0, min_zone_score)),
+                    page_size_similarity=page_size_similarity,
                 )
             )
     finally:
@@ -83,16 +96,40 @@ def score_visual_layout(
         original.close()
 
     if not pages:
-        return VisualLayoutScore(0.0, [], min_page_score=0.0, min_zone_score=0.0, risk_level="high")
-    overall = sum(page.score for page in pages) / len(pages)
+        return VisualLayoutScore(
+            0.0,
+            [],
+            min_page_score=0.0,
+            min_zone_score=0.0,
+            risk_level="high",
+            original_pages=original_pages,
+            translated_pages=translated_pages,
+            page_count_delta=page_count_delta,
+            page_count_similarity=page_count_similarity,
+            min_page_size_similarity=0.0,
+        )
+    denominator = max(original_pages, translated_pages, len(pages), 1)
+    overall = sum(page.score for page in pages) / denominator
     min_page_score = min(page.score for page in pages)
     min_zone_score = min(page.min_zone_score for page in pages)
+    min_page_size_similarity = min(page.page_size_similarity for page in pages)
     return VisualLayoutScore(
         overall_score=overall,
         pages=pages,
         min_page_score=min_page_score,
         min_zone_score=min_zone_score,
-        risk_level=_visual_risk_level(overall, min_page_score, min_zone_score),
+        risk_level=_visual_risk_level(
+            overall,
+            min_page_score,
+            min_zone_score,
+            page_count_similarity=page_count_similarity,
+            min_page_size=min_page_size_similarity,
+        ),
+        original_pages=original_pages,
+        translated_pages=translated_pages,
+        page_count_delta=page_count_delta,
+        page_count_similarity=page_count_similarity,
+        min_page_size_similarity=min_page_size_similarity,
     )
 
 
@@ -144,9 +181,51 @@ def _ink_similarity(first: float, second: float) -> float:
     return max(0.0, min(1.0, 1.0 - abs(first - second) / denominator))
 
 
-def _visual_risk_level(overall: float, min_page: float, min_zone: float) -> str:
-    if overall < 0.45 or min_page < 0.35 or min_zone < 0.20:
+def _count_similarity(first: int, second: int) -> float:
+    maximum = max(first, second)
+    if maximum <= 0:
+        return 1.0
+    return min(first, second) / maximum
+
+
+def _page_size_similarity(first_page: object, second_page: object) -> float:
+    first = first_page.rect
+    second = second_page.rect
+    first_width = max(0.0, float(first.width))
+    first_height = max(0.0, float(first.height))
+    second_width = max(0.0, float(second.width))
+    second_height = max(0.0, float(second.height))
+    if min(first_width, first_height, second_width, second_height) <= 0.0:
+        return 0.0
+    first_area = first_width * first_height
+    second_area = second_width * second_height
+    first_aspect = first_width / first_height
+    second_aspect = second_width / second_height
+    scores = (
+        min(first_width, second_width) / max(first_width, second_width),
+        min(first_height, second_height) / max(first_height, second_height),
+        min(first_area, second_area) / max(first_area, second_area),
+        min(first_aspect, second_aspect) / max(first_aspect, second_aspect),
+    )
+    return max(0.0, min(1.0, min(scores)))
+
+
+def _visual_risk_level(
+    overall: float,
+    min_page: float,
+    min_zone: float,
+    *,
+    page_count_similarity: float = 1.0,
+    min_page_size: float = 1.0,
+) -> str:
+    if (
+        page_count_similarity < 1.0
+        or min_page_size < 0.80
+        or overall < 0.45
+        or min_page < 0.35
+        or min_zone < 0.20
+    ):
         return "high"
-    if overall < 0.72 or min_page < 0.60 or min_zone < 0.45:
+    if overall < 0.72 or min_page < 0.60 or min_zone < 0.45 or min_page_size < 0.92:
         return "medium"
     return "low"
