@@ -1392,6 +1392,7 @@ def _run_post_translation_qa(
         _audit_terminology_usage(paper_id, loop, input_path, mono_path)
         passes = max(1, max_passes if qa_mode == "iterative" else 1)
         issues = []
+        pass_history = []
         passes_run = 0
         repair_attempted = False
         for pass_index in range(1, passes + 1):
@@ -1400,6 +1401,7 @@ def _run_post_translation_qa(
             issues = verify_translation_issues(input_path, mono_path)
             passes_run += 1
             if not issues:
+                pass_history.append(_qa_pass_summary(pass_index, issues))
                 _append_log(paper_id, loop, f"译文检查通过 (第 {pass_index} 轮)")
                 _write_qa_report(
                     trans_result,
@@ -1407,6 +1409,7 @@ def _run_post_translation_qa(
                     qa_mode=qa_mode,
                     passes_run=passes_run,
                     repair_attempted=repair_attempted,
+                    pass_history=pass_history,
                     status="passed",
                 )
                 return []
@@ -1420,16 +1423,21 @@ def _run_post_translation_qa(
                 _append_log(paper_id, loop, issue.message)
 
             if not _has_fixable_layout_issue(issues):
+                pass_history.append(_qa_pass_summary(pass_index, issues))
                 break
             _set_translation_stage(paper_id, loop, "版面修复")
             fixed = _fix_translated_outputs(trans_result)
             repair_attempted = True
+            pass_history.append(
+                _qa_pass_summary(pass_index, issues, repair_attempted_after=True)
+            )
             if not fixed:
                 break
             _append_log(paper_id, loop, "检测到可修复版面问题，已自动执行一次版面修复")
             if qa_mode != "iterative":
                 issues = verify_translation_issues(input_path, mono_path)
                 passes_run += 1
+                pass_history.append(_qa_pass_summary(passes_run, issues))
                 break
 
         _write_qa_report(
@@ -1438,6 +1446,7 @@ def _run_post_translation_qa(
             qa_mode=qa_mode,
             passes_run=passes_run,
             repair_attempted=repair_attempted,
+            pass_history=pass_history,
             status="failed" if _has_unresolved_error(issues) else "warning",
         )
         return issues
@@ -1452,6 +1461,7 @@ def _run_post_translation_qa(
             qa_mode=qa_mode,
             passes_run=0,
             repair_attempted=False,
+            pass_history=[],
             status="qa_failed",
             error=sanitize_error(e),
         )
@@ -1465,6 +1475,7 @@ def _write_qa_report(
     qa_mode: str,
     passes_run: int,
     repair_attempted: bool,
+    pass_history: list[dict] | None = None,
     status: str,
     error: str | None = None,
 ) -> None:
@@ -1479,6 +1490,7 @@ def _write_qa_report(
             "status": status,
             "passes_run": passes_run,
             "repair_attempted": repair_attempted,
+            "pass_history": pass_history or [],
             "issue_count": len(issue_items),
             "error_count": sum(1 for item in issue_items if item["severity"] == "error"),
             "warning_count": sum(1 for item in issue_items if item["severity"] != "error"),
@@ -1493,6 +1505,23 @@ def _write_qa_report(
         )
     except Exception as e:
         logger.warning("Failed to write QA report: %s", sanitize_error(e))
+
+
+def _qa_pass_summary(
+    pass_index: int,
+    issues: list,
+    *,
+    repair_attempted_after: bool = False,
+) -> dict:
+    issue_items = [_qa_issue_to_dict(issue) for issue in issues]
+    return {
+        "pass": pass_index,
+        "issue_count": len(issue_items),
+        "error_count": sum(1 for item in issue_items if item["severity"] == "error"),
+        "warning_count": sum(1 for item in issue_items if item["severity"] != "error"),
+        "repair_attempted_after": repair_attempted_after,
+        "issue_codes": sorted({item["code"] for item in issue_items})[:12],
+    }
 
 
 def _qa_issue_to_dict(issue: object) -> dict:

@@ -278,6 +278,37 @@ class FragmentedProseWarningTests(unittest.TestCase):
 
         self.assertEqual(warnings, [])
 
+    def test_ignores_catalog_and_task_table_fragments(self):
+        snippets = [
+            "Standard Erlenmeyer flasks, Stoppered Erlenmeyer flasks, Volumetric flasks",
+            "Transfer liquid from a 100 mL beaker to a 250 mL beaker without spillage.",
+            "Schema-constrained YAML with scene, goals, phase transitions, and safety constraints.",
+            "Pass rates are stage-conditional; the end-to-end pass rate is normalized in Table 6.",
+            "DiffDrive-Perception",
+            "IntentConditionedAgentGate",
+            "Controls corpus shuffle order",
+        ]
+        units = [
+            (
+                TextBlock(
+                    page_index=0,
+                    bbox=(160.0, 100.0 + index * 12.0, 500.0, 110.0 + index * 12.0),
+                    text=text,
+                    font_size=9.0,
+                    color=(0.0, 0.0, 0.0),
+                    nowrap=True,
+                    source_lines=1,
+                ),
+                text,
+                {},
+            )
+            for index, text in enumerate(snippets)
+        ]
+
+        warnings = fragmented_prose_warnings_from_units(units)
+
+        self.assertEqual(warnings, [])
+
 
 class FormulaTailProseTests(unittest.TestCase):
     def test_clean_translation_collapses_mixed_formula_parentheses(self):

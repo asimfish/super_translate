@@ -781,6 +781,7 @@ class TestTranslationEndpoint:
 
         with (
             patch("app.api.papers._append_log"),
+            patch("app.api.papers._set_translation_stage"),
             patch("app.api.papers._record_terminology_candidates"),
             # This test is about layout-fix rechecks, not cancellation.
             patch("app.api.papers._is_cancel_requested", return_value=False),
@@ -807,6 +808,24 @@ class TestTranslationEndpoint:
         assert report["passes_run"] == 2
         assert report["repair_attempted"] is True
         assert report["issue_count"] == 0
+        assert report["pass_history"] == [
+            {
+                "pass": 1,
+                "issue_count": 1,
+                "error_count": 0,
+                "warning_count": 1,
+                "repair_attempted_after": True,
+                "issue_codes": ["text_overlap"],
+            },
+            {
+                "pass": 2,
+                "issue_count": 0,
+                "error_count": 0,
+                "warning_count": 0,
+                "repair_attempted_after": False,
+                "issue_codes": [],
+            },
+        ]
 
 
 class TestCancelEndpoint:

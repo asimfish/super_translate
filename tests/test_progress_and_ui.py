@@ -75,6 +75,7 @@ def test_translation_progress_ui_has_client_eta_smoothing():
 def test_translation_ui_exposes_qa_and_ocr_controls():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
 
     assert 'id="qa-mode"' in html
     assert 'value="iterative"' in html
@@ -86,6 +87,11 @@ def test_translation_ui_exposes_qa_and_ocr_controls():
     assert 'id="qa-report-panel"' in html
     assert "async getQaReport(id)" in js
     assert "function renderQaReport(report)" in js
+    assert "report.pass_history" in js
+    assert "qa-pass-history" in js
+    assert "已触发修复" in js
+    assert ".qa-pass-history" in css
+    assert ".qa-pass-item" in css
     assert "'show-qa-report': showQaReport" in js
 
 

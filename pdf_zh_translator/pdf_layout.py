@@ -1734,12 +1734,30 @@ def _looks_like_small_fixed_width_table_fragment(block: TextBlock, text: str) ->
     compact = " ".join(text.split())
     if not compact:
         return True
+    width = block.bbox[2] - block.bbox[0]
+    words = _PROSE_WORD_RE.findall(compact)
+    lower = compact.lower()
     if block.font_size <= 8.5:
+        return True
+    if _looks_like_code_or_symbolic_text(compact) or looks_like_math(compact):
         return True
     if re.search(r"\b(?:CR1|CR2|ICD|K-NN|BA:|Dataset|Success Rate)\b", compact):
         return True
     if any(marker in compact for marker in ("↔", "✓", "✗")):
         return True
+    if width <= 240.0 and len(words) <= 8 and not re.search(r"[.!?。！？]$", compact):
+        return True
+    if compact.count(",") >= 2 and len(words) <= 24:
+        return True
+    if block.font_size <= 9.5 and width <= 380.0:
+        if re.search(
+            r"\b(?:beaker|flask|reagent|cylinder|pipette|centrifuge|thermometer|"
+            r"cuvette|crucible|funnel|stirrer|mantle|hygrometer|balance|"
+            r"yaml|schema|registry|verifier|constraint|constraints|reachability|"
+            r"support table|stage-conditional|table\s+\d+)\b",
+            lower,
+        ):
+            return True
     return False
 
 

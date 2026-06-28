@@ -1033,8 +1033,26 @@ function renderQaReport(report) {
   const content = document.getElementById('qa-report-content');
   if (!content) return;
   const issues = Array.isArray(report.issues) ? report.issues : [];
+  const passHistory = Array.isArray(report.pass_history) ? report.pass_history : [];
   const status = report.status || 'unknown';
   const statusText = qaStatusLabel(status);
+  const passHistoryHtml = passHistory.length > 0
+    ? `
+      <div class="qa-pass-history">
+        ${passHistory.map(item => `
+          <div class="qa-pass-item">
+            <span>第 ${Number(item.pass || 0)} 轮</span>
+            <span>错误 ${Number(item.error_count || 0)}</span>
+            <span>警告 ${Number(item.warning_count || 0)}</span>
+            ${item.repair_attempted_after ? '<span>已触发修复</span>' : ''}
+            ${Array.isArray(item.issue_codes) && item.issue_codes.length
+              ? `<span>${item.issue_codes.map(code => esc(code)).join(', ')}</span>`
+              : ''}
+          </div>
+        `).join('')}
+      </div>
+    `
+    : '';
   const issueHtml = issues.length > 0
     ? issues.map(issue => `
       <div class="qa-issue qa-${sanitizeClass(issue.severity || 'warning')}">
@@ -1056,6 +1074,7 @@ function renderQaReport(report) {
       <div>警告：${Number(report.warning_count || 0)}</div>
       <div>自动修复：${report.repair_attempted ? '是' : '否'}</div>
     </div>
+    ${passHistoryHtml}
     <div class="qa-issues">${issueHtml}</div>
   `;
 }
