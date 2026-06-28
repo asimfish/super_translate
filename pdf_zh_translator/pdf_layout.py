@@ -53,6 +53,8 @@ LINE_NUMBER_SIZE_RATIO = 0.72
 # Horizontal air (PDF points) a digit span needs around it to count as a
 # gutter line number; closer means it is a formula sub/superscript.
 LINE_NUMBER_NEIGHBOR_GAP = 3.0
+MARGIN_LINE_NUMBER_MAX_SIZE = 7.5
+MARGIN_LINE_NUMBER_EDGE_RATIO = 0.08
 # Vertical gap (in units of font size) below which two blocks are one paragraph.
 PARAGRAPH_GAP_FACTOR = 0.65
 # Font size difference above which blocks are never merged.
@@ -2073,12 +2075,13 @@ def collect_text_blocks(document: object) -> Tuple[List[TextBlock], Dict[int, Li
     gutter_rects: Dict[int, List[BBox]] = {}
     for page_index in range(document.page_count):
         page = document[page_index]
+        page_width = float(page.rect.width)
         page_dict = page.get_text("dict")
         records: List[_RawBlockRec] = []
         for raw_block in page_dict.get("blocks", []):
             if raw_block.get("type") != 0:
                 continue
-            record, dropped = parse_block_lines(raw_block)
+            record, dropped = parse_block_lines(raw_block, page_width=page_width)
             if dropped:
                 gutter_rects.setdefault(page_index, []).extend(dropped)
             if record is not None:
@@ -2349,7 +2352,9 @@ def _span_is_isolated(span: dict, siblings: Sequence[dict]) -> bool:
     return True
 
 
-def parse_block_lines(raw_block: dict) -> Tuple[Optional[_RawBlockRec], List[BBox]]:
+def parse_block_lines(
+    raw_block: dict, page_width: float | None = None
+) -> Tuple[Optional[_RawBlockRec], List[BBox]]:
     """First pass: clean one raw PyMuPDF block into annotated physical lines.
 
     Gutter line numbers and prompt-injection lines are dropped here (their
@@ -2375,9 +2380,10 @@ def parse_block_lines(raw_block: dict) -> Tuple[Optional[_RawBlockRec], List[BBo
                     fragments.append((span_text, span))
                 continue
             span_size = float(span.get("size", line_max_size))
+            isolated = _span_is_isolated(span, spans)
             if is_line_number_span(
-                span_text, span_size, line_max_size, isolated=_span_is_isolated(span, spans)
-            ):
+                span_text, span_size, line_max_size, isolated=isolated
+            ) or _is_margin_line_number_span(span_text, span, span_size, page_width, isolated):
                 if "bbox" in span:
                     dropped_rects.append(tuple(float(x) for x in span["bbox"]))
                 continue
@@ -3122,6 +3128,26 @@ def is_line_number_span(
     if size <= LINE_NUMBER_MAX_SIZE:
         return True
     return bool(line_max_size) and size <= line_max_size * LINE_NUMBER_SIZE_RATIO
+
+
+def _is_margin_line_number_span(
+    text: str,
+    span: dict,
+    size: float,
+    page_width: float | None,
+    isolated: bool,
+) -> bool:
+    stripped = text.strip()
+    if not isolated or not stripped.isdigit() or len(stripped) > 3:
+        return False
+    if page_width is None or page_width <= 0 or "bbox" not in span:
+        return False
+    if size > MARGIN_LINE_NUMBER_MAX_SIZE:
+        return False
+    x0, _y0, x1, _y1 = (float(value) for value in span["bbox"])
+    center_x = (x0 + x1) / 2.0
+    edge_band = max(24.0, page_width * MARGIN_LINE_NUMBER_EDGE_RATIO)
+    return center_x <= edge_band or center_x >= page_width - edge_band
 
 
 def join_lines(lines: Sequence[str]) -> str:

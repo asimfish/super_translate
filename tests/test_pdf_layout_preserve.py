@@ -22,6 +22,7 @@ from pdf_zh_translator.pdf_layout import (
     _visible_image_stats,
     _visual_min_zone_intersects_graphics,
     clean_translation,
+    collect_text_blocks,
     fragmented_prose_warnings_from_units,
     insert_translated_text,
     is_math_span,
@@ -232,6 +233,30 @@ class TableDetectionTests(unittest.TestCase):
 
 
 class FragmentedProseWarningTests(unittest.TestCase):
+    def test_margin_line_numbers_do_not_block_prose_merging(self):
+        document = fitz.open()
+        page = document.new_page(width=410, height=300)
+        body_lines = [
+            "Dexterous grasping with multi-fingered hands has achieved",
+            "substantial progress in static object manipulation. In contrast,",
+            "catching in-flight objects remains largely underexplored.",
+        ]
+        for index, text in enumerate(body_lines, start=5):
+            y = 150 + (index - 5) * 11
+            page.insert_text((62, y), text, fontsize=9)
+            page.insert_text((5, y), f"{index:03d}", fontsize=7)
+            page.insert_text((396, y), f"{index:03d}", fontsize=7)
+
+        blocks, gutter_rects = collect_text_blocks(document)
+        merged = merge_paragraph_blocks(blocks)
+
+        document.close()
+        self.assertGreaterEqual(len(gutter_rects.get(0, [])), 6)
+        self.assertEqual(len(merged), 1)
+        self.assertFalse(merged[0].nowrap)
+        self.assertIn("substantial progress", merged[0].text)
+        self.assertNotIn("005", merged[0].text)
+
     def test_warns_when_many_body_units_are_fixed_width_fragments(self):
         units = [
             (
