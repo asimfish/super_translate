@@ -128,6 +128,7 @@ _FOOTER_MAX_Y_OFFSET = 50.0  # from bottom of page
 _FOOTER_PAGE_NUM_RE = re.compile(r"^\d{1,3}$")
 # Figure label max length (axis labels, short annotations)
 _FIGURE_LABEL_MAX_LEN = 15
+_DIAGRAM_HEAD_LABEL_WORDS = r"(?:Object|Skill|Depth)"
 # Image zone extension to include nearby captions
 _IMAGE_ZONE_CAPTION_GAP = 20.0  # points below image to look for captions
 _CAPTION_EXTRA_HEIGHT = 36.0
@@ -2239,6 +2240,8 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
         return False
     if block.block_type == "table" and block.nowrap and block.no_merge:
         return True
+    if looks_like_preserved_diagram_label(plain):
+        return True
     if block_overlaps_graphic_region(block.bbox, graphic_regions):
         if looks_like_translatable_graphic_prose(block, plain):
             return False
@@ -2248,6 +2251,36 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
     if short_graphic_label_block(block, plain):
         return True
     return False
+
+
+def looks_like_preserved_diagram_label(plain: str) -> bool:
+    """Short labels inside architecture figures stay in their original language.
+
+    Captions still translate; this only covers diagram-internal labels such as
+    "(i) Object Head (ii) Skill Head (iii) Depth Head".
+    """
+    compact = " ".join(strip_sentinels(plain).split()).strip()
+    if not compact or len(compact) > 120:
+        return False
+    if _CAPTION_RE.match(compact):
+        return False
+    if re.search(r"[.!?:。！？：]$", compact):
+        return False
+    without_markers = re.sub(r"\(?[ivx]{1,4}\)\s*", " ", compact, flags=re.IGNORECASE)
+    without_markers = re.sub(
+        rf"\b(Head)(?={_DIAGRAM_HEAD_LABEL_WORDS}\s+Head\b)",
+        r"\1 ",
+        without_markers,
+        flags=re.IGNORECASE,
+    )
+    normalized = " ".join(without_markers.split())
+    return bool(
+        re.fullmatch(
+            rf"(?:(?:{_DIAGRAM_HEAD_LABEL_WORDS})\s+Head\s*){{1,4}}",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
 
 
 def looks_like_translatable_graphic_prose(block: TextBlock, plain: str) -> bool:
@@ -2482,6 +2515,12 @@ def classify_blocks(
         if getattr(block, "_equation_zone", False):
             block.block_type = "equation"
             block.should_translate = False
+            continue
+
+        if looks_like_preserved_diagram_label(text):
+            block.block_type = "figure_label"
+            block.should_translate = False
+            block.preserve_position = True
             continue
 
         # Inside image zone
@@ -2832,19 +2871,64 @@ def mark_equation_blocks(records: Sequence[_RawBlockRec]) -> List[bool]:
 
 
 _PSEUDOCODE_STEP_RE = re.compile(r"\b\d{1,2}:\s*\S")
+_ALGORITHM_TITLE_RE = re.compile(r"^\s*Algorithm\s+\d+\b", re.IGNORECASE)
+_ALGORITHM_IO_RE = re.compile(r"\b(?:Require|Ensure|Input|Output)\s*:", re.IGNORECASE)
+_CODE_FONT_RE = re.compile(
+    r"(?:Inconsolata|Courier|Mono|Typewriter|Consolas|Menlo|CMTT|CMRTypewriter)",
+    re.IGNORECASE,
+)
+_CODE_LINE_RE = re.compile(
+    r"^\s*(?:@\w+|def\s+\w+\s*\(|class\s+\w+\s*[:(]|return\b|yield\b|"
+    r"if\b|elif\b|else\s*:|for\b|while\b|with\b|try\s*:|except\b|finally\s*:|"
+    r"import\s+[A-Za-z_]|from\s+[A-Za-z_]|#|[A-Za-z_]\w*\s*(?:=|\+=|-=|:=))"
+)
+
+
+def line_has_code_font(line: _LineRec) -> bool:
+    return any(_CODE_FONT_RE.search(str(span.get("font", ""))) for span in line.spans)
+
+
+def line_is_code_like(line: _LineRec) -> bool:
+    compact = " ".join(strip_sentinels(line.text).split()).strip()
+    if not compact:
+        return False
+    if _PSEUDOCODE_STEP_RE.match(compact):
+        return True
+    if _CODE_LINE_RE.match(compact):
+        return True
+    if line_has_code_font(line):
+        if re.search(r"(?:->|=>|==|!=|<=|>=|\+=|-=|:=|=|\(|\)|\[|\]|:)", compact):
+            return True
+    return False
 
 
 def record_is_algorithm(record: _RawBlockRec) -> bool:
     """Algorithm floats (numbered pseudocode) keep their original typesetting:
     reflowing '1: x <- F(y)' statements as prose destroys them."""
     bare = record.bare_text()
-    steps = len(_PSEUDOCODE_STEP_RE.findall(bare))
-    if steps < 1:
-        return False
-    has_arrow = "\u2190" in bare or "\u27f5" in bare or "\u21d0" in bare
-    if has_arrow:
+    compact = " ".join(bare.split()).strip()
+    if _ALGORITHM_TITLE_RE.match(compact):
         return True
-    return steps >= 3 and bool(re.search(r"\b(Require|Ensure|Input|Output)\s*:", bare))
+    if _ALGORITHM_IO_RE.search(compact) and len(record.lines) <= 12:
+        return True
+
+    steps = len(_PSEUDOCODE_STEP_RE.findall(bare))
+    if steps >= 1:
+        has_arrow = "\u2190" in bare or "\u27f5" in bare or "\u21d0" in bare
+        if has_arrow:
+            return True
+        if steps >= 3 and _ALGORITHM_IO_RE.search(bare):
+            return True
+
+    code_lines = [line for line in record.lines if line_is_code_like(line)]
+    if len(code_lines) < 2:
+        return False
+    code_font_lines = sum(1 for line in code_lines if line_has_code_font(line))
+    has_function_signature = any(
+        re.match(r"^\s*(?:def|class)\s+\w+", strip_sentinels(line.text))
+        for line in code_lines
+    )
+    return code_font_lines >= 2 or has_function_signature
 
 
 def record_is_table(record: _RawBlockRec) -> bool:
@@ -3135,6 +3219,137 @@ def heading_block_from_line(page_index: int, line: _LineRec) -> Optional[TextBlo
     return block
 
 
+def body_block_from_line(
+    page_index: int,
+    line: _LineRec,
+    *,
+    no_merge: bool = False,
+) -> Optional[TextBlock]:
+    accumulator = _SegmentAccumulator()
+    _accumulate_line(accumulator, line)
+    block = accumulator.flush(page_index)
+    if block is not None:
+        block.no_merge = no_merge
+    return block
+
+
+def line_looks_like_summary_leadin(line: _LineRec) -> bool:
+    compact = " ".join(strip_sentinels(line.text).split()).strip()
+    return bool(re.match(r"^In\s+summary\b", compact, re.IGNORECASE))
+
+
+def line_looks_like_list_item(line: _LineRec) -> bool:
+    compact = " ".join(strip_sentinels(line.text).split()).strip()
+    return bool(re.match(r"^(?:[•◦▪●]|\(?[a-zA-Z0-9]{1,3}\)|[-–])\s+", compact))
+
+
+def line_continues_list_item(line: _LineRec, current: "_SegmentAccumulator") -> bool:
+    if not current.line_bboxes:
+        return False
+    previous = current.line_bboxes[-1]
+    previous_height = max(previous[3] - previous[1], 1.0)
+    vertical_gap = line.bbox[1] - previous[3]
+    if vertical_gap > max(14.0, previous_height * 1.45):
+        return False
+    list_left = current.line_bboxes[0][0]
+    if not sentence_final_text(current.lines[-1]):
+        return True
+    if line.bbox[0] <= list_left + 8.0:
+        return False
+    return list_left - 2.0 <= line.bbox[0] <= list_left + 60.0
+
+
+def split_bold_leadin_line(line: _LineRec) -> Optional[Tuple[_LineRec, _LineRec]]:
+    prefix_spans: List[dict] = []
+    tail_spans: List[dict] = []
+    seen_text = False
+    seen_bold_text = False
+    collecting_prefix = True
+
+    for span in line.spans:
+        span_text = normalize_span_text(span.get("text", ""))
+        if not span_text.strip():
+            if seen_text and collecting_prefix:
+                prefix_spans.append(span)
+            elif seen_text:
+                tail_spans.append(span)
+            continue
+        span_bold = bool(int(span.get("flags", 0)) & FLAG_BOLD)
+        if not seen_text:
+            if not span_bold and not span_is_leadin_marker(span_text):
+                return None
+            seen_text = True
+        if collecting_prefix and span_bold:
+            seen_bold_text = True
+            prefix_spans.append(span)
+            continue
+        if collecting_prefix and not seen_bold_text and span_is_leadin_marker(span_text):
+            prefix_spans.append(span)
+            continue
+        collecting_prefix = False
+        tail_spans.append(span)
+
+    if not seen_bold_text or not prefix_spans or not tail_spans:
+        return None
+    prefix_text = text_from_spans(prefix_spans)
+    tail_text = text_from_spans(tail_spans)
+    if not looks_like_bold_leadin_text(prefix_text, tail_text):
+        return None
+    prefix_line = line_from_spans(prefix_spans, fallback_bbox=line.bbox)
+    tail_line = line_from_spans(tail_spans, fallback_bbox=line.bbox)
+    if prefix_line is None or tail_line is None:
+        return None
+    if tail_line.text.startswith((": ", ":")) and not prefix_line.text.endswith(":"):
+        prefix_line.text = prefix_line.text.rstrip() + ":"
+        tail_line.text = tail_line.text[1:].lstrip()
+    elif tail_line.text.startswith(("： ", "：")) and not prefix_line.text.endswith("："):
+        prefix_line.text = prefix_line.text.rstrip() + "："
+        tail_line.text = tail_line.text[1:].lstrip()
+    return prefix_line, tail_line
+
+
+def span_is_leadin_marker(text: str) -> bool:
+    compact = " ".join(text.split()).strip()
+    return bool(re.fullmatch(r"(?:\d+\)|\([a-zA-Z0-9]{1,3}\)|[•◦▪●])", compact))
+
+
+def line_starts_with_leadin_marker(line: _LineRec) -> bool:
+    compact = " ".join(strip_sentinels(line.text).split()).strip()
+    return bool(re.match(r"^(?:\d+\)|\([a-zA-Z0-9]{1,3}\)|[•◦▪●])\s+", compact))
+
+
+def looks_like_bold_leadin_text(prefix_text: str, tail_text: str) -> bool:
+    prefix = " ".join(strip_sentinels(prefix_text).split()).strip()
+    tail = " ".join(strip_sentinels(tail_text).split()).strip()
+    if not prefix or not tail:
+        return False
+    if sentinel_char_count(prefix_text):
+        return False
+    if _CAPTION_RE.match(prefix):
+        return False
+    if len(prefix) > 90:
+        return False
+    words = _PROSE_WORD_RE.findall(prefix)
+    if not 1 <= len(words) <= 10:
+        return False
+    if substantial_prose_word_count(tail) < 2:
+        return False
+    return prefix.endswith((".", ":", "：")) or tail.startswith((": ", ":", "： ", "："))
+
+
+def text_from_spans(spans: Sequence[dict]) -> str:
+    return "".join(normalize_span_text(span.get("text", "")) for span in spans).strip()
+
+
+def line_from_spans(spans: Sequence[dict], fallback_bbox: BBox) -> Optional[_LineRec]:
+    text = text_from_spans(spans)
+    if not text:
+        return None
+    boxes = [tuple(float(x) for x in span["bbox"]) for span in spans if "bbox" in span]
+    bbox = union_bbox(boxes) if boxes else fallback_bbox
+    return _LineRec(text=text, bbox=bbox, spans=list(spans))
+
+
 def line_continues_inline_formula_tail(line: _LineRec, current: "_SegmentAccumulator") -> bool:
     """True for same-baseline formula fragments that finish a prose sentence."""
     if not current.bboxes:
@@ -3379,9 +3594,10 @@ def segments_from_record(
 
     current = _SegmentAccumulator()
     current_has_inline_tail = False
+    current_no_merge = False
 
     def flush_current() -> None:
-        nonlocal current, current_has_inline_tail
+        nonlocal current, current_has_inline_tail, current_no_merge
         block = current.flush(page_index)
         if block is not None:
             if current_has_inline_tail:
@@ -3389,9 +3605,12 @@ def segments_from_record(
                 # union rectangle can erase nearby display-equation glyphs when
                 # PyMuPDF vertically overlaps a prose tail and the next formula.
                 block.redact_bboxes = list(current.line_bboxes)
+            if current_no_merge:
+                block.no_merge = True
             segments.append(block)
         current = _SegmentAccumulator()
         current_has_inline_tail = False
+        current_no_merge = False
 
     skip_line_index: Optional[int] = None
     for line_index, line in enumerate(record.lines):
@@ -3403,6 +3622,23 @@ def segments_from_record(
             if heading is not None:
                 segments.append(heading)
                 continue
+        if not equation_record and line_looks_like_summary_leadin(line):
+            flush_current()
+            summary = heading_block_from_line(page_index, line)
+            if summary is not None:
+                segments.append(summary)
+                continue
+        if not equation_record:
+            split = split_bold_leadin_line(line)
+            if split is not None:
+                flush_current()
+                leadin, tail = split
+                heading = heading_block_from_line(page_index, leadin)
+                if heading is not None:
+                    segments.append(heading)
+                if line_starts_with_leadin_marker(leadin):
+                    current_no_merge = True
+                line = tail
         prose_tail = line_formula_prefix_prose_tail(line)
         if prose_tail is not None:
             next_line = (
@@ -3445,6 +3681,11 @@ def segments_from_record(
                 block.nowrap = True
                 segments.append(block)
             continue
+        if not equation_record and line_looks_like_list_item(line):
+            flush_current()
+            current_no_merge = True
+        elif current_no_merge and current.lines and not line_continues_list_item(line, current):
+            flush_current()
         _accumulate_line(current, line)
 
     flush_current()

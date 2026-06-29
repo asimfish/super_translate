@@ -35,6 +35,7 @@ from pdf_zh_translator.pdf_layout import (
     math_heavy_block,
     merge_paragraph_blocks,
     prepare_translation_units,
+    record_is_algorithm,
     record_is_table,
     requested_translation_font_size,
     segments_from_record,
@@ -119,6 +120,30 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         )
 
         self.assertTrue(should_preserve_original_block(block, []))
+
+    def test_preserves_guidedvla_diagram_head_labels(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(120.0, 220.0, 350.0, 238.0),
+            text="(i) Object Head (ii) Skill Head (iii) Depth Head",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+        )
+
+        self.assertTrue(should_preserve_original_block(block, []))
+
+    def test_does_not_preserve_body_discussion_of_object_head(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(50.0, 120.0, 290.0, 145.0),
+            text="Object Head. The object head supervises visual grounding in the policy.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+
+        self.assertFalse(should_preserve_original_block(block, []))
 
     def test_preserves_short_block_crossing_graphic_region(self):
         block = TextBlock(
@@ -309,6 +334,59 @@ def _line(text, bbox, is_cell=False):
 
 
 class TableDetectionTests(unittest.TestCase):
+    def test_algorithm_title_block_is_preserved(self):
+        record = _RawBlockRec(
+            lines=[
+                _line(
+                    "Algorithm 1 Decoupled Attention with Guided Heads Require: hidden states h",
+                    (312.0, 402.2, 535.4, 414.2),
+                )
+            ]
+        )
+
+        self.assertTrue(record_is_algorithm(record))
+
+    def test_python_style_algorithm_block_is_preserved(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="def masked_mean(loss, valid):",
+                    bbox=(64.0, 120.0, 240.0, 132.0),
+                    spans=[
+                        _span(
+                            "def masked_mean(loss, valid):",
+                            (64.0, 120.0, 240.0, 132.0),
+                            font="Inconsolata",
+                        )
+                    ],
+                ),
+                _LineRec(
+                    text="    loss = loss * valid",
+                    bbox=(64.0, 134.0, 220.0, 146.0),
+                    spans=[
+                        _span(
+                            "    loss = loss * valid",
+                            (64.0, 134.0, 220.0, 146.0),
+                            font="Inconsolata",
+                        )
+                    ],
+                ),
+                _LineRec(
+                    text="    return loss.sum() / valid.sum()",
+                    bbox=(64.0, 148.0, 280.0, 160.0),
+                    spans=[
+                        _span(
+                            "    return loss.sum() / valid.sum()",
+                            (64.0, 148.0, 280.0, 160.0),
+                            font="Inconsolata",
+                        )
+                    ],
+                ),
+            ]
+        )
+
+        self.assertTrue(record_is_algorithm(record))
+
     def test_same_baseline_prose_fragments_are_not_table(self):
         record = _RawBlockRec(
             lines=[
@@ -1416,6 +1494,108 @@ class PreserveGraphicsTextTests(unittest.TestCase):
             "While scientific discovery drives technological progress.",
         )
 
+    def test_segments_split_bold_leadin_before_body_tail(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="Object Grounding: The policy must localize task-relevant objects.",
+                    bbox=(49.0, 100.0, 300.0, 112.0),
+                    spans=[
+                        _span(
+                            "Object Grounding:",
+                            (49.0, 100.0, 126.0, 112.0),
+                            flags=16,
+                        ),
+                        _span(
+                            " The policy must localize task-relevant objects.",
+                            (126.0, 100.0, 300.0, 112.0),
+                            flags=0,
+                        ),
+                    ],
+                )
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0].text, "Object Grounding:")
+        self.assertEqual(blocks[0].block_type, "heading")
+        self.assertTrue(blocks[0].bold)
+        self.assertTrue(blocks[0].no_merge)
+        self.assertEqual(
+            blocks[1].text,
+            "The policy must localize task-relevant objects.",
+        )
+
+    def test_segments_split_numbered_marker_before_bold_leadin(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="1) Object Grounding: whether action tokens can attend to",
+                    bbox=(58.9, 511.5, 300.0, 521.7),
+                    spans=[
+                        _span("1)", (58.9, 511.6, 67.2, 521.7), flags=4),
+                        _span(
+                            " Object Grounding",
+                            (67.2, 511.5, 151.8, 521.6),
+                            flags=20,
+                        ),
+                        _span(
+                            ": whether action tokens can attend to",
+                            (151.8, 511.6, 300.0, 521.7),
+                            flags=4,
+                        ),
+                    ],
+                ),
+                _line(
+                    "the correct task-relevant regions.",
+                    (58.9, 523.5, 260.0, 533.6),
+                ),
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0].text, "1) Object Grounding:")
+        self.assertEqual(blocks[0].block_type, "heading")
+        self.assertTrue(blocks[0].bold)
+        self.assertTrue(blocks[1].no_merge)
+        self.assertEqual(
+            blocks[1].text,
+            "whether action tokens can attend to the correct task-relevant regions.",
+        )
+
+    def test_segments_split_summary_and_contribution_items(self):
+        record = _RawBlockRec(
+            lines=[
+                _line(
+                    "In summary, we make the following contributions:",
+                    (49.0, 100.0, 300.0, 112.0),
+                ),
+                _line(
+                    "• We propose GuidedVLA for structured robotic reasoning.",
+                    (55.0, 116.0, 300.0, 128.0),
+                ),
+                _line(
+                    "• We evaluate sensitivity across guidance choices.",
+                    (55.0, 132.0, 300.0, 144.0),
+                ),
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertEqual(len(blocks), 3)
+        self.assertEqual(blocks[0].block_type, "heading")
+        self.assertTrue(blocks[0].bold)
+        self.assertTrue(blocks[0].no_merge)
+        self.assertTrue(blocks[1].no_merge)
+        self.assertTrue(blocks[2].no_merge)
+        self.assertTrue(blocks[1].text.startswith("• We propose"))
+        self.assertTrue(blocks[2].text.startswith("• We evaluate"))
+
     def test_insert_translated_text_renders_caption_without_name_error(self):
         document = fitz.open()
         page = document.new_page(width=300, height=180)
@@ -1514,6 +1694,20 @@ class TestClassifyBlocks(unittest.TestCase):
         block = self._make_block("Time", bbox=(150, 200, 180, 215))
         image_zones = [(100, 150, 300, 300)]  # covers the block
         classify_blocks([block], 0, 792, image_zones)
+        self.assertEqual(block.block_type, "figure_label")
+        self.assertFalse(block.should_translate)
+        self.assertTrue(block.preserve_position)
+
+    def test_guidedvla_head_labels_are_figure_labels_without_image_zone(self):
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block(
+            "(i) Object Head (ii) Skill Head (iii) Depth Head",
+            bbox=(120, 200, 360, 215),
+        )
+
+        classify_blocks([block], 0, 792, [])
+
         self.assertEqual(block.block_type, "figure_label")
         self.assertFalse(block.should_translate)
         self.assertTrue(block.preserve_position)
