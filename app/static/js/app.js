@@ -918,14 +918,57 @@ async function quickTranslate(paperId) {
   doTranslateDirect(paperId, '', 'balanced');
 }
 
+function showTranslationSubmitting(paperId) {
+  if (translationPollId) {
+    clearInterval(translationPollId);
+    translationPollId = null;
+  }
+  const prog = document.getElementById('translation-progress');
+  const fill = document.getElementById('trans-progress-fill');
+  const statusEl = document.getElementById('trans-status');
+  const percentEl = document.getElementById('trans-percent');
+  const logEl = document.getElementById('trans-log');
+  const titleEl = document.getElementById('trans-title');
+
+  if (prog) prog.classList.remove('hidden');
+  if (fill) {
+    fill.style.width = '2%';
+    fill.style.background = '';
+    fill.classList.add('progress-fill-active', 'progress-fill-pending');
+  }
+  if (percentEl) percentEl.textContent = '0%';
+  if (statusEl) statusEl.textContent = '正在提交翻译任务... 0s';
+  if (titleEl) {
+    const paper = currentPaper && currentPaper.id === paperId
+      ? currentPaper
+      : papers.find(p => p.id === paperId);
+    titleEl.textContent = paper?.title || '';
+  }
+  if (logEl) logEl.innerHTML = '';
+  addTransLog('正在提交翻译任务，服务器确认后立即开始排队...');
+}
+
+function showTranslationStartFailure(message) {
+  const fill = document.getElementById('trans-progress-fill');
+  const statusEl = document.getElementById('trans-status');
+  if (fill) {
+    fill.classList.remove('progress-fill-active', 'progress-fill-pending');
+    fill.style.background = 'var(--error)';
+  }
+  if (statusEl) statusEl.textContent = '启动失败';
+  addTransLog(message || '翻译任务启动失败', 'error');
+}
+
 async function doTranslateDirect(paperId, backend, quality, options = {}) {
   if (translating) return;
   translating = true;
+  showTranslationSubmitting(paperId);
   try {
     const normalizedOptions = { preserve_graphics_text: true, ...options };
     await api.translatePaper(paperId, backend, quality, normalizedOptions);
     pollTranslationStatus(paperId);
   } catch (e) {
+    showTranslationStartFailure(e.message);
     toastError(e.message);
   } finally {
     translating = false;

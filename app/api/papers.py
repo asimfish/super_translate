@@ -84,6 +84,20 @@ _ETA_RE = re.compile(
 _EDITABLE_FIGURES_DIRNAME = "editable_figures"
 
 
+def _schedule_background_task(func: Callable[..., None], *args: Any) -> threading.Thread:
+    """Start long-running work outside the request response lifecycle."""
+    task_name = getattr(func, "__name__", "task").strip("_") or "task"
+    first_arg = str(args[0]) if args else "job"
+    thread = threading.Thread(
+        target=func,
+        args=args,
+        name=f"paper-china-{task_name}-{first_arg}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
 def _cancel_marker_path(paper_id: str) -> Path:
     safe_id = re.sub(r"[^0-9A-Za-z_-]", "_", paper_id)
     return settings.translations_path / f"{safe_id}.cancel"
@@ -780,7 +794,7 @@ async def delete_paper(
 @router.post("/{paper_id}/translate")
 async def start_translation(
     paper_id: str,
-    background_tasks: BackgroundTasks,
+    _background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_session)],
     access_scope: AccessScope,
     backend: str = "",
@@ -843,6 +857,8 @@ async def start_translation(
             translated_filename="",
             dual_filename="",
             translation_log="",
+            translation_stage="已提交",
+            translation_eta_seconds=None,
         ),
     )
     if result.rowcount == 0:
@@ -867,7 +883,7 @@ async def start_translation(
     db.add(job)
     await db.commit()
 
-    background_tasks.add_task(
+    _schedule_background_task(
         _run_translation,
         paper_id,
         backend or settings.translation_backend,
@@ -1264,6 +1280,7 @@ async def _do_translate(
     )
     _append_log(paper_id, loop, f"开始翻译 (引擎: {config.backend}, 质量: {quality})")
     _append_log(paper_id, loop, f"共 {paper.page_count} 页, 文件大小: {paper.file_size // 1024}KB")
+    _set_translation_stage(paper_id, loop, "解析 PDF")
 
     # Phase 2: Run translation (no DB session held)
     on_progress = _create_progress_handler(paper_id, loop, job_id=job_id)

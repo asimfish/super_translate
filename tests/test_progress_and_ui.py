@@ -80,6 +80,26 @@ def test_translation_progress_ui_has_client_eta_smoothing():
     assert "@keyframes progress-stripes" in css
 
 
+def test_translation_start_shows_progress_before_request_finishes():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "function showTranslationSubmitting(paperId)" in js
+    assert "正在提交翻译任务，服务器确认后立即开始排队..." in js
+    assert "function showTranslationStartFailure(message)" in js
+    assert "showTranslationSubmitting(paperId);" in js
+    assert "await api.translatePaper(paperId, backend, quality, normalizedOptions);" in js
+    assert js.index("showTranslationSubmitting(paperId);") < js.index(
+        "await api.translatePaper(paperId, backend, quality, normalizedOptions);"
+    )
+
+
+def test_translation_start_records_early_backend_stages():
+    api = (ROOT / "app/api/papers.py").read_text(encoding="utf-8")
+
+    assert 'translation_stage="已提交"' in api
+    assert '_set_translation_stage(paper_id, loop, "解析 PDF")' in api
+
+
 def test_translation_ui_exposes_qa_and_ocr_controls():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")

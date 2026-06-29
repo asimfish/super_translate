@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.dialects import sqlite
@@ -168,9 +168,10 @@ async def test_start_translation_update_filters_by_access_scope():
     db = _Db()
     background_tasks = MagicMock()
 
-    response = await start_translation("abcd12345678", background_tasks, db, "team-a")
+    with patch("app.api.papers._schedule_background_task") as mock_schedule:
+        response = await start_translation("abcd12345678", background_tasks, db, "team-a")
 
     assert response["ok"] is True
     assert db.committed is True
     assert "papers.access_scope = 'team-a'" in _sql(db.queries[0])
-    assert background_tasks.add_task.call_count == 1
+    assert mock_schedule.call_count == 1

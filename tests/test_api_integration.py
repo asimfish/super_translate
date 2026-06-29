@@ -623,6 +623,33 @@ class TestPaperUpdateEndpoint:
 class TestTranslationEndpoint:
     """Test translation endpoint."""
 
+    def test_schedule_background_task_starts_daemon_thread(self):
+        from app.api.papers import _schedule_background_task
+
+        started = []
+
+        class DummyThread:
+            def __init__(self, *, target, args, name, daemon):
+                self.target = target
+                self.args = args
+                self.name = name
+                self.daemon = daemon
+
+            def start(self):
+                started.append(self)
+
+        def fake_task(paper_id):
+            return paper_id
+
+        with patch("app.api.papers.threading.Thread", DummyThread):
+            thread = _schedule_background_task(fake_task, "paper123")
+
+        assert started == [thread]
+        assert thread.daemon is True
+        assert thread.target is fake_task
+        assert thread.args == ("paper123",)
+        assert thread.name == "paper-china-fake_task-paper123"
+
     def test_translate_paper_not_found(self, client, mock_db):
         # First call: UPDATE returns rowcount=0 (no rows matched)
         mock_update_result = MagicMock()
@@ -654,7 +681,7 @@ class TestTranslationEndpoint:
         mock_update_result.rowcount = 1
         mock_db.execute.return_value = mock_update_result
 
-        with patch("app.api.papers.BackgroundTasks.add_task"):
+        with patch("app.api.papers._schedule_background_task"):
             response = client.post(f"/api/papers/{sample_paper.id}/translate")
             assert response.status_code == 200
             assert response.json()["status"] == "translating"
@@ -667,7 +694,7 @@ class TestTranslationEndpoint:
         mock_update_result.rowcount = 1
         mock_db.execute.return_value = mock_update_result
 
-        with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
+        with patch("app.api.papers._schedule_background_task") as mock_task:
             response = client.post(f"/api/papers/{sample_paper.id}/translate?quality=fast")
             assert response.status_code == 200
             mock_task.assert_called_once()
@@ -680,7 +707,7 @@ class TestTranslationEndpoint:
         mock_update_result.rowcount = 1
         mock_db.execute.return_value = mock_update_result
 
-        with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
+        with patch("app.api.papers._schedule_background_task") as mock_task:
             response = client.post(f"/api/papers/{sample_paper.id}/translate")
             assert response.status_code == 200
             call_args = mock_task.call_args[0]
@@ -697,7 +724,7 @@ class TestTranslationEndpoint:
         mock_update_result.rowcount = 1
         mock_db.execute.return_value = mock_update_result
 
-        with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
+        with patch("app.api.papers._schedule_background_task") as mock_task:
             response = client.post(
                 f"/api/papers/{sample_paper.id}/translate?preserve_graphics_text=true",
             )
@@ -711,7 +738,7 @@ class TestTranslationEndpoint:
         mock_update_result.rowcount = 1
         mock_db.execute.return_value = mock_update_result
 
-        with patch("app.api.papers.BackgroundTasks.add_task") as mock_task:
+        with patch("app.api.papers._schedule_background_task") as mock_task:
             response = client.post(
                 f"/api/papers/{sample_paper.id}/translate"
                 "?qa_mode=iterative&qa_max_passes=6&ocr_mode=auto&ocr_language=eng&ocr_dpi=200",
@@ -1291,7 +1318,7 @@ class TestErrorHandling:
         mock_result.scalar_one_or_none.return_value = sample_paper
         mock_db.execute.return_value = mock_result
 
-        with patch("app.api.papers.BackgroundTasks.add_task"):
+        with patch("app.api.papers._schedule_background_task"):
             response = client.post(f"/api/papers/{sample_paper.id}/translate")
             assert response.status_code == 200
             assert response.json()["status"] == "translating"
