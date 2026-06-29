@@ -3,6 +3,7 @@
 let papers = [];
 let currentPaper = null;
 let selectedFiles = [];
+let selectedFileKeys = new Set();
 let searchTimer = null;
 let translationPollId = null;
 let pagination = { offset: 0, limit: 50, total: 0 };
@@ -88,7 +89,9 @@ const api = {
     const params = new URLSearchParams();
     if (backend) params.set('backend', backend);
     if (quality) params.set('quality', quality);
-    if (options.preserve_graphics_text) params.set('preserve_graphics_text', 'true');
+    if (Object.prototype.hasOwnProperty.call(options, 'preserve_graphics_text')) {
+      params.set('preserve_graphics_text', options.preserve_graphics_text ? 'true' : 'false');
+    }
     if (options.skip_overflow) params.set('skip_overflow', 'true');
     if (options.qa_mode) params.set('qa_mode', options.qa_mode);
     if (options.qa_max_passes) params.set('qa_max_passes', String(options.qa_max_passes));
@@ -157,10 +160,13 @@ function showLibrary() {
 function showUpload() {
   showView('upload');
   selectedFiles = [];
+  selectedFileKeys.clear();
   document.getElementById('upload-preview').classList.add('hidden');
   document.getElementById('upload-progress').classList.add('hidden');
   document.getElementById('drop-zone').classList.remove('hidden');
   document.getElementById('file-input').value = '';
+  const tags = document.getElementById('upload-tags');
+  if (tags) tags.value = '';
 }
 
 // === Paper Library ===
@@ -207,6 +213,11 @@ async function updateStats() {
 
 let batchTranslating = false;
 
+function getPreserveGraphicsTextOption() {
+  const control = document.getElementById('preserve-graphics-text');
+  return control ? control.checked : true;
+}
+
 async function batchTranslate() {
   if (batchTranslating) return;
 
@@ -221,7 +232,7 @@ async function batchTranslate() {
   batchTranslating = true;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
   const options = {
-    preserve_graphics_text: document.getElementById('preserve-graphics-text')?.checked || false,
+    preserve_graphics_text: getPreserveGraphicsTextOption(),
     skip_overflow: document.getElementById('skip-overflow')?.checked || false,
     qa_mode: document.getElementById('qa-mode')?.value || 'single',
     qa_max_passes: 4,
@@ -342,23 +353,40 @@ function handleFileSelect(input) {
   input.value = '';
 }
 
+function uploadFileKey(file) {
+  return `${file.name}:${file.size}:${file.lastModified || 0}`;
+}
+
 function addFiles(files) {
   const maxSize = 100 * 1024 * 1024;
+  let duplicates = 0;
   for (const f of files) {
     if (f.size > maxSize) { toastWarning(`${f.name} 过大（最大 100MB）`); continue; }
     if (f.size === 0) { toastWarning(`${f.name} 为空`); continue; }
-    if (!selectedFiles.some(s => s.name === f.name && s.size === f.size)) {
-      selectedFiles.push(f);
+    const key = uploadFileKey(f);
+    if (selectedFileKeys.has(key)) {
+      duplicates++;
+      continue;
     }
+    selectedFileKeys.add(key);
+    selectedFiles.push(f);
+  }
+  if (duplicates > 0) {
+    toastWarning(`已跳过 ${duplicates} 个重复文件`);
   }
   if (selectedFiles.length === 0) return;
-  document.getElementById('drop-zone').classList.add('hidden');
+  document.getElementById('drop-zone').classList.remove('hidden');
   document.getElementById('upload-preview').classList.remove('hidden');
   renderFileList();
 }
 
 function renderFileList() {
   const container = document.getElementById('file-list');
+  const summary = document.getElementById('upload-summary');
+  const totalSize = selectedFiles.reduce((sum, file) => sum + file.size, 0);
+  if (summary) {
+    summary.textContent = `${selectedFiles.length} 篇待上传 · ${formatSize(totalSize)}`;
+  }
   container.innerHTML = selectedFiles.map((f, i) => `
     <div class="file-item">
       <span class="file-item-name">${esc(f.name)}</span>
@@ -367,11 +395,12 @@ function renderFileList() {
     </div>
   `).join('');
   const btn = document.getElementById('btn-do-upload');
-  btn.textContent = selectedFiles.length > 1 ? `上传 ${selectedFiles.length} 篇` : '上传';
+  btn.textContent = selectedFiles.length > 1 ? `确认上传 ${selectedFiles.length} 篇` : '确认上传';
 }
 
 function removeFile(index) {
-  selectedFiles.splice(index, 1);
+  const removed = selectedFiles.splice(index, 1)[0];
+  if (removed) selectedFileKeys.delete(uploadFileKey(removed));
   if (selectedFiles.length === 0) {
     cancelUpload();
   } else {
@@ -381,9 +410,11 @@ function removeFile(index) {
 
 function cancelUpload() {
   selectedFiles = [];
+  selectedFileKeys.clear();
   document.getElementById('drop-zone').classList.remove('hidden');
   document.getElementById('upload-preview').classList.add('hidden');
   document.getElementById('upload-progress').classList.add('hidden');
+  document.getElementById('file-input').value = '';
 }
 
 let uploading = false;
@@ -391,21 +422,23 @@ let uploading = false;
 async function doUpload() {
   if (selectedFiles.length === 0 || uploading) return;
   uploading = true;
+  const filesToUpload = [...selectedFiles];
 
   const tags = document.getElementById('upload-tags').value;
   const prog = document.getElementById('upload-progress');
   const fill = document.getElementById('upload-progress-fill');
   const status = document.getElementById('upload-status');
 
+  document.getElementById('drop-zone').classList.add('hidden');
   document.getElementById('upload-preview').classList.add('hidden');
   prog.classList.remove('hidden');
 
   let success = 0;
   let failed = 0;
-  const total = selectedFiles.length;
+  const total = filesToUpload.length;
 
   for (let i = 0; i < total; i++) {
-    const file = selectedFiles[i];
+    const file = filesToUpload[i];
     fill.style.width = '0%';
     fill.style.background = '';
     status.textContent = `上传中 (${i + 1}/${total}): ${file.name}`;
@@ -426,6 +459,7 @@ async function doUpload() {
   status.textContent = `完成！${success} 篇成功${failed > 0 ? `，${failed} 篇失败` : ''}`;
   toastSuccess(`上传完成：${success} 篇成功${failed > 0 ? `，${failed} 篇失败` : ''}`);
   selectedFiles = [];
+  selectedFileKeys.clear();
   setTimeout(() => showLibrary(), 1000);
   uploading = false;
 }
@@ -704,6 +738,33 @@ async function renderPage(panel, idx) {
   // Replace wrapper content
   wrapper.innerHTML = '';
   wrapper.appendChild(canvas);
+  await renderTextLayer(page, wrapper, viewport);
+}
+
+async function renderTextLayer(page, wrapper, viewport) {
+  if (typeof pdfjsLib.renderTextLayer !== 'function') return;
+
+  const textLayer = document.createElement('div');
+  textLayer.className = 'textLayer';
+  textLayer.style.width = viewport.width + 'px';
+  textLayer.style.height = viewport.height + 'px';
+  wrapper.appendChild(textLayer);
+
+  try {
+    const textContent = await page.getTextContent();
+    const renderTask = pdfjsLib.renderTextLayer({
+      textContentSource: textContent,
+      container: textLayer,
+      viewport,
+      textDivs: [],
+    });
+    if (renderTask?.promise) {
+      await renderTask.promise;
+    }
+  } catch (e) {
+    console.warn('PDF text layer failed:', e);
+    textLayer.remove();
+  }
 }
 
 // Scroll sync with page-based alignment
@@ -840,7 +901,7 @@ async function startTranslate() {
   if (!currentPaper) return;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
   const options = {
-    preserve_graphics_text: document.getElementById('preserve-graphics-text')?.checked || false,
+    preserve_graphics_text: getPreserveGraphicsTextOption(),
     skip_overflow: document.getElementById('skip-overflow')?.checked || false,
     qa_mode: document.getElementById('qa-mode')?.value || 'single',
     qa_max_passes: 4,
@@ -861,7 +922,8 @@ async function doTranslateDirect(paperId, backend, quality, options = {}) {
   if (translating) return;
   translating = true;
   try {
-    await api.translatePaper(paperId, backend, quality, options);
+    const normalizedOptions = { preserve_graphics_text: true, ...options };
+    await api.translatePaper(paperId, backend, quality, normalizedOptions);
     pollTranslationStatus(paperId);
   } catch (e) {
     toastError(e.message);

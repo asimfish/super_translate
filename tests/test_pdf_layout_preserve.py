@@ -22,6 +22,8 @@ from pdf_zh_translator.pdf_layout import (
     _RawBlockRec,
     _visible_image_stats,
     _visual_min_zone_intersects_graphics,
+    caption_should_center,
+    center_caption_bbox,
     classify_blocks,
     clean_translation,
     collect_text_blocks,
@@ -34,6 +36,7 @@ from pdf_zh_translator.pdf_layout import (
     merge_paragraph_blocks,
     prepare_translation_units,
     record_is_table,
+    requested_translation_font_size,
     segments_from_record,
     should_preserve_original_block,
     strip_sentinels,
@@ -89,7 +92,7 @@ class PreserveOriginalBlockTests(unittest.TestCase):
 
         self.assertFalse(should_preserve_original_block(block, []))
 
-    def test_translates_equation_table_prose_even_when_math_heavy(self):
+    def test_preserves_table_text_even_when_math_heavy(self):
         block = TextBlock(
             page_index=0,
             bbox=(207.3, 513.8, 396.8, 525.6),
@@ -103,7 +106,7 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         )
 
         self.assertTrue(math_heavy_block(block))
-        self.assertFalse(should_preserve_original_block(block, []))
+        self.assertTrue(should_preserve_original_block(block, []))
 
     def test_skips_math_heavy_short_block(self):
         block = TextBlock(
@@ -188,6 +191,58 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         )
 
         self.assertFalse(should_preserve_original_block(block, [(0.0, 40.0, 280.0, 140.0)]))
+
+    def test_heading_over_graphic_region_is_still_translated(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(55.4, 67.8, 183.0, 79.8),
+            text="A. Simulation and Assets",
+            font_size=12.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+        )
+
+        self.assertFalse(should_preserve_original_block(block, [(40.0, 40.0, 550.0, 700.0)]))
+
+    def test_nearly_centered_caption_is_centered_in_output(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(110.0, 390.7, 486.4, 399.7),
+            text="Figure 1: Overview of SafeLab.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+            preserve_position=True,
+        )
+
+        self.assertTrue(caption_should_center(block, 612.0))
+
+    def test_centered_caption_moves_insert_box_but_keeps_original_redaction(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(110.0, 390.7, 486.4, 399.7),
+            text="Figure 1: Overview of SafeLab.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+
+        moved = center_caption_bbox(block, 612.0)
+
+        self.assertAlmostEqual((moved.bbox[0] + moved.bbox[2]) / 2.0, 306.0)
+        self.assertEqual(moved.redact_bboxes, [block.bbox])
+
+    def test_heading_requests_larger_translation_font(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(75.0, 423.0, 120.0, 435.0),
+            text="Abstract",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+        )
+
+        self.assertGreater(requested_translation_font_size(block, 5.0, 0.92), 10.0)
 
     def test_bibliography_ends_at_appendix_heading(self):
         blocks = [
@@ -533,6 +588,9 @@ class FragmentedProseWarningTests(unittest.TestCase):
 class FormulaTailProseTests(unittest.TestCase):
     def test_clean_translation_collapses_mixed_formula_parentheses(self):
         self.assertEqual(clean_translation("（U e ij≈0).）"), "（U e ij≈0）")
+
+    def test_clean_translation_replaces_math_angle_brackets_for_cjk_fonts(self):
+        self.assertEqual(clean_translation("元组T = ⟨S,G,C⟩。"), "元组 T = 〈S,G,C〉。")
 
     def test_superscript_flag_does_not_protect_common_prose_word(self):
         self.assertFalse(
@@ -1275,6 +1333,88 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         self.assertFalse(any("Figure Label" in source for source in preserved_sources))
         self.assertTrue(any("body sentence" in source for source in normal_sources))
         self.assertTrue(any("body sentence" in source for source in preserved_sources))
+
+    def test_segments_split_standalone_heading_before_body(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="Abstract",
+                    bbox=(50.0, 50.0, 95.0, 62.0),
+                    spans=[
+                        {
+                            "text": "Abstract",
+                            "bbox": (50.0, 50.0, 95.0, 62.0),
+                            "size": 10.0,
+                            "flags": 16,
+                            "color": 0,
+                        }
+                    ],
+                ),
+                _LineRec(
+                    text="Laboratory automation requires safe embodied agents.",
+                    bbox=(50.0, 66.0, 280.0, 78.0),
+                    spans=[
+                        {
+                            "text": "Laboratory automation requires safe embodied agents.",
+                            "bbox": (50.0, 66.0, 280.0, 78.0),
+                            "size": 9.0,
+                            "flags": 0,
+                            "color": 0,
+                        }
+                    ],
+                ),
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0].block_type, "heading")
+        self.assertTrue(blocks[0].bold)
+        self.assertTrue(blocks[0].no_merge)
+        self.assertEqual(blocks[1].text, "Laboratory automation requires safe embodied agents.")
+
+    def test_segments_split_numbered_heading_before_body(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="1. Introduction",
+                    bbox=(55.0, 67.0, 132.0, 80.0),
+                    spans=[
+                        {
+                            "text": "1. Introduction",
+                            "bbox": (55.0, 67.0, 132.0, 80.0),
+                            "size": 12.0,
+                            "flags": 16,
+                            "color": 0,
+                        }
+                    ],
+                ),
+                _LineRec(
+                    text="While scientific discovery drives technological progress.",
+                    bbox=(55.0, 83.0, 291.0, 93.0),
+                    spans=[
+                        {
+                            "text": "While scientific discovery drives technological progress.",
+                            "bbox": (55.0, 83.0, 291.0, 93.0),
+                            "size": 10.0,
+                            "flags": 0,
+                            "color": 0,
+                        }
+                    ],
+                ),
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0].text, "1. Introduction")
+        self.assertEqual(blocks[0].block_type, "heading")
+        self.assertEqual(
+            blocks[1].text,
+            "While scientific discovery drives technological progress.",
+        )
 
     def test_insert_translated_text_renders_caption_without_name_error(self):
         document = fitz.open()

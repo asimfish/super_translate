@@ -86,6 +86,7 @@ def test_translation_ui_exposes_qa_and_ocr_controls():
     css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
 
     assert 'id="qa-mode"' in html
+    assert 'value="single" selected' in html
     assert 'value="iterative"' in html
     assert 'id="ocr-mode"' in html
     assert "params.set('qa_mode'" in js
@@ -101,6 +102,46 @@ def test_translation_ui_exposes_qa_and_ocr_controls():
     assert ".qa-pass-history" in css
     assert ".qa-pass-item" in css
     assert "'show-qa-report': showQaReport" in js
+
+
+def test_translation_ui_preserves_graphics_text_by_default():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+
+    assert 'id="preserve-graphics-text" checked' in html
+    assert "function getPreserveGraphicsTextOption()" in js
+    assert "const normalizedOptions = { preserve_graphics_text: true, ...options };" in js
+    assert "options.preserve_graphics_text ? 'true' : 'false'" in js
+
+
+def test_upload_view_stages_files_until_user_confirms_upload():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
+
+    assert 'id="upload-summary"' in html
+    assert "待上传列表" in html
+    assert "确认上传" in html
+    assert "let selectedFileKeys = new Set();" in js
+    assert "function uploadFileKey(file)" in js
+    assert "selectedFileKeys.has(key)" in js
+    assert "已跳过 ${duplicates} 个重复文件" in js
+    assert "document.getElementById('drop-zone').classList.remove('hidden');" in js
+    assert "const filesToUpload = [...selectedFiles];" in js
+    assert "`确认上传 ${selectedFiles.length} 篇`" in js
+    assert ".upload-queue-header" in css
+
+
+def test_reader_renders_pdf_text_layer_for_selection():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
+
+    assert "async function renderTextLayer(page, wrapper, viewport)" in js
+    assert "pdfjsLib.renderTextLayer" in js
+    assert "textContentSource: textContent" in js
+    assert ".textLayer" in css
+    assert "user-select: text" in css
+    assert ".textLayer ::selection" in css
 
 
 def test_reader_ui_exposes_editable_figure_manifest_workflow():

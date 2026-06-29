@@ -97,6 +97,30 @@ _ENUMERATED_ACADEMIC_BOX_RE = re.compile(r"^\(?[ivx]{1,4}\)\s+[A-Z]", re.IGNOREC
 _HEADING_RE = re.compile(
     r"^(?:\d+(?:\.\d+)*\.?\s|[A-Z]\.\s)",
 )
+_NUMBERED_HEADING_LINE_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
+_APPENDIX_STYLE_HEADING_LINE_RE = re.compile(r"^[A-Z]\.\s+\S")
+_STRUCTURE_HEADING_WORDS = {
+    "abstract",
+    "introduction",
+    "background",
+    "method",
+    "methods",
+    "methodology",
+    "experiments",
+    "experiment",
+    "results",
+    "discussion",
+    "conclusion",
+    "conclusions",
+    "limitations",
+    "references",
+    "bibliography",
+    "acknowledgments",
+    "acknowledgements",
+    "appendix",
+    "impact statement",
+    "keywords",
+}
 # Section number pattern for heading detection
 _SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s")
 # Footer patterns: page numbers, headers
@@ -396,10 +420,14 @@ def translate_pdf(
         page_items: List[Tuple[TextBlock, str]] = []
         item_centered_flags: List[bool] = []
         for (block, translated_text), centered in zip(candidate_items, centered_flags):
-            # Preserve position for captions and figure labels — don't center
-            if block.preserve_position:
+            # Preserve anchored labels, but keep visually centered captions centered.
+            if block.block_type == "caption" and caption_should_center(block, page_width):
+                block = center_caption_bbox(block, page_width)
+                centered = True
+            elif block.preserve_position:
                 centered = False
-            requested_size = max(min_font_size, block.font_size * font_scale)
+            block = expand_heading_bbox(block)
+            requested_size = requested_translation_font_size(block, min_font_size, font_scale)
             # Float-aware clip: keep reflowed CJK body text out of a right-column
             # figure/table instead of painting over it. Only applied when the
             # clipped box still fits the text, so it never makes layout worse.
@@ -442,7 +470,7 @@ def translate_pdf(
                 block=block,
                 text=translated_text,
                 font_pack=font_pack,
-                font_size=max(min_font_size, block.font_size * font_scale),
+                font_size=requested_translation_font_size(block, min_font_size, font_scale),
                 min_font_size=min_font_size,
                 margin=margin,
                 centered=centered,
@@ -555,6 +583,10 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         source_units, _, _ = prepare_translation_units(orig_doc)
     except Exception:
         source_units = []
+    try:
+        preserved_regions_by_page = preserved_original_text_regions(orig_doc)
+    except Exception:
+        preserved_regions_by_page = {}
     for warning in fragmented_prose_warnings_from_units(source_units):
         match = re.search(r"Page (\d+):", warning)
         page = int(match.group(1)) if match else 0
@@ -575,6 +607,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         # Check for untranslated English paragraphs
         trans_blocks = trans_page.get_text("dict").get("blocks", [])
         visual_regions = _visual_regions_for_page(orig_page)
+        preserved_regions = preserved_regions_by_page.get(page_idx, [])
         reference_y = _reference_section_start_y(trans_page)
         if reference_y is None:
             reference_y = _reference_section_start_y(orig_page)
@@ -604,6 +637,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 untranslated_formula_examples.append(" ".join(text.split())[:80])
             elif _looks_like_untranslated_english(text):
                 if _block_inside_visual_region(block, visual_regions):
+                    continue
+                if _block_overlaps_preserved_regions(block, preserved_regions):
                     continue
                 untranslated_examples.append(" ".join(text.split())[:80])
 
@@ -1277,6 +1312,46 @@ def _block_inside_visual_region(
         bbox_intersection_area(block_bbox, region) / area >= min_overlap
         for region in visual_regions
     )
+
+
+def _block_overlaps_preserved_regions(
+    block: dict,
+    regions: Sequence[BBox],
+    *,
+    min_total_overlap: float = 0.20,
+) -> bool:
+    bbox = block.get("bbox")
+    if not bbox or not regions:
+        return False
+    block_bbox = tuple(float(value) for value in bbox)
+    area = max(1.0, bbox_area(block_bbox))
+    total_overlap = sum(bbox_intersection_area(block_bbox, region) for region in regions)
+    return total_overlap / area >= min_total_overlap
+
+
+def preserved_original_text_regions(document: object) -> Dict[int, List[BBox]]:
+    """Regions whose English text is intentionally preserved in graphics/table mode."""
+    global _bibliography_ended, _bibliography_heading_size
+
+    raw_blocks, _ = collect_text_blocks(document)
+    graphic_regions = collect_graphic_regions(document)
+    blocks = merge_paragraph_blocks(raw_blocks, graphic_regions_by_page=graphic_regions)
+
+    _bibliography_seen.clear()
+    _bibliography_ended = False
+    _bibliography_heading_size = 0.0
+    for page_index in range(document.page_count):
+        page = document[page_index]
+        page_blocks = [block for block in blocks if block.page_index == page_index]
+        classify_blocks(page_blocks, page_index, page.rect.height, detect_image_zones(page))
+
+    regions: Dict[int, List[BBox]] = {}
+    for block in blocks:
+        if not block.should_translate:
+            continue
+        if should_preserve_original_block(block, graphic_regions.get(block.page_index, [])):
+            regions.setdefault(block.page_index, []).append(block.bbox)
+    return regions
 
 
 def _restore_unit_translation(
@@ -2160,8 +2235,10 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
         return True
     if block.block_type == "caption" or _CAPTION_RE.match(plain):
         return False
-    if block.block_type == "table" and block.nowrap and block.no_merge:
+    if block.block_type == "heading":
         return False
+    if block.block_type == "table" and block.nowrap and block.no_merge:
+        return True
     if block_overlaps_graphic_region(block.bbox, graphic_regions):
         if looks_like_translatable_graphic_prose(block, plain):
             return False
@@ -2431,6 +2508,12 @@ def classify_blocks(
         if _is_bibliography_context(block, blocks):
             block.block_type = "bibliography"
             block.should_translate = False
+            continue
+
+        if block.block_type == "heading":
+            block.should_translate = True
+            block.bold = True
+            block.no_merge = True
             continue
 
         # Heading: bold + numbered + short
@@ -2984,6 +3067,74 @@ def line_is_short_prose_prefix(line: _LineRec, next_line: _LineRec) -> bool:
     return lines_share_y_band(line, next_line)
 
 
+def line_looks_like_section_heading(line: _LineRec) -> bool:
+    """Detect structural heading lines before paragraph merging hides them."""
+    compact = " ".join(strip_sentinels(line.text).split()).strip()
+    if not compact:
+        return False
+    if sentinel_char_count(line.text):
+        return False
+    if len(compact) > 120:
+        return False
+    if _CAPTION_RE.match(compact):
+        return False
+
+    numbered_match = _NUMBERED_HEADING_LINE_RE.match(compact)
+    appendix_match = _APPENDIX_STYLE_HEADING_LINE_RE.match(compact)
+    reference_like = _looks_like_reference_entry_text(compact)
+    if reference_like and (
+        _REFERENCE_YEAR_RE.search(compact) or _REFERENCE_FRAGMENT_CUE_RE.search(compact)
+    ):
+        return False
+    if reference_like and not (numbered_match or appendix_match):
+        return False
+
+    lower = compact.lower().rstrip(":")
+    if lower in _STRUCTURE_HEADING_WORDS:
+        return True
+
+    if not (numbered_match or appendix_match):
+        return False
+    words = _PROSE_WORD_RE.findall(compact)
+    if not 1 <= len(words) <= 14:
+        return False
+    if numbered_match:
+        prefix = _SECTION_NUM_RE.match(compact)
+        tail = compact[prefix.end() :].strip() if prefix else compact
+    elif appendix_match:
+        prefix = re.match(r"^[A-Z]\.\s+", compact)
+        tail = compact[prefix.end() :].strip() if prefix else compact
+    else:
+        tail = compact
+    tail_words = _PROSE_WORD_RE.findall(tail or compact)
+    if not tail_words:
+        return False
+    if re.search(r"[!?。！？]$", compact):
+        return False
+    significant = [
+        word
+        for word in tail_words
+        if word.lower() not in {"a", "an", "and", "for", "in", "of", "on", "the", "to", "with"}
+    ]
+    if not significant:
+        return False
+    return sum(1 for word in significant if word[0].isupper()) >= max(1, len(significant) - 1)
+
+
+def heading_block_from_line(page_index: int, line: _LineRec) -> Optional[TextBlock]:
+    accumulator = _SegmentAccumulator()
+    _accumulate_line(accumulator, line)
+    block = accumulator.flush(page_index)
+    if block is None:
+        return None
+    block.block_type = "heading"
+    block.should_translate = True
+    block.bold = True
+    block.no_merge = True
+    block.preserve_position = False
+    return block
+
+
 def line_continues_inline_formula_tail(line: _LineRec, current: "_SegmentAccumulator") -> bool:
     """True for same-baseline formula fragments that finish a prose sentence."""
     if not current.bboxes:
@@ -3246,6 +3397,12 @@ def segments_from_record(
     for line_index, line in enumerate(record.lines):
         if skip_line_index == line_index:
             continue
+        if not equation_record and line_looks_like_section_heading(line):
+            flush_current()
+            heading = heading_block_from_line(page_index, line)
+            if heading is not None:
+                segments.append(heading)
+                continue
         prose_tail = line_formula_prefix_prose_tail(line)
         if prose_tail is not None:
             next_line = (
@@ -3480,9 +3637,9 @@ def restore_text(translated: str, mapping: Dict[int, str]) -> Tuple[str, List[in
 
 CJK_CHAR_RE = r"\u2e80-\u9fff\uf900-\ufaff\u3000-\u303f"
 _SPACE_BEFORE_FULLWIDTH_RE = re.compile(  # noqa: E501
-    r"\s+([\u3001\u3002\uff0c\uff1b\uff1a\uff1f\uff01\uff09\u300b\u300d\u3011\u2019\u201d])"
+    r"\s+([\u3001\u3002\uff0c\uff1b\uff1a\uff1f\uff01\uff09\u3009\u300b\u300d\u3011\u2019\u201d])"
 )
-_SPACE_AFTER_FULLWIDTH_RE = re.compile(r"([\uff08\u300a\u300c\u3010\u2018\u201c])\s+")
+_SPACE_AFTER_FULLWIDTH_RE = re.compile(r"([\uff08\u3008\u300a\u300c\u3010\u2018\u201c])\s+")
 _CJK_THEN_LATIN_RE = re.compile(r"([%s])([A-Za-z0-9$(\[\u2200-\u22ff\u0370-\u03ff])" % CJK_CHAR_RE)
 _LATIN_THEN_CJK_RE = re.compile(r"([A-Za-z0-9%%)\]\u2200-\u22ff\u0370-\u03ff])([%s])" % CJK_CHAR_RE)
 _FULLWIDTH_PUNCT = (  # noqa: E501
@@ -3493,6 +3650,7 @@ _FULLWIDTH_PUNCT = (  # noqa: E501
 def clean_translation(text: str) -> str:
     """Normalise spacing of inserted Chinese text (盘古之白 + punctuation)."""
     cleaned = re.sub(r"[ \t]{2,}", " ", text)
+    cleaned = cleaned.replace("\u27e8", "\u3008").replace("\u27e9", "\u3009")
     cleaned = cleaned.replace(").）", "）")
     cleaned = cleaned.replace(").，", "），")
     cleaned = _SPACE_BEFORE_FULLWIDTH_RE.sub(r"\1", cleaned)
@@ -3500,6 +3658,7 @@ def clean_translation(text: str) -> str:
     # Thin breathing space between CJK and Latin/digits/math, both directions.
     cleaned = _CJK_THEN_LATIN_RE.sub(r"\1 \2", cleaned)
     cleaned = _LATIN_THEN_CJK_RE.sub(r"\1 \2", cleaned)
+    cleaned = cleaned.replace("\u3008 ", "\u3008").replace(" \u3009", "\u3009")
     # No space between fullwidth punctuation and anything.
     cleaned = re.sub(r"([%s]) +" % _FULLWIDTH_PUNCT, r"\1", cleaned)
     cleaned = re.sub(r" +([%s])" % _FULLWIDTH_PUNCT, r"\1", cleaned)
@@ -3809,6 +3968,49 @@ def detect_centered_blocks(blocks: Sequence[TextBlock], page_width: float) -> Li
         indented = block.bbox[0] >= column_left + 18.0
         flags.append(delta <= tolerance and narrow and short and indented)
     return flags
+
+
+def caption_should_center(block: TextBlock, page_width: float) -> bool:
+    if block.block_type != "caption" or block.nowrap or block.source_lines > 2:
+        return False
+    x0, _, x1, _ = block.bbox
+    width = x1 - x0
+    if width < page_width * 0.25 or width > page_width * 0.90:
+        return False
+    center = (x0 + x1) / 2.0
+    return abs(center - page_width / 2.0) <= max(12.0, page_width * 0.02)
+
+
+def center_caption_bbox(block: TextBlock, page_width: float) -> TextBlock:
+    if block.block_type != "caption":
+        return block
+    x0, y0, x1, y1 = block.bbox
+    width = x1 - x0
+    if width <= 0:
+        return block
+    new_x0 = max(0.0, min(page_width - width, page_width / 2.0 - width / 2.0))
+    redacts = block.redact_bboxes or [block.bbox]
+    return replace(block, bbox=(new_x0, y0, new_x0 + width, y1), redact_bboxes=redacts)
+
+
+def requested_translation_font_size(
+    block: TextBlock,
+    min_font_size: float,
+    font_scale: float,
+) -> float:
+    base_size = max(min_font_size, block.font_size * font_scale)
+    if block.block_type == "heading":
+        return max(base_size, block.font_size * 1.12)
+    return base_size
+
+
+def expand_heading_bbox(block: TextBlock) -> TextBlock:
+    if block.block_type != "heading":
+        return block
+    x0, y0, x1, y1 = block.bbox
+    pad_y = max(1.0, block.font_size * 0.18)
+    pad_x = max(2.0, block.font_size * 0.35)
+    return replace(block, bbox=(x0, y0 - pad_y, x1 + pad_x, y1 + pad_y))
 
 
 def relax_caption_boxes(page: object, items: Sequence[Tuple[TextBlock, str]]) -> None:

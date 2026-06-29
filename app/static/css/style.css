@@ -271,6 +271,9 @@ select:focus-visible {
 .drop-zone.dragover { border-color: var(--accent); background: var(--accent-soft); }
 .drop-zone p { color: var(--text-dim); margin-bottom: 12px; }
 .upload-preview { margin-top: 20px; text-align: left; }
+.upload-queue-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; font-size: 13px; }
+.upload-queue-header strong { font-size: 14px; color: var(--text); }
+.upload-queue-header span { color: var(--text-dim); white-space: nowrap; }
 .file-list { max-height: 240px; overflow-y: auto; margin-bottom: 12px; }
 .file-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg-field); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; font-size: 13px; }
 .file-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 12px; }
@@ -375,6 +378,28 @@ select:focus-visible {
 }
 .pdf-page-wrapper canvas {
   box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  user-select: none;
+  z-index: 1;
+}
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-align: initial;
+  user-select: text;
+  z-index: 2;
+}
+.textLayer span,
+.textLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.textLayer ::selection {
+  background: rgba(24,169,153,0.35);
 }
 .resizer {
   width: 7px; cursor: col-resize; background: var(--bg);
@@ -723,6 +748,8 @@ select:focus-visible {
     width: 100%;
   }
   .paper-grid { grid-template-columns: 1fr; }
+  .upload-queue-header { flex-wrap: wrap; }
+  .upload-queue-header span { white-space: normal; }
   .upload-actions { flex-wrap: wrap; }
   .upload-actions input { flex: 1 1 100%; }
   .reader-body { flex-direction: column; height: auto; }

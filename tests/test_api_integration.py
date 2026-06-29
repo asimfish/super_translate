@@ -674,7 +674,7 @@ class TestTranslationEndpoint:
             call_args = mock_task.call_args[0]
             assert call_args[3] == "fast"  # quality is 4th arg (after func, paper_id, backend)
 
-    def test_translate_defaults_to_translating_graphics_text(self, client, mock_db, sample_paper):
+    def test_translate_defaults_to_preserving_graphics_text(self, client, mock_db, sample_paper):
         sample_paper.translation_status = "pending"
         mock_update_result = MagicMock()
         mock_update_result.rowcount = 1
@@ -684,7 +684,7 @@ class TestTranslationEndpoint:
             response = client.post(f"/api/papers/{sample_paper.id}/translate")
             assert response.status_code == 200
             call_args = mock_task.call_args[0]
-            assert call_args[4] is False
+            assert call_args[4] is True
 
     def test_translate_can_preserve_graphics_text_when_requested(
         self,
@@ -1560,12 +1560,12 @@ class TestHelpers:
         assert config.preserve_graphics_text is True
         assert config.skip_overflow is True
 
-    def test_resolve_backend_config_graphics_flags_default_false(self):
+    def test_resolve_backend_config_graphics_flags_default_true(self):
         from app.api.papers import _resolve_backend_config
         from app.services.translator import QualityPreset
 
         config = _resolve_backend_config("google", QualityPreset.BALANCED)
-        assert config.preserve_graphics_text is False
+        assert config.preserve_graphics_text is True
         assert config.skip_overflow is False
 
 

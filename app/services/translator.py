@@ -97,7 +97,7 @@ class TranslationConfig:
     quality: QualityPreset = QualityPreset.BALANCED
     max_retries: int = 2
     threads: int = 8  # concurrent page translation threads
-    preserve_graphics_text: bool = False
+    preserve_graphics_text: bool = True
     skip_overflow: bool = False
     ocr_mode: str = "off"  # off | auto | force
     ocr_language: str = "eng"

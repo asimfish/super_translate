@@ -49,7 +49,7 @@ class TestTranslationConfig(unittest.TestCase):
         self.assertEqual(config.quality, QualityPreset.BALANCED)
         self.assertEqual(config.max_retries, 2)
         self.assertEqual(config.threads, 8)
-        self.assertFalse(config.preserve_graphics_text)
+        self.assertTrue(config.preserve_graphics_text)
         self.assertFalse(config.skip_overflow)
         self.assertEqual(config.ocr_mode, "off")
         self.assertEqual(config.ocr_language, "eng")
