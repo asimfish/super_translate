@@ -76,12 +76,20 @@ MATH_SYMBOLS = set(
 )  # noqa: E501
 
 # --- Structure-aware classification ------------------------------------------
-# Caption patterns: "Figure 1", "Fig. 2:", "Table 3.", "图1", "表2"
+# Caption patterns: "Figure 1", "Fig. 2:", "Table III.", "图1", "表2".
+# Plain prose references such as "Figure 5 summarizes ..." must stay body text.
+_CAPTION_REFERENCE_VERBS = (
+    r"(?:shows?|summari[sz]es|illustrates?|presents?|reports?|compares?|lists?|"
+    r"contains?|provides?|depicts?|demonstrates?|highlights?|describes?|visuali[sz]es?)"
+)
 _CAPTION_RE = re.compile(
-    r"^(?:Figure|Fig\.|Table|图|表)\s*\d", re.IGNORECASE,
+    rf"^(?:(?:Figure|Fig\.|Table)\s*(?:\d+|[IVXLCDM]+)"
+    rf"(?:\s*[:.\-\u2013]\s*|\s+(?!{_CAPTION_REFERENCE_VERBS}\b))|(?:图|表)\s*\d)",
+    re.IGNORECASE,
 )
 _ENGLISH_CAPTION_PREFIX_RE = re.compile(
-    r"^(?:Figure|Fig\.|Table)\s*\d+(?:\s*[:.\-\u2013]\s*)?",
+    rf"^(?:Figure|Fig\.|Table)\s*(?:\d+|[IVXLCDM]+)"
+    rf"(?:\s*[:.\-\u2013]\s*|\s+(?!{_CAPTION_REFERENCE_VERBS}\b))",
     re.IGNORECASE,
 )
 _FORMULA_EXPLANATION_RE = re.compile(

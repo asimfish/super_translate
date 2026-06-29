@@ -16,6 +16,7 @@ from pdf_zh_translator.pdf_layout import (
     _LineRec,
     _looks_like_formula_fragment,
     _looks_like_overlap_exempt_text,
+    _looks_like_untranslated_caption,
     _looks_like_untranslated_english,
     _normalize_formula_fragment_for_compare,
     _overlap_text_entries_from_block,
@@ -1654,6 +1655,23 @@ class TestClassifyBlocks(unittest.TestCase):
         self.assertTrue(block.preserve_position)
         self.assertTrue(block.should_translate)
 
+    def test_roman_table_caption_detection(self):
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block("TABLE XI: Precision and framework ablation for OpenVLA.")
+        classify_blocks([block], 0, 792, [])
+
+        self.assertEqual(block.block_type, "caption")
+        self.assertTrue(block.preserve_position)
+
+    def test_figure_reference_sentence_is_body(self):
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block("Figure 5 summarizes these trends across all guidance factors.")
+        classify_blocks([block], 0, 792, [])
+
+        self.assertEqual(block.block_type, "body")
+
     def test_chinese_caption_detection(self):
         """Chinese captions are detected."""
         from pdf_zh_translator.pdf_layout import classify_blocks
@@ -1974,6 +1992,20 @@ class TestTranslationVerification(unittest.TestCase):
             _looks_like_formula_fragment("Handover47/7714/6550/7915/6852/8016/6955/8118/72")
         )
         self.assertTrue(_looks_like_formula_fragment("α+β=γ"))
+
+    def test_untranslated_caption_detector_supports_roman_tables(self):
+        self.assertTrue(
+            _looks_like_untranslated_caption(
+                "TABLE XI: Precision and framework ablation for OpenVLA."
+            )
+        )
+
+    def test_untranslated_caption_detector_ignores_figure_reference_sentence(self):
+        self.assertFalse(
+            _looks_like_untranslated_caption(
+                "Figure 5 summarizes these trends across all guidance factors."
+            )
+        )
 
     def test_flags_untranslated_body_but_ignores_reference_entry(self):
         original = fitz.open()
