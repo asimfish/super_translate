@@ -137,6 +137,10 @@ _FOOTER_PAGE_NUM_RE = re.compile(r"^\d{1,3}$")
 # Figure label max length (axis labels, short annotations)
 _FIGURE_LABEL_MAX_LEN = 15
 _DIAGRAM_HEAD_LABEL_WORDS = r"(?:Object|Skill|Depth)"
+_DIAGRAM_MEMORY_LABEL_WORDS = (
+    r"(?:Event-Boundary|Short-Term|Long-Term|Sliding Window|Full-KV|"
+    r"Gist|Persistent|Hybrid)"
+)
 # Image zone extension to include nearby captions
 _IMAGE_ZONE_CAPTION_GAP = 20.0  # points below image to look for captions
 _CAPTION_EXTRA_HEIGHT = 36.0
@@ -2242,6 +2246,8 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
     plain = " ".join(strip_sentinels(block.text).split())
     if not plain:
         return True
+    if looks_like_vertical_margin_metadata(block, plain):
+        return True
     if block.block_type == "caption" or _CAPTION_RE.match(plain):
         return False
     if block.block_type == "heading":
@@ -2282,13 +2288,34 @@ def looks_like_preserved_diagram_label(plain: str) -> bool:
         flags=re.IGNORECASE,
     )
     normalized = " ".join(without_markers.split())
-    return bool(
-        re.fullmatch(
-            rf"(?:(?:{_DIAGRAM_HEAD_LABEL_WORDS})\s+Head\s*){{1,4}}",
-            normalized,
-            re.IGNORECASE,
-        )
-    )
+    if re.fullmatch(
+        rf"(?:(?:{_DIAGRAM_HEAD_LABEL_WORDS})\s+Head\s*){{1,4}}",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return True
+    if re.fullmatch(
+        rf"(?:(?:{_DIAGRAM_MEMORY_LABEL_WORDS})\s+Memory\s*){{1,5}}",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return True
+    if re.fullmatch(
+        r"(?:(?:Action|Video|World|Policy|Vision|Language)\s+Expert\s*){1,4}",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def looks_like_vertical_margin_metadata(block: TextBlock, plain: str) -> bool:
+    width = block.bbox[2] - block.bbox[0]
+    height = block.bbox[3] - block.bbox[1]
+    if width > 45.0 or height < 80.0:
+        return False
+    compact = " ".join(plain.split())
+    return bool(re.search(r"\barxiv\b|\[[a-z]{2}\.[a-z]{2}\]", compact, re.IGNORECASE))
 
 
 def looks_like_translatable_graphic_prose(block: TextBlock, plain: str) -> bool:
@@ -2300,8 +2327,11 @@ def looks_like_translatable_graphic_prose(block: TextBlock, plain: str) -> bool:
         return True
     if block.source_lines < 2:
         return False
-    if substantial_prose_word_count(plain) < 8:
+    prose_words = substantial_prose_word_count(plain)
+    if prose_words < 8:
         return False
+    if prose_words >= 20:
+        return True
     if _looks_like_code_or_symbolic_text(plain):
         return False
     return True
@@ -2955,7 +2985,44 @@ def record_is_table(record: _RawBlockRec) -> bool:
             table_rows += 1
         if table_rows >= 2:
             return True
-    return False
+    return record_is_single_row_table(record)
+
+
+def record_is_single_row_table(record: _RawBlockRec) -> bool:
+    """Single physical table rows are common for headers and summary rows.
+
+    They do not have the two same-y rows required by the stronger table
+    detector, so we only accept short, multi-cell rows containing numeric
+    values or table-header vocabulary.
+    """
+    rows = [row for row in group_same_y_lines(record.lines) if row_has_table_gap(row)]
+    if len(rows) != 1:
+        return False
+    row = rows[0]
+    if len(row) < 4:
+        return False
+    texts = [" ".join(strip_sentinels(line.text).split()) for line in row]
+    if any(not text for text in texts):
+        return False
+    if any(len(text) > 42 for text in texts):
+        return False
+    joined = " ".join(texts)
+    if re.search(r"(?<!\d)[.!?](?!\d)|[。！？]", joined):
+        return False
+    numeric_cells = sum(
+        1
+        for text in texts
+        if re.search(r"(?:\d+(?:\.\d+)?\s*%|\d+\s*/\s*\d+|^\d+(?:\.\d+)?$)", text)
+    )
+    if numeric_cells >= max(2, len(row) // 2):
+        return True
+    header_terms = re.compile(
+        r"\b(?:task|method|model|dataset|metric|average|avg|ours|baseline|"
+        r"attention|frames?|tokens?|window|success|rate|score|accuracy|"
+        r"precision|recall|f1|w/o|without)\b",
+        re.IGNORECASE,
+    )
+    return bool(header_terms.search(joined))
 
 
 def group_same_y_lines(lines: Sequence[_LineRec]) -> List[List[_LineRec]]:
@@ -3246,6 +3313,14 @@ def line_looks_like_summary_leadin(line: _LineRec) -> bool:
     return bool(re.match(r"^In\s+summary\b", compact, re.IGNORECASE))
 
 
+def accumulator_is_hyphenated_caption(accumulator: "_SegmentAccumulator") -> bool:
+    if not accumulator.lines:
+        return False
+    first = " ".join(strip_sentinels(accumulator.lines[0]).split()).strip()
+    last = strip_sentinels(accumulator.lines[-1]).rstrip()
+    return bool(_CAPTION_RE.match(first) and last.endswith("-"))
+
+
 def line_looks_like_list_item(line: _LineRec) -> bool:
     compact = " ".join(strip_sentinels(line.text).split()).strip()
     return bool(re.match(r"^(?:[•◦▪●]|\(?[a-zA-Z0-9]{1,3}\)|[-–])\s+", compact))
@@ -3324,6 +3399,10 @@ def span_is_leadin_marker(text: str) -> bool:
 def line_starts_with_leadin_marker(line: _LineRec) -> bool:
     compact = " ".join(strip_sentinels(line.text).split()).strip()
     return bool(re.match(r"^(?:\d+\)|\([a-zA-Z0-9]{1,3}\)|[•◦▪●])\s+", compact))
+
+
+def line_contains_url(line: _LineRec) -> bool:
+    return bool(URL_RE.search(strip_sentinels(line.text)))
 
 
 def looks_like_bold_leadin_text(prefix_text: str, tail_text: str) -> bool:
@@ -3603,9 +3682,12 @@ def segments_from_record(
     current = _SegmentAccumulator()
     current_has_inline_tail = False
     current_no_merge = False
+    current_min_y0: Optional[float] = None
+    current_inline_prefix_right: Optional[float] = None
 
     def flush_current() -> None:
-        nonlocal current, current_has_inline_tail, current_no_merge
+        nonlocal current, current_has_inline_tail, current_no_merge, current_min_y0
+        nonlocal current_inline_prefix_right
         block = current.flush(page_index)
         if block is not None:
             if current_has_inline_tail:
@@ -3613,12 +3695,31 @@ def segments_from_record(
                 # union rectangle can erase nearby display-equation glyphs when
                 # PyMuPDF vertically overlaps a prose tail and the next formula.
                 block.redact_bboxes = list(current.line_bboxes)
+            single_tail_after_prefix = (
+                current_inline_prefix_right is not None
+                and len(current.line_bboxes) == 1
+                and current.line_bboxes[0][0] >= current_inline_prefix_right - 0.5
+            )
+            if (
+                current_min_y0 is not None
+                and block.bbox[1] < current_min_y0
+                and not single_tail_after_prefix
+            ):
+                original_height = max(block.bbox[3] - block.bbox[1], block.font_size * 1.2)
+                y0 = current_min_y0
+                y1 = block.bbox[3]
+                if y1 <= y0:
+                    y1 = y0 + original_height
+                block.bbox = (block.bbox[0], y0, block.bbox[2], y1)
+                block.redact_bboxes = list(current.line_bboxes)
             if current_no_merge:
                 block.no_merge = True
             segments.append(block)
         current = _SegmentAccumulator()
         current_has_inline_tail = False
         current_no_merge = False
+        current_min_y0 = None
+        current_inline_prefix_right = None
 
     skip_line_index: Optional[int] = None
     for line_index, line in enumerate(record.lines):
@@ -3636,14 +3737,28 @@ def segments_from_record(
             if summary is not None:
                 segments.append(summary)
                 continue
+        if not equation_record and accumulator_is_hyphenated_caption(current):
+            _accumulate_line(current, line)
+            continue
         if not equation_record:
             split = split_bold_leadin_line(line)
             if split is not None:
                 flush_current()
                 leadin, tail = split
+                if line_contains_url(tail):
+                    url_block = body_block_from_line(page_index, line, no_merge=True)
+                    if url_block is not None:
+                        url_block.nowrap = True
+                        segments.append(url_block)
+                    continue
                 heading = heading_block_from_line(page_index, leadin)
                 if heading is not None:
                     segments.append(heading)
+                    current_min_y0 = max(
+                        current_min_y0 or float("-inf"),
+                        heading.bbox[3] + max(1.0, heading.font_size * 0.12),
+                    )
+                    current_inline_prefix_right = heading.bbox[2]
                 if line_starts_with_leadin_marker(leadin):
                     current_no_merge = True
                 line = tail
@@ -4566,7 +4681,9 @@ def insert_translated_text(
         # Table cell: one line at the original anchor, shrunk to the cell width.
         for token in tokens:
             token.width = token_width(token, fonts, font_size)
-        render_single_line(page, tokens, rect, fonts, font_size, block.color, False, min_size)
+        render_single_line(
+            page, tokens, rect, fonts, font_size, block.color, False, min_size
+        )
         return True
 
     chosen: Optional[Tuple[float, float, List[List[_Token]]]] = None
@@ -4596,7 +4713,17 @@ def insert_translated_text(
     size, leading, lines = chosen
 
     if len(lines) == 1:
-        render_single_line(page, lines[0], rect, fonts, size, block.color, centered, min_size)
+        render_single_line(
+            page,
+            lines[0],
+            rect,
+            fonts,
+            size,
+            block.color,
+            centered,
+            min_size,
+            top_aligned=block.block_type == "caption",
+        )
         return fitted
 
     ascent = fonts[0][0].ascender if fonts[0][0].ascender > 0 else 0.8
@@ -4625,6 +4752,7 @@ def render_single_line(
     color: Color,
     centered: bool,
     min_font_size: float,
+    top_aligned: bool = False,
 ) -> None:
     """Single-line blocks (headings, footers, captions cells): vertically
     centred; shrinks to the rect width when necessary."""
@@ -4637,8 +4765,11 @@ def render_single_line(
         width = sum(token.width for token in line)
     ascent = fonts[0][0].ascender if fonts[0][0].ascender > 0 else 0.8
     descent = abs(fonts[0][0].descender) if fonts[0][0].descender else 0.2
-    baseline = rect.y0 + (rect.height + size * (ascent - descent)) / 2.0
-    baseline = min(baseline, rect.y1 - size * descent * 0.5)
+    if top_aligned:
+        baseline = rect.y0 + size * 0.75
+    else:
+        baseline = rect.y0 + (rect.height + size * (ascent - descent)) / 2.0
+        baseline = min(baseline, rect.y1 - size * descent * 0.5)
     x_start = rect.x0 + max(0.0, (rect.width - width) / 2.0) if centered else rect.x0
     emit_tokens(page, line, fonts, size, color, x_start, baseline, {})
 

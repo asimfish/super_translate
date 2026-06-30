@@ -134,6 +134,30 @@ class PreserveOriginalBlockTests(unittest.TestCase):
 
         self.assertTrue(should_preserve_original_block(block, []))
 
+    def test_preserves_memorywam_diagram_memory_labels(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(117.5, 363.7, 290.1, 371.2),
+            text="Event-Boundary Memory Gist Memory Short-Term Memory",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+        )
+
+        self.assertTrue(should_preserve_original_block(block, []))
+
+    def test_preserves_vertical_arxiv_margin_metadata(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(10.9, 222.7, 37.6, 569.3),
+            text="arXiv:2606.20562v1  [cs.RO]  18 Jun 2026",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+        )
+
+        self.assertTrue(should_preserve_original_block(block, []))
+
     def test_does_not_preserve_body_discussion_of_object_head(self):
         block = TextBlock(
             page_index=0,
@@ -204,6 +228,25 @@ class PreserveOriginalBlockTests(unittest.TestCase):
 
         self.assertFalse(
             should_preserve_original_block(block, [(96.0, 487.5, 516.0, 583.4)])
+        )
+
+    def test_translates_long_prose_overlapping_figure_region_with_math_symbols(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(107.6, 324.4, 505.2, 477.9),
+            text=(
+                "Our hardware platform consists of an ARX dual-arm robot and a RealSense "
+                "D455 camera that provides RGB observations. We compare MemoryWAM with "
+                "two representative baselines: π0.5 [62] and LingBot-VA [7]. We design "
+                "two challenging memory-dependent tasks, Shell Game and Look and Press."
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=5,
+        )
+
+        self.assertFalse(
+            should_preserve_original_block(block, [(242.6, 302.5, 529.2, 439.5)])
         )
 
     def test_caption_over_graphic_region_is_still_translated(self):
@@ -335,6 +378,52 @@ def _line(text, bbox, is_cell=False):
 
 
 class TableDetectionTests(unittest.TestCase):
+    def test_single_row_table_header_is_detected(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Task", (115.4, 271.4, 132.8, 280.0)),
+                _line("w/o Anchor Frames", (173.2, 271.4, 246.2, 280.0)),
+                _line("w/o Gist Tokens", (256.6, 271.4, 315.3, 280.0)),
+                _line("w/o Sliding Window", (325.7, 271.4, 400.0, 280.0)),
+                _line("Full Attention", (410.3, 271.4, 462.5, 280.0)),
+                _line("Ours", (475.4, 271.4, 494.1, 280.0)),
+            ]
+        )
+
+        self.assertTrue(record_is_table(record))
+
+    def test_single_row_table_summary_is_detected(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Average", (115.4, 308.8, 143.9, 317.5)),
+                _line("74.0%", (198.4, 308.7, 221.0, 317.3)),
+                _line("40%", (278.0, 308.7, 293.9, 317.3)),
+                _line("82.5%", (351.5, 308.7, 374.1, 317.3)),
+                _line("91.5%", (425.1, 308.7, 447.7, 317.3)),
+                _line("92.5%", (472.9, 308.8, 496.6, 317.5)),
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertTrue(record_is_table(record))
+        self.assertTrue(all(block.block_type == "table" for block in blocks))
+        self.assertTrue(all(block.nowrap and block.no_merge for block in blocks))
+
+    def test_single_row_author_list_is_not_table(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Sizhe Yang", (114.0, 141.2, 171.4, 151.5)),
+                _line("Juncheng Mu", (181.9, 141.2, 250.6, 151.5)),
+                _line("Tianming Wei", (261.0, 141.3, 325.3, 151.5)),
+                _line("Chenhao Lu", (335.7, 141.2, 394.7, 151.5)),
+                _line("Xiaofan Li", (405.1, 141.2, 456.0, 151.5)),
+                _line("Linning Xu", (466.3, 141.2, 516.2, 151.5)),
+            ]
+        )
+
+        self.assertFalse(record_is_table(record))
+
     def test_algorithm_title_block_is_preserved(self):
         record = _RawBlockRec(
             lines=[
@@ -1528,6 +1617,98 @@ class PreserveGraphicsTextTests(unittest.TestCase):
             blocks[1].text,
             "The policy must localize task-relevant objects.",
         )
+
+    def test_segments_shift_multiline_leadin_body_below_heading(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="Abstract: Robust robotic manipulation requires memory.",
+                    bbox=(143.5, 483.6, 468.1, 493.7),
+                    spans=[
+                        _span("Abstract:", (143.5, 483.6, 184.7, 493.6), flags=16),
+                        _span(
+                            " Robust robotic manipulation requires memory.",
+                            (184.7, 483.7, 468.1, 493.7),
+                            flags=0,
+                        ),
+                    ],
+                ),
+                _line(
+                    "World action models preserve historical observations.",
+                    (143.4, 495.6, 469.9, 505.6),
+                ),
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0].text, "Abstract:")
+        self.assertGreaterEqual(blocks[1].bbox[1], blocks[0].bbox[3])
+        self.assertLess(blocks[1].redact_bboxes[0][1], blocks[1].bbox[1])
+
+    def test_segments_keep_project_page_url_with_label(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="Project page: https://yangsizhe.github.io/MemoryWAM/",
+                    bbox=(200.8, 195.8, 429.9, 205.8),
+                    spans=[
+                        _span("Project page:", (200.8, 195.8, 257.3, 205.8), flags=16),
+                        _span(
+                            " https://yangsizhe.github.io/MemoryWAM/",
+                            (257.3, 195.9, 429.9, 205.8),
+                            flags=0,
+                        ),
+                    ],
+                )
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].text, "Project page: https://yangsizhe.github.io/MemoryWAM/")
+        self.assertTrue(blocks[0].nowrap)
+        self.assertTrue(blocks[0].no_merge)
+        self.assertGreater(blocks[0].bbox[2], 420.0)
+
+    def test_segments_keep_hyphenated_caption_continuation_together(self):
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="Table 2: Results of real-world experi-",
+                    bbox=(337.4, 487.2, 505.7, 497.3),
+                    spans=[
+                        _span("Table 2:", (337.4, 487.3, 371.6, 497.3), flags=4),
+                        _span(
+                            " Results of real-world experi-",
+                            (371.6, 487.2, 505.7, 497.2),
+                            flags=20,
+                        ),
+                    ],
+                ),
+                _LineRec(
+                    text="ments. We report the number of successes",
+                    bbox=(337.7, 498.2, 504.0, 508.2),
+                    spans=[
+                        _span("ments.", (337.7, 498.2, 365.1, 508.1), flags=20),
+                        _span(
+                            " We report the number of successes",
+                            (365.1, 498.3, 504.0, 508.2),
+                            flags=4,
+                        ),
+                    ],
+                ),
+                _line("over the total number of trials.", (337.7, 509.2, 458.6, 519.1)),
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("real-world experiments.", blocks[0].text)
+        self.assertIn("number of successes over the total number of trials", blocks[0].text)
 
     def test_segments_split_numbered_marker_before_bold_leadin(self):
         record = _RawBlockRec(
