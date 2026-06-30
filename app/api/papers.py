@@ -1332,9 +1332,15 @@ async def _do_translate(
         except TranslationCancelledError:
             await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)
             return
-        if _has_unresolved_error(unresolved_issues):
+        if _has_blocking_qa_error(unresolved_issues):
             trans_result = TranslationResult(
-                error="QA found unresolved layout or translation issues after post-checks"
+                error="QA found blocking layout or translation issues after post-checks"
+            )
+        elif _has_unresolved_error(unresolved_issues):
+            _append_log(
+                paper_id,
+                loop,
+                "译后检查仍有未解决问题，已保留译文并生成 QA 报告供复核",
             )
 
     elapsed = time.monotonic() - start_time
@@ -1577,6 +1583,22 @@ def _has_fixable_layout_issue(issues: list) -> bool:
 
 def _has_unresolved_error(issues: list) -> bool:
     return any(getattr(issue, "severity", "warning") == "error" for issue in issues)
+
+
+_BLOCKING_QA_ERROR_CODES = {
+    "qa_open_failed",
+    "page_count_mismatch",
+    "empty_page",
+    "page_size_mismatch",
+}
+
+
+def _has_blocking_qa_error(issues: list) -> bool:
+    return any(
+        getattr(issue, "severity", "warning") == "error"
+        and getattr(issue, "code", "") in _BLOCKING_QA_ERROR_CODES
+        for issue in issues
+    )
 
 
 def _fix_translated_outputs(trans_result: TranslationResult) -> bool:
