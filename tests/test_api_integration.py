@@ -34,7 +34,11 @@ def client():
     if rl:
         rl.reset()
 
-    return TestClient(app)
+    with (
+        patch("app.main._recover_stuck_translations", new_callable=AsyncMock, return_value=[]),
+        TestClient(app) as test_client,
+    ):
+        yield test_client
 
 
 @pytest.fixture
@@ -344,6 +348,7 @@ class TestPaperUploadEndpoint:
             patch("app.api.papers.generate_stored_filename") as mock_gen,
             patch("app.api.papers.settings") as mock_settings,
             patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")),
+            patch("app.main._recover_stuck_translations", new_callable=AsyncMock, return_value=[]),
             TestClient(app, raise_server_exceptions=False) as c,
         ):
             mock_gen.return_value = "stored_test.pdf"
@@ -373,6 +378,7 @@ class TestPaperUploadEndpoint:
             patch("app.api.papers.settings") as mock_settings,
             patch("app.api.papers.get_pdf_info", return_value=((1, 100), "Test")),
             patch("app.api.papers.extract_title_from_pdf", return_value="Test"),
+            patch("app.main._recover_stuck_translations", new_callable=AsyncMock, return_value=[]),
             TestClient(app, raise_server_exceptions=False) as c,
         ):
             mock_gen.return_value = "stored_test.pdf"
@@ -402,6 +408,7 @@ class TestPaperUploadEndpoint:
             patch("app.api.papers.generate_stored_filename") as mock_gen,
             patch("app.api.papers.settings") as mock_settings,
             patch.object(Path, "open", mock_open),
+            patch("app.main._recover_stuck_translations", new_callable=AsyncMock, return_value=[]),
             TestClient(app, raise_server_exceptions=False) as c,
         ):
             mock_gen.return_value = "stored_test.pdf"
@@ -855,6 +862,61 @@ class TestTranslationEndpoint:
             },
         ]
 
+    def test_qa_rolls_back_layout_fix_when_issue_count_worsens(self, tmp_path):
+        from app.api.papers import _run_post_translation_qa
+        from app.services.translator import TranslationResult
+
+        mono_path = tmp_path / "paper-mono.pdf"
+        dual_path = tmp_path / "paper-dual.pdf"
+        input_path = tmp_path / "paper.pdf"
+        mono_path.write_bytes(b"%PDF-1.4 mono-original")
+        dual_path.write_bytes(b"%PDF-1.4 dual-original")
+        input_path.write_bytes(b"%PDF-1.4 input")
+
+        before = MagicMock()
+        before.code = "text_overlap"
+        before.severity = "warning"
+        before.message = "Page 1: text blocks overlap"
+        after_1 = MagicMock()
+        after_1.code = "text_overlap"
+        after_1.severity = "warning"
+        after_1.message = "Page 1: text blocks overlap"
+        after_2 = MagicMock()
+        after_2.code = "untranslated_english"
+        after_2.severity = "error"
+        after_2.message = "Page 1: untranslated English"
+
+        def worsen_layout(path):
+            path.write_bytes(b"%PDF-1.4 worsened")
+            return True
+
+        with (
+            patch("app.api.papers._append_log"),
+            patch("app.api.papers._set_translation_stage"),
+            patch("app.api.papers._record_terminology_candidates"),
+            patch("app.api.papers._is_cancel_requested", return_value=False),
+            patch(
+                "pdf_zh_translator.pdf_layout.verify_translation_issues",
+                side_effect=[[before], [after_1, after_2]],
+            ),
+            patch("app.services.layout_fix.fix_translated_layout", side_effect=worsen_layout),
+        ):
+            unresolved = _run_post_translation_qa(
+                "abcd12345678",
+                MagicMock(),
+                input_path,
+                TranslationResult(mono_path=mono_path, dual_path=dual_path),
+                qa_mode="single",
+                max_passes=4,
+            )
+
+        assert unresolved == [before]
+        assert mono_path.read_bytes() == b"%PDF-1.4 mono-original"
+        assert dual_path.read_bytes() == b"%PDF-1.4 dual-original"
+        report = json.loads(mono_path.with_suffix(".qa.json").read_text(encoding="utf-8"))
+        assert report["status"] == "warning"
+        assert report["issue_count"] == 1
+
 
 class TestCancelEndpoint:
     """Test cancel translation endpoint."""
@@ -988,6 +1050,9 @@ class TestDownloadEndpoints:
             response = client.get(f"/api/papers/{sample_paper.id}/download/original")
             assert response.status_code == 200
             assert response.headers["content-type"] == "application/pdf"
+            assert response.headers["accept-ranges"] == "bytes"
+            assert response.headers["cache-control"] == "private, max-age=300, no-transform"
+            assert response.headers["content-encoding"] == "identity"
 
     def test_view_original_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful original PDF view."""
@@ -1004,6 +1069,9 @@ class TestDownloadEndpoints:
             mock_settings.papers_path = tmp_path
             response = client.get(f"/api/papers/{sample_paper.id}/view/original")
             assert response.status_code == 200
+            assert response.headers["accept-ranges"] == "bytes"
+            assert response.headers["cache-control"] == "private, max-age=300, no-transform"
+            assert response.headers["content-encoding"] == "identity"
 
     def test_view_translated_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful translated PDF view."""
@@ -1021,6 +1089,9 @@ class TestDownloadEndpoints:
             mock_settings.translations_path = tmp_path
             response = client.get(f"/api/papers/{sample_paper.id}/view/translated")
             assert response.status_code == 200
+            assert response.headers["accept-ranges"] == "bytes"
+            assert response.headers["cache-control"] == "private, max-age=300, no-transform"
+            assert response.headers["content-encoding"] == "identity"
 
     def test_download_translated_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful translated PDF download."""
@@ -1665,7 +1736,7 @@ class TestRunTranslation:
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
-    def test_nonblocking_qa_error_keeps_translation_completed(
+    def test_qa_error_fails_translation_but_keeps_outputs(
         self, mock_settings, mock_translate, tmp_path
     ):
         from app.api.papers import _run_translation
@@ -1699,6 +1770,7 @@ class TestRunTranslation:
         mock_translate.side_effect = fake_translate
 
         qa_issue = MagicMock()
+        qa_issue.page = 1
         qa_issue.code = "formula_changed"
         qa_issue.severity = "error"
         qa_issue.message = "Page 1: formula fragment appears missing"
@@ -1709,8 +1781,9 @@ class TestRunTranslation:
         ):
             _run_translation("paper123", "google", "fast")
 
-        assert paper.translation_status == "completed"
-        assert paper.translation_error is None
+        assert paper.translation_status == "failed"
+        assert "译后检查未通过：1 个错误" in paper.translation_error
+        assert "公式变更（第 1 页）" in paper.translation_error
         assert paper.translated_filename == "paper123/test-mono.pdf"
         assert mono_path.exists()
 
@@ -1750,6 +1823,7 @@ class TestRunTranslation:
         mock_translate.side_effect = fake_translate
 
         qa_issue = MagicMock()
+        qa_issue.page = 0
         qa_issue.code = "page_count_mismatch"
         qa_issue.severity = "error"
         qa_issue.message = "Translated PDF page count differs from original"
@@ -1761,8 +1835,10 @@ class TestRunTranslation:
             _run_translation("paper123", "google", "fast")
 
         assert paper.translation_status == "failed"
-        assert "blocking layout" in paper.translation_error
-        assert not mono_path.exists()
+        assert "译后检查阻断：1 个错误" in paper.translation_error
+        assert "页数不一致" in paper.translation_error
+        assert paper.translated_filename == "paper123/test-mono.pdf"
+        assert mono_path.exists()
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")
@@ -2243,11 +2319,12 @@ class TestRunTranslation:
 
     @patch("app.api.papers._reset_paper_status")
     @patch("app.api.papers._translation_semaphore")
-    def test_semaphore_timeout_resets_paper(self, mock_semaphore, mock_reset):
+    def test_semaphore_acquire_failure_resets_paper(self, mock_semaphore, mock_reset):
         from app.api.papers import _run_translation
 
         mock_semaphore.acquire.return_value = False
         _run_translation("paper123", "google", "fast")
+        mock_semaphore.acquire.assert_called_once_with()
         mock_reset.assert_called_once_with(
             "paper123", "Translation queue is busy, please try again later"
         )
@@ -2415,6 +2492,41 @@ class TestRunTranslation:
         ):
             # Must not raise
             _reset_paper_status("paper123", "some error")
+
+    def test_force_terminal_state_syncs_paper_and_latest_job(self):
+        from app.api.papers import _force_translation_job_terminal_state
+
+        db = AsyncMock()
+        db.execute = AsyncMock()
+        db.commit = AsyncMock()
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.core.database.async_session", MagicMock(return_value=ctx)):
+            asyncio.run(
+                _force_translation_job_terminal_state(
+                    "job123",
+                    status="failed",
+                    error="QA failed",
+                    paper_id="paper123",
+                    paper_values={
+                        "translation_status": "failed",
+                        "translation_progress": 1.0,
+                        "translation_error": "QA failed",
+                        "translation_stage": "译后检查失败",
+                    },
+                )
+            )
+
+        assert db.execute.await_count == 2
+        paper_statement = db.execute.await_args_list[0].args[0]
+        job_statement = db.execute.await_args_list[1].args[0]
+        assert paper_statement.table.name == "papers"
+        assert job_statement.table.name == "translation_jobs"
+        assert paper_statement.compile().params["translation_status"] == "failed"
+        assert job_statement.compile().params["status"] == "failed"
+        db.commit.assert_awaited_once()
 
     """Test custom validation error handling."""
 
@@ -2609,11 +2721,19 @@ class TestSecurityHeaders:
         csp = response.headers["Content-Security-Policy"]
         assert "default-src 'self'" in csp
         assert "script-src 'self'" in csp
+        assert "worker-src 'self' blob:" in csp
         assert "style-src 'self' 'unsafe-inline'" in csp
         assert "connect-src 'self'" in csp
         assert "font-src 'self'" in csp
         assert "frame-ancestors 'none'" in csp
         assert "script-src 'self';" in csp
+
+    def test_pdf_worker_static_asset_is_served(self, client):
+        response = client.get("/static/js/pdf.worker.min.js")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/javascript")
+        assert len(response.content) > 1_000_000
 
     def test_security_headers_on_api(self, client, mock_db):
         mock_db.scalar.return_value = 0
@@ -2647,13 +2767,17 @@ class TestRecoverStuckTranslations:
 
         queued_result = MagicMock()
         queued_result.scalars.return_value.all.return_value = []
+        running_result = MagicMock()
+        running_result.scalars.return_value.all.return_value = []
         paper_result = MagicMock()
         paper_result.rowcount = 1
-        job_result = MagicMock()
-        job_result.rowcount = 1
+        stale_job_result = MagicMock()
+        stale_job_result.rowcount = 0
 
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(side_effect=[queued_result, paper_result, job_result])
+        mock_session.execute = AsyncMock(
+            side_effect=[queued_result, running_result, paper_result, stale_job_result]
+        )
         mock_session.commit = AsyncMock()
 
         mock_ctx_manager = MagicMock()
@@ -2672,13 +2796,17 @@ class TestRecoverStuckTranslations:
 
         queued_result = MagicMock()
         queued_result.scalars.return_value.all.return_value = []
+        running_result = MagicMock()
+        running_result.scalars.return_value.all.return_value = []
         paper_result = MagicMock()
         paper_result.rowcount = 0
-        job_result = MagicMock()
-        job_result.rowcount = 0
+        stale_job_result = MagicMock()
+        stale_job_result.rowcount = 0
 
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(side_effect=[queued_result, paper_result, job_result])
+        mock_session.execute = AsyncMock(
+            side_effect=[queued_result, running_result, paper_result, stale_job_result]
+        )
         mock_session.commit = AsyncMock()
 
         mock_ctx_manager = MagicMock()
@@ -2698,13 +2826,17 @@ class TestRecoverStuckTranslations:
 
         queued_result = MagicMock()
         queued_result.scalars.return_value.all.return_value = []
+        running_result = MagicMock()
+        running_result.scalars.return_value.all.return_value = []
         paper_result = MagicMock()
         paper_result.rowcount = 1
-        job_result = MagicMock()
-        job_result.rowcount = 0
+        stale_job_result = MagicMock()
+        stale_job_result.rowcount = 0
 
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(side_effect=[queued_result, paper_result, job_result])
+        mock_session.execute = AsyncMock(
+            side_effect=[queued_result, running_result, paper_result, stale_job_result]
+        )
         mock_session.commit = AsyncMock(side_effect=Exception("database locked"))
 
         mock_ctx_manager = MagicMock()
@@ -2738,16 +2870,27 @@ class TestRecoverStuckTranslations:
 
         queued_result = MagicMock()
         queued_result.scalars.return_value.all.return_value = [job]
+        running_result = MagicMock()
+        running_result.scalars.return_value.all.return_value = []
         paper_result = MagicMock()
         paper_result.rowcount = 0
-        job_result = MagicMock()
-        job_result.rowcount = 0
+        resumed_job_result = MagicMock()
+        resumed_job_result.rowcount = 1
+        stale_job_result = MagicMock()
+        stale_job_result.rowcount = 0
         queued_paper_result = MagicMock()
         queued_paper_result.rowcount = 1
 
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(
-            side_effect=[queued_result, paper_result, job_result, queued_paper_result]
+            side_effect=[
+                queued_result,
+                running_result,
+                paper_result,
+                resumed_job_result,
+                stale_job_result,
+                queued_paper_result,
+            ]
         )
         mock_session.commit = AsyncMock()
 
@@ -2756,7 +2899,7 @@ class TestRecoverStuckTranslations:
         mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
         mock_factory = MagicMock(return_value=mock_ctx_manager)
         with patch("app.core.database.async_session", mock_factory):
-            resume_payloads = await _recover_stuck_translations()
+            resume_payloads = await _recover_stuck_translations(resume_queued=True)
 
         assert resume_payloads == [
             {
@@ -2775,9 +2918,164 @@ class TestRecoverStuckTranslations:
         ]
         mock_session.commit.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_returns_running_jobs_for_startup_resume(self):
+        from app.main import _recover_stuck_translations
+
+        job = MagicMock()
+        job.id = "job456"
+        job.paper_id = "efgh12345678"
+        job.backend = "deepseek"
+        job.quality = "quality"
+        job.preserve_graphics_text = True
+        job.skip_overflow = True
+        job.qa_mode = "single"
+        job.qa_max_passes = 2
+        job.ocr_mode = "off"
+        job.ocr_language = "eng"
+        job.ocr_dpi = 180
+
+        queued_result = MagicMock()
+        queued_result.scalars.return_value.all.return_value = []
+        running_result = MagicMock()
+        running_result.scalars.return_value.all.return_value = [job]
+        paper_result = MagicMock()
+        paper_result.rowcount = 0
+        resumed_job_result = MagicMock()
+        resumed_job_result.rowcount = 1
+        stale_job_result = MagicMock()
+        stale_job_result.rowcount = 0
+        running_paper_result = MagicMock()
+        running_paper_result.rowcount = 1
+
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                queued_result,
+                running_result,
+                paper_result,
+                resumed_job_result,
+                stale_job_result,
+                running_paper_result,
+            ]
+        )
+        mock_session.commit = AsyncMock()
+
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx_manager)
+        with patch("app.core.database.async_session", mock_factory):
+            resume_payloads = await _recover_stuck_translations(resume_queued=True)
+
+        assert resume_payloads == [
+            {
+                "paper_id": "efgh12345678",
+                "backend": "deepseek",
+                "quality": "quality",
+                "preserve_graphics_text": True,
+                "skip_overflow": True,
+                "qa_mode": "single",
+                "qa_max_passes": 2,
+                "ocr_mode": "off",
+                "ocr_language": "eng",
+                "ocr_dpi": 180,
+                "job_id": "job456",
+            }
+        ]
+        mock_session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_marks_stale_running_jobs_failed_without_resuming(self):
+        from app.main import _recover_stuck_translations
+
+        queued_result = MagicMock()
+        queued_result.scalars.return_value.all.return_value = []
+        running_result = MagicMock()
+        running_result.scalars.return_value.all.return_value = []
+        paper_result = MagicMock()
+        paper_result.rowcount = 0
+        stale_job_result = MagicMock()
+        stale_job_result.rowcount = 2
+
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(
+            side_effect=[queued_result, running_result, paper_result, stale_job_result]
+        )
+        mock_session.commit = AsyncMock()
+
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx_manager)
+        with patch("app.core.database.async_session", mock_factory):
+            resume_payloads = await _recover_stuck_translations(resume_queued=True)
+
+        assert resume_payloads == []
+        mock_session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_marks_queued_jobs_failed_when_startup_resume_disabled(self):
+        from app.main import _recover_stuck_translations
+
+        job = MagicMock()
+        job.id = "job123"
+        job.paper_id = "abcd12345678"
+        job.backend = "deepseek"
+        job.quality = "balanced"
+        job.preserve_graphics_text = True
+        job.skip_overflow = False
+        job.qa_mode = "single"
+        job.qa_max_passes = 4
+        job.ocr_mode = "off"
+        job.ocr_language = "eng"
+        job.ocr_dpi = 180
+
+        queued_result = MagicMock()
+        queued_result.scalars.return_value.all.return_value = [job]
+        running_result = MagicMock()
+        running_result.scalars.return_value.all.return_value = []
+        paper_result = MagicMock()
+        paper_result.rowcount = 1
+        failed_running_job_result = MagicMock()
+        failed_running_job_result.rowcount = 0
+        queued_job_result = MagicMock()
+        queued_job_result.rowcount = 1
+
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                queued_result,
+                running_result,
+                paper_result,
+                failed_running_job_result,
+                queued_job_result,
+            ]
+        )
+        mock_session.commit = AsyncMock()
+
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_ctx_manager)
+        with patch("app.core.database.async_session", mock_factory):
+            resume_payloads = await _recover_stuck_translations(resume_queued=False)
+
+        assert resume_payloads == []
+        assert mock_session.execute.await_count == 5
+        mock_session.commit.assert_awaited_once()
+
 
 class TestEnsureDirs:
     """Test directory creation on startup."""
+
+    def test_startup_translation_resume_enabled_by_default(self):
+        from app.core.config import Settings
+
+        settings = Settings(_env_file=None)
+
+        assert settings.resume_queued_translations_on_startup is True
+        assert settings.translation_timeout_seconds == 1800
 
     def test_creates_all_directories(self, tmp_path):
         from app.core.config import Settings, ensure_dirs
@@ -2833,11 +3131,11 @@ class TestLifespan:
 
         mock_dirs.assert_called_once()
         mock_db.assert_awaited_once()
-        mock_recover.assert_awaited_once()
+        mock_recover.assert_awaited_once_with(resume_queued=True)
 
     @pytest.mark.asyncio
     async def test_lifespan_schedules_recovered_jobs(self):
-        """Queued durable jobs should restart when the app starts."""
+        """Durable jobs should restart when the app starts."""
         from app.main import lifespan
 
         payload = {"job_id": "job123", "paper_id": "abcd12345678"}
@@ -2845,16 +3143,18 @@ class TestLifespan:
         with (
             patch("app.main.ensure_dirs"),
             patch("app.main.init_db", new_callable=AsyncMock),
+            patch("app.main.settings.resume_queued_translations_on_startup", True),
             patch(
                 "app.main._recover_stuck_translations",
                 new_callable=AsyncMock,
                 return_value=[payload],
-            ),
+            ) as mock_recover,
             patch("app.main._schedule_recovered_translation") as mock_schedule,
         ):
             async with lifespan(MagicMock()):
                 pass
 
+        mock_recover.assert_awaited_once_with(resume_queued=True)
         mock_schedule.assert_called_once_with(payload)
 
 

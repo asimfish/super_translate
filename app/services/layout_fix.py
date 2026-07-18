@@ -191,7 +191,8 @@ def _fix_page_layout(page: object) -> int:
     to_fix = [
         b
         for b in blocks
-        if _needs_fix(b, columns, page_height) and not _block_overlaps_image(b, image_bboxes)
+        if _needs_fix(b, columns, page_height, page.rect.width)
+        and not _block_overlaps_image(b, image_bboxes)
     ]
 
     # Also flag full-width blocks that overlap with caption blocks
@@ -641,6 +642,7 @@ def _needs_fix(
     block: TextBlockInfo,
     columns: list[ColumnInfo],
     page_height: float = 792.0,
+    page_width: float = 612.0,
 ) -> bool:
     """Check if a text block needs position/width correction."""
     x0, y0, x1, y1 = block.bbox
@@ -655,9 +657,12 @@ def _needs_fix(
     if y0 < PAGE_MARGIN_TOP or y1 > page_height - PAGE_MARGIN_BOTTOM:
         return False
 
-    # Always fix line number artifacts (before short text filter)
+    # Only page-edge numbers are manuscript line artifacts. Interior numeric
+    # blocks are commonly chart ticks or table values and must stay anchored.
     if _is_line_number_text(block.text):
-        return True
+        center_x = (x0 + x1) / 2.0
+        edge_band = max(24.0, page_width * 0.10)
+        return center_x <= edge_band or center_x >= page_width - edge_band
 
     # Fix blocks that contain embedded line numbers
     if _has_embedded_line_numbers(block.text):

@@ -52,12 +52,22 @@ def _translation_job_resume_payload(job) -> dict[str, object]:
     }
 
 
-def _schedule_recovered_translation(payload: dict[str, object]) -> None:
+def _schedule_recovered_translation(
+    payload: dict[str, object],
+    delay_seconds: float | None = None,
+) -> None:
     """Resume a durable queued translation job after startup."""
     from app.api.papers import _run_translation
 
-    task = asyncio.create_task(
-        asyncio.to_thread(
+    async def _run_after_delay() -> None:
+        delay = (
+            settings.resume_queued_translations_delay_seconds
+            if delay_seconds is None
+            else delay_seconds
+        )
+        if delay > 0:
+            await asyncio.sleep(delay)
+        await asyncio.to_thread(
             _run_translation,
             payload["paper_id"],
             payload["backend"],
@@ -71,17 +81,21 @@ def _schedule_recovered_translation(payload: dict[str, object]) -> None:
             payload["ocr_dpi"],
             payload["job_id"],
         )
-    )
+
+    task = asyncio.create_task(_run_after_delay())
     _startup_translation_tasks.add(task)
     task.add_done_callback(_startup_translation_tasks.discard)
 
 
-async def _recover_stuck_translations() -> list[dict[str, object]]:
+async def _recover_stuck_translations(
+    *,
+    resume_queued: bool = True,
+) -> list[dict[str, object]]:
     """Recover durable translation records after a crash.
 
-    Queued jobs are safe to resume because they have not started running yet.
-    Running jobs are marked failed because the previous process may have died
-    mid-write; re-running them automatically could duplicate side effects.
+    Queued jobs and interrupted running jobs are safe to resume when startup
+    recovery is enabled. The translation runner cleans the output directory
+    before a re-run, so stale partial PDFs are discarded instead of reused.
     """
     from sqlalchemy import func, select
     from sqlalchemy import update as sa_update
@@ -97,46 +111,139 @@ async def _recover_stuck_translations() -> list[dict[str, object]]:
     async with async_session() as db:
         queued_result = await db.execute(
             select(TranslationJob)
+            .join(Paper, Paper.id == TranslationJob.paper_id)
             .where(TranslationJob.status == TranslationJobStatus.QUEUED.value)
+            .where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
             .order_by(TranslationJob.created_at.asc())
         )
         queued_jobs = list(queued_result.scalars().all())
-        resume_payloads = [_translation_job_resume_payload(job) for job in queued_jobs]
-        queued_paper_ids = [payload["paper_id"] for payload in resume_payloads]
+        running_result = await db.execute(
+            select(TranslationJob)
+            .join(Paper, Paper.id == TranslationJob.paper_id)
+            .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
+            .where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
+            .order_by(TranslationJob.started_at.asc(), TranslationJob.created_at.asc())
+        )
+        running_jobs = list(running_result.scalars().all())
+        resumable_jobs = [*queued_jobs, *running_jobs] if resume_queued else []
+        resume_payloads = [_translation_job_resume_payload(job) for job in resumable_jobs]
+        resumable_paper_ids = list(
+            dict.fromkeys(str(payload["paper_id"]) for payload in resume_payloads)
+        )
+        resumable_job_ids = [str(job.id) for job in resumable_jobs]
 
         paper_update = sa_update(Paper).where(
             Paper.translation_status == TranslationStatus.TRANSLATING.value
         )
-        if queued_paper_ids:
-            paper_update = paper_update.where(Paper.id.not_in(queued_paper_ids))
+        if resumable_paper_ids:
+            paper_update = paper_update.where(Paper.id.not_in(resumable_paper_ids))
         paper_result = await db.execute(
             paper_update.values(
                 translation_status=TranslationStatus.FAILED.value,
                 translation_error="Translation was interrupted (server restart)",
             ),
         )
-        job_result = await db.execute(
-            sa_update(TranslationJob)
-            .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
-            .values(
-                status=TranslationJobStatus.FAILED.value,
-                error="Translation was interrupted (server restart)",
-                finished_at=func.now(),
-                updated_at=func.now(),
-            ),
-        )
+        resumed_job_result = None
+        failed_running_job_result = None
+        if resume_queued and resumable_job_ids:
+            resumed_job_result = await db.execute(
+                sa_update(TranslationJob)
+                .where(
+                    TranslationJob.id.in_(resumable_job_ids),
+                    TranslationJob.status.in_(
+                        [
+                            TranslationJobStatus.QUEUED.value,
+                            TranslationJobStatus.RUNNING.value,
+                        ]
+                    ),
+                )
+                .values(
+                    status=TranslationJobStatus.QUEUED.value,
+                    progress=0.0,
+                    cancel_requested=False,
+                    heartbeat_at=None,
+                    started_at=None,
+                    finished_at=None,
+                    error=None,
+                    updated_at=func.now(),
+                ),
+            )
+        stale_job_result = None
+        if resume_queued:
+            stale_job_update = sa_update(TranslationJob).where(
+                TranslationJob.status.in_(
+                    [
+                        TranslationJobStatus.QUEUED.value,
+                        TranslationJobStatus.RUNNING.value,
+                    ]
+                )
+            )
+            if resumable_job_ids:
+                stale_job_update = stale_job_update.where(
+                    TranslationJob.id.not_in(resumable_job_ids)
+                )
+            stale_job_result = await db.execute(
+                stale_job_update.values(
+                    status=TranslationJobStatus.FAILED.value,
+                    error=(
+                        "Translation job no longer has an active translating paper "
+                        "after server restart"
+                    ),
+                    finished_at=func.now(),
+                    updated_at=func.now(),
+                ),
+            )
+        elif not resume_queued:
+            failed_running_job_result = await db.execute(
+                sa_update(TranslationJob)
+                .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
+                .values(
+                    status=TranslationJobStatus.FAILED.value,
+                    error="Translation was interrupted (server restart)",
+                    finished_at=func.now(),
+                    updated_at=func.now(),
+                ),
+            )
+        queued_job_result = None
+        if not resume_queued:
+            queued_job_result = await db.execute(
+                sa_update(TranslationJob)
+                .where(
+                    TranslationJob.status == TranslationJobStatus.QUEUED.value,
+                )
+                .values(
+                    status=TranslationJobStatus.FAILED.value,
+                    error="Queued translation was not resumed automatically after server restart",
+                    finished_at=func.now(),
+                    updated_at=func.now(),
+                ),
+            )
         refreshed = 0
-        if queued_paper_ids:
-            queued_paper_result = await db.execute(
+        if resume_queued and resumable_paper_ids:
+            resumable_paper_result = await db.execute(
                 sa_update(Paper)
-                .where(Paper.id.in_(queued_paper_ids))
+                .where(Paper.id.in_(resumable_paper_ids))
                 .values(
                     translation_status=TranslationStatus.TRANSLATING.value,
                     translation_error=None,
+                    translation_progress=0.0,
+                    translation_stage="等待恢复",
+                    translation_eta_seconds=None,
                 ),
             )
-            refreshed = queued_paper_result.rowcount or 0
-        recovered = (paper_result.rowcount or 0) + (job_result.rowcount or 0) + refreshed
+            refreshed = resumable_paper_result.rowcount or 0
+        recovered = (
+            (paper_result.rowcount or 0)
+            + ((resumed_job_result.rowcount or 0) if resumed_job_result is not None else 0)
+            + ((stale_job_result.rowcount or 0) if stale_job_result is not None else 0)
+            + (
+                (failed_running_job_result.rowcount or 0)
+                if failed_running_job_result is not None
+                else 0
+            )
+            + ((queued_job_result.rowcount or 0) if queued_job_result is not None else 0)
+            + refreshed
+        )
         if recovered > 0:
             try:
                 await db.commit()
@@ -145,18 +252,21 @@ async def _recover_stuck_translations() -> list[dict[str, object]]:
                 await db.rollback()
                 logger.exception("Failed to recover stuck translations")
                 return []
-        return resume_payloads
+        return resume_payloads if resume_queued else []
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ensure_dirs()
     await init_db()
-    queued_jobs = await _recover_stuck_translations()
-    for payload in queued_jobs:
+    resume_queued = settings.resume_queued_translations_on_startup
+    recovered_jobs = await _recover_stuck_translations(resume_queued=resume_queued)
+    for payload in recovered_jobs:
         _schedule_recovered_translation(payload)
-    if queued_jobs:
-        logger.info("Resumed %d queued translation job(s)", len(queued_jobs))
+    if recovered_jobs:
+        logger.info("Resumed %d translation job(s)", len(recovered_jobs))
+    elif not resume_queued:
+        logger.info("Startup translation resume is disabled")
     logger.info("Super Translate started at http://localhost:8000")
     yield
 
@@ -208,6 +318,7 @@ async def add_security_headers(request: Request, call_next: RequestResponseEndpo
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self'; "
+        "worker-src 'self' blob:; "
         "style-src 'self' 'unsafe-inline'; "
         "font-src 'self'; "
         "img-src 'self' data:; "

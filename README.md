@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-670%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-807%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.12+-blue)]()
@@ -11,7 +11,7 @@ Super Translate is a web-based system for translating English academic papers in
 
 ## Features
 
-- **Smart Translation Engine** — Supports DeepSeek, OpenAI, and Google Translate backends with automatic fallback
+- **Smart Translation Engine** — Supports DeepSeek, Kimi K3, OpenAI, and Google Translate backends with automatic fallback
 - **Layout Preservation** — Maintains original page dimensions, images, vector graphics, and text block positions
 - **Formula Protection** — Mathematical formulas, equations, and variables are preserved as-is
 - **Figure/Text Safety** — Preserves figure internals while translating captions and surrounding prose
@@ -54,6 +54,9 @@ export PAPER_CHINA_DEEPSEEK_API_KEY="your-api-key-here"
 
 # Or use OpenAI
 export PAPER_CHINA_OPENAI_API_KEY="your-openai-key"
+
+# Or use Kimi K3 (select "Kimi K3" in the reader toolbar)
+export PAPER_CHINA_MOONSHOT_API_KEY="your-moonshot-key"
 ```
 
 ### 3. Start the Server
@@ -80,16 +83,22 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PAPER_CHINA_DEEPSEEK_API_KEY` | — | DeepSeek API key |
+| `PAPER_CHINA_MOONSHOT_API_KEY` | — | Moonshot API key for Kimi |
+| `PAPER_CHINA_MOONSHOT_BASE_URL` | `https://api.moonshot.cn/v1` | Kimi OpenAI-compatible API base URL |
+| `PAPER_CHINA_KIMI_MODEL` | `kimi-k3` | Kimi model ID |
 | `PAPER_CHINA_OPENAI_API_KEY` | — | OpenAI API key |
 | `PAPER_CHINA_TRANSLATION_ENGINE` | `native` | Translation engine (`native` or `pdf2zh`) |
 | `PAPER_CHINA_TRANSLATION_BACKEND` | `deepseek` | Default translation backend |
-| `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` | `600` | Global timeout for each translation run |
+| `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` | `1800` | Global timeout for each translation run |
 | `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `3` | Max concurrent translation jobs |
 | `PAPER_CHINA_TRANSLATION_CONCURRENCY` | `4` | Parallel supplier requests within one translation (lower to `1` for rate-limited API keys) |
 | `PAPER_CHINA_API_TOKEN` | — | Optional bearer token for `/api/*` requests |
 | `PAPER_CHINA_WORKSPACE_TOKENS` | — | Optional comma/newline-separated `workspace:token` entries for lightweight per-workspace isolation |
 | `PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE` | `false` | Allow remote API access without token |
 | `PAPER_CHINA_FEISHU_WEBHOOK_URL` | — | Feishu webhook for notifications |
+
+Kimi K3 always uses the native translation engine because its API fixes sampling
+parameters that the bundled pdf2zh OpenAI adapter overrides.
 
 Remote access is local-only by default unless `PAPER_CHINA_API_TOKEN` or
 `PAPER_CHINA_WORKSPACE_TOKENS` is set. When a token is configured, the web UI
@@ -112,7 +121,7 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (670 tests)
+└── tests/            # Test suite (807 tests)
 ```
 
 ## Deployment Notes

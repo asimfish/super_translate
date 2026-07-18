@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import threading
+import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -242,6 +243,7 @@ def translate_pdf_sync(
 _BACKEND_ENV_KEYS = {
     "deepseek": "DEEPSEEK_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "kimi": "MOONSHOT_API_KEY",
     "deepl": "DEEPL_API_KEY",
 }
 
@@ -256,7 +258,10 @@ def _resolve_service(config: TranslationConfig, fallback: str) -> str:
         logger.warning("No %s, falling back to %s", config.backend, fallback)
         return fallback
 
-    return service
+    # Kimi speaks the OpenAI protocol. The web path still forces Kimi through
+    # the constraint-aware native adapter below because pdf2zh hard-codes an
+    # incompatible temperature override.
+    return "openai" if service == "kimi" else service
 
 
 # Service → (env_key_for_api_key, env_fallback, optional_model_env, optional_base_url_env)
@@ -305,24 +310,38 @@ def _build_pdf2zh_envs(
 
 # Backends the native engine can drive (LLM APIs speaking the DeepSeek or
 # OpenAI chat protocol). Others (google/deepl/ollama) stay on pdf2zh.
-_NATIVE_ENGINE_BACKENDS = {"deepseek", "openai"}
+_NATIVE_ENGINE_BACKENDS = {"deepseek", "openai", "kimi"}
 
 
 def _use_native_engine(config: TranslationConfig) -> bool:
     from app.core.config import settings
 
+    # Kimi K3 fixes its sampling parameters server-side, while pdf2zh's bundled
+    # OpenAI adapter always sends temperature=0. Keep Kimi on our constraint-aware
+    # native adapter even when the global fallback engine is set to pdf2zh.
+    if config.backend == "kimi":
+        return True
     return settings.translation_engine == "native" and config.backend in _NATIVE_ENGINE_BACKENDS
 
 
-_TRANSLATION_TIMEOUT = 600  # Fallback: 10 minutes max for the entire translation
+_DEFAULT_TRANSLATION_TIMEOUT_SECONDS = 1800
+_TRANSLATION_TIMEOUT = _DEFAULT_TRANSLATION_TIMEOUT_SECONDS
+
+
+def _translation_timeout_seconds() -> int:
+    configured_timeout = getattr(
+        settings,
+        "translation_timeout_seconds",
+        _TRANSLATION_TIMEOUT,
+    )
+    if configured_timeout == _DEFAULT_TRANSLATION_TIMEOUT_SECONDS:
+        configured_timeout = _TRANSLATION_TIMEOUT
+    return max(1, int(configured_timeout))
 
 
 def _run_with_timeout(fn, *args, timeout: int | None = None, **kwargs):
     if timeout is None:
-        configured_timeout = getattr(settings, "translation_timeout_seconds", _TRANSLATION_TIMEOUT)
-        if configured_timeout == 600:
-            configured_timeout = _TRANSLATION_TIMEOUT
-        timeout = max(1, int(configured_timeout))
+        timeout = _translation_timeout_seconds()
     pool = ThreadPoolExecutor(max_workers=1)
     future = pool.submit(fn, *args, **kwargs)
     try:
@@ -407,6 +426,11 @@ class _ProgressTranslator:
             return self._translate_serial(groups, total)
         return self._translate_parallel(groups, total)
 
+    def invalidate(self, texts):
+        invalidate = getattr(self._inner, "invalidate", None)
+        if callable(invalidate):
+            invalidate(texts)
+
     def _translate_serial(self, groups, total):
         results: list = []
         for group in groups:
@@ -472,6 +496,15 @@ def _translate_sync_native(
         api_key = config.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         mode = "deepseek"
         model = config.model or "deepseek-v4-pro"
+    elif config.backend == "kimi":
+        api_url = (
+            config.base_url
+            or os.environ.get("MOONSHOT_BASE_URL", "")
+            or "https://api.moonshot.cn/v1"
+        )
+        api_key = config.api_key or os.environ.get("MOONSHOT_API_KEY", "")
+        mode = "openai-compatible"
+        model = config.model or "kimi-k3"
     else:  # openai
         api_url = config.base_url or "https://api.openai.com/v1"
         api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
@@ -481,6 +514,9 @@ def _translate_sync_native(
     mono_path = output_dir / f"{input_path.stem}-mono.pdf"
     dual_path = output_dir / f"{input_path.stem}-dual.pdf"
     cache_path = output_dir / f"{input_path.stem}.translation-cache.jsonl"
+    staging_dir = output_dir / f".{input_path.stem}.native-{uuid.uuid4().hex}"
+    staged_mono_path = staging_dir / mono_path.name
+    staged_dual_path = staging_dir / dual_path.name
 
     vendor = VendorTranslator(
         api_url=api_url,
@@ -496,33 +532,35 @@ def _translate_sync_native(
         progress_callback,
         concurrency=settings.translation_concurrency,
     )
+    timeout_seconds = _translation_timeout_seconds()
 
     for attempt in range(config.max_retries + 1):
+        cleanup_output_dir(staging_dir)
+        staging_dir.mkdir(parents=True, exist_ok=True)
         try:
-            source_path = _prepare_ocr_source(input_path, output_dir, config)
+            source_path = _prepare_ocr_source(input_path, staging_dir, config)
             report = _run_with_timeout(
                 translate_pdf,
                 input_pdf=source_path,
-                output_pdf=mono_path,
+                output_pdf=staged_mono_path,
                 translator=translator,
                 preserve_graphics_text=config.preserve_graphics_text,
                 skip_overflow=config.skip_overflow,
+                timeout=timeout_seconds,
             )
             for warning in report.warnings:
                 logger.warning("Native engine: %s", warning)
             break
         except FutureTimeout:
-            cleanup_output_dir(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
+            cleanup_output_dir(staging_dir)
             logger.error(
                 "Native translation timed out after %ds for %s",
-                _TRANSLATION_TIMEOUT,
+                timeout_seconds,
                 input_path.name,
             )
-            raise TimeoutError(f"Translation timed out after {_TRANSLATION_TIMEOUT}s")
+            raise TimeoutError(f"Translation timed out after {timeout_seconds}s")
         except Exception as e:
-            cleanup_output_dir(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
+            cleanup_output_dir(staging_dir)
             if attempt < config.max_retries:
                 logger.warning(
                     "Native translation attempt %d failed: %s. Retrying...",
@@ -533,31 +571,38 @@ def _translate_sync_native(
                 logger.error("All native translation attempts failed for %s", input_path.name)
                 raise
 
-    if not mono_path.exists():
+    if not staged_mono_path.exists():
+        cleanup_output_dir(staging_dir)
         return TranslationResult(error="Translation produced no output files")
 
     # Generate dual-language PDF (interleaved original + translated pages)
     try:
         from pdf_zh_translator.pdf_layout import create_dual_pdf
 
-        create_dual_pdf(input_path, mono_path, dual_path)
+        create_dual_pdf(input_path, staged_mono_path, staged_dual_path)
     except Exception as e:
         logger.warning("Failed to create dual PDF: %s", e)
-        dual_path = None
 
     # Post-translation verification
     try:
         from pdf_zh_translator.pdf_layout import verify_translation
 
-        issues = verify_translation(source_path, mono_path)
+        issues = verify_translation(source_path, staged_mono_path)
         if issues:
             for issue in issues:
                 logger.warning("Translation quality: %s", issue)
     except Exception as e:
         logger.debug("Translation verification skipped: %s", e)
 
-    has_dual = dual_path is not None and dual_path.exists()
-    return TranslationResult(mono_path=mono_path, dual_path=dual_path if has_dual else None)
+    staged_mono_path.replace(mono_path)
+    if staged_dual_path.exists():
+        staged_dual_path.replace(dual_path)
+        result_dual_path: Path | None = dual_path
+    else:
+        dual_path.unlink(missing_ok=True)
+        result_dual_path = None
+    cleanup_output_dir(staging_dir)
+    return TranslationResult(mono_path=mono_path, dual_path=result_dual_path)
 
 
 def _translate_sync(
@@ -584,6 +629,7 @@ def _translate_sync(
     threads = preset.get("threads", config.threads)
 
     pdf2zh_callback = _create_progress_callback(progress_callback)
+    timeout_seconds = _translation_timeout_seconds()
 
     for attempt in range(config.max_retries + 1):
         try:
@@ -604,6 +650,7 @@ def _translate_sync(
                 vfont=preset.get("vfont", ""),
                 vchar=preset.get("vchar", ""),
                 envs=envs or None,
+                timeout=timeout_seconds,
             )
             break  # Success
 
@@ -612,10 +659,10 @@ def _translate_sync(
             output_dir.mkdir(parents=True, exist_ok=True)
             logger.error(
                 "pdf2zh translation timed out after %ds for %s",
-                _TRANSLATION_TIMEOUT,
+                timeout_seconds,
                 input_path.name,
             )
-            raise TimeoutError(f"Translation timed out after {_TRANSLATION_TIMEOUT}s")
+            raise TimeoutError(f"Translation timed out after {timeout_seconds}s")
         except Exception as e:
             # Clean up partial output from this attempt (files and subdirs)
             cleanup_output_dir(output_dir)

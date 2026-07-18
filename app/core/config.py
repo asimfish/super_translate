@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # "native" uses the in-house pdf_zh_translator engine (equation-safe layout,
     # gutter line-number removal, prompt-injection stripping); "pdf2zh" uses the
     # third-party PDFMathTranslate pipeline. Native only supports LLM backends
-    # (deepseek/openai); other backends automatically fall back to pdf2zh.
+    # (deepseek/openai/kimi); other backends automatically fall back to pdf2zh.
     translation_engine: str = "native"
     translation_backend: str = "deepseek"
     deepseek_api_key: SecretStr = SecretStr("")
@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = SecretStr("")
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"
+    moonshot_api_key: SecretStr = SecretStr("")
+    moonshot_base_url: str = "https://api.moonshot.cn/v1"
+    kimi_model: str = "kimi-k3"
     deepl_api_key: SecretStr = SecretStr("")
     ollama_host: str = ""
 
@@ -41,8 +44,12 @@ class Settings(BaseSettings):
     upload_chunk_size: int = 1024 * 1024  # 1MB
 
     # Translation concurrency
-    max_concurrent_translations: int = 3
-    translation_timeout_seconds: int = 600
+    max_concurrent_translations: int = 1
+    translation_timeout_seconds: int = 1800
+    # Keep translation jobs durable across local server restarts. Queued jobs
+    # and jobs interrupted mid-run are reset to queued and restarted on startup.
+    resume_queued_translations_on_startup: bool = True
+    resume_queued_translations_delay_seconds: float = 10.0
     # Parallel supplier requests within a single native translation. Speeds up
     # long papers by overlapping API round-trips. Lower to 1 for rate-limited
     # API keys (e.g. free tiers) to avoid HTTP 429s.

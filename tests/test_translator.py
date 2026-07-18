@@ -1405,9 +1405,11 @@ class TestTranslateSyncNative(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            mono_path = tmp / "test-mono.pdf"
-            mono_path.write_bytes(b"pdf")
-            mock_translate.return_value = MagicMock(warnings=[])
+            def write_output(**kwargs):
+                kwargs["output_pdf"].write_bytes(b"pdf")
+                return MagicMock(warnings=[])
+
+            mock_translate.side_effect = write_output
 
             config = TranslationConfig(backend="openai", api_key="test-key")
             _translate_sync_native(tmp / "test.pdf", tmp, config)
@@ -1427,9 +1429,11 @@ class TestTranslateSyncNative(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            mono_path = tmp / "test-mono.pdf"
-            mono_path.write_bytes(b"pdf")
-            mock_translate.return_value = MagicMock(warnings=[])
+            def write_output(**kwargs):
+                kwargs["output_pdf"].write_bytes(b"pdf")
+                return MagicMock(warnings=[])
+
+            mock_translate.side_effect = write_output
 
             config = TranslationConfig(backend="deepseek", api_key="test-key")
             _translate_sync_native(tmp / "test.pdf", tmp, config)
@@ -1448,9 +1452,11 @@ class TestTranslateSyncNative(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            mono_path = tmp / "test-mono.pdf"
-            mono_path.write_bytes(b"pdf")
-            mock_translate.return_value = MagicMock(warnings=["test warning"])
+            def write_output(**kwargs):
+                kwargs["output_pdf"].write_bytes(b"pdf")
+                return MagicMock(warnings=["test warning"])
+
+            mock_translate.side_effect = write_output
 
             config = TranslationConfig(backend="deepseek", api_key="k")
             with self.assertLogs("app.services.translator", level="WARNING") as cm:
@@ -1486,7 +1492,6 @@ class TestTranslateSyncNative(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            mono_path = tmp / "test-mono.pdf"
 
             call_count = [0]
 
@@ -1494,7 +1499,7 @@ class TestTranslateSyncNative(unittest.TestCase):
                 call_count[0] += 1
                 if call_count[0] == 1:
                     raise Exception("API error")
-                mono_path.write_bytes(b"pdf")
+                kwargs["output_pdf"].write_bytes(b"pdf")
                 return MagicMock(warnings=[])
 
             mock_translate.side_effect = side_effect
@@ -1523,8 +1528,9 @@ class TestTranslateSyncNative(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             config = TranslationConfig(backend="deepseek", api_key="k", max_retries=0)
-            with self.assertRaises(TimeoutError):
+            with self.assertRaises(TimeoutError) as ctx:
                 _translate_sync_native(tmp / "test.pdf", tmp, config)
+            self.assertIn("1s", str(ctx.exception))
 
 
 class TestTranslateSyncRouting(unittest.TestCase):

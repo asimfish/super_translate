@@ -1475,5 +1475,16 @@ class TestTwoColumnLayout(unittest.TestCase):
         self.assertEqual(result, 0)
 
 
+def test_needs_fix_preserves_interior_chart_tick():
+    block = _tb((105.0, 124.0, 112.0, 133.0), text="20", font_size=6.0)
+
+    assert not _needs_fix(
+        block,
+        [ColumnInfo(left_margin=70.0, col_width=472.0)],
+        page_height=792.0,
+        page_width=612.0,
+    )
+
+
 if __name__ == "__main__":
     unittest.main()

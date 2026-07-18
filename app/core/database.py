@@ -5,16 +5,15 @@ from collections.abc import AsyncGenerator
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import StaticPool
 
 from .config import settings
 
-# SQLite-specific connection pool settings
-# StaticPool maintains a single connection per thread, which is optimal for SQLite
+# File-backed SQLite uses SQLAlchemy's async queue pool. Sharing one StaticPool
+# connection across concurrent progress, QA, and status sessions lets unrelated
+# transactions interfere with each other.
 engine = create_async_engine(
     settings.db_url,
     echo=settings.debug,
-    poolclass=StaticPool,
     connect_args={"check_same_thread": False},
 )
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

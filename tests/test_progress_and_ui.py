@@ -60,6 +60,22 @@ def test_reader_sync_scroll_defers_mirror_render_to_avoid_jank():
     assert "scroll-behavior: smooth" not in css
 
 
+def test_reader_pdf_open_renders_first_page_before_background_work():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
+
+    assert "function buildPageMetricsFromFirstPage(pdf, firstViewport, adaptiveScale)" in js
+    assert "void refinePdfMetrics(panel, pdf, adaptiveScale);" in js
+    assert (
+        "await renderVisiblePages(panel, container, { awaitFirst: true, deferRest: true });"
+        in js
+    )
+    assert "wrapper.innerHTML = '<div class=\"pdf-page-loading\">加载中...</div>';" in js
+    assert ".pdf-page-loading" in css
+    assert "void loadPdfDocument('translated'" in js
+    assert "await loadPdfDocument('translated'" not in js
+
+
 def test_translation_progress_ui_has_client_eta_smoothing():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
@@ -73,7 +89,11 @@ def test_translation_progress_ui_has_client_eta_smoothing():
     assert 'id="trans-percent"' in html
     assert "async function refreshTranslationStatus()" in js
     assert "refreshTranslationStatus();" in js
-    assert "setInterval(refreshTranslationStatus, 1000)" in js
+    assert "const POLL_INTERVAL_MS = 2000;" in js
+    assert "setInterval(refreshTranslationStatus, POLL_INTERVAL_MS)" in js
+    assert "let statusRequestInFlight = false;" in js
+    assert "if (statusRequestInFlight) return;" in js
+    assert "setInterval(refreshTranslationStatus, 1000)" not in js
     assert "等待首批进度" in js
     assert "progress-fill-pending" in js
     assert ".progress-fill-active" in css
@@ -154,14 +174,36 @@ def test_upload_view_stages_files_until_user_confirms_upload():
 
 def test_reader_renders_pdf_text_layer_for_selection():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
     css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
 
     assert "async function renderTextLayer(page, wrapper, viewport)" in js
     assert "pdfjsLib.renderTextLayer" in js
     assert "textContentSource: textContent" in js
+    assert "void renderTextLayer(page, wrapper, viewport);" in js
+    assert "scheduleIdleWork(() => {" in js
+    assert "textLayer.style.setProperty('--scale-factor', viewport.scale);" in js
+    assert "async function copyPdfSelection()" in js
+    assert "'copy-pdf-selection': copyPdfSelection" in js
+    assert 'id="btn-copy-selection"' in html
     assert ".textLayer" in css
+    assert "--scale-factor: 1" in css
     assert "user-select: text" in css
     assert ".textLayer ::selection" in css
+    assert ".textLayer span::selection" in css
+
+
+def test_reader_uses_authenticated_pdf_worker_on_whalent_preview():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "function isWhalentForwardedPreview()" in js
+    assert "endsWith('.fwd.memory.whalent.com')" in js
+    assert "async function prepareForwardedPdfWorker(workerSrc)" in js
+    assert "credentials: 'include'" in js
+    assert "cache: 'no-store'" in js
+    assert "GlobalWorkerOptions.workerPort = new Worker(workerUrl)" in js
+    assert "await preloadPdfWorkerOnMainThread(workerSrc)" in js
+    assert "await pdfWorkerReady;" in js
 
 
 def test_reader_ui_exposes_editable_figure_manifest_workflow():

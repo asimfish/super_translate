@@ -2,7 +2,14 @@
 
 import sqlite3
 
-from app.core.database import apply_sqlite_pragmas
+from sqlalchemy.pool import StaticPool
+
+from app.core.database import apply_sqlite_pragmas, engine
+
+
+def test_file_sqlite_uses_async_queue_pool_for_concurrent_sessions():
+    assert not isinstance(engine.sync_engine.pool, StaticPool)
+    assert engine.sync_engine.pool.__class__.__name__ == "AsyncAdaptedQueuePool"
 
 
 def test_apply_sqlite_pragmas_sets_wal_busy_timeout_and_fk(tmp_path):

@@ -46,6 +46,11 @@ class FailingSecondCallTranslator(Translator):
         return ["译:" + text for text in texts]
 
 
+class DroppingPlaceholderTranslator(Translator):
+    def translate_batch(self, texts):
+        return ["公式已翻译" for _text in texts]
+
+
 class JsonFailingVendorTranslator(VendorTranslator):
     def __init__(self):
         super().__init__(api_url="https://example.com", mode="deepseek", progress=False)
@@ -196,6 +201,18 @@ class TranslatorParsingTests(unittest.TestCase):
             self.assertEqual(cached_again.translate_batch(["a"]), ["译:a"])
             self.assertEqual(wrapped.calls, 1)
 
+    def test_cached_translator_invalidate_forces_supplier_retry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            wrapped = CountingTranslator()
+            cached = CachedTranslator(wrapped, cache_file)
+
+            self.assertEqual(cached.translate_batch(["a"]), ["译:a"])
+            cached.invalidate(["a"])
+            self.assertEqual(cached.translate_batch(["a"]), ["译:a"])
+
+            self.assertEqual(wrapped.calls, 2)
+
     def test_cached_translator_persists_completed_chunks_before_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_file = Path(tmpdir) / "cache.jsonl"
@@ -206,6 +223,40 @@ class TranslatorParsingTests(unittest.TestCase):
 
             cached_again = CachedTranslator(CountingTranslator(), cache_file)
             self.assertEqual(cached_again.translate_batch(["a"]), ["译:a"])
+
+    def test_cached_translator_retranslates_invalid_placeholder_entry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            source = "Formula ⟦0⟧ remains unchanged."
+            cache_file.write_text(
+                json.dumps(
+                    {
+                        "key": cache_key(source),
+                        "source": source,
+                        "translation": "公式丢失了占位符。",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            wrapped = CountingTranslator()
+
+            translated = CachedTranslator(wrapped, cache_file).translate_batch([source])
+
+            self.assertEqual(translated, ["译:" + source])
+            self.assertEqual(wrapped.calls, 1)
+
+    def test_cached_translator_rejects_new_invalid_placeholder_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            source = "Formula ⟦0⟧ remains unchanged."
+            cached = CachedTranslator(DroppingPlaceholderTranslator(), cache_file)
+
+            with self.assertRaisesRegex(TranslationError, "protected placeholders"):
+                cached.translate_batch([source])
+
+            self.assertFalse(cache_file.exists())
 
     def test_cached_translator_concurrent_writes_stay_valid_jsonl(self):
         import threading
@@ -317,6 +368,30 @@ class CacheOnlyTranslatorTests(unittest.TestCase):
             translator = CacheOnlyTranslator(cache_file)
             with self.assertRaises(TranslationError):
                 translator.translate_batch(["anything"])
+
+    def test_rejects_cached_translation_with_duplicate_placeholders(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            source = "Variables ⟦0⟧ and ⟦1⟧."
+            cache_file.write_text(
+                json.dumps(
+                    {
+                        "key": cache_key(source),
+                        "source": source,
+                        "translation": "变量 ⟦0⟧ 和 ⟦0⟧。",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(TranslationError, "missing or invalid"):
+                CacheOnlyTranslator(cache_file).translate_batch([source])
+
+            missing_file = cache_file.with_name(cache_file.name + ".missing.jsonl")
+            record = json.loads(missing_file.read_text(encoding="utf-8"))
+            self.assertEqual(record["reason"], "invalid_placeholders")
 
     def test_ignores_malformed_json_lines(self):
         with tempfile.TemporaryDirectory() as tmpdir:

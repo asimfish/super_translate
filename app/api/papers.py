@@ -811,7 +811,7 @@ async def start_translation(
 
     Args:
         paper_id: The paper's unique identifier
-        backend: Translation backend (deepseek, openai, google)
+        backend: Translation backend (deepseek, kimi, openai, google)
         quality: Quality preset (fast, balanced, quality)
         preserve_graphics_text: Keep text inside figures/tables unchanged
         skip_overflow: Leave original text when Chinese won't fit its bbox
@@ -826,7 +826,7 @@ async def start_translation(
         HTTPException: If paper not found (404), translation in progress (409),
         or invalid backend/quality values (400)
     """
-    valid_backends = {"", "deepseek", "openai", "google", "deepl", "ollama"}
+    valid_backends = {"", "deepseek", "kimi", "openai", "google", "deepl", "ollama"}
     valid_qualities = {"fast", "balanced", "quality"}
     if backend not in valid_backends:
         raise HTTPException(400, f"Invalid backend: {backend}")
@@ -948,6 +948,7 @@ async def list_translation_jobs(
 
 _BACKEND_API_KEY_ATTRS = {
     "deepseek": "deepseek_api_key",
+    "kimi": "moonshot_api_key",
     "openai": "openai_api_key",
     "deepl": "deepl_api_key",
 }
@@ -974,6 +975,10 @@ def _resolve_backend_config(
     if backend == "deepseek":
         api_key = settings.deepseek_api_key.get_secret_value()
         model_name = settings.deepseek_model
+    elif backend == "kimi":
+        api_key = settings.moonshot_api_key.get_secret_value()
+        base_url = settings.moonshot_base_url
+        model_name = settings.kimi_model
     elif backend == "openai":
         api_key = settings.openai_api_key.get_secret_value()
         base_url = settings.openai_base_url
@@ -1050,6 +1055,62 @@ async def _update_translation_job(
     )
 
 
+async def _force_translation_job_terminal_state(
+    job_id: str | None,
+    *,
+    status: str | None,
+    error: str | None = None,
+    paper_id: str | None = None,
+    paper_values: dict[str, object] | None = None,
+) -> None:
+    """Best-effort terminal sync after the main result transaction commits."""
+    if status not in {
+        TranslationJobStatus.COMPLETED.value,
+        TranslationJobStatus.FAILED.value,
+        TranslationJobStatus.CANCELLED.value,
+    }:
+        return
+    if not job_id and not (paper_id and paper_values):
+        return
+    from app.core.database import async_session
+
+    try:
+        async with async_session() as db:
+            if paper_id and paper_values:
+                paper_filters = [Paper.id == paper_id]
+                if job_id:
+                    latest_job_id = (
+                        select(TranslationJob.id)
+                        .where(TranslationJob.paper_id == paper_id)
+                        .order_by(TranslationJob.created_at.desc())
+                        .limit(1)
+                        .scalar_subquery()
+                    )
+                    paper_filters.append(latest_job_id == job_id)
+                await db.execute(
+                    update(Paper)
+                    .where(*paper_filters)
+                    .values(**paper_values),
+                )
+            values: dict[str, object] = {
+                "status": status,
+                "error": error,
+                "finished_at": func.now(),
+                "updated_at": func.now(),
+            }
+            if status == TranslationJobStatus.COMPLETED.value:
+                values["progress"] = 1.0
+            if job_id:
+                await db.execute(
+                    update(TranslationJob)
+                    .where(TranslationJob.id == job_id)
+                    .values(**values),
+                )
+            await db.commit()
+    except Exception:
+        logger.exception("Failed to force terminal translation job state for %s", job_id)
+
+
 def _reset_paper_status(paper_id: str, error_message: str, job_id: str | None = None) -> None:
     """Reset a paper's translation status to failed (synchronous, for background threads)."""
     from app.core.database import async_session
@@ -1098,7 +1159,8 @@ def _run_translation(
     ocr_dpi: int = 180,
     job_id: str | None = None,
 ) -> None:
-    acquired = _translation_semaphore.acquire(timeout=300)
+    logger.info("Translation job waiting for available worker slot: paper %s", paper_id)
+    acquired = _translation_semaphore.acquire()
     if not acquired:
         logger.error("Translation queue full, rejecting paper %s", paper_id)
         if job_id:
@@ -1318,6 +1380,7 @@ async def _do_translate(
         _clear_cancel_requested(paper_id)
         return
 
+    qa_failure_error: str | None = None
     if trans_result.success and trans_result.mono_path:
         try:
             unresolved_issues = await asyncio.to_thread(
@@ -1328,22 +1391,25 @@ async def _do_translate(
                 trans_result,
                 qa_mode=qa_mode,
                 max_passes=qa_max_passes,
+                job_id=job_id,
             )
         except TranslationCancelledError:
             await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)
             return
         if _has_blocking_qa_error(unresolved_issues):
-            trans_result = TranslationResult(
-                error="QA found blocking layout or translation issues after post-checks"
-            )
+            qa_failure_error = _qa_failure_error_message(unresolved_issues, blocking=True)
         elif _has_unresolved_error(unresolved_issues):
+            qa_failure_error = _qa_failure_error_message(unresolved_issues, blocking=False)
             _append_log(
                 paper_id,
                 loop,
-                "译后检查仍有未解决问题，已保留译文并生成 QA 报告供复核",
+                "译后检查失败：仍有未解决问题，已保留译文并生成 QA 报告供复核",
             )
 
     elapsed = time.monotonic() - start_time
+    terminal_job_status: str | None = None
+    terminal_job_error: str | None = None
+    terminal_paper_values: dict[str, object] | None = None
 
     # Phase 3: Write results (short session)
     async with async_session() as db:
@@ -1356,7 +1422,25 @@ async def _do_translate(
             return
 
         _update_paper_result(paper, trans_result, output_dir)
-        if trans_result.success:
+        if trans_result.success and qa_failure_error:
+            paper.translation_status = TranslationStatus.FAILED.value
+            paper.translation_error = qa_failure_error
+            paper.translation_stage = "译后检查失败"
+            paper.translation_eta_seconds = None
+            terminal_job_status = TranslationJobStatus.FAILED.value
+            terminal_job_error = qa_failure_error
+            await _update_translation_job(
+                db,
+                job_id,
+                status=TranslationJobStatus.FAILED.value,
+                error=qa_failure_error,
+                finished=True,
+            )
+        elif trans_result.success:
+            paper.translation_error = None
+            paper.translation_stage = "翻译完成"
+            paper.translation_eta_seconds = None
+            terminal_job_status = TranslationJobStatus.COMPLETED.value
             await _update_translation_job(
                 db,
                 job_id,
@@ -1365,6 +1449,10 @@ async def _do_translate(
                 finished=True,
             )
         else:
+            paper.translation_stage = "翻译失败"
+            paper.translation_eta_seconds = None
+            terminal_job_status = TranslationJobStatus.FAILED.value
+            terminal_job_error = trans_result.error or "Translation failed"
             await _update_translation_job(
                 db,
                 job_id,
@@ -1372,10 +1460,22 @@ async def _do_translate(
                 error=trans_result.error or "Translation failed",
                 finished=True,
             )
-        if trans_result.success:
-            _append_log(paper_id, loop, f"翻译完成! 耗时 {elapsed:.0f}秒")
+        if trans_result.success and not qa_failure_error:
+            final_log_message = f"翻译完成! 耗时 {elapsed:.0f}秒"
         else:
-            _append_log(paper_id, loop, f"翻译失败: {trans_result.error} (耗时 {elapsed:.0f}秒)")
+            error = qa_failure_error or trans_result.error
+            final_log_message = f"翻译失败: {error} (耗时 {elapsed:.0f}秒)"
+        paper.translation_log = _append_log_text(paper.translation_log, final_log_message)
+        terminal_paper_values = {
+            "translation_status": paper.translation_status,
+            "translation_progress": paper.translation_progress,
+            "translation_error": paper.translation_error,
+            "translation_stage": paper.translation_stage,
+            "translation_eta_seconds": paper.translation_eta_seconds,
+            "translated_filename": paper.translated_filename,
+            "dual_filename": paper.dual_filename,
+            "translation_log": paper.translation_log,
+        }
         await db.commit()
 
         # Send Feishu notification
@@ -1387,10 +1487,17 @@ async def _do_translate(
                 webhook_url,
                 paper.title,
                 paper_id,
-                trans_result.success,
-                trans_result.error,
+                trans_result.success and not qa_failure_error,
+                qa_failure_error or trans_result.error,
                 base_url=settings.base_url,
             )
+    await _force_translation_job_terminal_state(
+        job_id,
+        status=terminal_job_status,
+        error=terminal_job_error,
+        paper_id=paper_id,
+        paper_values=terminal_paper_values,
+    )
     _clear_cancel_requested(paper_id)
 
 
@@ -1402,6 +1509,7 @@ def _run_post_translation_qa(
     *,
     qa_mode: str = "single",
     max_passes: int = 4,
+    job_id: str | None = None,
 ) -> list:
     """Run layout/translation QA.
 
@@ -1417,7 +1525,7 @@ def _run_post_translation_qa(
         if _is_cancel_requested(paper_id):
             raise TranslationCancelledError("Translation cancelled by user")
         _append_log(paper_id, loop, "正在检查译文和版面")
-        _set_translation_stage(paper_id, loop, "译后检查")
+        _set_translation_stage(paper_id, loop, "译后检查", job_id=job_id)
         _record_terminology_candidates(paper_id, loop, input_path)
         _audit_terminology_usage(paper_id, loop, input_path, mono_path)
         passes = max(1, max_passes if qa_mode == "iterative" else 1)
@@ -1428,6 +1536,7 @@ def _run_post_translation_qa(
         for pass_index in range(1, passes + 1):
             if _is_cancel_requested(paper_id):
                 raise TranslationCancelledError("Translation cancelled by user")
+            _set_translation_stage(paper_id, loop, f"译后检查 {pass_index}/{passes}", job_id=job_id)
             issues = verify_translation_issues(input_path, mono_path)
             passes_run += 1
             if not issues:
@@ -1455,7 +1564,9 @@ def _run_post_translation_qa(
             if not _has_fixable_layout_issue(issues):
                 pass_history.append(_qa_pass_summary(pass_index, issues))
                 break
-            _set_translation_stage(paper_id, loop, "版面修复")
+            _set_translation_stage(paper_id, loop, "版面修复", job_id=job_id)
+            before_repair_issues = list(issues)
+            snapshot = _snapshot_translated_outputs(trans_result)
             fixed = _fix_translated_outputs(trans_result)
             repair_attempted = True
             pass_history.append(
@@ -1464,10 +1575,29 @@ def _run_post_translation_qa(
             if not fixed:
                 break
             _append_log(paper_id, loop, "检测到可修复版面问题，已自动执行一次版面修复")
-            if qa_mode != "iterative":
-                issues = verify_translation_issues(input_path, mono_path)
-                passes_run += 1
+            _set_translation_stage(paper_id, loop, "复查版面", job_id=job_id)
+            issues = verify_translation_issues(input_path, mono_path)
+            passes_run += 1
+            if _qa_issue_score(issues) > _qa_issue_score(before_repair_issues):
+                _restore_translated_outputs(snapshot)
+                issues = before_repair_issues
+                _append_log(paper_id, loop, "版面修复使问题增多，已回滚到修复前译文")
                 pass_history.append(_qa_pass_summary(passes_run, issues))
+                break
+            pass_history.append(_qa_pass_summary(passes_run, issues))
+            if not issues:
+                _append_log(paper_id, loop, f"译文检查通过 (第 {passes_run} 轮)")
+                _write_qa_report(
+                    trans_result,
+                    issues,
+                    qa_mode=qa_mode,
+                    passes_run=passes_run,
+                    repair_attempted=repair_attempted,
+                    pass_history=pass_history,
+                    status="passed",
+                )
+                return []
+            if qa_mode != "iterative":
                 break
 
         _write_qa_report(
@@ -1585,6 +1715,56 @@ def _has_unresolved_error(issues: list) -> bool:
     return any(getattr(issue, "severity", "warning") == "error" for issue in issues)
 
 
+_QA_ERROR_LABELS = {
+    "caption_overlap": "图注重叠",
+    "empty_page": "空白页",
+    "formula_changed": "公式变更",
+    "missing_graphic": "矢量图缺失",
+    "missing_image": "图片缺失",
+    "page_count_mismatch": "页数不一致",
+    "page_size_mismatch": "页面尺寸不一致",
+    "preserved_text_changed": "表格/算法保留区被改动",
+    "qa_open_failed": "PDF 无法检查",
+    "text_overlap": "正文重叠",
+    "untranslated_caption": "图注漏翻",
+    "untranslated_english": "正文疑似漏翻",
+    "untranslated_formula_explanation": "公式说明漏翻",
+}
+
+
+def _qa_failure_error_message(issues: list, *, blocking: bool) -> str:
+    errors = [
+        issue for issue in issues if getattr(issue, "severity", "warning") == "error"
+    ]
+    by_code: dict[str, set[int]] = {}
+    for issue in errors:
+        code = str(getattr(issue, "code", "unknown"))
+        page = getattr(issue, "page", 0)
+        by_code.setdefault(code, set())
+        if isinstance(page, int) and page > 0:
+            by_code[code].add(page)
+
+    details: list[str] = []
+    for code, pages in list(by_code.items())[:3]:
+        label = _QA_ERROR_LABELS.get(code, code)
+        if pages:
+            page_text = "、".join(str(page) for page in sorted(pages)[:5])
+            details.append(f"{label}（第 {page_text} 页）")
+        else:
+            details.append(label)
+    if len(by_code) > 3:
+        details.append(f"另有 {len(by_code) - 3} 类")
+
+    prefix = "译后检查阻断" if blocking else "译后检查未通过"
+    summary = "；".join(details) or "存在未解决错误"
+    return f"{prefix}：{len(errors)} 个错误；{summary}。译文已保留，请查看 QA 报告。"
+
+
+def _qa_issue_score(issues: list) -> tuple[int, int]:
+    errors = sum(1 for issue in issues if getattr(issue, "severity", "warning") == "error")
+    return errors, len(issues)
+
+
 _BLOCKING_QA_ERROR_CODES = {
     "qa_open_failed",
     "page_count_mismatch",
@@ -1610,6 +1790,19 @@ def _fix_translated_outputs(trans_result: TranslationResult) -> bool:
     if trans_result.dual_path:
         fixed = fix_translated_layout(trans_result.dual_path) or fixed
     return fixed
+
+
+def _snapshot_translated_outputs(trans_result: TranslationResult) -> dict[Path, bytes]:
+    snapshots: dict[Path, bytes] = {}
+    for path in (trans_result.mono_path, trans_result.dual_path):
+        if path and path.exists():
+            snapshots[path] = path.read_bytes()
+    return snapshots
+
+
+def _restore_translated_outputs(snapshots: dict[Path, bytes]) -> None:
+    for path, content in snapshots.items():
+        path.write_bytes(content)
 
 
 def _record_terminology_candidates(
@@ -1641,6 +1834,7 @@ def _set_translation_stage(
     stage: str,
     *,
     eta_seconds: int | None = None,
+    job_id: str | None = None,
 ) -> None:
     """Update the live translation stage label (e.g. post-translation QA phase).
 
@@ -1661,6 +1855,7 @@ def _set_translation_stage(
                 )
                 .values(translation_stage=stage, translation_eta_seconds=eta_seconds),
             )
+            await _update_translation_job(p_db, job_id, heartbeat=True)
             await p_db.commit()
 
     with contextlib.suppress(Exception):
@@ -1714,12 +1909,19 @@ def _audit_terminology_usage(
         logger.debug("Terminology audit skipped for %s: %s", paper_id, e)
 
 
-def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) -> None:
-    """Append a log message to the paper's translation_log."""
+def _append_log_text(current_log: str | None, message: str) -> str:
     from datetime import datetime
 
     timestamp = datetime.now().strftime("%H:%M:%S")
     line = f"[{timestamp}] {message}"
+    new_log = f"{current_log}\n{line}" if current_log else line
+    if len(new_log) > 2000:
+        new_log = new_log[-2000:]
+    return new_log
+
+
+def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) -> None:
+    """Append a log message to the paper's translation_log."""
 
     async def _update():
         from app.core.database import async_session
@@ -1729,10 +1931,7 @@ def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) ->
                 select(Paper.translation_log).where(Paper.id == paper_id),
             )
             current_log = result.scalar() or ""
-            new_log = f"{current_log}\n{line}" if current_log else line
-            # Keep last 2000 chars to avoid unbounded growth
-            if len(new_log) > 2000:
-                new_log = new_log[-2000:]
+            new_log = _append_log_text(current_log, message)
             await p_db.execute(
                 update(Paper).where(Paper.id == paper_id).values(translation_log=new_log),
             )
@@ -1880,7 +2079,6 @@ def _update_paper_result(
                 paper.dual_filename = str(resolved.relative_to(translations_base))
             else:
                 logger.warning("Dual path outside translations dir: %s", trans_result.dual_path)
-        logger.info("Translation completed for paper %s", paper.id)
     else:
         paper.translation_status = TranslationStatus.FAILED.value
         paper.translation_error = trans_result.error
@@ -1896,7 +2094,16 @@ async def _serve_paper_file(
 ) -> FileResponse:
     """Shared helper for download/view endpoints."""
     file_path = _get_paper_file(paper, file_attr, base_dir)
-    return FileResponse(file_path, filename=download_name, media_type="application/pdf")
+    return FileResponse(
+        file_path,
+        filename=download_name,
+        media_type="application/pdf",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=300, no-transform",
+            "Content-Encoding": "identity",
+        },
+    )
 
 
 @router.get("/{paper_id}/download/original")

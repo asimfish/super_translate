@@ -1,5 +1,6 @@
 """Tests for conservative native-layout preservation rules."""
 
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,20 +10,38 @@ import fitz
 from pdf_zh_translator.pdf_layout import (
     SENTINEL_CLOSE,
     SENTINEL_OPEN,
+    SENTINEL_RUN_RE,
     FontPack,
     TextBlock,
+    _align_formula_anchors,
+    _attach_formula_keepouts,
     _clip_block_bbox_against_floats,
+    _equation_table_region_bboxes,
+    _extract_formula_fragments,
     _formula_fragment_present,
+    _inline_formula_bridge_block,
     _LineRec,
     _looks_like_formula_fragment,
     _looks_like_overlap_exempt_text,
     _looks_like_untranslated_caption,
     _looks_like_untranslated_english,
+    _looks_like_untranslated_formula_explanation,
     _normalize_formula_fragment_for_compare,
     _overlap_text_entries_from_block,
+    _preserved_text_qa_regions,
+    _promote_equation_table_neighbor_blocks,
+    _promote_table_component_blocks,
     _RawBlockRec,
+    _review_line_number_bboxes,
+    _table_region_bboxes,
+    _tokenize_translation_with_formula_clips,
+    _translated_block_still_english,
+    _unresolved_formula_keepouts,
+    _uses_fixed_source_math,
     _visible_image_stats,
     _visual_min_zone_intersects_graphics,
+    _visual_regions_for_page,
+    apply_inline_bold,
     caption_should_center,
     center_caption_bbox,
     classify_blocks,
@@ -32,16 +51,26 @@ from pdf_zh_translator.pdf_layout import (
     graphic_regions_for_page,
     insert_translated_text,
     is_math_span,
+    join_lines,
+    line_is_prose,
     mark_bibliography_blocks,
     math_heavy_block,
     merge_paragraph_blocks,
+    parse_block_lines,
     prepare_translation_units,
+    preserved_original_text_regions,
+    preserved_region_text_changed,
+    protect_text,
     record_is_algorithm,
     record_is_table,
+    redact_original_text,
+    relax_caption_boxes,
     requested_translation_font_size,
     segments_from_record,
     should_preserve_original_block,
     strip_sentinels,
+    subset_fonts_safely,
+    tokenize_text,
     trim_redact_bbox_against_formula_lines,
     verify_translation,
     verify_translation_issues,
@@ -49,6 +78,24 @@ from pdf_zh_translator.pdf_layout import (
 
 
 class PreserveOriginalBlockTests(unittest.TestCase):
+    def test_preserve_graphics_mode_keeps_source_fonts_intact(self):
+        class DocumentStub:
+            def subset_fonts(self):
+                raise AssertionError("source fonts must not be subset")
+
+        document = DocumentStub()
+        warnings = []
+
+        result = subset_fonts_safely(
+            document,
+            None,
+            warnings,
+            preserve_source_fonts=True,
+        )
+
+        self.assertIs(result, document)
+        self.assertTrue(any("source fonts intact" in warning for warning in warnings))
+
     def test_translates_figure_caption(self):
         block = TextBlock(
             page_index=0,
@@ -158,6 +205,22 @@ class PreserveOriginalBlockTests(unittest.TestCase):
 
         self.assertTrue(should_preserve_original_block(block, []))
 
+    def test_preserves_first_page_author_metadata(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(135.6, 141.3, 516.2, 192.1),
+            text=(
+                "Sizhe Yang^{1} Juncheng Mu^{2} Tianming Wei^{2} "
+                "Zhengrong Xue^{2} 1The Chinese University of Hong Kong "
+                "2Tsinghua University 3Zhejiang University"
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+
+        self.assertTrue(should_preserve_original_block(block, []))
+
     def test_does_not_preserve_body_discussion_of_object_head(self):
         block = TextBlock(
             page_index=0,
@@ -181,6 +244,53 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         )
 
         self.assertTrue(should_preserve_original_block(block, [(170.0, 20.0, 280.0, 100.0)]))
+
+    def test_translates_small_short_body_fragment_outside_graphic_region(self):
+        block = TextBlock(
+            page_index=1,
+            bbox=(91.4, 578.5, 170.1, 588.4),
+            text="Contributions. 78",
+            font_size=8.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+        )
+
+        self.assertFalse(should_preserve_original_block(block, []))
+
+    def test_translates_formula_adjacent_prose_inside_graphic_region(self):
+        block = TextBlock(
+            page_index=4,
+            bbox=(108.0, 390.0, 225.0, 401.7),
+            text=(
+                "receive predictions closer to "
+                f"{SENTINEL_OPEN}^{{1}}{SENTINEL_CLOSE}"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+            nowrap=True,
+        )
+
+        self.assertFalse(
+            should_preserve_original_block(block, [(104.0, 374.0, 230.0, 406.0)])
+        )
+
+    def test_preserves_low_font_multiline_prose_inside_diagram(self):
+        block = TextBlock(
+            page_index=6,
+            bbox=(146.1, 149.5, 466.9, 178.7),
+            text=(
+                "Source Image x Target URDF U Response: the gripper is aligned "
+                "with the object before the edit is applied."
+            ),
+            font_size=7.28,
+            color=(0.0, 0.0, 0.0),
+            source_lines=4,
+        )
+
+        self.assertTrue(
+            should_preserve_original_block(block, [(115.4, 59.0, 496.9, 327.7)])
+        )
 
     def test_translates_theorem_text_inside_background_region(self):
         block = TextBlock(
@@ -301,6 +411,53 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         self.assertAlmostEqual((moved.bbox[0] + moved.bbox[2]) / 2.0, 306.0)
         self.assertEqual(moved.redact_bboxes, [block.bbox])
 
+    def test_relaxed_caption_keeps_original_redaction_tight(self):
+        caption = TextBlock(
+            page_index=0,
+            bbox=(143.4, 59.1, 468.3, 69.2),
+            text="Table 1: Results on RMBench [1].",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+        table_row = TextBlock(
+            page_index=0,
+            bbox=(164.8, 95.8, 250.3, 105.8),
+            text="Observe and Pick Up",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="table",
+            nowrap=True,
+            no_merge=True,
+        )
+
+        relax_caption_boxes(
+            SimpleNamespace(rect=SimpleNamespace(height=792.0)),
+            [(caption, "表1"), (table_row, "")],
+        )
+
+        self.assertGreater(caption.bbox[3], 69.2)
+        self.assertLess(caption.bbox[3], table_row.bbox[1])
+        self.assertEqual(caption.redact_bboxes, [(143.4, 59.1, 468.3, 69.2)])
+
+    def test_inline_bold_marks_caption_prefix_and_verbatim_term(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(0.0, 0.0, 200.0, 40.0),
+            text="Figure 1: Overview. MemoryWAM improves efficiency.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            bold_terms=("MemoryWAM",),
+            bold_prefix=True,
+        )
+        tokens = tokenize_text("图1：概览。MemoryWAM 显著提升效率。")
+
+        apply_inline_bold(tokens, block, "图1：概览。MemoryWAM 显著提升效率。")
+
+        self.assertTrue(tokens[0].bold)
+        self.assertTrue(any(token.text == "MemoryWAM" and token.bold for token in tokens))
+        self.assertTrue(any(token.text == "显" and not token.bold for token in tokens))
+
     def test_heading_requests_larger_translation_font(self):
         block = TextBlock(
             page_index=0,
@@ -368,6 +525,117 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         self.assertIn("We use a conversational structure to prompt the model.", exported_text)
         self.assertNotIn("Smith et al. Learning representations.", exported_text)
 
+    def test_parse_block_lines_merges_cross_line_inline_formula_tail(self):
+        raw_block = {
+            "type": 0,
+            "bbox": (108.0, 465.3, 504.3, 489.9),
+            "lines": [
+                {
+                    "bbox": (108.0, 465.3, 504.3, 477.0),
+                    "spans": [
+                        _span(
+                            "During inference, the clean latent",
+                            (108.0, 465.5, 242.5, 475.5),
+                        ),
+                        _span(" z", (242.5, 465.3, 249.6, 475.3), font="CMMI10", flags=6),
+                        _span("t", (249.6, 469.2, 252.6, 476.1), size=6.97, font="CMMI7", flags=6),
+                        _span(
+                            " of the current observation is forwarded through the video DiT",
+                            (252.6, 465.5, 504.3, 477.0),
+                        ),
+                    ],
+                },
+                {
+                    "bbox": (108.0, 476.0, 347.2, 487.5),
+                    "spans": [
+                        _span(
+                            "only once to update the video-side key-value (KV) cache",
+                            (108.0, 477.5, 334.9, 487.5),
+                        ),
+                        _span(" C", (334.9, 477.1, 342.7, 487.1), font="CMSY10", flags=6),
+                        _span("v", (343.2, 476.0, 347.2, 483.0), size=6.97, font="CMMI7", flags=7),
+                    ],
+                },
+                {
+                    "bbox": (342.7, 477.5, 350.7, 489.9),
+                    "spans": [
+                        _span("t", (342.7, 482.1, 345.7, 489.0), size=6.97, font="CMMI7", flags=6),
+                        _span(" :", (348.0, 477.5, 350.7, 487.5), flags=5),
+                    ],
+                },
+            ],
+        }
+
+        record, _ = parse_block_lines(raw_block, page_width=612.0)
+        self.assertIsNotNone(record)
+        blocks = segments_from_record(0, record)
+        text = strip_sentinels(blocks[0].text)
+        _protected, mapping = protect_text(blocks[0].text)
+
+        self.assertIn("z_{t}", text)
+        self.assertIn("C^{v}", text)
+        self.assertIn("_{t}", text)
+        self.assertIn("C^{v}", mapping.values())
+        self.assertIn("_{t}:", mapping.values())
+        self.assertEqual(len(mapping), 3)
+        self.assertNotRegex(text, r"[ᵃ-ᵿ₀-ₜ]")
+
+    def test_parse_block_lines_expands_normal_font_formula_operands(self):
+        raw_block = {
+            "type": 0,
+            "bbox": (108.0, 100.0, 500.0, 112.0),
+            "lines": [
+                {
+                    "bbox": (108.0, 100.0, 500.0, 112.0),
+                    "spans": [
+                        _span("loss track", (108.0, 100.0, 170.0, 112.0)),
+                        _span("s ", (170.0, 100.0, 180.0, 112.0)),
+                        _span("L", (180.0, 100.0, 188.0, 112.0), font="CMMI10"),
+                        _span("(N) = 0.0584 + 0.087/", (188.0, 100.0, 330.0, 112.0)),
+                        _span(" w", (330.0, 100.0, 340.0, 112.0)),
+                        _span("ith ", (340.0, 100.0, 360.0, 112.0)),
+                        _span("R", (360.0, 100.0, 368.0, 112.0), font="CMMI10"),
+                        _span("2", (368.0, 98.0, 373.0, 106.0), size=7.0, font="CMR7"),
+                        _span(" = 0.975", (373.0, 100.0, 420.0, 112.0)),
+                    ],
+                }
+            ],
+        }
+
+        record, _ = parse_block_lines(raw_block, page_width=612.0)
+
+        self.assertIsNotNone(record)
+        line = record.lines[0]
+        self.assertEqual(len(SENTINEL_RUN_RE.findall(line.text)), 2)
+        self.assertEqual(len(line.math_run_bboxes), 2)
+        self.assertIn("loss tracks ", line.text)
+        self.assertIn(" with ", line.text)
+        self.assertRegex(
+            line.text,
+            re.escape(SENTINEL_CLOSE) + r"\s+with\s+" + re.escape(SENTINEL_OPEN),
+        )
+        self.assertGreaterEqual(line.math_run_bboxes[0][2], 329.0)
+
+    def test_short_prose_before_display_equation_stays_translatable(self):
+        record = _RawBlockRec(
+            lines=[
+                _line(
+                    f"Then the number of cached video tokens after{SENTINEL_OPEN}N{SENTINEL_CLOSE}",
+                    (108.0, 276.4, 295.0, 286.6),
+                ),
+                _line("frames is", (108.0, 288.6, 144.2, 298.6)),
+                _line(
+                    f"{SENTINEL_OPEN}|C^v_full| = O(NL){SENTINEL_CLOSE}",
+                    (167.8, 299.7, 236.3, 313.5),
+                ),
+            ]
+        )
+
+        blocks = segments_from_record(0, record, equation_record=True)
+        exported = " ".join(strip_sentinels(block.text) for block in blocks)
+
+        self.assertIn("frames is", exported)
+
 
 def _span(text, bbox, size=10.0, font="NimbusRomNo9L-Regu", flags=4):
     return {"text": text, "bbox": bbox, "size": size, "font": font, "flags": flags}
@@ -378,6 +646,230 @@ def _line(text, bbox, is_cell=False):
 
 
 class TableDetectionTests(unittest.TestCase):
+    def test_equation_table_cells_promote_adjacent_text_but_not_following_prose(self):
+        header = TextBlock(
+            page_index=0,
+            bbox=(286.4, 146.5, 481.9, 157.9),
+            text="2 Cos. alignment Degree-grad rho Recovery rate",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+            source_lines=4,
+        )
+        row_label = TextBlock(
+            page_index=0,
+            bbox=(134.1, 186.8, 288.6, 197.3),
+            text="Theoretical prediction",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        following_prose = TextBlock(
+            page_index=0,
+            bbox=(108.0, 223.7, 504.0, 244.6),
+            text="All three quantitative predictions are confirmed.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        cells = [
+            (130.1, 162.6, 157.0, 171.6),
+            (173.2, 160.9, 216.4, 171.4),
+            (233.8, 162.3, 287.1, 171.4),
+            (301.2, 162.3, 354.5, 171.4),
+            (365.9, 162.3, 419.2, 171.4),
+            (428.6, 162.3, 481.9, 171.4),
+            (130.1, 172.6, 160.5, 181.6),
+            (447.3, 186.8, 461.9, 197.1),
+        ]
+
+        _promote_equation_table_neighbor_blocks(
+            [header, row_label, following_prose],
+            cells,
+        )
+
+        self.assertEqual(header.block_type, "table")
+        self.assertFalse(header.should_translate)
+        self.assertEqual(row_label.block_type, "table")
+        self.assertFalse(row_label.should_translate)
+        self.assertEqual(following_prose.block_type, "body")
+        self.assertTrue(following_prose.should_translate)
+
+    def test_handedit_formula_neighbors_remain_translatable_prose(self):
+        renderer_description = TextBlock(
+            page_index=6,
+            bbox=(107.6, 383.7, 504.0, 404.5),
+            text=(
+                "We use a frozen image encoder and define the camera pose for "
+                "all rendered views:"
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+        hyperparameters = TextBlock(
+            page_index=6,
+            bbox=(107.6, 535.3, 504.0, 557.7),
+            text=(
+                "We use lambda equal to 0.5 for all experiments and set the "
+                "Lab-space threshold to 25 in all experiments."
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+
+        _promote_equation_table_neighbor_blocks(
+            [renderer_description, hyperparameters],
+            [
+                (235.6, 406.1, 384.3, 443.2),
+                (220.0, 505.0, 392.0, 536.0),
+            ],
+        )
+
+        self.assertEqual(renderer_description.block_type, "body")
+        self.assertTrue(renderer_description.should_translate)
+        self.assertEqual(hyperparameters.block_type, "body")
+        self.assertTrue(hyperparameters.should_translate)
+
+    def test_handedit_long_rubric_cell_inside_table_is_preserved(self):
+        rubric_cell = TextBlock(
+            page_index=23,
+            bbox=(204.0, 128.0, 332.0, 174.0),
+            text=(
+                "Robot cues are visible, but key morphology, material, or color "
+                "details are wrong."
+            ),
+            font_size=8.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=4,
+        )
+
+        _promote_equation_table_neighbor_blocks(
+            [rubric_cell],
+            [
+                (107.7, 105.4, 204.0, 232.9),
+                (204.0, 105.4, 332.0, 232.9),
+                (332.0, 105.4, 504.0, 232.9),
+            ],
+        )
+
+        self.assertEqual(rubric_cell.block_type, "table")
+        self.assertFalse(rubric_cell.should_translate)
+
+    def test_long_multiline_cell_inside_caption_anchored_table_is_preserved(self):
+        caption = TextBlock(
+            page_index=23,
+            bbox=(107.7, 79.0, 504.0, 99.9),
+            text="Table 14: Rating guide for human evaluation.",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+        header = TextBlock(
+            page_index=23,
+            bbox=(112.0, 105.4, 128.9, 114.4),
+            text="Axis",
+            font_size=8.97,
+            color=(0.0, 0.0, 0.0),
+            block_type="table",
+            should_translate=False,
+        )
+        anchor_cell = TextBlock(
+            page_index=23,
+            bbox=(307.5, 121.9, 401.5, 160.7),
+            text="Robot cues are visible, but key morphology details are wrong.",
+            font_size=8.97,
+            color=(0.0, 0.0, 0.0),
+            block_type="table",
+            should_translate=False,
+            source_lines=4,
+        )
+        long_cell = TextBlock(
+            page_index=23,
+            bbox=(112.0, 121.9, 301.4, 160.7),
+            text=(
+                "Target-robot correctness. The requested robot is missing, "
+                "mostly humanlike, or clearly the wrong embodiment."
+            ),
+            font_size=8.97,
+            color=(0.0, 0.0, 0.0),
+            source_lines=5,
+        )
+
+        _promote_table_component_blocks([caption, header, anchor_cell, long_cell])
+
+        self.assertEqual(long_cell.block_type, "table")
+        self.assertFalse(long_cell.should_translate)
+
+    def test_cap_sat_training_header_is_detected_as_table(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Training regime", (124.3, 338.3, 200.0, 347.5)),
+                _line("Training signal", (268.9, 338.3, 355.0, 347.5)),
+                _line("Accuracy", (430.0, 338.3, 481.7, 347.5)),
+            ]
+        )
+
+        self.assertTrue(record_is_table(record))
+
+    def test_cap_sat_walksat_header_is_detected_as_table(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Variables", (190.7, 662.5, 226.8, 671.4)),
+                _line("Neural Init", (238.7, 662.5, 281.3, 671.4)),
+                _line("Random Init", (293.3, 662.5, 342.3, 671.4)),
+                _line("Reduction", (354.3, 662.5, 393.6, 671.4)),
+                _line("Inference", (405.6, 662.5, 441.8, 671.4)),
+            ]
+        )
+
+        self.assertTrue(record_is_table(record))
+
+    def test_cap_sat_scaling_header_with_abbreviation_is_table(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Instances", (158.8, 595.6, 194.7, 604.6)),
+                _line("Labels", (216.2, 595.6, 241.6, 604.6)),
+                _line("Mean Acc", (263.2, 595.6, 301.8, 604.6)),
+                _line("Dispersion/status", (313.7, 595.6, 379.5, 604.6)),
+                _line("Gap to best sup.", (391.4, 595.6, 453.2, 604.6)),
+            ]
+        )
+
+        self.assertTrue(record_is_table(record))
+
+    def test_cap_sat_supervised_reference_row_is_table(self):
+        record = _RawBlockRec(
+            lines=[
+                _line(
+                    "Reference (fully supervised, G4SATBench [5]):",
+                    (158.8, 675.7, 328.1, 684.7),
+                ),
+                _line("SGC", (177.2, 687.8, 194.7, 696.8)),
+                _line("100% (18K)", (206.6, 687.8, 251.2, 696.8)),
+                _line("0.723", (272.4, 687.8, 292.5, 696.8)),
+                _line("ref.", (340.5, 687.8, 352.7, 696.8)),
+                _line("0.0 pp", (391.4, 687.6, 414.4, 696.8)),
+            ]
+        )
+
+        self.assertTrue(record_is_table(record))
+
+    def test_equation_marked_numeric_table_is_exposed_as_preserved_region(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("500", (181.2, 610.9, 194.7, 619.9)),
+                _line("0%", (222.9, 610.9, 234.9, 619.9)),
+                _line("0.705", (272.4, 610.9, 292.5, 619.9)),
+                _line("0.001", (336.5, 610.9, 356.7, 619.9)),
+                _line("1.8 pp", (391.4, 610.7, 414.4, 619.9)),
+            ]
+        )
+
+        regions = _equation_table_region_bboxes([record], [True])
+
+        self.assertEqual(regions, [line.bbox for line in record.lines])
+        self.assertEqual(_equation_table_region_bboxes([record], [False]), [])
+
     def test_single_row_table_header_is_detected(self):
         record = _RawBlockRec(
             lines=[
@@ -391,6 +883,41 @@ class TableDetectionTests(unittest.TestCase):
         )
 
         self.assertTrue(record_is_table(record))
+
+    def test_single_row_table_header_with_subscript_metric_is_detected(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Task", (164.8, 79.4, 185.1, 89.5)),
+                _line("π₀.₅", (266.4, 79.3, 285.0, 90.2)),
+                _line("FastWAM", (301.1, 79.4, 344.9, 89.5)),
+                _line("Lingbot-VA", (356.9, 79.4, 407.5, 89.5)),
+                _line("Ours", (422.5, 79.4, 444.3, 89.5)),
+            ]
+        )
+
+        self.assertTrue(record_is_table(record))
+
+    def test_single_row_table_header_with_protected_script_metric_is_detected(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Task", (164.8, 79.4, 185.1, 89.5)),
+                _line(
+                    f"{SENTINEL_OPEN}π{SENTINEL_CLOSE}"
+                    f"{SENTINEL_OPEN}_{{0}}{SENTINEL_CLOSE}"
+                    f"{SENTINEL_OPEN}_{{.}}{SENTINEL_CLOSE}"
+                    f"{SENTINEL_OPEN}_{{5}}{SENTINEL_CLOSE}",
+                    (266.4, 79.3, 285.0, 90.2),
+                ),
+                _line("FastWAM", (301.1, 79.4, 344.9, 89.5)),
+                _line("Lingbot-VA", (356.9, 79.4, 407.5, 89.5)),
+                _line("Ours", (422.5, 79.4, 444.3, 89.5)),
+            ]
+        )
+
+        blocks = segments_from_record(0, record)
+
+        self.assertTrue(record_is_table(record))
+        self.assertTrue(all(block.block_type == "table" for block in blocks))
 
     def test_single_row_table_summary_is_detected(self):
         record = _RawBlockRec(
@@ -430,6 +957,18 @@ class TableDetectionTests(unittest.TestCase):
                 _line(
                     "Algorithm 1 Decoupled Attention with Guided Heads Require: hidden states h",
                     (312.0, 402.2, 535.4, 414.2),
+                )
+            ]
+        )
+
+        self.assertTrue(record_is_algorithm(record))
+
+    def test_algorithm_stage_line_is_preserved(self):
+        record = _RawBlockRec(
+            lines=[
+                _line(
+                    "Stage 2: Per-Head Supervision",
+                    (327.2, 527.6, 440.0, 536.5),
                 )
             ]
         )
@@ -614,10 +1153,105 @@ class TableDetectionTests(unittest.TestCase):
         classify_blocks([block], page_index=0, page_height=720.0, image_zones=[])
 
         self.assertEqual(block.block_type, "table")
-        self.assertTrue(block.should_translate)
+        self.assertFalse(block.should_translate)
 
 
 class FragmentedProseWarningTests(unittest.TestCase):
+    def test_detects_indented_neurips_review_line_number_sequence(self):
+        raw_blocks = []
+        for offset, number in enumerate(range(78, 83)):
+            y = 578.5 + offset * 11.0
+            body_bbox = (108.0, y, 468.0, y + 10.0)
+            number_bbox = (91.4, y + 3.0, 98.0, y + 9.0)
+            body_text = (
+                "Contributions."
+                if number == 78
+                else "A review-paper prose line with enough width."
+            )
+            raw_blocks.append(
+                {
+                    "type": 0,
+                    "lines": [
+                        {
+                            "bbox": body_bbox,
+                            "spans": [_span(body_text, body_bbox)],
+                        },
+                        {
+                            "bbox": number_bbox,
+                            "spans": [_span(str(number), number_bbox, size=6.0)],
+                        },
+                    ],
+                }
+            )
+
+        gutter_bboxes = _review_line_number_bboxes({"blocks": raw_blocks})
+        record, dropped = parse_block_lines(
+            raw_blocks[0],
+            page_width=612.0,
+            known_gutter_bboxes=gutter_bboxes,
+        )
+
+        self.assertEqual(len(gutter_bboxes), 5)
+        self.assertEqual(dropped, [(91.4, 581.5, 98.0, 587.5)])
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertNotIn("78", record.bare_text())
+
+    def test_does_not_detect_nonconsecutive_plot_ticks_as_review_line_numbers(self):
+        raw_blocks = []
+        for offset, number in enumerate((20, 40, 60, 80)):
+            y = 100.0 + offset * 20.0
+            label_bbox = (180.0, y, 280.0, y + 9.0)
+            tick_bbox = (160.0, y + 2.0, 174.0, y + 8.0)
+            raw_blocks.append(
+                {
+                    "type": 0,
+                    "lines": [
+                        {
+                            "bbox": label_bbox,
+                            "spans": [_span("Evaluation category", label_bbox)],
+                        },
+                        {
+                            "bbox": tick_bbox,
+                            "spans": [_span(str(number), tick_bbox, size=6.0)],
+                        },
+                    ],
+                }
+            )
+
+        self.assertEqual(_review_line_number_bboxes({"blocks": raw_blocks}), [])
+
+    def test_formula_qa_excludes_confirmed_review_line_numbers(self):
+        raw_blocks = []
+        for offset, number in enumerate(range(157, 162)):
+            y = 180.0 + offset * 11.0
+            text_bbox = (108.0, y, 468.0, y + 10.0)
+            number_bbox = (91.4, y + 3.0, 98.0, y + 9.0)
+            text = "α + β = γ" if offset == 0 else "A review prose line for sequence detection."
+            raw_blocks.append(
+                {
+                    "type": 0,
+                    "lines": [
+                        {
+                            "bbox": text_bbox,
+                            "spans": [_span(text, text_bbox)],
+                        },
+                        {
+                            "bbox": number_bbox,
+                            "spans": [_span(str(number), number_bbox, size=6.0)],
+                        },
+                    ],
+                }
+            )
+
+        fragments = _extract_formula_fragments(
+            SimpleNamespace(),
+            blocks=raw_blocks,
+        )
+
+        self.assertIn("α+β=γ", fragments)
+        self.assertTrue(all("157" not in fragment for fragment in fragments))
+
     def test_margin_line_numbers_do_not_block_prose_merging(self):
         document = fitz.open()
         page = document.new_page(width=410, height=300)
@@ -754,6 +1388,336 @@ class FragmentedProseWarningTests(unittest.TestCase):
 
 
 class FormulaTailProseTests(unittest.TestCase):
+    def test_handedit_multiline_inline_formula_keeps_trailing_prose(self):
+        prefix = _line(
+            f"requested embodiment. Denote {SENTINEL_OPEN}{{(Iref{SENTINEL_CLOSE}",
+            (116.5, 688.1, 387.4, 706.7),
+        )
+        prefix.math_bboxes = [(360.5, 688.1, 387.4, 706.7)]
+        prefix.math_run_bboxes = list(prefix.math_bboxes)
+        superscript = _line(
+            f"{SENTINEL_OPEN}v, Mref{SENTINEL_CLOSE}",
+            (377.5, 688.1, 412.7, 701.8),
+        )
+        closing = _line(
+            f"{SENTINEL_OPEN}v )}} V{SENTINEL_CLOSE}",
+            (402.5, 688.1, 427.3, 706.7),
+        )
+        trailing = _LineRec(
+            text=f"{SENTINEL_OPEN}v=1{SENTINEL_CLOSE} as the rendered",
+            bbox=(422.6, 689.6, 504.0, 702.0),
+            spans=[
+                _span("v", (422.6, 694.2, 426.6, 701.1), size=6.97, font="CMMI7"),
+                _span("=1", (426.9, 694.2, 437.0, 701.1), size=6.97, font="CMR7"),
+                _span(
+                    " as the rendered",
+                    (437.0, 689.6, 504.0, 699.6),
+                    font="NimbusRomNo9L-Regu",
+                ),
+            ],
+        )
+        for line in (superscript, closing, trailing):
+            line.math_bboxes = [line.bbox]
+            line.math_run_bboxes = [line.bbox]
+
+        segments = segments_from_record(
+            5,
+            _RawBlockRec(lines=[prefix, superscript, closing, trailing]),
+            equation_record=True,
+        )
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("as the rendered", strip_sentinels(segments[0].text))
+        self.assertIn("v=1", strip_sentinels(segments[0].text))
+        self.assertEqual(segments[0].source_lines, 4)
+
+    def test_adjacent_display_formula_keepout_above_body_is_ignored(self):
+        keepout = (243.4, 406.1, 248.0, 443.2)
+        block = TextBlock(
+            page_index=6,
+            bbox=(116.5, 434.2, 504.2, 499.6),
+            text="Unlike the structural term, the score is not computed against pseudo-GT.",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            keepout_bboxes=[keepout],
+        )
+
+        self.assertEqual(_unresolved_formula_keepouts(block), [])
+
+    def test_formula_keepout_centered_inside_body_remains_active(self):
+        keepout = (220.0, 104.0, 240.0, 118.0)
+        block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 260.0, 130.0),
+            text="Prose surrounding an unresolved formula fragment.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            keepout_bboxes=[keepout],
+        )
+
+        self.assertEqual(_unresolved_formula_keepouts(block), [keepout])
+
+    def test_source_line_covered_formula_keepout_is_resolved(self):
+        keepout = (100.0, 100.0, 220.0, 112.0)
+        block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 260.0, 130.0),
+            text="formula bridge",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=(keepout,),
+            source_math_bboxes=((170.0, 100.0, 220.0, 112.0),),
+            keepout_bboxes=[keepout],
+        )
+
+        self.assertEqual(_unresolved_formula_keepouts(block), [])
+
+    def test_inline_formula_record_bridges_adjacent_prose_records(self):
+        previous = _RawBlockRec(
+            lines=[_line("we fit the form L(N) =", (108.0, 100.0, 504.0, 111.0))]
+        )
+        formula_line = _line(
+            f"{SENTINEL_OPEN}L_inf+c/{SENTINEL_CLOSE}",
+            (108.0, 109.0, 145.0, 121.0),
+        )
+        formula_line.math_bboxes = [formula_line.bbox]
+        formula_line.math_run_bboxes = [formula_line.bbox]
+        root_line = _line(
+            f"{SENTINEL_OPEN}sqrt{SENTINEL_CLOSE}",
+            (145.0, 102.0, 153.0, 112.0),
+        )
+        root_line.math_bboxes = [root_line.bbox]
+        root_line.math_run_bboxes = [root_line.bbox]
+        bridge_record = _RawBlockRec(lines=[formula_line, root_line])
+        following = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN}N{SENTINEL_CLOSE} to our training runs",
+                    (153.0, 109.0, 504.0, 121.0),
+                )
+            ]
+        )
+
+        bridge = _inline_formula_bridge_block(
+            0,
+            [previous, bridge_record, following],
+            [True, True, True],
+            [False, False, False],
+            1,
+        )
+
+        self.assertIsNotNone(bridge)
+        self.assertIn("L_inf+c/", strip_sentinels(bridge.text))
+        self.assertIn("sqrt", strip_sentinels(bridge.text))
+        self.assertEqual(len(bridge.source_math_bboxes), 2)
+
+    def test_display_formula_record_is_not_an_inline_bridge(self):
+        previous = _RawBlockRec(
+            lines=[_line("where we use", (108.0, 100.0, 170.0, 111.0))]
+        )
+        display = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN}x=y+z{SENTINEL_CLOSE}",
+                    (220.0, 118.0, 360.0, 132.0),
+                )
+            ]
+        )
+        following = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN}x{SENTINEL_CLOSE} is the result",
+                    (108.0, 140.0, 250.0, 151.0),
+                )
+            ]
+        )
+
+        bridge = _inline_formula_bridge_block(
+            0,
+            [previous, display, following],
+            [True, True, True],
+            [False, False, False],
+            1,
+        )
+
+        self.assertIsNone(bridge)
+
+    def test_formula_keepouts_do_not_pin_captured_source_math(self):
+        formula_bboxes = tuple(
+            (100.0 + index * 12.0, 100.0, 108.0 + index * 12.0, 112.0)
+            for index in range(5)
+        )
+        resolved_block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 260.0, 130.0),
+            text="formula-rich prose",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_math_bboxes=formula_bboxes,
+            formula_anchors=formula_bboxes,
+            keepout_bboxes=[formula_bboxes[0]],
+        )
+        unresolved_block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 260.0, 130.0),
+            text="formula with an external fragment",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_math_bboxes=formula_bboxes,
+            formula_anchors=formula_bboxes,
+            keepout_bboxes=[(220.0, 100.0, 240.0, 112.0)],
+        )
+
+        self.assertFalse(_uses_fixed_source_math(resolved_block))
+        self.assertFalse(_uses_fixed_source_math(unresolved_block))
+
+    def test_fixed_source_math_survives_redaction_and_is_not_duplicated(self):
+        document = fitz.open()
+        page = document.new_page(width=300, height=160)
+        page.insert_text((40.0, 60.0), "LEFT", fontsize=10.0)
+        page.insert_text((140.0, 60.0), "x", fontsize=10.0)
+        page.insert_text((200.0, 60.0), "RIGHT", fontsize=10.0)
+        left_bbox = tuple(page.search_for("LEFT")[0])
+        formula_bbox = tuple(page.search_for("x")[0])
+        right_bbox = tuple(page.search_for("RIGHT")[0])
+        block = TextBlock(
+            page_index=0,
+            bbox=(35.0, 45.0, 260.0, 75.0),
+            text=f"LEFT {SENTINEL_OPEN}x{SENTINEL_CLOSE} RIGHT",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=4,
+            redact_bboxes=[left_bbox, formula_bbox, right_bbox],
+            keepout_bboxes=[(270.0, 45.0, 280.0, 65.0)],
+            source_line_bboxes=((35.0, 45.0, 260.0, 65.0),),
+            source_math_bboxes=(formula_bbox,),
+            formula_anchors=(formula_bbox,),
+        )
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        redact_original_text(page, [block], margin=0.1)
+        inserted = insert_translated_text(
+            page=page,
+            block=block,
+            text=f"Translated {SENTINEL_OPEN}x{SENTINEL_CLOSE} result",
+            font_pack=font_pack,
+            font_size=10.0,
+            min_font_size=5.0,
+            margin=0.1,
+        )
+
+        extracted = page.get_text("text")
+        document.close()
+        self.assertTrue(inserted)
+        self.assertIn("Translated", extracted)
+        self.assertIn("result", extracted)
+        self.assertEqual(extracted.split().count("x"), 1)
+
+    def test_join_lines_keeps_cross_line_formula_runs_separate(self):
+        joined = join_lines(
+            [
+                f"prefix {SENTINEL_OPEN}c/{SENTINEL_CLOSE}",
+                f"{SENTINEL_OPEN}N{SENTINEL_CLOSE} suffix",
+            ]
+        )
+
+        self.assertEqual(len(SENTINEL_RUN_RE.findall(joined)), 2)
+        self.assertEqual(strip_sentinels(joined).split(), ["prefix", "c/", "N", "suffix"])
+
+    def test_join_lines_keeps_normal_spacing(self):
+        self.assertEqual(join_lines(["first line", "second line"]), "first line second line")
+
+    def test_formula_anchor_alignment_requires_exact_count(self):
+        anchors = (
+            (100.0, 100.0, 110.0, 110.0),
+            (112.0, 100.0, 122.0, 110.0),
+        )
+
+        self.assertEqual(_align_formula_anchors(anchors, 2), anchors)
+        self.assertEqual(_align_formula_anchors(anchors, 1), ())
+
+    def test_formula_tokenizer_falls_back_to_visible_text_when_anchors_mismatch(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(100.0, 100.0, 300.0, 130.0),
+            text="formula",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            formula_anchors=(),
+        )
+
+        tokens = _tokenize_translation_with_formula_clips(
+            f"中文 {SENTINEL_OPEN}x^{{2}}{SENTINEL_CLOSE} 结果",
+            block,
+        )
+
+        rendered = "".join(token.text for token in tokens)
+        self.assertIn("x^{2}", rendered)
+        self.assertNotIn(SENTINEL_OPEN, rendered)
+        self.assertTrue(all(token.kind != "formula" for token in tokens))
+
+    def test_formula_tokenizer_groups_contiguous_vector_formula_pieces(self):
+        anchors = (
+            (100.0, 100.0, 120.0, 110.0),
+            (120.0, 92.0, 128.0, 102.0),
+            (128.0, 100.0, 138.0, 110.0),
+        )
+        block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 260.0, 130.0),
+            text="formula",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            formula_anchors=anchors,
+        )
+
+        tokens = _tokenize_translation_with_formula_clips(
+            (
+                f"结果 {SENTINEL_OPEN}c/{SENTINEL_CLOSE}  "
+                f"{SENTINEL_OPEN}√{SENTINEL_CLOSE}  "
+                f"{SENTINEL_OPEN}N{SENTINEL_CLOSE} 成立"
+            ),
+            block,
+        )
+
+        formulas = [token for token in tokens if token.kind == "formula"]
+        self.assertEqual(len(formulas), 1)
+        self.assertEqual(formulas[0].text, "c/ √ N")
+        self.assertEqual(formulas[0].source_bbox, (100.0, 92.0, 138.0, 110.0))
+
+    def test_formula_tokenizer_keeps_prose_connector_between_formulas(self):
+        anchors = (
+            (100.0, 100.0, 110.0, 110.0),
+            (140.0, 100.0, 190.0, 110.0),
+        )
+        block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 260.0, 130.0),
+            text="formula",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            formula_anchors=anchors,
+        )
+
+        tokens = _tokenize_translation_with_formula_clips(
+            (
+                f"{SENTINEL_OPEN}N{SENTINEL_CLOSE} with "
+                f"{SENTINEL_OPEN}R^2=0.975{SENTINEL_CLOSE}"
+            ),
+            block,
+        )
+
+        self.assertEqual(sum(token.kind == "formula" for token in tokens), 2)
+        self.assertIn("with", "".join(token.text for token in tokens))
+
     def test_clean_translation_collapses_mixed_formula_parentheses(self):
         self.assertEqual(clean_translation("（U e ij≈0).）"), "（U e ij≈0）")
 
@@ -770,6 +1734,83 @@ class FormulaTailProseTests(unittest.TestCase):
                 line_max_size=10.0,
             )
         )
+
+    def test_metric_comparison_with_formula_numbers_is_prose(self):
+        line = _LineRec(
+            text=(
+                f"2 is{SENTINEL_OPEN}0.442{SENTINEL_CLOSE}"
+                f"{SENTINEL_OPEN}±0.134{SENTINEL_CLOSE} (planted) versus"
+                f"{SENTINEL_OPEN}0.001±0.199{SENTINEL_CLOSE}"
+            ),
+            bbox=(316.7, 449.7, 504.3, 463.4),
+            spans=[],
+        )
+
+        self.assertTrue(line_is_prose(line))
+
+    def test_short_connector_between_formula_runs_is_prose(self):
+        line = _LineRec(
+            text=(
+                f"{SENTINEL_OPEN}N{SENTINEL_CLOSE} with"
+                f"{SENTINEL_OPEN}R^2 = 0.975{SENTINEL_CLOSE}"
+            ),
+            bbox=(280.0, 100.0, 430.0, 112.0),
+            spans=[],
+        )
+
+        self.assertTrue(line_is_prose(line))
+
+    def test_equation_record_keeps_wrapped_formula_suffix_after_prose(self):
+        prose = _line(
+            "Both quantities show a decay rate consistent with the",
+            (108.0, 100.0, 504.0, 111.0),
+        )
+        formula_prefix = _line(
+            f"{SENTINEL_OPEN}O(1/{SENTINEL_CLOSE}",
+            (108.0, 109.5, 130.0, 121.0),
+        )
+        formula_root = _line(
+            f"{SENTINEL_OPEN}sqrt{SENTINEL_CLOSE}",
+            (130.0, 101.0, 140.0, 110.0),
+        )
+
+        blocks = segments_from_record(
+            0,
+            _RawBlockRec(lines=[prose, formula_prefix, formula_root]),
+            equation_record=True,
+        )
+
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("O(1/", strip_sentinels(blocks[0].text))
+        self.assertIn("sqrt", strip_sentinels(blocks[0].text))
+
+    def test_equation_record_does_not_merge_independent_display_formula(self):
+        prose = _line("This completes the proof.", (108.0, 100.0, 260.0, 111.0))
+        display = _line(
+            f"{SENTINEL_OPEN}x = y + z{SENTINEL_CLOSE}",
+            (220.0, 118.0, 360.0, 132.0),
+        )
+
+        blocks = segments_from_record(
+            0,
+            _RawBlockRec(lines=[prose, display]),
+            equation_record=True,
+        )
+
+        self.assertEqual(len(blocks), 1)
+        self.assertNotIn("x = y + z", strip_sentinels(blocks[0].text))
+
+    def test_pure_numeric_comparison_is_not_prose(self):
+        line = _LineRec(
+            text=(
+                f"{SENTINEL_OPEN}0.442±0.134{SENTINEL_CLOSE} versus "
+                f"{SENTINEL_OPEN}0.001±0.199{SENTINEL_CLOSE}"
+            ),
+            bbox=(316.7, 449.7, 504.3, 463.4),
+            spans=[],
+        )
+
+        self.assertFalse(line_is_prose(line))
 
     def test_splits_where_clause_without_redacting_fraction(self):
         prefix = _LineRec(
@@ -1353,6 +2394,220 @@ class PreserveGraphicsTextTests(unittest.TestCase):
             2,
         )
 
+    def test_merges_run_in_bold_heading_with_same_line_prose(self):
+        heading = TextBlock(
+            page_index=0,
+            bbox=(70.9, 238.9, 163.9, 247.7),
+            text="Experimental Results.",
+            font_size=8.77,
+            color=(0.0, 0.0, 0.0),
+            bold=True,
+            starts_bold=True,
+            no_merge=True,
+            block_type="heading",
+        )
+        first_line = TextBlock(
+            page_index=0,
+            bbox=(163.9, 233.1, 526.8, 247.2),
+            text="Figure 3 summarizes performance, with full results in appendix E.",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+        )
+        continuation = TextBlock(
+            page_index=0,
+            bbox=(70.9, 251.0, 541.5, 289.1),
+            text="On low-dimensional tasks, FlashSAC slightly outperforms PPO.",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+        )
+
+        merged = merge_paragraph_blocks([heading, first_line, continuation])
+
+        self.assertEqual(len(merged), 1)
+        self.assertTrue(merged[0].starts_bold)
+        self.assertTrue(merged[0].bold_prefix)
+        self.assertFalse(merged[0].bold)
+        self.assertAlmostEqual(merged[0].font_size, first_line.font_size)
+        self.assertIn("Experimental Results. Figure 3", merged[0].text)
+
+    def test_merges_caption_fragments_split_by_inline_formula(self):
+        caption = TextBlock(
+            page_index=19,
+            bbox=(108.0, 394.1, 363.5, 403.3),
+            text=(
+                "Figure 7. Empirical data scaling on 3-SAT, with a "
+                f"{SENTINEL_OPEN}c/{SENTINEL_CLOSE}"
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            redact_bboxes=[(108.0, 396.5, 363.5, 403.3)],
+        )
+        continuation = TextBlock(
+            page_index=19,
+            bbox=(107.7, 394.1, 504.6, 426.6),
+            text=(
+                f"{SENTINEL_OPEN}N{SENTINEL_CLOSE} fit predicted by Proposition 4. "
+                "Final-epoch validation loss follows the expected rate."
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+            redact_bboxes=[
+                (371.1, 396.5, 504.6, 400.8),
+                (108.0, 408.3, 422.3, 415.0),
+            ],
+        )
+        second_panel = TextBlock(
+            page_index=19,
+            bbox=(107.7, 413.6, 504.2, 436.6),
+            text=(
+                "(b) Test prediction error follows the same rate and carries "
+                "additional finite-test-set noise."
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+        )
+
+        merged = merge_paragraph_blocks(
+            [caption, continuation, second_panel],
+            graphic_regions_by_page={19: [(96.0, 120.0, 516.0, 405.0)]},
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertIn("fit predicted by Proposition 4", merged[0].text)
+        self.assertIn("Test prediction error", merged[0].text)
+
+    def test_merges_bold_run_in_heading_split_by_inline_formula(self):
+        heading = TextBlock(
+            page_index=19,
+            bbox=(108.0, 594.5, 241.2, 604.6),
+            text=(
+                "Empirical verification of the 1"
+                f"{SENTINEL_OPEN}/{SENTINEL_CLOSE}"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            bold=True,
+            starts_bold=True,
+        )
+        continuation = TextBlock(
+            page_index=19,
+            bbox=(107.8, 594.5, 504.4, 651.9),
+            text=(
+                f"{SENTINEL_OPEN}N{SENTINEL_CLOSE} decay rate. We verify that the "
+                "qualitative rate matches the observed data scaling."
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=6,
+            redact_bboxes=[
+                (249.5, 594.5, 308.0, 604.7),
+                (317.9, 594.7, 504.4, 604.7),
+            ],
+        )
+
+        merged = merge_paragraph_blocks([heading, continuation])
+
+        self.assertEqual(len(merged), 1)
+        self.assertTrue(merged[0].bold_prefix)
+        self.assertFalse(merged[0].bold)
+
+    def test_merges_same_source_line_with_small_formula_bbox_overlap(self):
+        heading = TextBlock(
+            page_index=22,
+            bbox=(105.3, 319.7, 269.1, 331.5),
+            text=f"(2) Gradient sign correctness at p = {SENTINEL_OPEN}1{SENTINEL_CLOSE}",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((105.3, 319.7, 269.1, 331.5),),
+        )
+        continuation = TextBlock(
+            page_index=22,
+            bbox=(265.1, 321.2, 504.0, 334.0),
+            text=(
+                f"{SENTINEL_OPEN}2{SENTINEL_CLOSE}. On the planted regime, "
+                "the initial gradient pushes each variable"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((265.1, 321.2, 504.0, 334.0),),
+        )
+
+        merged = merge_paragraph_blocks([heading, continuation])
+
+        self.assertEqual(len(merged), 1)
+        self.assertIn("On the planted regime", merged[0].text)
+
+    def test_merges_same_line_formula_tail_before_metric_comparison(self):
+        first = TextBlock(
+            page_index=22,
+            bbox=(121.6, 448.2, 320.6, 461.8),
+            text=(
+                "The cosine alignment between"
+                f"{SENTINEL_OPEN}-gradient{SENTINEL_CLOSE} and x"
+                f"{SENTINEL_OPEN}-1{SENTINEL_CLOSE}"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((121.6, 448.2, 320.6, 461.8),),
+        )
+        comparison = TextBlock(
+            page_index=22,
+            bbox=(316.7, 449.7, 504.3, 463.4),
+            text=(
+                f"2 is{SENTINEL_OPEN}0.442+/-0.134{SENTINEL_CLOSE} "
+                f"(planted) versus{SENTINEL_OPEN}0.001+/-0.199{SENTINEL_CLOSE}"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((316.7, 449.7, 504.3, 463.4),),
+        )
+
+        merged = merge_paragraph_blocks([first, comparison])
+
+        self.assertEqual(len(merged), 1)
+        self.assertIn("planted", merged[0].text)
+
+    def test_does_not_merge_same_line_formula_fragments_with_large_overlap(self):
+        first = TextBlock(
+            page_index=0,
+            bbox=(105.0, 100.0, 270.0, 112.0),
+            text=f"A formula-rich paragraph ends at {SENTINEL_OPEN}x{SENTINEL_CLOSE}",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((105.0, 100.0, 270.0, 112.0),),
+        )
+        unrelated = TextBlock(
+            page_index=0,
+            bbox=(245.0, 100.5, 500.0, 112.5),
+            text=f"{SENTINEL_OPEN}y{SENTINEL_CLOSE} unrelated prose starts here",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((245.0, 100.5, 500.0, 112.5),),
+        )
+
+        self.assertEqual(len(merge_paragraph_blocks([first, unrelated])), 2)
+
+    def test_attaches_cross_record_formula_keepout(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(108.0, 594.5, 504.4, 651.9),
+            text="Translated prose surrounding a display formula.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        formula = _LineRec(
+            text=f"{SENTINEL_OPEN}L_inf + c / sqrt(N){SENTINEL_CLOSE}",
+            bbox=(108.0, 609.6, 181.0, 628.9),
+            spans=[],
+        )
+
+        _attach_formula_keepouts([block], [formula])
+
+        self.assertEqual(block.keepout_bboxes, [formula.bbox])
+
     def test_merges_fixed_width_body_line_fragments(self):
         blocks = [
             TextBlock(
@@ -1812,6 +3067,41 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         self.assertTrue(inserted)
         self.assertIn("Short translated caption", page.get_text("text"))
 
+    def test_insert_translated_text_renders_ascii_scripts_as_scripts(self):
+        document = fitz.open()
+        page = document.new_page(width=300, height=180)
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+        block = TextBlock(
+            page_index=0,
+            bbox=(30.0, 40.0, 250.0, 80.0),
+            text="Cache C^v_t.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        inserted = insert_translated_text(
+            page=page,
+            block=block,
+            text="Cache C^{v}_{t}:",
+            font_pack=font_pack,
+            font_size=10.0,
+            min_font_size=5.0,
+            margin=0.8,
+        )
+
+        extracted = page.get_text("text")
+        document.close()
+        self.assertTrue(inserted)
+        self.assertIn("Cache C^{v}_{t}:", extracted)
+
 
 class TestClassifyBlocks(unittest.TestCase):
     """Test block classification into semantic types."""
@@ -1836,6 +3126,142 @@ class TestClassifyBlocks(unittest.TestCase):
         self.assertTrue(block.preserve_position)
         self.assertTrue(block.should_translate)
 
+    def test_author_metadata_is_not_translated(self):
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block(
+            "Author Names Omitted for Anonymous Review. Paper-ID 74",
+            bbox=(49.0, 133.0, 563.0, 146.0),
+        )
+
+        classify_blocks([block], 0, 792, [])
+
+        self.assertEqual(block.block_type, "metadata")
+        self.assertFalse(block.should_translate)
+
+    def test_reference_entry_without_heading_is_bibliography(self):
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block(
+            "Depth anything 3: Recovering the visual space from any views. "
+            "arXiv preprint arXiv:2511.10647, 2025.",
+            bbox=(312.0, 58.4, 563.0, 110.0),
+            page=10,
+        )
+
+        classify_blocks([block], 10, 792, [])
+
+        self.assertEqual(block.block_type, "bibliography")
+        self.assertFalse(block.should_translate)
+
+    def test_fraction_tail_number_is_not_bibliography_without_reference_context(self):
+        import pdf_zh_translator.pdf_layout as layout
+
+        block = self._make_block(
+            "2. Unlike CSM and VCL, this term gives the model a per-variable target.",
+            bbox=(221.0, 391.9, 505.7, 404.3),
+            page=4,
+        )
+        layout._bibliography_seen.clear()
+        layout._bibliography_ended = False
+        layout._bibliography_heading_size = 0.0
+
+        classify_blocks([block], 4, 792, [])
+
+        self.assertEqual(block.block_type, "body")
+        self.assertTrue(block.should_translate)
+
+    def test_citation_dense_body_paragraph_is_not_bibliography(self):
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block(
+            (
+                "Vision-Language-Action (VLA) models [99, 44, 8] represent a significant "
+                "step toward generalist robot policies by integrating action as a specialized "
+                "modality within Vision-Language Models. In practice, we observe that the "
+                "action decoder often latches onto spurious correlations, as shown in Fig. 1."
+            ),
+            bbox=(312.0, 487.5, 563.0, 725.9),
+        )
+
+        classify_blocks([block], 0, 792, [])
+
+        self.assertEqual(block.block_type, "body")
+        self.assertTrue(block.should_translate)
+
+    def test_safe_rl_body_paragraph_with_in_this_paper_is_not_bibliography(self):
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block(
+            (
+                "The standard formalism is the constrained Markov decision process (CMDP), "
+                "which maximizes reward subject to expected safety costs [2]. In this paper, "
+                "we propose SafeTransport, which lifts this flow equivalence into a safe-RL "
+                "algorithm and keeps per-channel constraints visible."
+            ),
+            bbox=(107.6, 74.5, 505.7, 542.7),
+        )
+
+        classify_blocks([block], 1, 792, [])
+
+        self.assertEqual(block.block_type, "body")
+        self.assertTrue(block.should_translate)
+
+    def test_hyperparameter_2048_is_not_misread_as_reference_year(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_reference_entry_text
+
+        text = (
+            "As in the GPU-based setting, FlashSAC uses a single unified configuration "
+            "across all tasks, with only minimal adjustments to match each benchmark's "
+            "conventions. Since sample collection is slower with a single environment, "
+            "the CPU-based configuration differs by reducing the batch size from 2048 "
+            "to 512 and setting the update-to-data ratio to 1."
+        )
+
+        self.assertFalse(_looks_like_reference_entry_text(text))
+
+    def test_named_reference_with_year_remains_bibliography(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_reference_entry_text
+
+        text = (
+            "Haarnoja, T., Zhou, A., Abbeel, P., and Levine, S. "
+            "Soft actor-critic algorithms and applications. ICML, 2018."
+        )
+
+        self.assertTrue(_looks_like_reference_entry_text(text))
+
+    def test_preserved_region_text_changed_detects_translated_table_label(self):
+        self.assertTrue(preserved_region_text_changed("Task", "任务"))
+        self.assertFalse(preserved_region_text_changed("Task FastWAM Ours", "Task FastWAM Ours"))
+
+    def test_preserved_region_text_changed_detects_chinese_overlay(self):
+        self.assertTrue(
+            preserved_region_text_changed(
+                "Source Image Target URDF",
+                "Source Image Target URDF 源图像 目标模型",
+            )
+        )
+
+    def test_preserved_formula_ignores_adjacent_chinese_line_bbox(self):
+        self.assertFalse(
+            preserved_region_text_changed(
+                "Sref = max 1 + cos phi clip Iref",
+                "Sref = max 1 + cos phi clip Iref Sref并非针对",
+            )
+        )
+
+    def test_preserved_text_qa_merges_adjacent_formula_atoms(self):
+        regions = _preserved_text_qa_regions(
+            [
+                (248.0, 414.0, 278.4, 424.0),
+                (278.8, 412.3, 384.3, 431.4),
+                (107.6, 505.0, 190.0, 520.0),
+            ]
+        )
+
+        self.assertEqual(len(regions), 2)
+        self.assertTrue(any(region[0] <= 248.0 and region[2] >= 384.3 for region in regions))
+
     def test_roman_table_caption_detection(self):
         from pdf_zh_translator.pdf_layout import classify_blocks
 
@@ -1844,6 +3270,40 @@ class TestClassifyBlocks(unittest.TestCase):
 
         self.assertEqual(block.block_type, "caption")
         self.assertTrue(block.preserve_position)
+
+    def test_references_heading_inside_figure_zone_starts_bibliography(self):
+        import pdf_zh_translator.pdf_layout as layout
+
+        heading = TextBlock(
+            page_index=7,
+            bbox=(409.6, 567.4, 480.0, 577.4),
+            text="REFERENCES",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            bold=True,
+        )
+        entry = TextBlock(
+            page_index=7,
+            bbox=(317.0, 584.4, 563.0, 620.0),
+            text="[1] Smith, J. A robust translation method. ICML, 2026.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        layout._bibliography_seen.clear()
+        layout._bibliography_ended = False
+        layout._bibliography_heading_size = 0.0
+
+        classify_blocks(
+            [heading, entry],
+            page_index=7,
+            page_height=792.0,
+            image_zones=[(380.0, 540.0, 520.0, 582.0)],
+        )
+
+        self.assertEqual(heading.block_type, "heading")
+        self.assertTrue(heading.should_translate)
+        self.assertEqual(entry.block_type, "bibliography")
+        self.assertFalse(entry.should_translate)
 
     def test_figure_reference_sentence_is_body(self):
         from pdf_zh_translator.pdf_layout import classify_blocks
@@ -2153,6 +3613,201 @@ class TestTranslationVerification(unittest.TestCase):
             )
         )
 
+    def test_untranslated_detector_allows_translated_metric_fragment(self):
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "（1.36× wall-clock, 20.1% conflict reduction）和Glucose 4.2"
+                "（1.10×, 6.0%）中的"
+            )
+        )
+
+    def test_untranslated_detector_flags_english_metric_sentence(self):
+        self.assertTrue(
+            _looks_like_untranslated_english(
+                "Accuracy improves by 20.1% and conflict reduction reaches 6.0% "
+                "across all benchmark tasks."
+            )
+        )
+
+    def test_retry_detector_flags_english_run_inside_chinese_caption(self):
+        block = TextBlock(
+            page_index=17,
+            bbox=(72.0, 100.0, 500.0, 130.0),
+            text="Figure 6: Empirical verification of Corollary 1 on 3-SAT instances.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+
+        self.assertTrue(
+            _translated_block_still_english(
+                block,
+                "图6：Empirical verification of Corollary 1 on 3-SAT instances，"
+                "结果与理论预测一致。",
+            )
+        )
+
+    def test_retry_detector_flags_model_commentary(self):
+        block = TextBlock(
+            page_index=19,
+            bbox=(72.0, 100.0, 500.0, 150.0),
+            text="Figure 7: Verification of the asymptotic decay rate.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+        contaminated = (
+            "图7：渐近衰减率验证。\n解释：该图比较理论和实测结果。\n步骤：\n"
+            "1. 读取曲线。\n2. 比较斜率。\n注：这段翻译保留了公式。"
+        )
+
+        self.assertTrue(_translated_block_still_english(block, contaminated))
+
+    def test_retry_detector_allows_chinese_with_standard_acronyms(self):
+        block = TextBlock(
+            page_index=1,
+            bbox=(72.0, 100.0, 500.0, 150.0),
+            text="We evaluate CAP-SAT on standard SAT benchmarks.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        self.assertFalse(
+            _translated_block_still_english(
+                block,
+                "我们在 SAT、CAP-SAT 与 Glucose 4.2 基准上评估该方法，并报告运行时间。",
+            )
+        )
+
+    def test_preserved_regions_include_nontranslated_table_and_metadata(self):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text(
+            (132, 145),
+            "Sizhe Yang Juncheng Mu Tianming Wei Chenhao Lu Xiaofan Li Linning Xu",
+            fontsize=9,
+        )
+        page.insert_text(
+            (138, 170),
+            "1The Chinese University of Hong Kong 2Tsinghua University "
+            "3Zhejiang University equal contribution",
+            fontsize=9,
+        )
+        x_positions = [130, 200, 310, 380, 450]
+        rows = [
+            ["Model", "Method", "Dry-run", "Solved", "Solved / Dry-run"],
+            ["MCDC", "Qwen 3.5 9B", "4/30 (13.3%)", "2/30 (6.7%)", "2/4 (50.0%)"],
+            ["OpenMC", "Claude Opus 4.6", "29/30 (96.7%)", "25/30 (83.3%)", "25/29"],
+        ]
+        for y, row in zip([260, 274, 288], rows):
+            for x, cell in zip(x_positions, row):
+                page.insert_text((x, y), cell, fontsize=9)
+
+        regions = preserved_original_text_regions(document)
+        document.close()
+
+        self.assertTrue(
+            any(130 <= bbox[1] <= 180 and bbox[2] - bbox[0] > 250 for bbox in regions[0])
+        )
+        self.assertGreaterEqual(
+            sum(1 for bbox in regions[0] if 245 <= bbox[1] <= 295),
+            10,
+        )
+
+    def test_preserved_regions_include_algorithm_records_skipped_by_collection(self):
+        document = fitz.open()
+        document.new_page(width=612, height=792)
+        page = document.new_page(width=612, height=792)
+        page.insert_text(
+            (72, 120),
+            "Algorithm 5 Python Pseudocode of Dual-Path Control Attention",
+            fontsize=9,
+        )
+
+        regions = preserved_original_text_regions(document)
+        document.close()
+
+        self.assertTrue(
+            any(
+                bbox[1] <= 120 <= bbox[3] + 10 and bbox[0] <= 72 <= bbox[2]
+                for bbox in regions[1]
+            )
+        )
+
+    def test_verification_ignores_untranslated_table_cells_without_grid(self):
+        original = fitz.open()
+        page = original.new_page(width=612, height=792)
+        x_positions = [130, 200, 310, 380, 450]
+        rows = [
+            ["Model", "Method", "Dry-run", "Solved", "Solved / Dry-run"],
+            ["MCDC", "Qwen 3.5 9B", "4/30 (13.3%)", "2/30 (6.7%)", "2/4 (50.0%)"],
+            ["OpenMC", "Claude Opus 4.6", "29/30 (96.7%)", "25/30 (83.3%)", "25/29"],
+        ]
+        for y, row in zip([80, 94, 108], rows):
+            for x, cell in zip(x_positions, row):
+                page.insert_text((x, y), cell, fontsize=9)
+        page.insert_text((88, 180), "The results demonstrate improved simulator generation.")
+
+        translated = fitz.open()
+        page = translated.new_page(width=612, height=792)
+        for y, row in zip([80, 94, 108], rows):
+            for x, cell in zip(x_positions, row):
+                page.insert_text((x, y), cell, fontsize=9)
+        page.insert_text((88, 180), "结果表明仿真器生成效果有所提升。")
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertFalse(any(issue.code == "untranslated_english" for issue in issues))
+
+    def test_verification_still_flags_untranslated_checklist_prose(self):
+        original = fitz.open()
+        page = original.new_page(width=612, height=792)
+        page.insert_text(
+            (88, 120),
+            "Question: Does the paper fully disclose all the information needed to "
+            "reproduce the main experimental results?",
+        )
+
+        translated = fitz.open()
+        page = translated.new_page(width=612, height=792)
+        page.insert_text(
+            (88, 120),
+            "Question: Does the paper fully disclose all the information needed to "
+            "reproduce the main experimental results?",
+        )
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "untranslated_english" for issue in issues))
+
+    def test_formula_explanation_detector_ignores_checklist_line_fragments(self):
+        self.assertFalse(
+            _looks_like_untranslated_formula_explanation("with human subjects.1117")
+        )
+        self.assertTrue(
+            _looks_like_untranslated_formula_explanation(
+                "where x denotes the input vector."
+            )
+        )
+
     def test_formula_fragment_detector_ignores_code_and_table_rows(self):
         self.assertFalse(_looks_like_formula_fragment("nu_p=np.array([1.2]))462"))
         self.assertFalse(_looks_like_formula_fragment("x=[0.0,4.0],486"))
@@ -2215,6 +3870,42 @@ class TestTranslationVerification(unittest.TestCase):
         translated.close()
         self.assertTrue(any("untranslated English" in issue for issue in issues))
         self.assertFalse(any("2 block" in issue for issue in issues))
+
+    def test_overlap_qa_ignores_lines_inside_preserved_table_region(self):
+        from unittest.mock import patch
+
+        original = fitz.open()
+        original.new_page(width=300, height=220)
+        translated = fitz.open()
+        page = translated.new_page(width=300, height=220)
+        page.insert_text((40, 80), "Model accuracy result", fontsize=11)
+        page.insert_text((40, 80), "Method success value", fontsize=11)
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            baseline = verify_translation_issues(original_path, translated_path)
+
+            def prepare_with_preserved_region(*args, **kwargs):
+                kwargs["preserved_regions_out"].update(
+                    {0: [(20.0, 20.0, 280.0, 180.0)]}
+                )
+                return [], {}, 0
+
+            with patch(
+                "pdf_zh_translator.pdf_layout.prepare_translation_units",
+                side_effect=prepare_with_preserved_region,
+            ):
+                preserved = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "text_overlap" for issue in baseline))
+        self.assertFalse(any(issue.code == "text_overlap" for issue in preserved))
 
     def test_ignores_multiline_english_reference_section(self):
         original = fitz.open()
@@ -2522,6 +4213,22 @@ class TestTranslationVerification(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertGreater(area, 10000.0)
 
+    def test_visual_regions_include_text_dict_image_blocks(self):
+        class FakePage:
+            rect = SimpleNamespace(width=300.0, height=220.0)
+
+            def get_text(self, kind):
+                assert kind == "dict"
+                return {"blocks": [{"type": 1, "bbox": (40.0, 50.0, 180.0, 130.0)}]}
+
+            def get_images(self):
+                return []
+
+            def get_drawings(self):
+                return []
+
+        self.assertEqual(_visual_regions_for_page(FakePage()), [(40.0, 50.0, 180.0, 130.0)])
+
     def test_visual_min_zone_ignores_text_only_region(self):
         document = fitz.open()
         document.new_page(width=300, height=300)
@@ -2586,6 +4293,15 @@ class TestTranslationVerification(unittest.TestCase):
 
         self.assertEqual(clipped, (107.5, 348.3, 303.0, 525.6))
 
+    def test_clip_block_bbox_against_memorywam_mid_right_image(self):
+        clipped = _clip_block_bbox_against_floats(
+            (107.6, 324.4, 505.2, 477.9),
+            [(254.6, 314.5, 517.2, 427.5)],
+            612.0,
+        )
+
+        self.assertEqual(clipped, (107.6, 324.4, 251.6, 477.9))
+
     def test_clip_block_bbox_ignores_non_right_side_float(self):
         bbox = (40.0, 100.0, 560.0, 180.0)
 
@@ -2624,6 +4340,262 @@ class TestBlockInZone(unittest.TestCase):
         from pdf_zh_translator.pdf_layout import _block_in_zone
         # Only ~10% overlap
         self.assertFalse(_block_in_zone((100, 100, 200, 200), (190, 100, 300, 200)))
+
+
+def test_classify_blocks_preserves_complete_three_column_table_component():
+    blocks = [
+        TextBlock(
+            0,
+            (70.0, 82.0, 518.0, 109.0),
+            "Table 9: Hyperparameters used in GPU simulators.",
+            9.0,
+            (0.0, 0.0, 0.0),
+        ),
+        TextBlock(
+            0,
+            (210.0, 124.0, 425.0, 133.0),
+            "Hyperparameter Notation Value",
+            9.0,
+            (0.0, 0.0, 0.0),
+            source_lines=3,
+        ),
+        TextBlock(
+            0,
+            (136.0, 162.0, 178.0, 171.0),
+            "Common",
+            9.0,
+            (0.0, 0.0, 0.0),
+        ),
+        TextBlock(
+            0,
+            (210.0, 140.0, 426.0, 193.0),
+            "Parallel environments - 1024 Replay buffer capacity - 10M",
+            9.0,
+            (0.0, 0.0, 0.0),
+            nowrap=True,
+            no_merge=True,
+            block_type="table",
+        ),
+        TextBlock(
+            0,
+            (136.0, 200.0, 413.0, 231.0),
+            "Actor Number of blocks - 2 Hidden dimension 128",
+            9.0,
+            (0.0, 0.0, 0.0),
+            nowrap=True,
+            no_merge=True,
+            block_type="table",
+        ),
+    ]
+
+    classify_blocks(blocks, page_index=0, page_height=792.0, image_zones=[])
+
+    assert blocks[0].block_type == "caption"
+    assert blocks[0].should_translate is True
+    assert blocks[1].block_type == "table"
+    assert blocks[1].should_translate is False
+    assert blocks[2].block_type == "table"
+    assert blocks[2].should_translate is False
+    assert _table_region_bboxes(blocks) == [(70.0, 124.0, 518.0, 231.0)]
+
+
+def test_classify_blocks_preserves_short_fragments_between_caption_and_table():
+    blocks = [
+        TextBlock(
+            0,
+            (107.7, 318.6, 505.6, 367.7),
+            "Table 4: Pairwise comparisons for the ablation study.",
+            8.0,
+            (0.0, 0.0, 0.0),
+        ),
+        TextBlock(
+            0,
+            (166.0, 397.7, 211.0, 404.7),
+            "Glucose 4.2",
+            7.0,
+            (0.0, 0.0, 0.0),
+        ),
+        TextBlock(
+            0,
+            (226.0, 403.2, 307.0, 410.1),
+            "Polarity-prior (Freq.)",
+            7.0,
+            (0.0, 0.0, 0.0),
+        ),
+        TextBlock(
+            0,
+            (107.7, 411.9, 505.6, 471.3),
+            "Neural model 68.2 71.4",
+            7.0,
+            (0.0, 0.0, 0.0),
+            block_type="table",
+            should_translate=False,
+            nowrap=True,
+            no_merge=True,
+        ),
+    ]
+
+    classify_blocks(blocks, page_index=0, page_height=792.0, image_zones=[])
+
+    assert blocks[1].block_type == "table"
+    assert blocks[1].should_translate is False
+    assert blocks[2].block_type == "table"
+    assert blocks[2].should_translate is False
+
+
+def test_classify_blocks_preserves_short_header_split_by_formula_cells():
+    blocks = [
+        TextBlock(
+            0,
+            (107.7, 197.2, 505.6, 236.1),
+            "Table 19: Polarity capture by initialization family.",
+            8.0,
+            (0.0, 0.0, 0.0),
+        ),
+        TextBlock(
+            0,
+            (117.8, 240.9, 144.1, 247.8),
+            "Family",
+            7.0,
+            (0.0, 0.0, 0.0),
+        ),
+    ]
+
+    classify_blocks(blocks, page_index=0, page_height=792.0, image_zones=[])
+
+    assert blocks[1].block_type == "table"
+    assert blocks[1].should_translate is False
+
+
+def test_classify_blocks_does_not_promote_prose_between_caption_and_table():
+    blocks = [
+        TextBlock(
+            0,
+            (107.7, 318.6, 505.6, 350.0),
+            "Table 4: Pairwise comparisons for the ablation study.",
+            8.0,
+            (0.0, 0.0, 0.0),
+        ),
+        TextBlock(
+            0,
+            (122.0, 365.0, 315.0, 374.0),
+            "This paragraph introduces the ablation",
+            7.0,
+            (0.0, 0.0, 0.0),
+        ),
+        TextBlock(
+            0,
+            (107.7, 381.0, 505.6, 451.0),
+            "Method Accuracy Success rate",
+            7.0,
+            (0.0, 0.0, 0.0),
+            block_type="table",
+            should_translate=False,
+            nowrap=True,
+            no_merge=True,
+        ),
+    ]
+
+    classify_blocks(blocks, page_index=0, page_height=792.0, image_zones=[])
+
+    assert blocks[1].block_type == "body"
+    assert blocks[1].should_translate is True
+
+
+def test_flashsac_three_column_header_is_table():
+    record = _RawBlockRec(
+        lines=[
+            _line("Hyperparameter", (210.0, 124.0, 287.0, 133.0)),
+            _line("Notation", (337.0, 124.0, 378.0, 133.0)),
+            _line("Value", (399.0, 124.0, 425.0, 133.0)),
+        ]
+    )
+
+    assert record_is_table(record)
+
+
+def test_scientific_value_row_is_table():
+    record = _RawBlockRec(
+        lines=[
+            _line("Joint acceleration", (79.0, 340.0, 150.0, 349.0)),
+            _line("||q||^2", (181.0, 339.0, 213.0, 349.0)),
+            _line("-2.5 x 10^-7", (363.0, 339.0, 408.0, 349.0)),
+            _line("-2.5 x 10^-7", (454.0, 339.0, 499.0, 349.0)),
+        ]
+    )
+
+    assert record_is_table(record)
+
+
+def test_table_component_caption_starts_new_region():
+    blocks = [
+        TextBlock(
+            0,
+            (136.0, 124.0, 426.0, 426.0),
+            "first table",
+            9.0,
+            (0.0, 0.0, 0.0),
+            block_type="table",
+        ),
+        TextBlock(
+            0,
+            (70.0, 462.0, 518.0, 500.0),
+            "Table 10: CPU simulator settings.",
+            9.0,
+            (0.0, 0.0, 0.0),
+            block_type="caption",
+        ),
+        TextBlock(
+            0,
+            (164.0, 515.0, 424.0, 584.0),
+            "second table",
+            9.0,
+            (0.0, 0.0, 0.0),
+            block_type="table",
+        ),
+    ]
+
+    assert _table_region_bboxes(blocks) == [
+        (70.0, 124.0, 518.0, 426.0),
+        (70.0, 515.0, 518.0, 584.0),
+    ]
+
+
+def test_figure_chart_grid_does_not_create_table_component_region():
+    blocks = [
+        TextBlock(
+            0,
+            (70.0, 100.0, 518.0, 118.0),
+            "Figure 4: Training curves for all environments.",
+            9.0,
+            (0.0, 0.0, 0.0),
+            block_type="caption",
+        ),
+        TextBlock(
+            0,
+            (80.0, 130.0, 500.0, 350.0),
+            "0 20 40 60 80 100 120 Humanoid Ant Walker",
+            8.0,
+            (0.0, 0.0, 0.0),
+            block_type="table",
+            should_translate=False,
+            nowrap=True,
+            no_merge=True,
+        ),
+        TextBlock(
+            0,
+            (80.0, 365.0, 500.0, 405.0),
+            "As in the GPU-based setting, FlashSAC uses fewer samples.",
+            9.0,
+            (0.0, 0.0, 0.0),
+        ),
+    ]
+
+    classify_blocks(blocks, page_index=0, page_height=792.0, image_zones=[])
+
+    assert _table_region_bboxes(blocks) == []
+    assert blocks[2].block_type == "body"
+    assert blocks[2].should_translate is True
 
 
 if __name__ == "__main__":

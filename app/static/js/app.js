@@ -476,6 +476,7 @@ const RENDER_SCALE = 1.5;
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 3.0;
 const OVERSCAN_PX = 600; // render pages within this distance of viewport
+const PAGE_GAP_PX = 4;
 let scrollSyncToken = 0;
 
 function availablePdfWidth(container) {
@@ -494,9 +495,140 @@ function getRenderScale(panel) {
   return Math.max(MIN_SCALE, Math.min(MAX_SCALE, fitScale));
 }
 
-// Configure PDF.js worker
+function scheduleIdleWork(callback, timeout = 500) {
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(callback, { timeout });
+  } else {
+    setTimeout(callback, 0);
+  }
+}
+
+function buildPageMetricsFromFirstPage(pdf, firstViewport, adaptiveScale) {
+  const scaleRatio = adaptiveScale / RENDER_SCALE;
+  const width = firstViewport.width * scaleRatio;
+  const height = firstViewport.height * scaleRatio;
+  const metrics = [];
+  for (let i = 0; i < pdf.numPages; i++) {
+    metrics.push({
+      top: i === 0 ? 0 : metrics[i - 1].top + metrics[i - 1].height + PAGE_GAP_PX,
+      height,
+      width,
+      baseWidth: firstViewport.width,
+      baseHeight: firstViewport.height,
+      pageNum: i + 1,
+    });
+  }
+  metrics._adaptiveScale = adaptiveScale;
+  metrics._baseScale = RENDER_SCALE;
+  return metrics;
+}
+
+function updatePageWrapperSizes(panel) {
+  const metrics = pageMetrics[panel];
+  const wrappers = pageWrappers[panel];
+  if (!metrics?.length || !wrappers?.length) return;
+  for (let i = 0; i < metrics.length; i++) {
+    if (!wrappers[i]) continue;
+    wrappers[i].style.width = metrics[i].width + 'px';
+    wrappers[i].style.height = metrics[i].height + 'px';
+  }
+}
+
+async function refinePdfMetrics(panel, pdf, adaptiveScale) {
+  const metrics = pageMetrics[panel];
+  if (!metrics?.length) return;
+  const scaleRatio = adaptiveScale / RENDER_SCALE;
+  let changed = false;
+
+  for (let i = 2; i <= pdf.numPages; i++) {
+    if (pdfDocs[panel] !== pdf) return;
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: RENDER_SCALE });
+    const metric = metrics[i - 1];
+    const width = viewport.width * scaleRatio;
+    const height = viewport.height * scaleRatio;
+    if (Math.abs(metric.width - width) > 1 || Math.abs(metric.height - height) > 1) {
+      metric.baseWidth = viewport.width;
+      metric.baseHeight = viewport.height;
+      metric.width = width;
+      metric.height = height;
+      changed = true;
+    }
+    if (i % 8 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  if (!changed || pdfDocs[panel] !== pdf) return;
+  for (let i = 0; i < metrics.length; i++) {
+    metrics[i].top = i === 0 ? 0 : metrics[i - 1].top + metrics[i - 1].height + PAGE_GAP_PX;
+  }
+  updatePageWrapperSizes(panel);
+}
+
+// Whalent's forwarded preview can reject direct Worker requests even though
+// credentialed page requests succeed. Fetch the vendored worker first and run
+// it from a Blob so the preview credential stays on the main-thread request.
+let pdfWorkerReady = Promise.resolve();
+
+function resolvePdfWorkerSrc() {
+  const appScript = document.currentScript
+    || Array.from(document.scripts).find(script => script.src.includes('/static/js/app.js'));
+  const appSrc = appScript?.src || new URL('/static/js/app.js', window.location.origin).href;
+  return new URL('pdf.worker.min.js', appSrc).href;
+}
+
+function isWhalentForwardedPreview() {
+  return window.location.hostname.endsWith('.fwd.memory.whalent.com');
+}
+
+function preloadPdfWorkerOnMainThread(workerSrc) {
+  if (globalThis.pdfjsWorker?.WorkerMessageHandler) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = workerSrc;
+    script.async = true;
+    script.dataset.pdfWorkerFallback = 'main-thread';
+    script.addEventListener('load', () => {
+      if (globalThis.pdfjsWorker?.WorkerMessageHandler) resolve();
+      else reject(new Error('PDF worker script loaded without WorkerMessageHandler'));
+    }, { once: true });
+    script.addEventListener('error', () => {
+      reject(new Error(`Cannot load PDF worker script: ${workerSrc}`));
+    }, { once: true });
+    document.head.appendChild(script);
+  });
+}
+
+async function prepareForwardedPdfWorker(workerSrc) {
+  try {
+    const response = await fetch(workerSrc, {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const workerBlob = await response.blob();
+    const workerUrl = URL.createObjectURL(workerBlob);
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerPort = new Worker(workerUrl);
+      return;
+    } finally {
+      URL.revokeObjectURL(workerUrl);
+    }
+  } catch (error) {
+    console.warn('Blob PDF worker unavailable; using the main-thread fallback.', error);
+  }
+
+  await preloadPdfWorkerOnMainThread(workerSrc);
+}
+
 if (typeof pdfjsLib !== 'undefined') {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '/static/js/pdf.worker.min.js';
+  const pdfWorkerSrc = resolvePdfWorkerSrc();
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+  if (isWhalentForwardedPreview()) {
+    pdfWorkerReady = prepareForwardedPdfWorker(pdfWorkerSrc);
+  }
 }
 
 async function openReader(paperId) {
@@ -549,8 +681,8 @@ async function openReader(paperId) {
   renderedPages = { original: new Set(), translated: new Set() };
   pageWrappers = { original: [], translated: [] };
 
-  // Load original PDF
-  await loadPdfDocument('original', `/api/papers/${paperId}/view/original`);
+  // Load original PDF first enough to show the first page quickly.
+  await loadPdfDocument('original', `/api/papers/${paperId}/view/original`, loadId);
   if (loadId !== currentLoadId) return;
 
   const btnTranslate = document.getElementById('btn-translate');
@@ -559,9 +691,10 @@ async function openReader(paperId) {
   if (currentPaper.has_translated) {
     placeholder.classList.add('hidden');
     document.getElementById('pdf-container-translated').classList.remove('hidden');
-    await loadPdfDocument('translated', `/api/papers/${paperId}/view/translated`);
-    if (loadId !== currentLoadId) return;
-    requestAnimationFrame(() => syncScrollFromPanel('original'));
+    void loadPdfDocument('translated', `/api/papers/${paperId}/view/translated`, loadId)
+      .then(() => {
+        if (loadId === currentLoadId) requestAnimationFrame(() => syncScrollFromPanel('original'));
+      });
     document.getElementById('btn-download-mono').classList.remove('hidden');
     // Show re-translate button, hide translate button
     if (btnTranslate) btnTranslate.classList.add('hidden');
@@ -603,7 +736,7 @@ async function openReader(paperId) {
   }
 }
 
-async function loadPdfDocument(panel, url) {
+async function loadPdfDocument(panel, url, loadId = currentLoadId) {
   const container = document.getElementById(`pdf-container-${panel}`);
   container.textContent = '';
   const loadingDiv = document.createElement('div');
@@ -612,43 +745,26 @@ async function loadPdfDocument(panel, url) {
   container.appendChild(loadingDiv);
 
   try {
+    await pdfWorkerReady;
+    if (loadId !== currentLoadId) return;
     const loadingTask = pdfjsLib.getDocument({ url, httpHeaders: authHeaders() });
     const pdf = await loadingTask.promise;
+    if (loadId !== currentLoadId) return;
     pdfDocs[panel] = pdf;
 
     container.innerHTML = '';
 
-    // Phase 1: Measure all page dimensions at base scale
-    const baseMetrics = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const viewport = page.getViewport({ scale: RENDER_SCALE });
-      baseMetrics.push({ height: viewport.height, width: viewport.width, pageNum: i });
-    }
+    // Use the first page to build immediate placeholders. Remaining page sizes
+    // are refined in the background so opening a PDF is not blocked by every page.
+    const firstPage = await pdf.getPage(1);
+    if (loadId !== currentLoadId) return;
+    const firstViewport = firstPage.getViewport({ scale: RENDER_SCALE });
 
     // Calculate adaptive scale to fit container width
     const containerWidth = availablePdfWidth(container);
-    const maxPageWidth = Math.max(...baseMetrics.map(m => m.width));
-    const adaptiveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, containerWidth / maxPageWidth * RENDER_SCALE));
-
-    const metrics = [];
-    const gap = 4;
-    for (let i = 0; i < baseMetrics.length; i++) {
-      const scale = adaptiveScale / RENDER_SCALE;
-      const w = baseMetrics[i].width * scale;
-      const h = baseMetrics[i].height * scale;
-      const top = metrics.length > 0
-        ? metrics[metrics.length - 1].top + metrics[metrics.length - 1].height + gap
-        : 0;
-      metrics.push({
-        top, height: h, width: w,
-        baseWidth: baseMetrics[i].width, baseHeight: baseMetrics[i].height,
-        pageNum: baseMetrics[i].pageNum,
-      });
-    }
+    const adaptiveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, containerWidth / firstViewport.width * RENDER_SCALE));
+    const metrics = buildPageMetricsFromFirstPage(pdf, firstViewport, adaptiveScale);
     pageMetrics[panel] = metrics;
-    pageMetrics[panel]._adaptiveScale = adaptiveScale;
-    pageMetrics[panel]._baseScale = RENDER_SCALE;
 
     // Phase 2: Create placeholder wrappers with reserved height
     const wrappers = [];
@@ -659,6 +775,7 @@ async function loadPdfDocument(panel, url) {
       wrapper.style.height = metrics[i].height + 'px';
       wrapper.style.flexShrink = '0';
       wrapper.dataset.pageIdx = i;
+      wrapper.innerHTML = '<div class="pdf-page-loading">加载中...</div>';
       container.appendChild(wrapper);
       wrappers.push(wrapper);
     }
@@ -681,8 +798,11 @@ async function loadPdfDocument(panel, url) {
     }
     renderObservers[panel] = observer;
 
-    // Also do an initial pass for pages near the top
-    await renderVisiblePages(panel, container);
+    updatePageInfo(panel, 0);
+    await renderVisiblePages(panel, container, { awaitFirst: true, deferRest: true });
+    scheduleIdleWork(() => {
+      void refinePdfMetrics(panel, pdf, adaptiveScale);
+    }, 1000);
 
     // Setup scroll sync
     setupSmoothScrollSync(panel);
@@ -696,15 +816,30 @@ async function loadPdfDocument(panel, url) {
   }
 }
 
-async function renderVisiblePages(panel, container) {
+async function renderVisiblePages(panel, container, options = {}) {
   const scrollTop = container.scrollTop;
   const viewBottom = scrollTop + container.clientHeight;
   const metrics = pageMetrics[panel];
+  if (!metrics?.length) return;
+  const indexes = [];
 
   for (let i = 0; i < metrics.length; i++) {
     const pageBottom = metrics[i].top + metrics[i].height;
     if (pageBottom >= scrollTop - OVERSCAN_PX && metrics[i].top <= viewBottom + OVERSCAN_PX) {
-      await renderPage(panel, i);
+      indexes.push(i);
+    }
+  }
+
+  if (options.awaitFirst && indexes.length > 0) {
+    await renderPage(panel, indexes.shift());
+  }
+  for (const idx of indexes) {
+    if (options.deferRest) {
+      scheduleIdleWork(() => {
+        void renderPage(panel, idx);
+      }, 500);
+    } else {
+      await renderPage(panel, idx);
     }
   }
 }
@@ -738,7 +873,17 @@ async function renderPage(panel, idx) {
   // Replace wrapper content
   wrapper.innerHTML = '';
   wrapper.appendChild(canvas);
-  await renderTextLayer(page, wrapper, viewport);
+  const renderToken = `${Date.now()}-${Math.random()}`;
+  wrapper.dataset.renderToken = renderToken;
+  scheduleIdleWork(() => {
+    if (
+      wrapper.isConnected
+      && renderedPages[panel].has(idx)
+      && wrapper.dataset.renderToken === renderToken
+    ) {
+      void renderTextLayer(page, wrapper, viewport);
+    }
+  }, 300);
 }
 
 async function renderTextLayer(page, wrapper, viewport) {
@@ -748,6 +893,7 @@ async function renderTextLayer(page, wrapper, viewport) {
   textLayer.className = 'textLayer';
   textLayer.style.width = viewport.width + 'px';
   textLayer.style.height = viewport.height + 'px';
+  textLayer.style.setProperty('--scale-factor', viewport.scale);
   wrapper.appendChild(textLayer);
 
   try {
@@ -761,9 +907,37 @@ async function renderTextLayer(page, wrapper, viewport) {
     if (renderTask?.promise) {
       await renderTask.promise;
     }
+    textLayer.dataset.loaded = 'true';
   } catch (e) {
     console.warn('PDF text layer failed:', e);
     textLayer.remove();
+  }
+}
+
+async function copyPdfSelection() {
+  const selection = window.getSelection ? window.getSelection() : null;
+  const selectedText = selection ? selection.toString().replace(/\s+\n/g, '\n').trim() : '';
+  if (!selectedText) {
+    toastInfo('请先选中 PDF 文本');
+    return;
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(selectedText);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = selectedText;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+    }
+    toastSuccess('已复制选中文本');
+  } catch (e) {
+    toastError('复制失败');
   }
 }
 
@@ -897,6 +1071,10 @@ async function cancelTranslation() {
 // === Translation ===
 let translating = false;
 
+function getTranslationBackend() {
+  return document.getElementById('translation-backend')?.value || '';
+}
+
 async function startTranslate() {
   if (!currentPaper) return;
   const quality = document.getElementById('quality-preset')?.value || 'balanced';
@@ -907,7 +1085,7 @@ async function startTranslate() {
     qa_max_passes: 4,
     ocr_mode: document.getElementById('ocr-mode')?.value || 'off',
   };
-  doTranslateDirect(currentPaper.id, '', quality, options);
+  doTranslateDirect(currentPaper.id, getTranslationBackend(), quality, options);
 }
 
 async function quickTranslate(paperId) {
@@ -1007,15 +1185,19 @@ function pollTranslationStatus(paperId) {
   if (logEl) logEl.innerHTML = '';
   addTransLog('已提交翻译任务，正在等待首批进度...');
 
-  const MAX_POLLS = 300; // 10 minutes at 2s intervals
+  const POLL_INTERVAL_MS = 2000;
+  const MAX_POLLS = Math.ceil((35 * 60 * 1000) / POLL_INTERVAL_MS);
   const MAX_CONSECUTIVE_ERRORS = 10; // stop after 20s of consecutive failures
   let pollCount = 0;
   let consecutiveErrors = 0;
+  let statusRequestInFlight = false;
   let lastPct = 0;
   let lastPctTime = startTime;
   let smoothedRate = 0;
 
   async function refreshTranslationStatus() {
+    if (statusRequestInFlight) return;
+    statusRequestInFlight = true;
     pollCount++;
     if (pollCount > MAX_POLLS) {
       clearInterval(translationPollId);
@@ -1025,6 +1207,7 @@ function pollTranslationStatus(paperId) {
       fill.classList.remove('progress-fill-active', 'progress-fill-pending');
       fill.style.background = 'var(--error)';
       loadPapers();
+      statusRequestInFlight = false;
       return;
     }
 
@@ -1105,11 +1288,13 @@ function pollTranslationStatus(paperId) {
         fill.style.background = 'var(--error)';
         loadPapers();
       }
+    } finally {
+      statusRequestInFlight = false;
     }
   }
 
   refreshTranslationStatus();
-  translationPollId = setInterval(refreshTranslationStatus, 1000);
+  translationPollId = setInterval(refreshTranslationStatus, POLL_INTERVAL_MS);
 }
 
 function formatEta(seconds) {
@@ -1425,7 +1610,6 @@ function reRenderPanel(panel) {
   pageMetrics[panel]._adaptiveScale = adaptiveScale;
 
   // Update wrapper sizes from base dimensions
-  const gap = 4;
   const wrappers = pageWrappers[panel];
   const scaleRatio = adaptiveScale / baseScale;
   for (let i = 0; i < metrics.length; i++) {
@@ -1433,7 +1617,7 @@ function reRenderPanel(panel) {
     const h = metrics[i].baseHeight * scaleRatio;
     metrics[i].width = w;
     metrics[i].height = h;
-    metrics[i].top = i === 0 ? 0 : metrics[i - 1].top + metrics[i - 1].height + gap;
+    metrics[i].top = i === 0 ? 0 : metrics[i - 1].top + metrics[i - 1].height + PAGE_GAP_PX;
     if (wrappers[i]) {
       wrappers[i].style.width = w + 'px';
       wrappers[i].style.height = h + 'px';
@@ -1514,6 +1698,7 @@ const actionHandlers = {
   'retranslate': startTranslate,
   'cancel-translate': cancelTranslation,
   'toggle-sync-scroll': toggleSyncScroll,
+  'copy-pdf-selection': copyPdfSelection,
   'show-qa-report': showQaReport,
   'hide-qa-report': hideQaReportPanel,
   'show-editable-figures': showEditableFigures,

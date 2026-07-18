@@ -21,6 +21,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -28,6 +29,16 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 class TranslationError(RuntimeError):
     """Raised when the translation supplier returns an unusable response."""
+
+
+_CACHE_PLACEHOLDER_RE = re.compile(r"⟦\d+⟧")
+
+
+def placeholders_preserved(source: str, translation: str) -> bool:
+    """Return whether every protected fragment marker is preserved exactly."""
+    return Counter(_CACHE_PLACEHOLDER_RE.findall(source)) == Counter(
+        _CACHE_PLACEHOLDER_RE.findall(translation)
+    )
 
 
 class Translator:
@@ -75,7 +86,12 @@ class CachedTranslator(Translator):
     def translate_batch(self, texts: Sequence[str]) -> List[str]:
         missing: List[str] = []
         for text in texts:
-            if cache_key(text) not in self.cache:
+            key = cache_key(text)
+            cached = self.cache.get(key)
+            if cached is None:
+                missing.append(text)
+            elif not placeholders_preserved(text, cached):
+                self.cache.pop(key, None)
                 missing.append(text)
 
         if missing:
@@ -86,6 +102,15 @@ class CachedTranslator(Translator):
             )
             for chunk in chunked_by_size(missing, batch_size, max_chars):
                 translations = self.wrapped.translate_batch(chunk)
+                invalid_count = sum(
+                    not placeholders_preserved(source, translation)
+                    for source, translation in zip(chunk, translations)
+                )
+                if invalid_count:
+                    raise TranslationError(
+                        "translator changed protected placeholders in "
+                        f"{invalid_count}/{len(chunk)} block(s)"
+                    )
                 with self._write_lock, self.cache_file.open("a", encoding="utf-8") as handle:
                     for source, translation in zip(chunk, translations):
                         key = cache_key(source)
@@ -99,6 +124,12 @@ class CachedTranslator(Translator):
                         )
 
         return [self.cache[cache_key(text)] for text in texts]
+
+    def invalidate(self, texts: Sequence[str]) -> None:
+        """Drop selected in-memory entries so a quality retry reaches the supplier."""
+        with self._write_lock:
+            for text in texts:
+                self.cache.pop(cache_key(text), None)
 
     def _load(self) -> None:
         if not self.cache_file.exists():
@@ -146,19 +177,27 @@ class CacheOnlyTranslator(Translator):
                         self.cache[key] = translation
 
     def translate_batch(self, texts: Sequence[str]) -> List[str]:
-        missing = [text for text in texts if cache_key(text) not in self.cache]
-        if missing:
+        unavailable = [
+            text
+            for text in texts
+            if cache_key(text) not in self.cache
+            or not placeholders_preserved(text, self.cache[cache_key(text)])
+        ]
+        if unavailable:
             missing_file = self.cache_file.with_name(self.cache_file.name + ".missing.jsonl")
             with missing_file.open("w", encoding="utf-8") as handle:
-                for text in missing:
+                for text in unavailable:
+                    cached = self.cache.get(cache_key(text))
                     record = {
                         "key": cache_key(text),
                         "source": text,
+                        "reason": "invalid_placeholders" if cached is not None else "missing",
                     }
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             raise TranslationError(
-                "cache-only mode: %d/%d blocks missing from cache. Missing blocks dumped to %s"
-                % (len(missing), len(texts), missing_file)
+                "cache-only mode: %d/%d blocks missing or invalid. "
+                "Unavailable blocks dumped to %s"
+                % (len(unavailable), len(texts), missing_file)
             )
         return [self.cache[cache_key(text)] for text in texts]
 
@@ -282,6 +321,7 @@ class VendorTranslator(Translator):
             "temperature": 0,
             "max_tokens": self.max_output_tokens,
         }
+        self._apply_openai_compatible_model_constraints(payload)
         data = self._post_json(normalize_chat_url(self.api_url), payload)
         return coerce_plain_translation(extract_openai_message(data))
 
@@ -331,9 +371,23 @@ class VendorTranslator(Translator):
             "temperature": 0,
             "max_tokens": self.max_output_tokens,
         }
+        self._apply_openai_compatible_model_constraints(payload)
         data = self._post_json(normalize_chat_url(self.api_url), payload)
         content = extract_openai_message(data)
         return parse_json_string_list(content)
+
+    def _apply_openai_compatible_model_constraints(self, payload: Dict[str, Any]) -> None:
+        """Apply model-specific request constraints without changing other providers."""
+        if not (self.model or "").lower().startswith("kimi-k3"):
+            return
+        # Kimi K3 fixes its sampling values server-side and rejects temperature,
+        # top_p, and penalty overrides. Its completion budget uses the current
+        # OpenAI-compatible max_completion_tokens field.
+        payload.pop("temperature", None)
+        max_tokens = payload.pop("max_tokens", None)
+        if max_tokens is not None:
+            payload["max_completion_tokens"] = max_tokens
+        payload["reasoning_effort"] = "max"
 
     def _translate_deepseek(self, texts: Sequence[str]) -> List[str]:
         prompt = translation_array_prompt_with_types(self.block_types, list(texts))

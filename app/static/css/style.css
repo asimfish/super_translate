@@ -381,25 +381,37 @@ select:focus-visible {
   user-select: none;
   z-index: 1;
 }
+.pdf-page-loading {
+  color: #c7cdcf;
+  font-size: 12px;
+  opacity: 0.72;
+  user-select: none;
+}
 .textLayer {
+  --scale-factor: 1;
   position: absolute;
   inset: 0;
   overflow: hidden;
   line-height: 1;
   text-align: initial;
   user-select: text;
+  pointer-events: auto;
   z-index: 2;
 }
 .textLayer span,
 .textLayer br {
   color: transparent;
+  -webkit-text-fill-color: transparent;
   position: absolute;
   white-space: pre;
   cursor: text;
   transform-origin: 0% 0%;
 }
-.textLayer ::selection {
+.textLayer ::selection,
+.textLayer span::selection {
   background: rgba(24,169,153,0.35);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 .resizer {
   width: 7px; cursor: col-resize; background: var(--bg);

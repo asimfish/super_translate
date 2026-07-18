@@ -96,10 +96,16 @@
         <div class="reader-title" id="reader-title"></div>
         <div class="reader-actions">
           <div class="translate-controls">
+            <select id="translation-backend" class="quality-select" aria-label="翻译模型">
+              <option value="deepseek" selected>DeepSeek V4 Pro</option>
+              <option value="kimi">Kimi K3</option>
+              <option value="openai">OpenAI</option>
+              <option value="google">Google 翻译</option>
+            </select>
             <select id="quality-preset" class="quality-select" aria-label="翻译质量">
               <option value="fast">快速 (Google)</option>
-              <option value="balanced" selected>标准 (DeepSeek)</option>
-              <option value="quality">高质量 (DeepSeek+优化)</option>
+              <option value="balanced" selected>标准</option>
+              <option value="quality">高质量 (增强提示)</option>
             </select>
             <label class="translate-option" title="保留图中的英文短标签；可能减少图注和图旁正文的翻译覆盖">
               <input type="checkbox" id="preserve-graphics-text" checked> 保留图表文字
@@ -120,6 +126,7 @@
             <button class="btn btn-sm btn-outline hidden" id="btn-retranslate" data-action="retranslate">重新翻译</button>
           </div>
           <button class="btn btn-sm btn-primary" id="btn-sync-scroll" data-action="toggle-sync-scroll">同步滚动: 开</button>
+          <button class="btn btn-sm btn-outline" id="btn-copy-selection" data-action="copy-pdf-selection">复制选中</button>
           <button class="btn btn-sm btn-outline hidden" id="btn-qa-report" data-action="show-qa-report">质检报告</button>
           <button class="btn btn-sm btn-outline" id="btn-editable-figures" data-action="show-editable-figures">图形素材</button>
           <button class="btn btn-sm hidden" id="btn-download-mono" data-action="download-translated">下载译文</button>

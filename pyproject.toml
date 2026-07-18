@@ -10,9 +10,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "pdf2zh>=1.8",
+    # 3.1.129 drops TextTranslateRequest, which pdf2zh 1.9.10 imports at startup.
+    "tencentcloud-sdk-python-tmt==3.1.121",
     "fastapi>=0.104",
     "uvicorn[standard]>=0.24",
-    "sqlalchemy>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
     "aiosqlite>=0.19",
     "python-multipart>=0.0.6",
     "jinja2>=3.1",

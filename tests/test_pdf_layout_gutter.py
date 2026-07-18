@@ -8,6 +8,7 @@ from pdf_zh_translator.pdf_layout import (
     _span_is_isolated,
     is_line_number_span,
     line_is_prose,
+    parse_block_lines,
 )
 
 
@@ -89,3 +90,26 @@ class NormalizeFontNameTests(unittest.TestCase):
             _normalize_font_name("AAAAAA+ArialUnicodeMS"),
             _normalize_font_name("Arial Unicode MS"),
         )
+
+
+def test_parse_block_lines_preserves_interior_chart_ticks():
+    raw_block = {
+        "type": 0,
+        "bbox": (105.0, 124.0, 174.0, 133.0),
+        "lines": [
+            {
+                "bbox": (105.0, 124.0, 174.0, 133.0),
+                "spans": [
+                    make_span("20", 105.0, 124.0, 111.0, 133.0, size=6.0),
+                    make_span("40", 125.0, 124.0, 131.0, 133.0, size=6.0),
+                    make_span("100", 150.0, 124.0, 160.0, 133.0, size=6.0),
+                ],
+            }
+        ],
+    }
+
+    record, dropped = parse_block_lines(raw_block, page_width=612.0)
+
+    assert record is not None
+    assert dropped == []
+    assert {line.text for line in record.lines} == {"20", "40", "100"}

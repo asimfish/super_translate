@@ -69,6 +69,22 @@ class ProgressTranslatorTests(unittest.TestCase):
         self.assertEqual(inner.block_types, ["title", "caption"])
         self.assertEqual(wrapper.block_types, ["title", "caption"])
 
+    def test_forwards_cache_invalidation_to_inner(self):
+        class _InvalidatingInner(_EchoInner):
+            def __init__(self):
+                super().__init__()
+                self.invalidated = []
+
+            def invalidate(self, texts):
+                self.invalidated.append(list(texts))
+
+        inner = _InvalidatingInner()
+        wrapper = _ProgressTranslator(inner, None)
+
+        wrapper.invalidate(["bad translation"])
+
+        self.assertEqual(inner.invalidated, [["bad translation"]])
+
     def test_parallel_preserves_order_and_reports_progress(self):
         inner = _EchoInner()
         seen = []
@@ -142,6 +158,37 @@ class TranslateSyncNativeTests(unittest.TestCase):
                 self.assertRaises(RuntimeError),
             ):
                 _translate_sync_native(input_pdf, output_dir, config)
+
+    def test_failure_preserves_existing_outputs_and_translation_cache(self):
+        config = TranslationConfig(backend="deepseek", api_key="k", max_retries=0)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_pdf = tmp_path / "paper.pdf"
+            input_pdf.write_bytes(b"%PDF-1.4 fake")
+            output_dir = tmp_path / "out"
+            output_dir.mkdir()
+            mono_path = output_dir / "paper-mono.pdf"
+            dual_path = output_dir / "paper-dual.pdf"
+            cache_path = output_dir / "paper.translation-cache.jsonl"
+            mono_path.write_bytes(b"previous mono")
+            dual_path.write_bytes(b"previous dual")
+            cache_path.write_text('{"key":"saved","translation":"译文"}\n')
+
+            with (
+                patch(
+                    "pdf_zh_translator.pdf_layout.translate_pdf",
+                    side_effect=RuntimeError("supplier unavailable"),
+                ),
+                self.assertRaises(RuntimeError),
+            ):
+                _translate_sync_native(input_pdf, output_dir, config)
+
+            self.assertEqual(mono_path.read_bytes(), b"previous mono")
+            self.assertEqual(dual_path.read_bytes(), b"previous dual")
+            self.assertIn('"key":"saved"', cache_path.read_text())
+            self.assertFalse(
+                any(path.name.startswith(".paper.native-") for path in output_dir.iterdir())
+            )
 
     def test_auto_ocr_uses_searchable_pdf_as_translation_source(self):
         config = TranslationConfig(

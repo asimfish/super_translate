@@ -2,7 +2,7 @@
 
 import fitz
 
-from pdf_zh_translator.pdf_layout import translate_pdf, verify_translation
+from pdf_zh_translator.pdf_layout import create_dual_pdf, translate_pdf, verify_translation
 
 
 class _RetryingStubTranslator:
@@ -26,6 +26,33 @@ class _RetryingStubTranslator:
                 outputs.append("参考文献")
             elif "proposed method" in text:
                 outputs.append("所提出的方法提升训练目标，并降低推理延迟。")
+            elif "paragraph after the figure" in text:
+                outputs.append("图后的段落说明版面仍然稳定，并且不会与图注重叠。")
+            else:
+                outputs.append("中文译文")
+        return outputs
+
+
+class _InvalidationRequiredTranslator:
+    def __init__(self):
+        self.invalidated: list[list[str]] = []
+        self.block_types: list[str] = []
+
+    def invalidate(self, texts):
+        self.invalidated.append(list(texts))
+
+    def translate_batch(self, texts):
+        invalidated = {text for batch in self.invalidated for text in batch}
+        outputs = []
+        for text in texts:
+            if "proposed method" in text and text not in invalidated:
+                outputs.append(text)
+            elif "proposed method" in text:
+                outputs.append("所提出的方法提升训练目标，并降低推理延迟。")
+            elif text.startswith("1 Introduction"):
+                outputs.append("1 引言")
+            elif text.startswith("Figure 1"):
+                outputs.append("图1：系统流程图，展示输入、模型和输出。")
             elif "paragraph after the figure" in text:
                 outputs.append("图后的段落说明版面仍然稳定，并且不会与图注重叠。")
             else:
@@ -112,4 +139,40 @@ def test_translate_pdf_preserves_formula_image_and_translates_caption(tmp_path):
     assert "x = y = z + 0" in original_text
     assert translated_images == original_images == 1
     assert translated_drawings >= max(1, original_drawings // 2)
+    assert b"/Linearized" in output_pdf.read_bytes()[:2048]
     assert issues == []
+
+
+def test_create_dual_pdf_saves_linearized_output(tmp_path):
+    original_pdf = tmp_path / "paper.pdf"
+    translated_pdf = tmp_path / "paper.zh.pdf"
+    dual_pdf = tmp_path / "paper.dual.pdf"
+    _build_academic_fixture(original_pdf)
+    _build_academic_fixture(translated_pdf)
+
+    create_dual_pdf(original_pdf, translated_pdf, dual_pdf)
+
+    assert b"/Linearized" in dual_pdf.read_bytes()[:2048]
+
+
+def test_translate_pdf_invalidates_bad_cached_output_before_retry(tmp_path):
+    input_pdf = tmp_path / "paper.pdf"
+    output_pdf = tmp_path / "paper.zh.pdf"
+    _build_academic_fixture(input_pdf)
+    translator = _InvalidationRequiredTranslator()
+
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=translator,
+        preserve_graphics_text=True,
+    )
+
+    translated = fitz.open(output_pdf)
+    translated_text = translated[0].get_text("text")
+    translated.close()
+
+    assert len(translator.invalidated) == 1
+    assert any("proposed method" in text for text in translator.invalidated[0])
+    assert "The proposed method" not in translated_text
+    assert "所提出的方法" in translated_text
