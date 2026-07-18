@@ -3132,9 +3132,7 @@ def _inline_formula_bridge_block(
     algorithm_flags: Sequence[bool],
     record_index: int,
 ) -> Optional[TextBlock]:
-    """Expose an inline formula record that bridges two prose records."""
-    if record_index <= 0 or record_index + 1 >= len(records):
-        return None
+    """Expose an inline formula record that belongs to surrounding prose."""
     record = records[record_index]
     if (
         not equation_flags[record_index]
@@ -3142,9 +3140,42 @@ def _inline_formula_bridge_block(
         or record_is_table(record)
         or not record.lines
         or any(line_is_prose(line) for line in record.lines)
-        or record.sentinel_ratio() < 0.45
     ):
         return None
+
+    if not _is_strict_inline_formula_bridge(records, record_index):
+        compact = "".join(record.bare_text().split())
+        has_equation_number = any(
+            EQUATION_NUMBER_RE.fullmatch(
+                "".join(strip_sentinels(line.text).split())
+            )
+            for line in record.lines
+        )
+        if (
+            not compact
+            or len(compact) > 100
+            or has_equation_number
+            or not any(sentinel_char_count(line.text) for line in record.lines)
+            or not _inline_formula_record_touches_formula_prose(records, record_index)
+        ):
+            return None
+
+    accumulator = _SegmentAccumulator()
+    for line in record.lines:
+        _accumulate_line(accumulator, line)
+    return accumulator.flush(page_index)
+
+
+def _is_strict_inline_formula_bridge(
+    records: Sequence[_RawBlockRec],
+    record_index: int,
+) -> bool:
+    """Match the original immediate prose/formula/prose bridge pattern."""
+    if record_index <= 0 or record_index + 1 >= len(records):
+        return False
+    record = records[record_index]
+    if record.sentinel_ratio() < 0.45:
+        return False
 
     previous = records[record_index - 1]
     following = records[record_index + 1]
@@ -3155,7 +3186,7 @@ def _inline_formula_bridge_block(
         if line_is_prose(line) and line.text.lstrip().startswith(SENTINEL_OPEN)
     ]
     if not previous_prose or not following_prose:
-        return None
+        return False
 
     following_line = following_prose[0]
     following_words = [
@@ -3164,29 +3195,61 @@ def _inline_formula_bridge_block(
         if word.lower() not in _MATH_WORDS
     ]
     if len(following_words) < 2:
-        return None
+        return False
 
     outside_text = " ".join(_text_outside_sentinels(line.text) for line in record.lines)
     outside_words = _PROSE_WORD_RE.findall(outside_text)
     if len(outside_words) > 3:
-        return None
+        return False
     previous_tail = strip_sentinels(previous_prose[-1].text).rstrip()
     if not previous_tail.endswith(("=", ":=")) and not outside_words:
-        return None
+        return False
 
     record_height = max(1.0, record.bbox[3] - record.bbox[1])
     horizontal_gap = following_line.bbox[0] - record.bbox[2]
     if abs(horizontal_gap) > max(8.0, record_height * 0.6):
-        return None
+        return False
     if record.bbox[1] - previous.bbox[3] > record_height * 0.75:
-        return None
-    if following.bbox[1] - record.bbox[3] > record_height * 0.75:
-        return None
+        return False
+    return following.bbox[1] - record.bbox[3] <= record_height * 0.75
 
-    accumulator = _SegmentAccumulator()
-    for line in record.lines:
-        _accumulate_line(accumulator, line)
-    return accumulator.flush(page_index)
+
+def _inline_formula_record_touches_formula_prose(
+    records: Sequence[_RawBlockRec],
+    record_index: int,
+) -> bool:
+    """Find a nearby formula-rich prose line sharing this record's baseline."""
+    record_bbox = records[record_index].bbox
+    first = max(0, record_index - 3)
+    last = min(len(records), record_index + 4)
+    for nearby_index in range(first, last):
+        if nearby_index == record_index:
+            continue
+        for line in records[nearby_index].lines:
+            if not line_is_prose(line) or not sentinel_char_count(line.text):
+                continue
+            record_height = max(1.0, record_bbox[3] - record_bbox[1])
+            line_height = max(1.0, line.bbox[3] - line.bbox[1])
+            if record_height > max(line_height * 1.8, line_height + 6.0):
+                continue
+            vertical_overlap = min(record_bbox[3], line.bbox[3]) - max(
+                record_bbox[1], line.bbox[1]
+            )
+            shorter_height = max(
+                1.0,
+                min(record_height, line_height),
+            )
+            horizontal_gap = max(
+                record_bbox[0] - line.bbox[2],
+                line.bbox[0] - record_bbox[2],
+                0.0,
+            )
+            if (
+                vertical_overlap >= -1.5
+                and horizontal_gap <= max(18.0, shorter_height * 3.0)
+            ):
+                return True
+    return False
 
 
 def _promote_equation_table_neighbor_blocks(
@@ -5925,28 +5988,41 @@ def _looks_like_same_line_formula_split(prev: TextBlock, nxt: TextBlock) -> bool
     )
     if not starts_formula_tail:
         return False
-    if len(_PROSE_WORD_RE.findall(strip_sentinels(prev.text))) < 3:
+    previous_word_count = len(_PROSE_WORD_RE.findall(strip_sentinels(prev.text)))
+    next_word_count = len(_PROSE_WORD_RE.findall(strip_sentinels(nxt.text)))
+    next_compact = "".join(strip_sentinels(nxt.text).split())
+    short_formula_continuation = (
+        next_text.startswith(SENTINEL_OPEN)
+        and sentinel_char_count(next_text) >= 2
+        and len(next_compact) <= 80
+        and next_word_count <= 2
+    )
+    if previous_word_count < 3:
         return False
-    if len(_PROSE_WORD_RE.findall(strip_sentinels(nxt.text))) < 2:
+    if next_word_count < 2 and not short_formula_continuation:
         return False
 
     prev_lines = prev.source_line_bboxes or tuple(prev.redact_bboxes or [prev.bbox])
     next_lines = nxt.source_line_bboxes or tuple(nxt.redact_bboxes or [nxt.bbox])
-    prev_line = max(prev_lines, key=lambda bbox: (bbox[1], bbox[0]))
-    next_line = min(next_lines, key=lambda bbox: (bbox[1], bbox[0]))
-    vertical_overlap = max(
-        0.0,
-        min(prev_line[3], next_line[3]) - max(prev_line[1], next_line[1]),
-    )
-    min_height = max(
-        1.0,
-        min(prev_line[3] - prev_line[1], next_line[3] - next_line[1]),
-    )
-    if vertical_overlap / min_height < 0.5:
-        return False
-    horizontal_gap = next_line[0] - prev_line[2]
     reference = max(prev.font_size, nxt.font_size, 1.0)
-    return -max(6.0, reference * 0.8) <= horizontal_gap <= max(16.0, reference * 2.0)
+    for prev_line in prev_lines:
+        for next_line in next_lines:
+            vertical_overlap = max(
+                0.0,
+                min(prev_line[3], next_line[3]) - max(prev_line[1], next_line[1]),
+            )
+            min_height = max(
+                1.0,
+                min(prev_line[3] - prev_line[1], next_line[3] - next_line[1]),
+            )
+            if vertical_overlap / min_height < 0.5:
+                continue
+            horizontal_gap = next_line[0] - prev_line[2]
+            if -max(12.0, reference * 1.25) <= horizontal_gap <= max(
+                16.0, reference * 2.0
+            ):
+                return True
+    return False
 
 
 def _looks_like_formula_rich_continuation_pair(prev: TextBlock, nxt: TextBlock) -> bool:

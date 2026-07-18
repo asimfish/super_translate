@@ -1511,6 +1511,135 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertIn("sqrt", strip_sentinels(bridge.text))
         self.assertEqual(len(bridge.source_math_bboxes), 2)
 
+    def test_short_formula_fragment_bridges_nearby_formula_rich_prose(self):
+        prose = _RawBlockRec(
+            lines=[
+                _line(
+                    "Denote the requested morphology as "
+                    f"{SENTINEL_OPEN}I^ref{SENTINEL_CLOSE}",
+                    (108.0, 100.0, 230.0, 112.0),
+                )
+            ]
+        )
+        first_fragment = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN}_(v){SENTINEL_CLOSE}",
+                    (230.0, 100.0, 246.0, 112.0),
+                )
+            ]
+        )
+        target_line = _line(
+            f"{SENTINEL_OPEN},M^ref_v{SENTINEL_CLOSE}",
+            (246.0, 99.5, 278.0, 112.5),
+        )
+        target_line.math_bboxes = [target_line.bbox]
+        target_line.math_run_bboxes = [target_line.bbox]
+        target = _RawBlockRec(lines=[target_line])
+        final_fragment = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN}v=1{SENTINEL_CLOSE}",
+                    (278.0, 100.0, 300.0, 112.0),
+                )
+            ]
+        )
+
+        bridge = _inline_formula_bridge_block(
+            0,
+            [prose, first_fragment, target, final_fragment],
+            [True, True, True, True],
+            [False, False, False, False],
+            2,
+        )
+
+        self.assertIsNotNone(bridge)
+        self.assertEqual(strip_sentinels(bridge.text), ",M^ref_v")
+        self.assertEqual(bridge.source_math_bboxes, (target_line.bbox,))
+
+    def test_numbered_display_formula_is_not_exposed_as_nearby_fragment(self):
+        prose = _RawBlockRec(
+            lines=[
+                _line(
+                    "The objective contains "
+                    f"{SENTINEL_OPEN}L_total{SENTINEL_CLOSE}",
+                    (108.0, 100.0, 210.0, 112.0),
+                )
+            ]
+        )
+        spacer = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN}+lambda L_aux{SENTINEL_CLOSE}",
+                    (210.0, 100.0, 255.0, 112.0),
+                )
+            ]
+        )
+        display = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN}L=L_main+lambda L_aux{SENTINEL_CLOSE}",
+                    (255.0, 99.0, 420.0, 113.0),
+                ),
+                _line("(4)", (480.0, 100.0, 498.0, 112.0)),
+            ]
+        )
+
+        bridge = _inline_formula_bridge_block(
+            0,
+            [prose, spacer, display],
+            [True, True, True],
+            [False, False, False],
+            2,
+        )
+
+        self.assertIsNone(bridge)
+
+    def test_tall_display_delimiter_is_not_exposed_as_inline_fragment(self):
+        equation_body = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN}cos(phi(x),phi(y)){SENTINEL_CLOSE}",
+                    (280.0, 108.0, 422.0, 121.0),
+                )
+            ]
+        )
+        tall_delimiter = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN})){SENTINEL_CLOSE}",
+                    (422.0, 100.0, 432.0, 137.0),
+                )
+            ]
+        )
+        formula_tail = _RawBlockRec(
+            lines=[
+                _line(
+                    f"{SENTINEL_OPEN}.{SENTINEL_CLOSE}",
+                    (432.0, 108.0, 438.0, 121.0),
+                )
+            ]
+        )
+        following_prose = _RawBlockRec(
+            lines=[
+                _line(
+                    "Unlike the structural term, "
+                    f"{SENTINEL_OPEN}S_ref{SENTINEL_CLOSE} is not computed against pseudo-GT.",
+                    (116.0, 128.0, 504.0, 140.0),
+                )
+            ]
+        )
+
+        bridge = _inline_formula_bridge_block(
+            0,
+            [equation_body, tall_delimiter, formula_tail, following_prose],
+            [True, True, True, True],
+            [False, False, False, False],
+            1,
+        )
+
+        self.assertIsNone(bridge)
+
     def test_display_formula_record_is_not_an_inline_bridge(self):
         previous = _RawBlockRec(
             lines=[_line("where we use", (108.0, 100.0, 170.0, 111.0))]
@@ -2569,6 +2698,45 @@ class PreserveGraphicsTextTests(unittest.TestCase):
 
         self.assertEqual(len(merged), 1)
         self.assertIn("planted", merged[0].text)
+
+    def test_merges_formula_only_chain_using_matching_source_line(self):
+        paragraph = TextBlock(
+            page_index=5,
+            bbox=(116.5, 678.6, 504.0, 702.0),
+            text=(
+                "For identity fidelity, we compare against a bank of the requested "
+                f"morphology. Denote {SENTINEL_OPEN}I^ref{SENTINEL_CLOSE}"
+            ),
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_line_bboxes=(
+                (116.5, 678.6, 280.0, 690.4),
+                (116.5, 691.0, 504.0, 702.0),
+            ),
+        )
+        middle = TextBlock(
+            page_index=5,
+            bbox=(278.0, 679.0, 322.0, 691.0),
+            text=f"{SENTINEL_OPEN}_(v),M^ref{SENTINEL_CLOSE}",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((278.0, 679.0, 322.0, 691.0),),
+        )
+        tail = TextBlock(
+            page_index=5,
+            bbox=(320.0, 679.0, 350.0, 691.0),
+            text=f"{SENTINEL_OPEN}v)^V{SENTINEL_CLOSE}",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((320.0, 679.0, 350.0, 691.0),),
+        )
+
+        merged = merge_paragraph_blocks([paragraph, middle, tail])
+
+        self.assertEqual(len(merged), 1)
+        self.assertIn("M^ref", merged[0].text)
+        self.assertIn("v)^V", merged[0].text)
 
     def test_does_not_merge_same_line_formula_fragments_with_large_overlap(self):
         first = TextBlock(
