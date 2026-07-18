@@ -1073,6 +1073,27 @@ class TestDownloadEndpoints:
             assert response.headers["cache-control"] == "private, max-age=300, no-transform"
             assert response.headers["content-encoding"] == "identity"
 
+    def test_view_original_serves_safe_sidecar(self, client, mock_db, sample_paper, tmp_path):
+        sample_paper.stored_filename = "test.pdf"
+        source = tmp_path / "test.pdf"
+        source.write_bytes(b"%PDF-1.4 raw")
+        sidecar = tmp_path / ".test.safe.pdf"
+        sidecar.write_bytes(b"%PDF-1.4 safe")
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        with (
+            patch("app.api.papers.settings") as mock_settings,
+            patch("app.api.papers.safe_pdf_for_use", return_value=sidecar) as mock_safe,
+        ):
+            mock_settings.papers_path = tmp_path
+            response = client.get(f"/api/papers/{sample_paper.id}/view/original")
+
+        assert response.status_code == 200
+        assert response.content == sidecar.read_bytes()
+        mock_safe.assert_called_once_with(source.resolve())
+
     def test_view_translated_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful translated PDF view."""
         from unittest.mock import patch as _patch
@@ -1733,6 +1754,45 @@ class TestRunTranslation:
 
         assert paper.translation_status == "completed"
         assert paper.translation_progress == 1.0
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_translation_uses_safe_pdf_sidecar(self, mock_settings, mock_translate, tmp_path):
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = MagicMock(
+            id="paper123",
+            stored_filename="test.pdf",
+            translated_filename=None,
+            dual_filename=None,
+            translation_status="pending",
+        )
+        db = self._setup_db_mock(paper)
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+        source_path = papers_dir / "test.pdf"
+        safe_path = papers_dir / ".test.safe.pdf"
+        self._write_valid_pdf(source_path, "Original paper content.")
+        self._write_valid_pdf(safe_path, "Sanitized paper content.")
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        self._write_valid_pdf(mono_path, "译文内容。")
+        mock_translate.return_value = TranslationResult(mono_path=mono_path)
+
+        with (
+            patch("app.core.database.async_session", self._make_async_session_mock(db)),
+            patch("app.api.papers.safe_pdf_for_use", return_value=safe_path) as mock_safe,
+            patch("app.api.papers._run_post_translation_qa", return_value=[]) as mock_qa,
+        ):
+            _run_translation("paper123", "google", "fast")
+
+        mock_safe.assert_called_once_with(source_path.resolve())
+        assert mock_translate.call_args.args[0] == safe_path
+        assert mock_qa.call_args.args[2] == safe_path
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")

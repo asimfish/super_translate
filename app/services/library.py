@@ -13,6 +13,7 @@ import fitz
 
 from app.core.config import settings
 from app.models.paper import Paper
+from app.services.pdf_sanitizer import remove_safe_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ async def delete_paper_files(paper: Paper) -> None:
     """Delete all files associated with a paper."""
 
     def _delete_files() -> None:
+        remove_safe_pdf(settings.papers_path / paper.stored_filename)
         _safe_delete(settings.papers_path, paper.stored_filename)
         if paper.translated_filename:
             _safe_delete(settings.translations_path, paper.translated_filename)

@@ -221,6 +221,31 @@ class TestDeletePaperFiles:
             assert not dual.exists()
 
     @pytest.mark.asyncio
+    async def test_deletes_safe_preview_sidecar(self, tmp_path):
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        original = papers_dir / "test.pdf"
+        original.write_bytes(b"original")
+        sidecar = papers_dir / ".test.safe.pdf"
+        sidecar.write_bytes(b"safe")
+
+        with patch("app.services.library.settings") as mock_settings:
+            mock_settings.papers_path = papers_dir
+            mock_settings.translations_path = translations_dir
+            paper = MagicMock(
+                stored_filename="test.pdf",
+                translated_filename=None,
+                dual_filename=None,
+            )
+
+            await delete_paper_files(paper)
+
+        assert not original.exists()
+        assert not sidecar.exists()
+
+    @pytest.mark.asyncio
     async def test_handles_missing_files(self, tmp_path):
         """Should not raise when files are already missing."""
         papers_dir = tmp_path / "papers"

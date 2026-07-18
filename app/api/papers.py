@@ -38,6 +38,7 @@ from app.services.library import (
     generate_stored_filename,
     get_pdf_info,
 )
+from app.services.pdf_sanitizer import safe_pdf_for_use
 from app.services.translator import (
     QualityPreset,
     TranslationConfig,
@@ -728,6 +729,10 @@ async def upload_paper(
         raise HTTPException(500, "Failed to save paper record") from None
     await db.refresh(paper)
 
+    safe_path = await asyncio.to_thread(safe_pdf_for_use, stored_path)
+    if safe_path != stored_path.resolve():
+        logger.info("Prepared safe PDF preview for uploaded paper %s", paper.id)
+
     return _paper_to_response(paper, has_original=True)
 
 
@@ -1324,6 +1329,8 @@ async def _do_translate(
             await db.commit()
             _clear_cancel_requested(paper_id)
             return
+
+        input_path = await asyncio.to_thread(safe_pdf_for_use, input_path)
 
         if job_id:
             await db.commit()
@@ -2157,9 +2164,19 @@ async def view_original(
     db: Annotated[AsyncSession, Depends(get_session)],
     access_scope: AccessScope,
 ) -> FileResponse:
-    """View the original PDF file in browser."""
+    """View a browser-safe copy while preserving the raw original download."""
     paper = await _get_paper_or_404(paper_id, db, access_scope)
-    return await _serve_paper_file(paper, "stored_filename", settings.papers_path)
+    source_path = _get_paper_file(paper, "stored_filename", settings.papers_path)
+    view_path = await asyncio.to_thread(safe_pdf_for_use, source_path)
+    return FileResponse(
+        view_path,
+        media_type="application/pdf",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=300, no-transform",
+            "Content-Encoding": "identity",
+        },
+    )
 
 
 @router.get("/{paper_id}/view/translated")
