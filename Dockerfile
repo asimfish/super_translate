@@ -8,6 +8,13 @@
 
 FROM python:3.12-slim AS builder
 
+# Override for restricted networks, e.g.
+#   docker build --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ .
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    UV_INDEX_URL=${PIP_INDEX_URL} \
+    UV_DEFAULT_INDEX=${PIP_INDEX_URL}
+
 WORKDIR /app
 
 RUN pip install --no-cache-dir uv

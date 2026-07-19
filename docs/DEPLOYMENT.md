@@ -131,6 +131,29 @@ retried from the UI.
 | HTTP 429 from the translation provider | Set `PAPER_CHINA_TRANSLATION_CONCURRENCY=1` and keep `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS=1`. |
 | Long papers time out | Raise `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` (also raise the Caddy `response_header_timeout`). |
 
+## Restricted networks (e.g. campus/lab servers in China)
+
+- Build with a reachable PyPI mirror:
+
+  ```bash
+  docker compose build --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+  ```
+
+- No public 80/443 (no domain)? Skip Caddy and run only the app:
+
+  ```bash
+  docker compose up -d app
+  ```
+
+  The app listens on `127.0.0.1:8000` on the server. Access it through an SSH
+  tunnel from your laptop — traffic is encrypted by SSH, and the API token
+  still protects the app:
+
+  ```bash
+  ssh -N -L 18001:127.0.0.1:8000 your-server
+  # then open http://localhost:18001
+  ```
+
 ## Alternative platforms
 
 - **Fly.io / Railway**: workable if you attach a persistent volume, pin a
