@@ -2502,6 +2502,39 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(segments[0].redact_bboxes[0], heading.bbox)
 
 
+class TranslationUnitSourceTextsTests(unittest.TestCase):
+    def test_returns_translated_prose_and_skips_reference_entries(self):
+        from pdf_zh_translator.pdf_layout import translation_unit_source_texts
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text(
+            (55, 120),
+            "We train a neural network policy on demonstrations and study "
+            "how safety constraints shape the learned behavior at scale.",
+            fontsize=10,
+        )
+        page.insert_text((55, 600), "References", fontsize=11)
+        page.insert_text(
+            (55, 620),
+            "Haarnoja, T., Zhou, A., and Levine, S. Soft actor-critic "
+            "algorithms and applications. ICML, 2018.",
+            fontsize=9,
+        )
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdf_path = Path(tmpdir) / "source.pdf"
+            document.save(pdf_path)
+            texts = translation_unit_source_texts(pdf_path)
+        document.close()
+
+        blob = " ".join(texts)
+        self.assertIn("neural network policy", blob)
+        self.assertNotIn("actor-critic", blob)
+
+
 class PreservedRegionUnitFilterTests(unittest.TestCase):
     def test_block_mostly_inside_preserved_regions(self):
         from pdf_zh_translator.pdf_layout import _block_mostly_inside_preserved_regions

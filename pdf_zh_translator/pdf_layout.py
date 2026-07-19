@@ -1815,6 +1815,26 @@ def preserved_original_text_regions(document: object) -> Dict[int, List[BBox]]:
     return regions
 
 
+def translation_unit_source_texts(pdf_path: Path) -> List[str]:
+    """Plain source texts of the blocks that actually get translated.
+
+    Excludes references, tables, algorithms, and other preserved regions so
+    downstream checks (e.g. terminology adherence) don't flag text that was
+    intentionally kept in English.
+    """
+    import fitz
+
+    document = fitz.open(str(pdf_path))
+    try:
+        units, _, _ = prepare_translation_units(document, preserve_graphics_text=True)
+        return [
+            " ".join(strip_sentinels(block.text).split())
+            for block, _, _ in units
+        ]
+    finally:
+        document.close()
+
+
 def _restore_unit_translation(
     translated_text: str,
     mapping: Dict[int, str],

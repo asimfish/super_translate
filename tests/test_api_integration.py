@@ -1399,6 +1399,66 @@ class TestDownloadEndpoints:
         assert response.status_code == 404
 
 
+class TestTerminologyAuditScope:
+    """Terminology advisories must only cover text that was actually translated."""
+
+    @staticmethod
+    def _make_pdf(path, entries):
+        import fitz
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        for y, text, size in entries:
+            # insert_text keeps each entry on one physical line so multi-word
+            # terms stay contiguous in the extracted page text.
+            page.insert_text((55, y), text, fontsize=size, fontname="china-ss")
+        document.save(str(path))
+        document.close()
+
+    def _run_audit(self, tmp_path, source_entries, mono_entries):
+        from app.api.papers import _audit_terminology_usage
+
+        source_pdf = tmp_path / "source.pdf"
+        mono_pdf = tmp_path / "mono.pdf"
+        self._make_pdf(source_pdf, source_entries)
+        self._make_pdf(mono_pdf, mono_entries)
+
+        logs = []
+        with patch(
+            "app.api.papers._append_log",
+            side_effect=lambda _pid, _loop, message: logs.append(message),
+        ):
+            _audit_terminology_usage("paper-id", MagicMock(), source_pdf, mono_pdf)
+        return logs
+
+    def test_term_only_in_references_is_not_flagged(self, tmp_path):
+        logs = self._run_audit(
+            tmp_path,
+            source_entries=[
+                (120, "We study how demonstrations shape policy", 10),
+                (135, "behavior across long-horizon manipulation tasks.", 10),
+                (600, "References", 11),
+                (620, "Sutton, R. Reinforcement learning. ICML, 2018.", 9),
+            ],
+            mono_entries=[(120, "我们研究演示数据如何影响策略行为。", 10)],
+        )
+
+        assert not any("reinforcement learning" in message for message in logs)
+
+    def test_term_in_translated_body_is_flagged(self, tmp_path):
+        logs = self._run_audit(
+            tmp_path,
+            source_entries=[
+                (120, "We apply reinforcement learning to train the", 10),
+                (135, "policy and study how reward design shapes the", 10),
+                (150, "resulting behavior in unseen environments.", 10),
+            ],
+            mono_entries=[(120, "我们应用增强式学习来训练策略并研究奖励设计。", 10)],
+        )
+
+        assert any("reinforcement learning" in message for message in logs)
+
+
 class TestApiDocsToggle:
     """API docs must be switchable off for public deployments."""
 

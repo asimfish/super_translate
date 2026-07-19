@@ -1934,9 +1934,13 @@ def _audit_terminology_usage(
         return
     try:
         from pdf_zh_translator.corpus import audit_terminology_usage
+        from pdf_zh_translator.pdf_layout import translation_unit_source_texts
 
+        # Only audit text that was actually sent for translation. References,
+        # tables, and figure internals are intentionally kept in English, so
+        # sourcing terms from the whole PDF would guarantee false advisories.
         violations = audit_terminology_usage(
-            _read_pdf_texts(input_path),
+            translation_unit_source_texts(input_path),
             _read_pdf_texts(mono_path),
         )
         if violations:
