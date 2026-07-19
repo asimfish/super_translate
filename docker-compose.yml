@@ -1,0 +1,38 @@
+services:
+  app:
+    build: .
+    image: super-translate:latest
+    restart: unless-stopped
+    # Keep the app off the public interface; Caddy terminates HTTPS.
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    environment:
+      PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE: "false"
+      # Caddy fronts the app, so X-Forwarded-For is trustworthy here.
+      PAPER_CHINA_TRUST_PROXY: "true"
+    volumes:
+      - app-data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:

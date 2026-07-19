@@ -2,10 +2,11 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-807%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-845%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
-[![Python](https://img.shields.io/badge/python-3.12+-blue)]()
+[![Python](https://img.shields.io/badge/python-3.10+-blue)]()
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)]()
 
 Super Translate is a web-based system for translating English academic papers into Chinese while preserving the original formatting, mathematical formulas, and document structure.
 
@@ -90,7 +91,7 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 | `PAPER_CHINA_TRANSLATION_ENGINE` | `native` | Translation engine (`native` or `pdf2zh`) |
 | `PAPER_CHINA_TRANSLATION_BACKEND` | `deepseek` | Default translation backend |
 | `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` | `1800` | Global timeout for each translation run |
-| `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `3` | Max concurrent translation jobs |
+| `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `1` | Max concurrent translation jobs |
 | `PAPER_CHINA_TRANSLATION_CONCURRENCY` | `4` | Parallel supplier requests within one translation (lower to `1` for rate-limited API keys) |
 | `PAPER_CHINA_API_TOKEN` | — | Optional bearer token for `/api/*` requests |
 | `PAPER_CHINA_WORKSPACE_TOKENS` | — | Optional comma/newline-separated `workspace:token` entries for lightweight per-workspace isolation |
@@ -121,7 +122,8 @@ super_translate/
 │   ├── services/     # Translation, layout fixing, notifications
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
-└── tests/            # Test suite (807 tests)
+├── docs/             # Deployment guide + Chinese tutorial
+└── tests/            # Test suite (845 tests)
 ```
 
 ## Deployment Notes
@@ -181,6 +183,27 @@ Super Translate targets local / single-machine / small-team use:
 .venv/bin/python -m pdf_zh_translator figure-ppt-audit data/editable_figures
 ```
 
+## Deploying as a Website
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full tutorial (Docker +
+Caddy HTTPS on a VPS, backup, and troubleshooting). The short version:
+
+```bash
+cp .env.example .env       # fill in DEEPSEEK_API_KEY + PAPER_CHINA_API_TOKEN
+vim Caddyfile              # replace your-domain.example.com with your domain
+docker compose up -d --build
+```
+
+A Chinese user guide covering everyday usage lives in
+[docs/TUTORIAL.zh-CN.md](docs/TUTORIAL.zh-CN.md).
+
 ## License
 
-MIT
+[AGPL-3.0-or-later](LICENSE).
+
+Super Translate bundles and imports [pdf2zh (PDFMathTranslate)](https://github.com/Byaidu/PDFMathTranslate)
+and [PyMuPDF](https://github.com/pymupdf/PyMuPDF), which are licensed under
+AGPL-3.0. The project as a whole is therefore distributed under AGPL-3.0: if
+you run a modified copy as a network service, you must offer its source code
+to your users (the web UI's "源码" link serves this purpose — keep it pointing
+at the repository that matches your running code).

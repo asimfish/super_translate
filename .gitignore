@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.py[cod]
@@ -9,5 +11,12 @@ data/
 .coverage
 htmlcov/
 .pytest_cache/
+.ruff_cache/
 .gitnexus
 qa_render/
+.DS_Store
+.mcp.json
+.windsurf/
+.whalent_tmp/
+.claude/
+gta-web/

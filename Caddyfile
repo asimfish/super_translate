@@ -1,0 +1,28 @@
+# Replace with your domain. Caddy provisions Let's Encrypt automatically.
+# For a local/LAN test without a domain, use ":80" instead of a hostname.
+{
+	servers {
+		timeouts {
+			# Large PDFs on slow uplinks; bounded so stalled uploads free the connection.
+			read_body 10m
+		}
+	}
+}
+
+your-domain.example.com {
+	# Long-running translation requests + 100MB PDF uploads.
+	reverse_proxy app:8000 {
+		# Overwrite (not append) X-Forwarded-For so clients cannot spoof
+		# their IP for rate limiting when PAPER_CHINA_TRUST_PROXY=true.
+		header_up X-Forwarded-For {remote_host}
+		transport http {
+			response_header_timeout 30m
+		}
+	}
+
+	request_body {
+		max_size 100MB
+	}
+
+	encode gzip
+}

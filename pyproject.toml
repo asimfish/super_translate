@@ -7,9 +7,14 @@ name = "paper-china"
 version = "0.2.0"
 description = "Local AI-powered paper reading + Chinese translation system"
 readme = "README.md"
+# AGPL-3.0 is required: the app links pdf2zh and PyMuPDF (both AGPL-3.0).
+license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.10"
 dependencies = [
     "pdf2zh>=1.8",
+    # The app imports fitz directly (layout fix, sanitizer, library scans);
+    # pdf2zh 1.9.10 requires pymupdf<1.25.3.
+    "pymupdf>=1.24,<1.25.3",
     # 3.1.129 drops TextTranslateRequest, which pdf2zh 1.9.10 imports at startup.
     "tencentcloud-sdk-python-tmt==3.1.121",
     "fastapi>=0.104",
