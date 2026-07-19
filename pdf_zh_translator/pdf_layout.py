@@ -1781,6 +1781,29 @@ def _block_overlaps_preserved_regions(
     return total_overlap / area >= min_total_overlap
 
 
+def _block_mostly_inside_preserved_regions(
+    block: TextBlock,
+    regions: Sequence[BBox],
+    *,
+    min_ratio: float = 0.7,
+) -> bool:
+    """Whether a translation block sits mostly inside QA-preserved regions.
+
+    Table cells that escape structural classification would otherwise be
+    translated and then rejected by preserved-region QA, so the translate
+    path must honor the same envelopes verification uses.
+    """
+    if not regions:
+        return False
+    area = bbox_area(block.bbox)
+    if area <= 0:
+        return False
+    return any(
+        bbox_intersection_area(block.bbox, region) / area >= min_ratio
+        for region in regions
+    )
+
+
 def preserved_original_text_regions(document: object) -> Dict[int, List[BBox]]:
     """Regions whose English text is intentionally preserved in graphics/table mode."""
     regions: Dict[int, List[BBox]] = {}
@@ -2561,14 +2584,13 @@ def prepare_translation_units(
 
     algorithm_regions: Dict[int, List[BBox]] = {}
     equation_table_regions: Dict[int, List[BBox]] = {}
+    compute_preserved = preserve_graphics_text or preserved_regions_out is not None
     raw_blocks, gutter_rects = collect_text_blocks(
         document,
-        algorithm_regions_out=(
-            algorithm_regions if preserved_regions_out is not None else None
-        ),
+        algorithm_regions_out=(algorithm_regions if compute_preserved else None),
         equation_table_regions_out=equation_table_regions,
     )
-    analyze_graphics = preserve_graphics_text or preserved_regions_out is not None
+    analyze_graphics = compute_preserved
     graphic_regions = collect_graphic_regions(document) if analyze_graphics else {}
     blocks = merge_paragraph_blocks(
         raw_blocks,
@@ -2593,25 +2615,30 @@ def prepare_translation_units(
             equation_table_regions.get(page_index, ()),
         )
 
-    if preserved_regions_out is not None:
-        preserved_regions_out.clear()
+    preserved_union: Dict[int, List[BBox]] = {}
+    if compute_preserved:
         for block in blocks:
             if should_preserve_original_block(
                 block,
                 graphic_regions.get(block.page_index, []),
             ):
-                preserved_regions_out.setdefault(block.page_index, []).append(block.bbox)
+                preserved_union.setdefault(block.page_index, []).append(block.bbox)
         for page_index in range(document.page_count):
             page_blocks = [block for block in blocks if block.page_index == page_index]
-            preserved_regions_out.setdefault(page_index, []).extend(
+            preserved_union.setdefault(page_index, []).extend(
                 _table_region_bboxes(page_blocks)
             )
         for page_index, page_algorithm_regions in algorithm_regions.items():
-            preserved_regions_out.setdefault(page_index, []).extend(page_algorithm_regions)
+            preserved_union.setdefault(page_index, []).extend(page_algorithm_regions)
         for page_index, page_table_regions in equation_table_regions.items():
-            preserved_regions_out.setdefault(page_index, []).extend(page_table_regions)
-        for page_index, page_regions in preserved_regions_out.items():
-            preserved_regions_out[page_index] = list(dict.fromkeys(page_regions))
+            preserved_union.setdefault(page_index, []).extend(page_table_regions)
+        for page_index, page_regions in preserved_union.items():
+            preserved_union[page_index] = list(dict.fromkeys(page_regions))
+
+    if preserved_regions_out is not None:
+        preserved_regions_out.clear()
+        for page_index, page_regions in preserved_union.items():
+            preserved_regions_out[page_index] = list(page_regions)
 
     units: List[TranslationUnit] = []
     skipped = 0
@@ -2623,6 +2650,16 @@ def prepare_translation_units(
         if preserve_graphics_text and should_preserve_original_block(
             block,
             graphic_regions.get(block.page_index, []),
+        ):
+            skipped += 1
+            continue
+        # Table cells that escaped structural classification (e.g. header
+        # cells merged as body prose) must stay untranslated whenever the
+        # verification layer treats their enclosing envelope as preserved;
+        # translating them would flag preserved_text_changed later.
+        if preserve_graphics_text and _block_mostly_inside_preserved_regions(
+            block,
+            preserved_union.get(block.page_index, []),
         ):
             skipped += 1
             continue

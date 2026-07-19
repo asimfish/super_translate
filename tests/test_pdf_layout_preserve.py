@@ -2502,6 +2502,71 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(segments[0].redact_bboxes[0], heading.bbox)
 
 
+class PreservedRegionUnitFilterTests(unittest.TestCase):
+    def test_block_mostly_inside_preserved_regions(self):
+        from pdf_zh_translator.pdf_layout import _block_mostly_inside_preserved_regions
+
+        cell = TextBlock(
+            page_index=0,
+            bbox=(243.5, 107.9, 281.5, 116.6),
+            text="RoboCasa",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        envelope = (54.9, 107.9, 541.8, 273.0)
+
+        self.assertTrue(_block_mostly_inside_preserved_regions(cell, [envelope]))
+        self.assertFalse(_block_mostly_inside_preserved_regions(cell, []))
+
+        outside = TextBlock(
+            page_index=0,
+            bbox=(55.0, 372.0, 291.2, 513.5),
+            text="Scientific benchmarks impose stricter physical constraints.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        self.assertFalse(_block_mostly_inside_preserved_regions(outside, [envelope]))
+
+    def test_units_skip_body_blocks_inside_preserved_table_envelope(self):
+        """Cells misclassified as body must not be translated when the QA
+        layer will treat the enclosing table envelope as preserved."""
+        import unittest.mock
+
+        from pdf_zh_translator import pdf_layout
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text(
+            (60, 116),
+            "Uses segmented point clouds following the DP3 protocol.",
+            fontsize=9,
+        )
+        page.insert_text(
+            (55, 380),
+            "Scientific benchmarks impose stricter physical constraints on tasks.",
+            fontsize=10,
+        )
+        envelope = (54.9, 100.0, 541.8, 273.0)
+
+        # First call (classification-time promotion) sees no envelope — the
+        # real-world ordering gap — while the final preserved-union pass does.
+        with unittest.mock.patch.object(
+            pdf_layout,
+            "_table_region_bboxes",
+            side_effect=[[], [envelope]],
+        ) as mock_regions:
+            units, _, _ = pdf_layout.prepare_translation_units(
+                document,
+                preserve_graphics_text=True,
+            )
+        document.close()
+        self.assertEqual(mock_regions.call_count, 2)
+
+        texts = [" ".join(strip_sentinels(source).split()) for _, source, _ in units]
+        self.assertFalse(any("segmented point clouds" in text for text in texts))
+        self.assertTrue(any("Scientific benchmarks" in text for text in texts))
+
+
 class PreserveGraphicsTextTests(unittest.TestCase):
     def test_wide_shallow_background_rule_is_not_graphic_region(self):
         document = fitz.open()
