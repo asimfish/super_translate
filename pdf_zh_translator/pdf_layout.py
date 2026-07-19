@@ -1781,6 +1781,31 @@ def _block_overlaps_preserved_regions(
     return total_overlap / area >= min_total_overlap
 
 
+def _overlapping_translation_block_bboxes(
+    blocks: Sequence[TextBlock],
+    *,
+    min_overlap_ratio: float = 0.25,
+) -> List[BBox]:
+    """Bboxes of translation candidates that substantially overlap each other.
+
+    Interleaved borderless-table extractions can yield one block nested inside
+    another. Translating both overprints Chinese text at the same coordinates,
+    so such blocks must keep their original typesetting instead.
+    """
+    flagged: List[BBox] = []
+    for index, first in enumerate(blocks):
+        for second in blocks[index + 1 :]:
+            intersection = bbox_intersection_area(first.bbox, second.bbox)
+            if intersection <= 0.0:
+                continue
+            smaller = min(bbox_area(first.bbox), bbox_area(second.bbox))
+            if smaller <= 0.0 or intersection / smaller < min_overlap_ratio:
+                continue
+            flagged.append(first.bbox)
+            flagged.append(second.bbox)
+    return list(dict.fromkeys(flagged))
+
+
 def _block_mostly_inside_preserved_regions(
     block: TextBlock,
     regions: Sequence[BBox],
@@ -2652,6 +2677,28 @@ def prepare_translation_units(
             preserved_union.setdefault(page_index, []).extend(page_algorithm_regions)
         for page_index, page_table_regions in equation_table_regions.items():
             preserved_union.setdefault(page_index, []).extend(page_table_regions)
+
+        # Mutually overlapping translation candidates would overprint each
+        # other's Chinese text; keep their original typesetting and exempt
+        # the area from untranslated-English QA. Adding the bboxes to the
+        # preserved union both skips them in the unit loop below (via
+        # _block_mostly_inside_preserved_regions at ratio 1.0) and keeps the
+        # QA layer consistent.
+        for page_index in range(document.page_count):
+            page_candidates = [
+                block
+                for block in blocks
+                if block.page_index == page_index
+                and block.should_translate
+                and not should_preserve_original_block(
+                    block,
+                    graphic_regions.get(page_index, []),
+                )
+            ]
+            flagged = _overlapping_translation_block_bboxes(page_candidates)
+            if flagged:
+                preserved_union.setdefault(page_index, []).extend(flagged)
+
         for page_index, page_regions in preserved_union.items():
             preserved_union[page_index] = list(dict.fromkeys(page_regions))
 

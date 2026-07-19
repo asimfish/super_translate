@@ -2535,6 +2535,107 @@ class TranslationUnitSourceTextsTests(unittest.TestCase):
         self.assertNotIn("actor-critic", blob)
 
 
+class OverlappingUnitPreservationTests(unittest.TestCase):
+    def test_mutually_overlapping_blocks_are_preserved_not_translated(self):
+        """Interleaved borderless-table blocks cannot be translated in place:
+        both bboxes receive Chinese text and overprint each other."""
+        import unittest.mock
+
+        from pdf_zh_translator import pdf_layout
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text(
+            (61, 120),
+            "Transparent rendering uses glass refraction with specular materials.",
+            fontsize=9,
+        )
+        page.insert_text(
+            (61, 600),
+            "Regular body paragraphs must keep translating as before.",
+            fontsize=10,
+        )
+
+        def fake_overlaps(blocks):
+            return [
+                block.bbox
+                for block in blocks
+                if "Transparent rendering" in strip_sentinels(block.text)
+            ]
+
+        regions_out = {}
+        with unittest.mock.patch.object(
+            pdf_layout,
+            "_overlapping_translation_block_bboxes",
+            side_effect=fake_overlaps,
+        ):
+            units, _, _ = pdf_layout.prepare_translation_units(
+                document,
+                preserve_graphics_text=True,
+                preserved_regions_out=regions_out,
+            )
+        document.close()
+
+        texts = [" ".join(strip_sentinels(source).split()) for _, source, _ in units]
+        self.assertFalse(any("Transparent rendering" in text for text in texts))
+        self.assertTrue(any("Regular body paragraphs" in text for text in texts))
+        # QA must exempt the same region so overlap warnings stay consistent.
+        self.assertTrue(
+            any(abs(region[1] - 111.0) < 12.0 for region in regions_out.get(0, []))
+        )
+
+    def test_overlapping_translation_block_bboxes_rule(self):
+        from pdf_zh_translator.pdf_layout import _overlapping_translation_block_bboxes
+
+        contained = TextBlock(
+            page_index=0,
+            bbox=(61.0, 409.0, 302.0, 438.0),
+            text="Transparent rendering uses glass refraction.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        container = TextBlock(
+            page_index=0,
+            bbox=(61.0, 409.0, 532.0, 470.0),
+            text="Optical material references match visual difficulty.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        neighbor = TextBlock(
+            page_index=0,
+            bbox=(61.0, 472.0, 303.0, 511.0),
+            text="Safety thresholds for transport tilt limits.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        flagged = _overlapping_translation_block_bboxes([contained, container, neighbor])
+
+        self.assertIn(contained.bbox, flagged)
+        self.assertIn(container.bbox, flagged)
+        self.assertNotIn(neighbor.bbox, flagged)
+
+    def test_touching_paragraphs_are_not_flagged(self):
+        from pdf_zh_translator.pdf_layout import _overlapping_translation_block_bboxes
+
+        first = TextBlock(
+            page_index=0,
+            bbox=(61.0, 100.0, 302.0, 130.0),
+            text="First paragraph of ordinary prose text.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        second = TextBlock(
+            page_index=0,
+            bbox=(61.0, 128.0, 302.0, 158.0),
+            text="Second paragraph overlapping by a hairline.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        self.assertEqual(_overlapping_translation_block_bboxes([first, second]), [])
+
+
 class PreservedRegionUnitFilterTests(unittest.TestCase):
     def test_block_mostly_inside_preserved_regions(self):
         from pdf_zh_translator.pdf_layout import _block_mostly_inside_preserved_regions
