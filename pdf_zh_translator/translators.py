@@ -54,9 +54,25 @@ class EchoTranslator(Translator):
     def translate_batch(self, texts: Sequence[str]) -> List[str]:
         output: List[str] = []
         for index, text in enumerate(texts, start=1):
-            repeat_count = max(1, min(4, len(text) // 60 + 1))
-            output.append(("第%d段中文占位译文。" % index) + ("用于检查版面。" * repeat_count))
+            # Keep protected fragments in their original positions so dry-run
+            # exercises the same formula restore/anchor/wrap paths as real
+            # suppliers instead of dropping or clumping them.
+            pieces: List[str] = ["第%d段" % index]
+            cursor = 0
+            for match in _CACHE_PLACEHOLDER_RE.finditer(text):
+                pieces.append(self._filler(match.start() - cursor))
+                pieces.append(match.group(0))
+                cursor = match.end()
+            pieces.append(self._filler(len(text) - cursor))
+            output.append("".join(pieces))
         return output
+
+    @staticmethod
+    def _filler(source_chars: int) -> str:
+        if source_chars <= 0:
+            return ""
+        repeat_count = max(1, min(24, source_chars // 14 + 1))
+        return "中文占位译文。" + ("用于检查版面。" * repeat_count)[: max(0, repeat_count * 7 - 7)]
 
 
 class CachedTranslator(Translator):

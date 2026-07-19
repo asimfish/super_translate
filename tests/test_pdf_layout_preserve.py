@@ -5164,3 +5164,57 @@ def test_figure_chart_grid_does_not_create_table_component_region():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreservedCollisionSkipTests(unittest.TestCase):
+    def test_candidate_colliding_with_preserved_label_is_flagged(self):
+        from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved
+
+        # DreamZero p26 geometry: heading-classified cell overprints the
+        # preserved "Coaster" label below it.
+        candidate = TextBlock(
+            page_index=0,
+            bbox=(95.5, 451.4, 129.0, 459.9),
+            text="6 Put Cup on",
+            font_size=6.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        label_bbox = (106.2, 457.8, 124.7, 463.0)
+
+        flagged = _candidate_bboxes_colliding_with_preserved([candidate], [label_bbox])
+
+        self.assertEqual(flagged, [candidate.bbox])
+
+    def test_candidate_near_but_not_overlapping_is_not_flagged(self):
+        from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved
+
+        candidate = TextBlock(
+            page_index=0,
+            bbox=(95.5, 440.0, 129.0, 450.0),
+            text="A separate caption line",
+            font_size=6.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        flagged = _candidate_bboxes_colliding_with_preserved(
+            [candidate], [(106.2, 457.8, 124.7, 463.0)]
+        )
+
+        self.assertEqual(flagged, [])
+
+    def test_hairline_touch_is_not_flagged(self):
+        from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved
+
+        candidate = TextBlock(
+            page_index=0,
+            bbox=(61.0, 100.0, 302.0, 130.0),
+            text="Body paragraph above a preserved table region.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        # Wide preserved region grazing the paragraph's bottom edge.
+        preserved = (61.0, 128.5, 302.0, 190.0)
+
+        flagged = _candidate_bboxes_colliding_with_preserved([candidate], [preserved])
+
+        self.assertEqual(flagged, [])

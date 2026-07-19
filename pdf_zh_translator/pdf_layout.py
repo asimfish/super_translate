@@ -1806,6 +1806,37 @@ def _overlapping_translation_block_bboxes(
     return list(dict.fromkeys(flagged))
 
 
+
+def _candidate_bboxes_colliding_with_preserved(
+    candidates: Sequence[TextBlock],
+    preserved_regions: Sequence[BBox],
+    *,
+    min_area_ratio: float = 0.25,
+    min_penetration: float = 2.0,
+) -> List[BBox]:
+    """Translation candidates whose redaction would erase preserved ink.
+
+    Figure labels and formula regions are preserved in place; a candidate
+    whose bbox meaningfully covers one (e.g. a mis-segmented caption cell
+    overhanging a label) would first redact that ink away and then overprint
+    it. Such candidates keep their original typesetting instead.
+    """
+    flagged: List[BBox] = []
+    for block in candidates:
+        bx0, by0, bx1, by1 = block.bbox
+        for region in preserved_regions:
+            rx0, ry0, rx1, ry1 = region
+            x_overlap = min(bx1, rx1) - max(bx0, rx0)
+            y_overlap = min(by1, ry1) - max(by0, ry0)
+            if x_overlap < min_penetration or y_overlap < min_penetration:
+                continue
+            region_area = max(0.1, (rx1 - rx0) * (ry1 - ry0))
+            if (x_overlap * y_overlap) / region_area >= min_area_ratio:
+                flagged.append(block.bbox)
+                break
+    return flagged
+
+
 def _block_mostly_inside_preserved_regions(
     block: TextBlock,
     regions: Sequence[BBox],
@@ -2698,6 +2729,12 @@ def prepare_translation_units(
             flagged = _overlapping_translation_block_bboxes(page_candidates)
             if flagged:
                 preserved_union.setdefault(page_index, []).extend(flagged)
+            colliding = _candidate_bboxes_colliding_with_preserved(
+                page_candidates,
+                preserved_union.get(page_index, []),
+            )
+            if colliding:
+                preserved_union.setdefault(page_index, []).extend(colliding)
 
         for page_index, page_regions in preserved_union.items():
             preserved_union[page_index] = list(dict.fromkeys(page_regions))

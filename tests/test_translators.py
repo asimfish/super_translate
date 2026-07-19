@@ -466,3 +466,21 @@ class CLIParserTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EchoTranslatorPlaceholderTests(unittest.TestCase):
+    def test_echo_translator_preserves_placeholders(self):
+        from pdf_zh_translator.translators import EchoTranslator, placeholders_preserved
+
+        source = "The bound ⟦0⟧ holds for ⟦1⟧ under mild assumptions."
+        output = EchoTranslator().translate_batch([source])[0]
+
+        self.assertTrue(placeholders_preserved(source, output))
+
+    def test_echo_translator_plain_text_unchanged_format(self):
+        from pdf_zh_translator.translators import EchoTranslator
+
+        output = EchoTranslator().translate_batch(["Plain sentence."])[0]
+
+        self.assertIn("中文占位译文", output)
+        self.assertNotIn("⟦", output)
