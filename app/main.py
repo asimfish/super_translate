@@ -273,7 +273,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
 
-app = FastAPI(title="Super Translate", version=__version__, lifespan=lifespan)
+app = FastAPI(
+    title="Super Translate",
+    version=__version__,
+    lifespan=lifespan,
+    docs_url="/docs" if settings.enable_api_docs else None,
+    redoc_url="/redoc" if settings.enable_api_docs else None,
+    openapi_url="/openapi.json" if settings.enable_api_docs else None,
+)
 
 # CORS
 app.add_middleware(

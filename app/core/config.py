@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     # CORS (comma-separated origins, e.g. "http://localhost:3000,https://example.com")
     cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
 
+    # Interactive API docs (/docs, /redoc, /openapi.json). Disable on public
+    # deployments to avoid advertising the API surface.
+    enable_api_docs: bool = True
+
     @property
     def db_url(self) -> str:
         """Get the database connection URL."""

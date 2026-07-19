@@ -1399,6 +1399,29 @@ class TestDownloadEndpoints:
         assert response.status_code == 404
 
 
+class TestApiDocsToggle:
+    """API docs must be switchable off for public deployments."""
+
+    def test_enable_api_docs_setting(self):
+        from app.core.config import Settings
+
+        assert Settings().enable_api_docs is True
+        assert Settings(enable_api_docs=False).enable_api_docs is False
+
+    def test_app_docs_urls_follow_setting(self):
+        from app.core.config import settings
+        from app.main import app as main_app
+
+        if settings.enable_api_docs:
+            assert main_app.docs_url == "/docs"
+            assert main_app.redoc_url == "/redoc"
+            assert main_app.openapi_url == "/openapi.json"
+        else:
+            assert main_app.docs_url is None
+            assert main_app.redoc_url is None
+            assert main_app.openapi_url is None
+
+
 class TestStatsEndpoint:
     """Test stats endpoint."""
 
