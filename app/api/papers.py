@@ -10,6 +10,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1574,7 +1575,11 @@ def _run_post_translation_qa(
             _set_translation_stage(paper_id, loop, "版面修复", job_id=job_id)
             before_repair_issues = list(issues)
             snapshot = _snapshot_translated_outputs(trans_result)
-            fixed = _fix_translated_outputs(trans_result)
+            try:
+                fixed = _fix_translated_outputs(input_path, trans_result)
+            except Exception:
+                _restore_translated_outputs(snapshot)
+                raise
             repair_attempted = True
             pass_history.append(
                 _qa_pass_summary(pass_index, issues, repair_attempted_after=True)
@@ -1621,18 +1626,32 @@ def _run_post_translation_qa(
         # Propagate so the caller resets the paper to pending (not a QA failure).
         raise
     except Exception as e:
-        logger.warning("Post-translation QA failed for %s: %s", paper_id, sanitize_error(e))
+        from pdf_zh_translator.pdf_layout import TranslationIssue
+
+        error = sanitize_error(e)
+        issue = TranslationIssue(
+            page=0,
+            code="qa_failed",
+            message=f"Post-translation QA failed: {error}",
+            severity="warning",
+        )
+        logger.warning("Post-translation QA failed for %s: %s", paper_id, error)
+        _append_log(
+            paper_id,
+            loop,
+            "译文已生成，但译后质检执行失败；已恢复修复前版本，请人工复核 QA 报告",
+        )
         _write_qa_report(
             trans_result,
-            [],
+            [issue],
             qa_mode=qa_mode,
             passes_run=0,
             repair_attempted=False,
             pass_history=[],
             status="qa_failed",
-            error=sanitize_error(e),
+            error=error,
         )
-        return []
+        return [issue]
 
 
 def _write_qa_report(
@@ -1731,6 +1750,7 @@ _QA_ERROR_LABELS = {
     "page_count_mismatch": "页数不一致",
     "page_size_mismatch": "页面尺寸不一致",
     "preserved_text_changed": "表格/算法保留区被改动",
+    "qa_failed": "译后质检执行失败",
     "qa_open_failed": "PDF 无法检查",
     "text_overlap": "正文重叠",
     "untranslated_caption": "图注漏翻",
@@ -1788,14 +1808,19 @@ def _has_blocking_qa_error(issues: list) -> bool:
     )
 
 
-def _fix_translated_outputs(trans_result: TranslationResult) -> bool:
+def _fix_translated_outputs(
+    input_path: Path,
+    trans_result: TranslationResult,
+) -> bool:
     from app.services.layout_fix import fix_translated_layout
 
     fixed = False
     if trans_result.mono_path:
         fixed = fix_translated_layout(trans_result.mono_path) or fixed
-    if trans_result.dual_path:
-        fixed = fix_translated_layout(trans_result.dual_path) or fixed
+    if fixed and trans_result.mono_path and trans_result.dual_path:
+        from pdf_zh_translator.pdf_layout import create_dual_pdf
+
+        create_dual_pdf(input_path, trans_result.mono_path, trans_result.dual_path)
     return fixed
 
 
@@ -1808,8 +1833,17 @@ def _snapshot_translated_outputs(trans_result: TranslationResult) -> dict[Path, 
 
 
 def _restore_translated_outputs(snapshots: dict[Path, bytes]) -> None:
-    for path, content in snapshots.items():
-        path.write_bytes(content)
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for path, content in snapshots.items():
+            temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.restore")
+            temporary.write_bytes(content)
+            staged.append((temporary, path))
+        for temporary, path in staged:
+            temporary.replace(path)
+    finally:
+        for temporary, _path in staged:
+            temporary.unlink(missing_ok=True)
 
 
 def _record_terminology_candidates(

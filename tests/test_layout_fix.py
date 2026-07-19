@@ -216,6 +216,15 @@ class TestNeedsFix(unittest.TestCase):
         block = self._make_block((150, 100, 300, 120))
         self.assertTrue(_needs_fix(block, self._COL))
 
+    def test_style_sensitive_math_block_is_not_reflowed(self):
+        block = self._make_block(
+            (150, 100, 300, 120),
+            text="译文中的 x = α + β 公式",
+        )
+        object.__setattr__(block, "style_sensitive", True)
+
+        self.assertFalse(_needs_fix(block, self._COL))
+
     def test_narrow_block_needs_fix(self):
         # Very narrow block with substantial text (width=23)
         block = self._make_block((91, 100, 114, 120), text="This is a paragraph of text")
@@ -442,6 +451,64 @@ class TestExtractTextBlocks(unittest.TestCase):
         self.assertEqual(len(blocks), 1)
         self.assertEqual(blocks[0].text, "line one\nline two")
 
+    def test_marks_math_font_blocks_as_style_sensitive(self):
+        from app.services.layout_fix import _extract_text_blocks
+
+        blocks_data = [
+            {
+                "type": 0,
+                "bbox": [150, 100, 300, 125],
+                "lines": [
+                    {
+                        "spans": [
+                            {
+                                "text": "译文中的 ",
+                                "size": 10.0,
+                                "font": "NotoSansCJK-Regular",
+                            },
+                            {
+                                "text": "x = α + β",
+                                "size": 10.0,
+                                "font": "CMMI10",
+                            },
+                        ]
+                    }
+                ],
+            }
+        ]
+
+        blocks = _extract_text_blocks(self._make_page(blocks_data))
+
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(getattr(blocks[0], "style_sensitive", False))
+
+    def test_marks_additional_latex_math_fonts_as_style_sensitive(self):
+        from app.services.layout_fix import _extract_text_blocks
+
+        for font_name in ("EulerVM", "EUFM10", "RSFS10", "wasy10", "txsy", "pxsy"):
+            with self.subTest(font_name=font_name):
+                blocks_data = [
+                    {
+                        "type": 0,
+                        "bbox": [150, 100, 300, 125],
+                        "lines": [
+                            {
+                                "spans": [
+                                    {
+                                        "text": "x = α + β",
+                                        "size": 10.0,
+                                        "font": font_name,
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ]
+
+                blocks = _extract_text_blocks(self._make_page(blocks_data))
+
+                self.assertTrue(getattr(blocks[0], "style_sensitive", False))
+
 
 class TestFixPageLayoutEdgeCases(unittest.TestCase):
     """Test _fix_page_layout edge cases with mocked pages."""
@@ -514,6 +581,79 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
         page.get_fonts.return_value = []
         result = _fix_page_layout(page)
         self.assertEqual(result, 0)
+
+    def test_does_not_redact_block_that_cannot_be_reinserted(self):
+        """Blocks rejected by reinsertion filters must remain untouched."""
+        from app.services.layout_fix import ColumnInfo, _fix_page_layout
+
+        block = _tb((440, 100, 485, 120), text="label text", font_size=10)
+        page = unittest.mock.MagicMock()
+        page.rect.height = 792
+        page.rect.width = 612
+
+        with (
+            unittest.mock.patch(
+                "app.services.layout_fix._extract_text_blocks",
+                return_value=[block],
+            ),
+            unittest.mock.patch("app.services.layout_fix._clean_page_artifacts"),
+            unittest.mock.patch(
+                "app.services.layout_fix._analyze_page_layout",
+                return_value=[ColumnInfo(91.0, 413.0)],
+            ),
+            unittest.mock.patch(
+                "app.services.layout_fix._get_image_bboxes",
+                return_value=[],
+            ),
+            unittest.mock.patch(
+                "app.services.layout_fix._needs_fix",
+                return_value=True,
+            ),
+            unittest.mock.patch("app.services.layout_fix._redact_blocks") as mock_redact,
+        ):
+            result = _fix_page_layout(page)
+
+        self.assertEqual(result, 0)
+        mock_redact.assert_not_called()
+
+    def test_does_not_redact_block_when_insert_preflight_fails(self):
+        """Geometrically valid blocks stay untouched when text cannot fit."""
+        from app.services.layout_fix import ColumnInfo, _fix_page_layout
+
+        block = _tb(
+            (200, 100, 320, 130),
+            text="A translated paragraph that must remain visible.",
+            font_size=10,
+        )
+        page = unittest.mock.MagicMock()
+        page.rect.height = 792
+        page.rect.width = 612
+        page.new_shape.return_value.insert_textbox.return_value = -1
+
+        with (
+            unittest.mock.patch(
+                "app.services.layout_fix._extract_text_blocks",
+                return_value=[block],
+            ),
+            unittest.mock.patch("app.services.layout_fix._clean_page_artifacts"),
+            unittest.mock.patch(
+                "app.services.layout_fix._analyze_page_layout",
+                return_value=[ColumnInfo(91.0, 413.0)],
+            ),
+            unittest.mock.patch(
+                "app.services.layout_fix._get_image_bboxes",
+                return_value=[],
+            ),
+            unittest.mock.patch(
+                "app.services.layout_fix._needs_fix",
+                return_value=True,
+            ),
+            unittest.mock.patch("app.services.layout_fix._redact_blocks") as mock_redact,
+        ):
+            result = _fix_page_layout(page)
+
+        self.assertEqual(result, 0)
+        mock_redact.assert_not_called()
 
 
 class TestFixTranslatedLayout(unittest.TestCase):
@@ -737,29 +877,60 @@ class TestCleanPageArtifacts(unittest.TestCase):
         doc.close()
 
     def test_skips_short_text_after_cleaning(self):
-        """Blocks where cleaning leaves very short text are skipped."""
-        import fitz
+        """Blocks that cannot be safely cleaned must not be redacted."""
+        from app.services.layout_fix import TextBlockInfo, _clean_page_artifacts
 
-        from app.services.layout_fix import _clean_page_artifacts, _extract_text_blocks
-
-        doc = fitz.open()
-        page = doc.new_page(width=612, height=792)
-        # Insert text that is one char + null byte — cleaning leaves 1 char (< MIN_TEXT_LEN=2)
-        shape = page.new_shape()
-        shape.insert_textbox(
-            fitz.Rect(91, 100, 504, 130),
-            "A\x00",
-            fontname="helv",
-            fontsize=10,
-            color=(0, 0, 0),
+        page = unittest.mock.MagicMock()
+        page.get_text.return_value = "\x01"
+        block = TextBlockInfo(
+            bbox=(91.0, 100.0, 504.0, 130.0),
+            text="\x01",
+            avg_font_size=10.0,
+            block_index=0,
         )
-        shape.commit()
+        page_dict = {
+            "blocks": [
+                {
+                    "type": 0,
+                    "bbox": block.bbox,
+                    "lines": [{"spans": [{"text": "\x01"}]}],
+                }
+            ]
+        }
 
-        blocks = _extract_text_blocks(page)
-        # After extraction cleaning, block text is "A" (1 char)
-        # _clean_page_artifacts should skip reinsertion for this block
-        _clean_page_artifacts(page, blocks)
-        doc.close()
+        _clean_page_artifacts(page, [block], page_dict)
+
+        page.add_redact_annot.assert_not_called()
+        page.apply_redactions.assert_not_called()
+
+    def test_does_not_redact_dirty_block_when_insert_preflight_fails(self):
+        """Artifact cleanup leaves text intact when cleaned text cannot fit."""
+        from app.services.layout_fix import TextBlockInfo, _clean_page_artifacts
+
+        page = unittest.mock.MagicMock()
+        page.rect.height = 792
+        page.get_text.return_value = "abc\x01"
+        page.new_shape.return_value.insert_textbox.return_value = -1
+        block = TextBlockInfo(
+            bbox=(91.0, 100.0, 120.0, 110.0),
+            text="abc\x01",
+            avg_font_size=10.0,
+            block_index=0,
+        )
+        page_dict = {
+            "blocks": [
+                {
+                    "type": 0,
+                    "bbox": block.bbox,
+                    "lines": [{"spans": [{"text": "abc\x01"}]}],
+                }
+            ]
+        }
+
+        _clean_page_artifacts(page, [block], page_dict)
+
+        page.add_redact_annot.assert_not_called()
+        page.apply_redactions.assert_not_called()
 
     def test_noop_when_no_dirty_blocks(self):
         """Pages with no artifacts are not modified."""
@@ -990,12 +1161,38 @@ class TestReinsertBlocks(unittest.TestCase):
         result = _reinsert_blocks(page, blocks, self._COL)
         self.assertEqual(result, 0)
 
+    def test_raises_when_text_cannot_be_reinserted(self):
+        """A failed insertion must abort instead of saving a redacted page."""
+        from app.services.layout_fix import _reinsert_blocks
+
+        page = unittest.mock.MagicMock()
+        page.rect.width = 612
+        page.rect.height = 792
+        page.get_fonts.return_value = []
+        page.new_shape.return_value.insert_textbox.return_value = 0
+        blocks = [
+            _tb(
+                (200, 100, 320, 130),
+                text="A translated paragraph that must not disappear.",
+                font_size=10,
+            )
+        ]
+
+        with (
+            unittest.mock.patch(
+                "app.services.layout_fix._insert_text_with_fallback",
+                return_value=False,
+            ),
+            self.assertRaises(RuntimeError),
+        ):
+            _reinsert_blocks(page, blocks, self._COL)
+
 
 class TestInsertTextWithFallback(unittest.TestCase):
     """Test _insert_text_with_fallback edge cases."""
 
     def test_fallback_when_all_sizes_fail(self):
-        """When all font sizes return negative, falls back to minimum size."""
+        """When all font sizes fail, no empty shape is committed."""
         import fitz
 
         from app.services.layout_fix import _insert_text_with_fallback
@@ -1007,9 +1204,8 @@ class TestInsertTextWithFallback(unittest.TestCase):
 
         rect = fitz.Rect(91, 100, 504, 120)
         result = _insert_text_with_fallback(page, rect, "test text", "helv", 10.0)
-        self.assertTrue(result)
-        # Should have called commit at least once (for the fallback)
-        self.assertTrue(shape.commit.called)
+        self.assertFalse(result)
+        shape.commit.assert_not_called()
 
 
 class TestEstimateTextHeight(unittest.TestCase):

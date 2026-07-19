@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # Rate limiting
     rate_limit_per_minute: int = 60
     rate_limit_per_hour: int = 500
+    # Trust X-Forwarded-For for rate limiting. Enable ONLY when the app sits
+    # behind a reverse proxy you control (e.g. the bundled Caddy compose
+    # setup); otherwise clients could spoof their IP to bypass limits.
+    trust_proxy: bool = False
 
     # Upload limits
     max_upload_size: int = 100 * 1024 * 1024  # 100MB

@@ -1,6 +1,9 @@
 """End-to-end PDF layout tests for native translation."""
 
+from unittest.mock import patch
+
 import fitz
+import pytest
 
 from pdf_zh_translator.pdf_layout import create_dual_pdf, translate_pdf, verify_translation
 
@@ -153,6 +156,30 @@ def test_create_dual_pdf_saves_linearized_output(tmp_path):
     create_dual_pdf(original_pdf, translated_pdf, dual_pdf)
 
     assert b"/Linearized" in dual_pdf.read_bytes()[:2048]
+
+
+def test_create_dual_pdf_preserves_previous_output_when_save_fails(tmp_path):
+    original_pdf = tmp_path / "paper.pdf"
+    translated_pdf = tmp_path / "paper.zh.pdf"
+    dual_pdf = tmp_path / "paper.dual.pdf"
+    _build_academic_fixture(original_pdf)
+    _build_academic_fixture(translated_pdf)
+    dual_pdf.write_bytes(b"previous dual output")
+
+    def fail_after_partial_write(_document, output_path):
+        output_path.write_bytes(b"partial")
+        raise OSError("disk full")
+
+    with (
+        patch(
+            "pdf_zh_translator.pdf_layout.save_pdf_for_fast_web_view",
+            side_effect=fail_after_partial_write,
+        ),
+        pytest.raises(OSError, match="disk full"),
+    ):
+        create_dual_pdf(original_pdf, translated_pdf, dual_pdf)
+
+    assert dual_pdf.read_bytes() == b"previous dual output"
 
 
 def test_translate_pdf_invalidates_bad_cached_output_before_retry(tmp_path):

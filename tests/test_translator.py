@@ -525,11 +525,18 @@ class TestTranslatePdfSync(unittest.TestCase):
             self.assertFalse(partial1.exists())
             self.assertFalse(partial2.exists())
 
+    @patch("pdf_zh_translator.pdf_layout.create_dual_pdf")
     @patch("app.services.layout_fix.fix_translated_layout")
     @patch("pdf2zh.translate")
     @patch("app.services.translator.get_model")
-    def test_layout_fix_called_on_output(self, mock_get_model, mock_translate, mock_fix):
-        """Test that layout fix is applied to translated output files."""
+    def test_layout_fix_called_on_output(
+        self,
+        mock_get_model,
+        mock_translate,
+        mock_fix,
+        mock_create_dual,
+    ):
+        """Fix only translated pages, then rebuild dual from the original."""
         import tempfile
 
         mock_get_model.return_value = MagicMock()
@@ -545,15 +552,16 @@ class TestTranslatePdfSync(unittest.TestCase):
             dual = output_dir / "input-dual.pdf"
             mono.write_bytes(b"mono content")
             dual.write_bytes(b"dual content")
+            input_path = Path(tmpdir) / "input.pdf"
 
             result = translate_pdf_sync(
-                Path(tmpdir) / "input.pdf",
+                input_path,
                 output_dir,
                 config,
             )
             self.assertTrue(result.success)
-            # Layout fix should have been called on both files
-            self.assertEqual(mock_fix.call_count, 2)
+            mock_fix.assert_called_once_with(mono)
+            mock_create_dual.assert_called_once_with(input_path, mono, dual)
 
     @patch("app.services.layout_fix.fix_translated_layout")
     @patch("pdf2zh.translate")

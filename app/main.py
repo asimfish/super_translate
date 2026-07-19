@@ -7,8 +7,9 @@ import webbrowser
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -19,15 +20,16 @@ from starlette.responses import Response
 
 from app import __version__
 from app.api.papers import router as papers_router
-from app.core.access import access_decision_for_request
+from app.core.access import access_decision_for_request, get_request_access_scope
 from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
 from app.core.rate_limit import RateLimitMiddleware
 
-# Stats cache with async lock
+# Stats cache with async lock, partitioned by workspace access scope so one
+# workspace can never observe another workspace's aggregate counters.
 _STATS_CACHE_TTL = 30  # seconds
-_stats_cache: dict | None = None
-_stats_cache_time: float = 0.0
+_stats_cache: dict[str, dict[str, int]] = {}
+_stats_cache_time: dict[str, float] = {}
 _stats_lock = asyncio.Lock()
 _startup_translation_tasks: set[asyncio.Task] = set()
 
@@ -287,6 +289,7 @@ app.add_middleware(
     RateLimitMiddleware,
     requests_per_minute=settings.rate_limit_per_minute,
     requests_per_hour=settings.rate_limit_per_hour,
+    trust_proxy=settings.trust_proxy,
 )
 
 # Response compression
@@ -368,13 +371,15 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/api/stats")
-async def stats() -> dict[str, int]:
-    """Get system statistics with caching.
+async def stats(
+    access_scope: Annotated[str, Depends(get_request_access_scope)],
+) -> dict[str, int]:
+    """Get workspace-scoped statistics with caching.
 
-    Returns cached stats for 30 seconds to reduce database queries.
-    Thread-safe: uses a module-level lock to prevent race conditions.
+    Counts are restricted to the caller's access scope and cached per scope
+    for 30 seconds to reduce database queries. Thread-safe: uses a
+    module-level lock to prevent race conditions.
     """
-    global _stats_cache, _stats_cache_time
     from sqlalchemy import func, select
 
     from app.core.database import async_session
@@ -383,22 +388,29 @@ async def stats() -> dict[str, int]:
     now = time.time()
 
     async with _stats_lock:
-        # Return cached result if fresh
-        if _stats_cache and (now - _stats_cache_time) < _STATS_CACHE_TTL:
-            return _stats_cache
+        # Return cached result if fresh for this workspace scope
+        cached = _stats_cache.get(access_scope)
+        cached_at = _stats_cache_time.get(access_scope, 0.0)
+        if cached is not None and (now - cached_at) < _STATS_CACHE_TTL:
+            return cached
 
         async with async_session() as db:
-            total = await db.scalar(select(func.count(Paper.id)))
+            total = await db.scalar(
+                select(func.count(Paper.id)).where(Paper.access_scope == access_scope),
+            )
             completed = await db.scalar(
-                select(func.count(Paper.id)).where(Paper.translation_status == "completed"),
+                select(func.count(Paper.id)).where(
+                    Paper.access_scope == access_scope,
+                    Paper.translation_status == "completed",
+                ),
             )
             result = {
                 "total_papers": total or 0,
                 "completed_translations": completed or 0,
             }
 
-            _stats_cache = result
-            _stats_cache_time = now
+            _stats_cache[access_scope] = result
+            _stats_cache_time[access_scope] = now
 
             return result
 

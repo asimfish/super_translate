@@ -35,6 +35,22 @@ def _save_corner_pdf(path, *, corner: str) -> None:
     document.close()
 
 
+def _save_paged_corner_pdf(path, *, pages: int, last_corner: str) -> None:
+    document = fitz.open()
+    for page_index in range(pages):
+        page = document.new_page(width=240, height=240)
+        corner = last_corner if page_index == pages - 1 else "top"
+        rect = (
+            fitz.Rect(20, 20, 100, 100)
+            if corner == "top"
+            else fitz.Rect(140, 140, 220, 220)
+        )
+        page.draw_rect(rect, color=(0, 0, 0), fill=(0, 0, 0))
+        page.insert_text((50, 210), f"Academic content page {page_index + 1}", fontsize=10)
+    document.save(path)
+    document.close()
+
+
 def test_visual_score_is_high_for_identical_pages(tmp_path):
     source = tmp_path / "source.pdf"
     _save_pdf(source, filled=True)
@@ -52,7 +68,21 @@ def test_visual_score_average_uses_sampled_pages(tmp_path):
     score = score_visual_layout(source, source, max_pages=4)
 
     assert len(score.pages) == 4
+    assert [page.page for page in score.pages] == [1, 5, 8, 12]
     assert score.overall_score > 0.98
+
+
+def test_visual_score_samples_late_page_regressions(tmp_path):
+    original = tmp_path / "original.pdf"
+    translated = tmp_path / "translated.pdf"
+    _save_paged_corner_pdf(original, pages=12, last_corner="top")
+    _save_paged_corner_pdf(translated, pages=12, last_corner="bottom")
+
+    score = score_visual_layout(original, translated, max_pages=4)
+
+    assert score.pages[-1].page == 12
+    assert score.pages[-1].min_zone_score < 0.25
+    assert score.risk_level == "high"
 
 
 def test_visual_score_is_low_when_translation_is_blank(tmp_path):

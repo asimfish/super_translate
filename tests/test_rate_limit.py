@@ -95,6 +95,30 @@ class TestGetClientIp:
         request.client.host = "1.2.3.4"
         assert middleware._get_client_ip(request) == "5.6.7.8"
 
+    def test_trust_proxy_is_configurable_via_settings(self):
+        from app.core.config import Settings
+
+        assert Settings().trust_proxy is False
+        assert Settings(trust_proxy=True).trust_proxy is True
+
+    def test_app_wires_trust_proxy_from_settings(self):
+        from app.core.config import settings
+        from app.main import app as main_app
+
+        if main_app.middleware_stack is None:
+            main_app.middleware_stack = main_app.build_middleware_stack()
+
+        def _find(stack):
+            if isinstance(stack, RateLimitMiddleware):
+                return stack
+            if hasattr(stack, "app"):
+                return _find(stack.app)
+            return None
+
+        middleware = _find(main_app.middleware_stack)
+        assert middleware is not None
+        assert middleware.trust_proxy == settings.trust_proxy
+
     def test_fallback_to_unknown_without_client(self):
         app = FastAPI()
         middleware = RateLimitMiddleware(app)

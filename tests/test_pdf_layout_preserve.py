@@ -1764,6 +1764,28 @@ class FormulaTailProseTests(unittest.TestCase):
     def test_join_lines_keeps_normal_spacing(self):
         self.assertEqual(join_lines(["first line", "second line"]), "first line second line")
 
+    def test_join_lines_preserves_known_academic_compound_hyphen(self):
+        self.assertEqual(
+            join_lines(["We train a vision-", "language model for control."]),
+            "We train a vision-language model for control.",
+        )
+
+    def test_join_lines_still_mends_split_word(self):
+        self.assertEqual(
+            join_lines(["The experi-", "ments show consistent gains."]),
+            "The experiments show consistent gains.",
+        )
+
+    def test_line_break_hyphen_ignores_unrelated_term_earlier_in_context(self):
+        from pdf_zh_translator.pdf_layout import _line_break_hyphen_belongs_to_term
+
+        self.assertFalse(
+            _line_break_hyphen_belongs_to_term(
+                "We use chain-of-thought reasoning. The proof-of-",
+                "thought experiment confirms the result.",
+            )
+        )
+
     def test_formula_anchor_alignment_requires_exact_count(self):
         anchors = (
             (100.0, 100.0, 110.0, 110.0),
@@ -3398,9 +3420,25 @@ class TestClassifyBlocks(unittest.TestCase):
 
         self.assertTrue(_looks_like_reference_entry_text(text))
 
+    def test_untranslated_body_with_url_is_not_exempt(self):
+        text = (
+            "We release the complete implementation and evaluation scripts at "
+            "https://github.com/example/project for reproducible experiments."
+        )
+
+        self.assertTrue(_looks_like_untranslated_english(text))
+        self.assertFalse(_looks_like_untranslated_english("https://github.com/example/project"))
+
     def test_preserved_region_text_changed_detects_translated_table_label(self):
         self.assertTrue(preserved_region_text_changed("Task", "任务"))
         self.assertFalse(preserved_region_text_changed("Task FastWAM Ours", "Task FastWAM Ours"))
+
+    def test_preserved_region_text_changed_detects_numeric_value_change(self):
+        self.assertTrue(preserved_region_text_changed("91.2", "19.2"))
+        self.assertFalse(preserved_region_text_changed("91.2 ± 0.4", "91.2 ± 0.4"))
+
+    def test_preserved_region_normalizes_unicode_minus_in_exponent(self):
+        self.assertFalse(preserved_region_text_changed("5.8e−6", "5.8e-6"))
 
     def test_preserved_region_text_changed_detects_chinese_overlay(self):
         self.assertTrue(
@@ -3547,6 +3585,38 @@ class TestClassifyBlocks(unittest.TestCase):
         classify_blocks([block], 0, 792, [])
         self.assertEqual(block.block_type, "body")
         self.assertTrue(block.should_translate)
+
+
+class TestDefaultFontDiscovery(unittest.TestCase):
+    def test_env_override_wins(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        from pdf_zh_translator.pdf_layout import find_default_font_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            font_path = Path(tmpdir) / "custom-font.otf"
+            font_path.write_bytes(b"stub")
+            with mock.patch.dict(os.environ, {"PDF_ZH_FONT_FILE": str(font_path)}):
+                self.assertEqual(find_default_font_file(), font_path)
+
+    def test_discovers_noto_cjk_under_linux_font_root(self):
+        import tempfile
+        from unittest import mock
+
+        from pdf_zh_translator import pdf_layout
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ttc = root / "opentype" / "noto" / "NotoSansCJK-Regular.ttc"
+            ttc.parent.mkdir(parents=True)
+            ttc.write_bytes(b"stub")
+            with (
+                mock.patch.object(pdf_layout, "FONT_FILE_CANDIDATES", ()),
+                mock.patch.object(pdf_layout, "FONT_SEARCH_ROOTS", (root,)),
+            ):
+                self.assertEqual(pdf_layout.find_default_font_file(), ttc)
 
 
 class TestDetectColumns(unittest.TestCase):
@@ -3905,6 +3975,9 @@ class TestTranslationVerification(unittest.TestCase):
     def test_verification_ignores_untranslated_table_cells_without_grid(self):
         original = fitz.open()
         page = original.new_page(width=612, height=792)
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 4, 4), False)
+        pixmap.clear_with(0xEEEEEE)
+        page.insert_image(fitz.Rect(110, 55, 590, 120), pixmap=pixmap)
         x_positions = [130, 200, 310, 380, 450]
         rows = [
             ["Model", "Method", "Dry-run", "Solved", "Solved / Dry-run"],
@@ -3918,6 +3991,7 @@ class TestTranslationVerification(unittest.TestCase):
 
         translated = fitz.open()
         page = translated.new_page(width=612, height=792)
+        page.insert_image(fitz.Rect(110, 55, 590, 120), pixmap=pixmap)
         for y, row in zip([80, 94, 108], rows):
             for x, cell in zip(x_positions, row):
                 page.insert_text((x, y), cell, fontsize=9)
@@ -3935,6 +4009,43 @@ class TestTranslationVerification(unittest.TestCase):
         original.close()
         translated.close()
         self.assertFalse(any(issue.code == "untranslated_english" for issue in issues))
+
+    def test_verification_flags_changed_numeric_value_in_preserved_table(self):
+        original = fitz.open()
+        page = original.new_page(width=612, height=792)
+        x_positions = [130, 200, 310, 380, 450]
+        original_rows = [
+            ["Model", "Method", "Accuracy", "Recall", "F1"],
+            ["Base", "Encoder A", "88.4", "82.1", "84.9"],
+            ["Ours", "Encoder B", "91.2", "89.7", "90.4"],
+        ]
+        for y, row in zip([80, 96, 112], original_rows):
+            for x, cell in zip(x_positions, row):
+                page.insert_text((x, y), cell, fontsize=9)
+
+        translated = fitz.open()
+        page = translated.new_page(width=612, height=792)
+        translated_rows = [
+            ["Model", "Method", "Accuracy", "Recall", "F1"],
+            ["Base", "Encoder A", "88.4", "82.1", "84.9"],
+            ["Ours", "Encoder B", "19.2", "89.7", "90.4"],
+        ]
+        for y, row in zip([80, 96, 112], translated_rows):
+            for x, cell in zip(x_positions, row):
+                page.insert_text((x, y), cell, fontsize=9)
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "preserved_text_changed" for issue in issues))
 
     def test_verification_still_flags_untranslated_checklist_prose(self):
         original = fitz.open()
@@ -4186,6 +4297,39 @@ class TestTranslationVerification(unittest.TestCase):
         original.close()
         translated.close()
         self.assertFalse(any(issue.code == "untranslated_english" for issue in issues))
+
+    def test_flags_untranslated_multiline_prose_inside_visual_region(self):
+        prose = (
+            "The proposed policy uses a visual encoder to extract robust features "
+            "from each observation and predicts actions across multiple long horizon tasks."
+        )
+
+        original = fitz.open()
+        page = original.new_page(width=420, height=320)
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 4, 4), False)
+        pixmap.clear_with(0xEEEEEE)
+        page.insert_image(fitz.Rect(40, 40, 380, 230), pixmap=pixmap)
+        page.insert_textbox(fitz.Rect(70, 80, 350, 180), prose, fontsize=10)
+
+        translated = fitz.open()
+        page = translated.new_page(width=420, height=320)
+        page.insert_image(fitz.Rect(40, 40, 380, 230), pixmap=pixmap)
+        page.insert_textbox(fitz.Rect(70, 80, 350, 180), prose, fontsize=10)
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "untranslated_english" for issue in issues))
 
     def test_flags_short_untranslated_english_caption(self):
         original = fitz.open()

@@ -56,6 +56,10 @@ _MAX_ERROR_LEN = 200  # max error message length after sanitization
 _ASCII_CONTROL_MAX = 32  # ASCII control characters below this value (except \n\r\t)
 # Minimum separation between x0 clusters to detect two-column layout
 _COLUMN_CLUSTER_GAP = 150.0
+_STYLE_SENSITIVE_FONT_RE = re.compile(
+    r"(?:math|symbol|cmmi|cmsy|cmex|msam|msbm|stix|euler|eufm|rsfs|wasy|txsy|pxsy)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,7 @@ class TextBlockInfo:
     text: str
     avg_font_size: float
     block_index: int
+    style_sensitive: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,15 @@ class ColumnInfo:
 
     left_margin: float
     col_width: float
+
+
+@dataclass(frozen=True)
+class ReinsertPlan:
+    """A text block with a preflight-validated reinsertion target."""
+
+    block: TextBlockInfo
+    bbox: tuple[float, float, float, float]
+    text: str
 
 
 def _find_nearest_column(
@@ -222,9 +236,12 @@ def _fix_page_layout(page: object) -> int:
     if not to_fix:
         return 0
 
-    # Redact and reinsert
-    _redact_blocks(page, to_fix)
-    return _reinsert_blocks(page, to_fix, columns, all_blocks=blocks)
+    # Decide which blocks can be safely reinserted before destructive redaction.
+    plans = _plan_reinsert_blocks(page, to_fix, columns, all_blocks=blocks)
+    if not plans:
+        return 0
+    _redact_blocks(page, [plan.block for plan in plans])
+    return _apply_reinsert_plans(page, plans)
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -291,10 +308,11 @@ def _clean_page_artifacts(
     if not has_control and not has_nbsp:
         return
 
-    font_name = _find_chinese_font(page)
     dirty_blocks = []
 
     for block in blocks:
+        if block.style_sensitive:
+            continue
         # Check block text for control chars
         if _CONTROL_CHAR_RE.search(block.text):
             dirty_blocks.append(block)
@@ -312,21 +330,8 @@ def _clean_page_artifacts(
     if not dirty_blocks:
         return
 
-    # Redact first
-    for block in dirty_blocks:
-        rect = fitz.Rect(block.bbox)
-        page.add_redact_annot(rect, fill=(1, 1, 1))
-    try:
-        kwargs = {}
-        if hasattr(fitz, "PDF_REDACT_IMAGE_NONE"):
-            kwargs["images"] = fitz.PDF_REDACT_IMAGE_NONE
-        if hasattr(fitz, "PDF_REDACT_LINE_ART_NONE"):
-            kwargs["graphics"] = fitz.PDF_REDACT_LINE_ART_NONE
-        page.apply_redactions(**kwargs)
-    except (TypeError, AttributeError):
-        page.apply_redactions()
-
-    # Then reinsert with cleaned text
+    plans: list[ReinsertPlan] = []
+    font_name = _find_chinese_font(page)
     for block in dirty_blocks:
         text = block.text
         text = _CONTROL_CHAR_RE.sub("", text)
@@ -340,8 +345,14 @@ def _clean_page_artifacts(
         height = rect.height
         if height < block.avg_font_size * 1.5:
             rect = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + block.avg_font_size * 2.5)
+        if _prepare_text_insert(page, rect, text, font_name, block.avg_font_size) is None:
+            continue
+        plans.append(ReinsertPlan(block=block, bbox=tuple(rect), text=text))
 
-        _insert_text_with_fallback(page, rect, text, font_name, block.avg_font_size)
+    if not plans:
+        return
+    _redact_blocks(page, [plan.block for plan in plans])
+    _apply_reinsert_plans(page, plans)
 
 
 def _redact_blocks(page: object, blocks: list[TextBlockInfo]) -> None:
@@ -371,8 +382,19 @@ def _reinsert_blocks(
     columns: list[ColumnInfo],
     all_blocks: list[TextBlockInfo] | None = None,
 ) -> int:
-    """Reinsert cleaned text blocks at correct positions. Returns count of blocks reinserted."""
-    fixed_count = 0
+    """Reinsert cleaned text blocks, raising if a preflighted insertion fails."""
+    plans = _plan_reinsert_blocks(page, blocks, columns, all_blocks=all_blocks)
+    return _apply_reinsert_plans(page, plans)
+
+
+def _plan_reinsert_blocks(
+    page: object,
+    blocks: list[TextBlockInfo],
+    columns: list[ColumnInfo],
+    all_blocks: list[TextBlockInfo] | None = None,
+) -> list[ReinsertPlan]:
+    """Return only blocks that pass every non-destructive reinsertion check."""
+    plans: list[ReinsertPlan] = []
     font_name = _find_chinese_font(page)
 
     # Collect bboxes of ALL blocks on the page (including captions, figure labels)
@@ -385,6 +407,8 @@ def _reinsert_blocks(
                 protected_bboxes.append(b.bbox)
 
     for block in blocks:
+        if block.style_sensitive:
+            continue
         text = _clean_text(block.text)
         if not text or len(text) < _MIN_TEXT_LEN:
             continue
@@ -441,11 +465,48 @@ def _reinsert_blocks(
         if skip:
             continue
 
-        # Try to insert with appropriate font size
-        if _insert_text_with_fallback(page, correct_rect, text, font_name, block.avg_font_size):
-            fixed_count += 1
+        if (
+            _prepare_text_insert(
+                page,
+                correct_rect,
+                text,
+                font_name,
+                block.avg_font_size,
+            )
+            is None
+        ):
+            continue
 
-    return fixed_count
+        plans.append(
+            ReinsertPlan(
+                block=block,
+                bbox=tuple(correct_rect),
+                text=text,
+            )
+        )
+
+    return plans
+
+
+def _apply_reinsert_plans(page: object, plans: list[ReinsertPlan]) -> int:
+    """Apply prepared plans or abort the caller's save-on-success transaction.
+
+    The safety guarantee relies on callers not saving the modified fitz
+    document after this function raises.
+    """
+    font_name = _find_chinese_font(page)
+    for plan in plans:
+        if not _insert_text_with_fallback(
+            page,
+            fitz.Rect(plan.bbox),
+            plan.text,
+            font_name,
+            plan.block.avg_font_size,
+        ):
+            raise RuntimeError(
+                "Layout fix aborted because translated text could not be reinserted"
+            )
+    return len(plans)
 
 
 def _estimate_text_height(text: str, font_size: float, rect_width: float) -> float:
@@ -480,6 +541,33 @@ def _insert_text_with_fallback(
     avg_font_size: float,
 ) -> bool:
     """Insert text into rect, trying decreasing font sizes. Returns True if inserted."""
+    prepared = _prepare_text_insert(page, rect, text, font_name, avg_font_size)
+    if prepared is None:
+        return False
+    prepared_rect, font_size = prepared
+    shape = page.new_shape()
+    result = shape.insert_textbox(
+        prepared_rect,
+        text,
+        fontname=font_name,
+        fontsize=font_size,
+        color=(0, 0, 0),
+        align=fitz.TEXT_ALIGN_LEFT,
+    )
+    if result < 0:
+        return False
+    shape.commit()
+    return True
+
+
+def _prepare_text_insert(
+    page: object,
+    rect: object,
+    text: str,
+    font_name: str,
+    avg_font_size: float,
+) -> tuple[object, float] | None:
+    """Find a fitting rectangle and font size without modifying the page."""
     # Expand rect height if text is likely to overflow, capped at page height
     est_height = _estimate_text_height(text, avg_font_size, rect.width)
     max_height = page.rect.height - rect.y0
@@ -500,22 +588,10 @@ def _insert_text_with_fallback(
             align=fitz.TEXT_ALIGN_LEFT,
         )
         if result >= 0:
-            shape.commit()
-            return True
+            return rect, size
         size -= 0.5
 
-    # Fallback: insert at minimum size
-    shape = page.new_shape()
-    shape.insert_textbox(
-        rect,
-        text,
-        fontname=font_name,
-        fontsize=5.0,
-        color=(0, 0, 0),
-        align=fitz.TEXT_ALIGN_LEFT,
-    )
-    shape.commit()
-    return True
+    return None
 
 
 def _extract_text_blocks(
@@ -539,6 +615,7 @@ def _extract_text_blocks(
 
         text_parts: list[str] = []
         font_sizes: list[float] = []
+        font_names: list[str] = []
 
         for raw_line in raw_block.get("lines", []):
             line_parts: list[str] = []
@@ -547,6 +624,7 @@ def _extract_text_blocks(
                 if span_text:
                     line_parts.append(span_text)
                     font_sizes.append(float(span.get("size", 9.0)))
+                    font_names.append(str(span.get("font", "")))
             line_text = "".join(line_parts).strip()
             if line_text:
                 text_parts.append(line_text)
@@ -569,6 +647,10 @@ def _extract_text_blocks(
                 text=text,
                 avg_font_size=avg_size,
                 block_index=idx,
+                style_sensitive=any(
+                    _STYLE_SENSITIVE_FONT_RE.search(font_name)
+                    for font_name in font_names
+                ),
             )
         )
 
@@ -651,6 +733,9 @@ def _needs_fix(
 
     # Skip very small blocks (images, decorations)
     if height < _TINY_BLOCK_HEIGHT or width < _TINY_BLOCK_WIDTH:
+        return False
+    # Repainting math/symbol fonts with a single CJK font destroys formula styling.
+    if block.style_sensitive:
         return False
 
     # Skip blocks in page margins (headers/footers)

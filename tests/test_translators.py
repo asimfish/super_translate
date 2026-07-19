@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pdf_zh_translator.cli import build_parser
 from pdf_zh_translator.translators import (
@@ -315,6 +316,21 @@ class TranslatorParsingTests(unittest.TestCase):
             translator._translate_chunk_with_fallback(["Model Details bullet list"]),
             ["纯文本:Model Details bullet list"],
         )
+
+    def test_openai_plain_fallback_keeps_relevant_terminology(self):
+        translator = VendorTranslator(
+            api_url="https://example.com",
+            mode="openai-compatible",
+            progress=False,
+        )
+        response = {"choices": [{"message": {"content": "我们使用神经网络。"}}]}
+
+        with patch.object(translator, "_post_json", return_value=response) as post_json:
+            translated = translator._translate_openai_plain("We use a neural network.")
+
+        prompt = post_json.call_args.args[1]["messages"][0]["content"]
+        self.assertEqual(translated, "我们使用神经网络。")
+        self.assertIn("neural network → 神经网络", prompt)
 
     def test_multi_item_parse_failure_retries_one_by_one(self):
         translator = MultiFailingVendorTranslator()

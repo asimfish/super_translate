@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import statistics
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
@@ -216,7 +217,23 @@ FONT_FILE_CANDIDATES = (
     "/Library/Fonts/Arial Unicode.ttf",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.otf",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+)
+# Linux distros place the Noto/Source Han CJK packages under distro-specific
+# subdirectories, so exact candidate paths above are complemented by a glob
+# search over these roots (Docker images only need `fonts-noto-cjk` installed).
+FONT_SEARCH_ROOTS = (
+    Path("/usr/share/fonts"),
+    Path("/usr/local/share/fonts"),
+)
+FONT_SEARCH_PATTERNS = (
+    "NotoSansCJK*-Regular.*",
+    "NotoSansCJK-Regular.*",
+    "NotoSerifCJK*-Regular.*",
+    "SourceHanSans*-Regular.*",
+    "NotoSansCJK*Regular*.ttc",
 )
 
 # Repo-local font faces extracted from the system TTCs (see ensure_font_pack).
@@ -577,23 +594,33 @@ def create_dual_pdf(
     """
     import fitz
 
-    orig_doc = fitz.open(str(original_pdf))
-    trans_doc = fitz.open(str(translated_pdf))
-    dual_doc = fitz.open()
+    output_pdf = Path(output_pdf)
+    staging_pdf = output_pdf.with_name(
+        f".{output_pdf.stem}.{uuid.uuid4().hex}.tmp.pdf"
+    )
+    try:
+        with (
+            fitz.open(str(original_pdf)) as orig_doc,
+            fitz.open(str(translated_pdf)) as trans_doc,
+            fitz.open() as dual_doc,
+        ):
+            for i in range(orig_doc.page_count):
+                dual_doc.insert_pdf(orig_doc, from_page=i, to_page=i)
+                if i < trans_doc.page_count:
+                    dual_doc.insert_pdf(trans_doc, from_page=i, to_page=i)
 
-    for i in range(orig_doc.page_count):
-        dual_doc.insert_pdf(orig_doc, from_page=i, to_page=i)
-        if i < trans_doc.page_count:
-            dual_doc.insert_pdf(trans_doc, from_page=i, to_page=i)
-
-    save_pdf_for_fast_web_view(dual_doc, output_pdf)
-    dual_doc.close()
-    trans_doc.close()
-    orig_doc.close()
+            save_pdf_for_fast_web_view(dual_doc, staging_pdf)
+        staging_pdf.replace(output_pdf)
+    finally:
+        staging_pdf.unlink(missing_ok=True)
 
 
 _CJK_DETECT_RE = re.compile(r"[\u2e80-\u9fff\uf900-\ufaff]")
 _ASCII_WORD_DETECT_RE = re.compile(r"[A-Za-z]{3,}")
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_PRESERVED_NUMERIC_TOKEN_RE = re.compile(
+    r"[+\-−]?(?:\d+(?:[.,]\d+)*|\.\d+)(?:[eE][+\-−]?\d+)?"
+)
 _REFERENCE_ENTRY_RE = re.compile(
     # `\d{1,3}\.(?!\d)` accepts numbered entries ("12. Smith...") but rejects
     # section numbering like "4.2. Conditional diffusion model training".
@@ -757,9 +784,12 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             elif _looks_like_untranslated_formula_explanation(text):
                 untranslated_formula_examples.append(" ".join(text.split())[:80])
             elif _looks_like_untranslated_english(text):
-                if _block_inside_visual_region(block, visual_regions):
-                    continue
                 if _block_overlaps_preserved_regions(block, preserved_regions):
+                    continue
+                if (
+                    _block_inside_visual_region(block, visual_regions)
+                    and not _visual_region_block_should_translate(block, text)
+                ):
                     continue
                 untranslated_examples.append(" ".join(text.split())[:80])
 
@@ -1119,6 +1149,10 @@ def preserved_region_text_changed(original_text: str, translated_text: str) -> b
         for word in _ASCII_WORD_DETECT_RE.findall(original_text)
         if len(word) >= 3
     ]
+    original_numbers = sorted(_preserved_numeric_tokens(original_text))
+    translated_numbers = sorted(_preserved_numeric_tokens(translated_text))
+    if original_numbers and original_numbers != translated_numbers:
+        return True
     if not original_words:
         return False
     translated_lower = " ".join(translated_text.lower().split())
@@ -1137,6 +1171,13 @@ def preserved_region_text_changed(original_text: str, translated_text: str) -> b
         if word not in translated_lower:
             missing += 1
     return checked > 0 and missing / checked >= 0.6
+
+
+def _preserved_numeric_tokens(text: str) -> List[str]:
+    return [
+        token.replace("−", "-")
+        for token in _PRESERVED_NUMERIC_TOKEN_RE.findall(text)
+    ]
 
 
 def _preserved_region_looks_like_formula(text: str) -> bool:
@@ -1189,15 +1230,18 @@ def _is_reference_or_formula_text(text: str) -> bool:
         return True
     if _looks_like_reference_entry_text(compact):
         return True
-    lower = compact.lower()
-    if "doi" in lower or "arxiv" in lower or "http://" in lower or "https://" in lower:
+    compact_without_urls = " ".join(_URL_RE.sub(" ", compact).split())
+    if not compact_without_urls:
         return True
-    if _looks_like_code_or_symbolic_text(compact):
+    if _looks_like_code_or_symbolic_text(compact_without_urls):
         return True
-    if looks_like_math(compact):
+    if looks_like_math(compact_without_urls):
         return True
-    math_chars = sum(1 for char in compact if char in MATH_SYMBOLS)
-    return math_chars >= 3 and math_chars / max(len(compact), 1) >= 0.08
+    math_chars = sum(1 for char in compact_without_urls if char in MATH_SYMBOLS)
+    return (
+        math_chars >= 3
+        and math_chars / max(len(compact_without_urls), 1) >= 0.08
+    )
 
 
 def _looks_like_untranslated_english(text: str) -> bool:
@@ -1631,10 +1675,10 @@ def _looks_like_reference_entry_text(text: str) -> bool:
     sentence_count = len(re.findall(r"[.!?]\s+[A-Z]", compact))
     lower = compact.lower()
     if "doi" in lower or "arxiv" in lower or "http://" in lower or "https://" in lower:
-        # URLs mark reference entries only in short fragments; long multi-
-        # sentence prose (e.g. abstracts ending with "code is available at
-        # https://...") is regular body text.
-        if len(compact) <= 260 or sentence_count < 2:
+        # A bare link or a short label such as "Project page: <URL>" is
+        # metadata. A normal prose sentence remains body text.
+        without_urls = _URL_RE.sub(" ", compact)
+        if len(_ASCII_WORD_DETECT_RE.findall(without_urls)) <= 4:
             return True
     if len(compact) > 520 and sentence_count >= 2:
         return False
@@ -1689,6 +1733,36 @@ def _block_inside_visual_region(
     return any(
         bbox_intersection_area(block_bbox, region) / area >= min_overlap
         for region in visual_regions
+    )
+
+
+def _visual_region_block_should_translate(block: dict, text: str) -> bool:
+    """Match QA exemptions to the translator's graphic-prose classifier."""
+    bbox = block.get("bbox")
+    if not bbox:
+        return False
+    lines = [
+        line
+        for line in block.get("lines", [])
+        if any(str(span.get("text", "")).strip() for span in line.get("spans", []))
+    ]
+    font_sizes = [
+        float(span.get("size", 0.0))
+        for line in lines
+        for span in line.get("spans", [])
+        if float(span.get("size", 0.0)) > 0.0
+    ]
+    candidate = TextBlock(
+        page_index=0,
+        bbox=tuple(float(value) for value in bbox),
+        text=text,
+        font_size=statistics.median(font_sizes) if font_sizes else 9.0,
+        color=(0.0, 0.0, 0.0),
+        source_lines=max(1, len(lines)),
+    )
+    return looks_like_translatable_graphic_prose(
+        candidate,
+        " ".join(strip_sentinels(text).split()),
     )
 
 
@@ -2370,10 +2444,22 @@ def find_fallback_font_file() -> Optional[Path]:
 
 
 def find_default_font_file() -> Optional[Path]:
+    env_override = os.environ.get("PDF_ZH_FONT_FILE", "").strip()
+    if env_override:
+        override_path = Path(env_override).expanduser()
+        if override_path.is_file():
+            return override_path
     for candidate in FONT_FILE_CANDIDATES:
         path = Path(candidate).expanduser()
         if path.is_file():
             return path
+    for root in FONT_SEARCH_ROOTS:
+        if not root.is_dir():
+            continue
+        for pattern in FONT_SEARCH_PATTERNS:
+            for found in sorted(root.rglob(pattern)):
+                if found.is_file():
+                    return found
     return None
 
 
@@ -5807,7 +5893,10 @@ def join_lines(lines: Sequence[str]) -> str:
         if not output:
             output = line
         elif output.endswith("-") and line[:1].islower():
-            output = output[:-1] + line
+            if _line_break_hyphen_belongs_to_term(output, line):
+                output += line
+            else:
+                output = output[:-1] + line
         else:
             separator = (
                 "  "
@@ -5817,6 +5906,30 @@ def join_lines(lines: Sequence[str]) -> str:
             )
             output += separator + line
     return output.strip()
+
+
+def _line_break_hyphen_belongs_to_term(previous: str, following: str) -> bool:
+    left_match = re.search(r"([A-Za-z]+)-$", previous)
+    right_match = re.match(r"([a-z]+)", following)
+    if not left_match or not right_match:
+        return False
+    left_context = previous[-120:]
+    context = (left_context + following[:120]).lower()
+    join_offset = len(left_context)
+    try:
+        from pdf_zh_translator.corpus import get_relevant_terms
+
+        terms = get_relevant_terms([context])
+    except Exception:
+        return False
+    for term in terms:
+        term_lower = term.lower()
+        start = context.find(term_lower)
+        while start >= 0:
+            if start < join_offset < start + len(term_lower):
+                return True
+            start = context.find(term_lower, start + 1)
+    return False
 
 
 def merge_paragraph_blocks(

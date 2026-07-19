@@ -31,6 +31,22 @@ class VisualLayoutScore:
     min_page_size_similarity: float = 1.0
 
 
+def _sample_page_indices(page_count: int, max_pages: int) -> tuple[int, ...]:
+    """Sample the full document span while keeping a fixed render budget."""
+    sample_count = min(max(0, int(max_pages)), max(0, int(page_count)))
+    if sample_count <= 0:
+        return ()
+    if sample_count == page_count:
+        return tuple(range(page_count))
+    if sample_count == 1:
+        return (0,)
+    last_index = page_count - 1
+    return tuple(
+        round(sample_index * last_index / (sample_count - 1))
+        for sample_index in range(sample_count)
+    )
+
+
 def score_visual_layout(
     original_pdf: Path,
     translated_pdf: Path,
@@ -56,8 +72,8 @@ def score_visual_layout(
     page_count_delta = translated_pages - original_pages
     page_count_similarity = _count_similarity(original_pages, translated_pages)
     try:
-        page_count = min(original.page_count, translated.page_count, max_pages)
-        for index in range(page_count):
+        comparable_pages = min(original.page_count, translated.page_count)
+        for index in _sample_page_indices(comparable_pages, max_pages):
             page_size_similarity = _page_size_similarity(original[index], translated[index])
             orig_ratio, orig_zones = _page_ink_profile(
                 original[index], dpi=dpi, grid_rows=grid_rows, grid_cols=grid_cols

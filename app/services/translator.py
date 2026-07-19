@@ -742,10 +742,13 @@ def _collect_output(
         try:
             from app.services.layout_fix import fix_translated_layout
 
+            mono_fixed = False
             if mono_path and mono_path.exists():
-                fix_translated_layout(mono_path)
-            if dual_path and dual_path.exists():
-                fix_translated_layout(dual_path)
+                mono_fixed = fix_translated_layout(mono_path)
+            if mono_fixed and dual_path and dual_path.exists():
+                from pdf_zh_translator.pdf_layout import create_dual_pdf
+
+                create_dual_pdf(input_path, mono_path, dual_path)
         except Exception as e:
             logger.warning("Layout post-processing failed (non-fatal): %s", e)
 

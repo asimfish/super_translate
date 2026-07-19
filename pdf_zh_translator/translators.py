@@ -315,7 +315,7 @@ class VendorTranslator(Translator):
         payload = {
             "model": self.model or "gpt-4o-mini",
             "messages": [
-                {"role": "system", "content": single_translation_prompt()},
+                {"role": "system", "content": single_translation_prompt(text)},
                 {"role": "user", "content": text},
             ],
             "temperature": 0,
@@ -329,7 +329,7 @@ class VendorTranslator(Translator):
         payload: Dict[str, Any] = {
             "model": self.model or "deepseek-v4-pro",
             "messages": [
-                {"role": "system", "content": single_translation_prompt()},
+                {"role": "system", "content": single_translation_prompt(text)},
                 {"role": "user", "content": text},
             ],
             "temperature": 0,
@@ -572,6 +572,18 @@ _TRANSLATION_RULES = (
 )
 
 
+def _with_relevant_terminology(base: str, texts: list[str] | None) -> str:
+    if not texts:
+        return base
+    try:
+        from pdf_zh_translator.corpus import build_terminology_prompt, get_relevant_terms
+
+        term_prompt = build_terminology_prompt(get_relevant_terms(texts))
+    except Exception:
+        return base
+    return base + "\n\n" + term_prompt if term_prompt else base
+
+
 def translation_array_prompt() -> str:
     return (
         _TRANSLATION_RULES + "\nTranslate each item in the JSON array "
@@ -584,9 +596,10 @@ def translation_array_prompt() -> str:
     )
 
 
-def single_translation_prompt() -> str:
+def single_translation_prompt(text: str | None = None) -> str:
+    base = _with_relevant_terminology(_TRANSLATION_RULES, [text] if text else None)
     return (
-        _TRANSLATION_RULES + "\nTranslate the user's text from English to Simplified Chinese. "
+        base + "\nTranslate the user's text from English to Simplified Chinese. "
         "Preserve numbers, citations, equations, URLs, product names, and placeholders "
         "like ⟦0⟧ exactly. Do not add commentary, labels, Markdown fences, or JSON. "
         "Return only the translated Chinese text."
@@ -624,17 +637,7 @@ def translation_array_prompt_with_types(
         if hints:
             base += "\n\n" + "\n".join(hints)
 
-    # Add relevant terminology from corpus
-    if texts:
-        try:
-            from pdf_zh_translator.corpus import build_terminology_prompt, get_relevant_terms
-
-            terms = get_relevant_terms(texts)
-            term_prompt = build_terminology_prompt(terms)
-            if term_prompt:
-                base += "\n\n" + term_prompt
-        except Exception:
-            pass  # Corpus is optional; don't fail translation if it's missing
+    base = _with_relevant_terminology(base, texts)
 
     return (
         base + "\nTranslate each item in the JSON array "

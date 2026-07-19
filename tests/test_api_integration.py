@@ -824,6 +824,7 @@ class TestTranslationEndpoint:
                 "pdf_zh_translator.pdf_layout.verify_translation_issues",
                 side_effect=[[issue], []],
             ) as mock_verify,
+            patch("pdf_zh_translator.pdf_layout.create_dual_pdf") as mock_create_dual,
             patch("app.services.layout_fix.fix_translated_layout", return_value=True) as mock_fix,
         ):
             unresolved = _run_post_translation_qa(
@@ -837,7 +838,8 @@ class TestTranslationEndpoint:
 
         assert unresolved == []
         assert mock_verify.call_count == 2
-        assert mock_fix.call_count == 2
+        mock_fix.assert_called_once_with(mono_path)
+        mock_create_dual.assert_called_once_with(input_path, mono_path, dual_path)
         report = json.loads(mono_path.with_suffix(".qa.json").read_text(encoding="utf-8"))
         assert report["status"] == "passed"
         assert report["passes_run"] == 2
@@ -861,6 +863,66 @@ class TestTranslationEndpoint:
                 "issue_codes": [],
             },
         ]
+
+    def test_layout_repair_failure_restores_outputs_and_reports_qa_warning(self, tmp_path):
+        from app.api.papers import _run_post_translation_qa
+        from app.services.translator import TranslationResult
+
+        mono_path = tmp_path / "paper-mono.pdf"
+        dual_path = tmp_path / "paper-dual.pdf"
+        input_path = tmp_path / "paper.pdf"
+        mono_path.write_bytes(b"%PDF-1.4 mono-original")
+        dual_path.write_bytes(b"%PDF-1.4 dual-original")
+        input_path.write_bytes(b"%PDF-1.4 input")
+
+        issue = MagicMock()
+        issue.code = "text_overlap"
+        issue.severity = "warning"
+        issue.message = "Page 1: text blocks overlap"
+
+        def modify_mono(_path):
+            mono_path.write_bytes(b"%PDF-1.4 mono-modified")
+            return True
+
+        with (
+            patch("app.api.papers._append_log") as mock_append_log,
+            patch("app.api.papers._set_translation_stage"),
+            patch("app.api.papers._record_terminology_candidates"),
+            patch("app.api.papers._is_cancel_requested", return_value=False),
+            patch(
+                "pdf_zh_translator.pdf_layout.verify_translation_issues",
+                return_value=[issue],
+            ),
+            patch(
+                "pdf_zh_translator.pdf_layout.create_dual_pdf",
+                side_effect=RuntimeError("dual rebuild failed"),
+            ),
+            patch(
+                "app.services.layout_fix.fix_translated_layout",
+                side_effect=modify_mono,
+            ),
+        ):
+            unresolved = _run_post_translation_qa(
+                "abcd12345678",
+                MagicMock(),
+                input_path,
+                TranslationResult(mono_path=mono_path, dual_path=dual_path),
+                qa_mode="iterative",
+                max_passes=3,
+            )
+
+        assert [(item.code, item.severity) for item in unresolved] == [
+            ("qa_failed", "warning")
+        ]
+        assert mono_path.read_bytes() == b"%PDF-1.4 mono-original"
+        assert dual_path.read_bytes() == b"%PDF-1.4 dual-original"
+        assert any(
+            "质检执行失败" in call.args[2]
+            for call in mock_append_log.call_args_list
+        )
+        report = json.loads(mono_path.with_suffix(".qa.json").read_text(encoding="utf-8"))
+        assert report["status"] == "qa_failed"
+        assert "dual rebuild failed" in report["qa_error"]
 
     def test_qa_rolls_back_layout_fix_when_issue_count_worsens(self, tmp_path):
         from app.api.papers import _run_post_translation_qa
@@ -890,6 +952,9 @@ class TestTranslationEndpoint:
             path.write_bytes(b"%PDF-1.4 worsened")
             return True
 
+        def rebuild_dual(_input_path, _mono_path, output_path):
+            output_path.write_bytes(b"%PDF-1.4 dual-worsened")
+
         with (
             patch("app.api.papers._append_log"),
             patch("app.api.papers._set_translation_stage"),
@@ -898,6 +963,10 @@ class TestTranslationEndpoint:
             patch(
                 "pdf_zh_translator.pdf_layout.verify_translation_issues",
                 side_effect=[[before], [after_1, after_2]],
+            ),
+            patch(
+                "pdf_zh_translator.pdf_layout.create_dual_pdf",
+                side_effect=rebuild_dual,
             ),
             patch("app.services.layout_fix.fix_translated_layout", side_effect=worsen_layout),
         ):
@@ -1333,7 +1402,15 @@ class TestDownloadEndpoints:
 class TestStatsEndpoint:
     """Test stats endpoint."""
 
+    @staticmethod
+    def _reset_stats_cache():
+        import app.main as main_module
+
+        main_module._stats_cache.clear()
+        main_module._stats_cache_time.clear()
+
     def test_stats_returns_data(self, client):
+        self._reset_stats_cache()
         # The stats endpoint creates its own session, so we need to mock it differently
         with patch("app.core.database.async_session") as mock_session_cls:
             mock_session = AsyncMock()
@@ -1348,13 +1425,11 @@ class TestStatsEndpoint:
             assert data["total_papers"] == 10
             assert data["completed_translations"] == 5
 
+        self._reset_stats_cache()
+
     def test_stats_caching(self, client):
         """Stats should be cached and not hit DB on repeated calls."""
-        import app.main as main_module
-
-        # Reset cache
-        main_module._stats_cache = None
-        main_module._stats_cache_time = 0.0
+        self._reset_stats_cache()
 
         with patch("app.core.database.async_session") as mock_session_cls:
             mock_session = AsyncMock()
@@ -1373,9 +1448,70 @@ class TestStatsEndpoint:
             assert r2.status_code == 200
             assert r2.json()["total_papers"] == 10
 
-        # Cleanup
-        main_module._stats_cache = None
-        main_module._stats_cache_time = 0.0
+        self._reset_stats_cache()
+
+    def test_stats_query_filters_by_access_scope(self, client):
+        """Stats counts must be restricted to the caller's workspace scope."""
+        self._reset_stats_cache()
+        captured_queries = []
+
+        async def capture_scalar(query):
+            captured_queries.append(str(query))
+            return 4
+
+        with patch("app.core.database.async_session") as mock_session_cls:
+            mock_session = AsyncMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=False)
+            mock_session.scalar = AsyncMock(side_effect=capture_scalar)
+            mock_session_cls.return_value = mock_session
+
+            response = client.get("/api/stats")
+
+        assert response.status_code == 200
+        assert captured_queries, "stats endpoint should query the database"
+        assert all("access_scope" in query for query in captured_queries)
+        self._reset_stats_cache()
+
+    def test_stats_cache_partitioned_by_workspace_scope(self, client):
+        """One workspace's cached stats must not leak to another workspace."""
+        from app.core.config import settings
+
+        self._reset_stats_cache()
+
+        with (
+            patch.object(
+                settings,
+                "workspace_tokens",
+                "lab-a:token-aaaaaaaaaaaaaaa,lab-b:token-bbbbbbbbbbbbbbb",
+            ),
+            patch("app.core.database.async_session") as mock_session_cls,
+        ):
+            mock_session = AsyncMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=False)
+            mock_session.scalar = AsyncMock(side_effect=[10, 5, 3, 1])
+            mock_session_cls.return_value = mock_session
+
+            first = client.get(
+                "/api/stats",
+                headers={"Authorization": "Bearer token-aaaaaaaaaaaaaaa"},
+            )
+            second = client.get(
+                "/api/stats",
+                headers={"Authorization": "Bearer token-bbbbbbbbbbbbbbb"},
+            )
+            first_cached = client.get(
+                "/api/stats",
+                headers={"Authorization": "Bearer token-aaaaaaaaaaaaaaa"},
+            )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json() == {"total_papers": 10, "completed_translations": 5}
+        assert second.json() == {"total_papers": 3, "completed_translations": 1}
+        assert first_cached.json() == first.json()
+        self._reset_stats_cache()
 
 
 class TestErrorHandling:
@@ -1484,6 +1620,42 @@ if __name__ == "__main__":
 
 class TestHelpers:
     """Test internal helper functions."""
+
+    def test_qa_infrastructure_failure_is_not_blocking(self):
+        from app.api.papers import _has_blocking_qa_error
+        from pdf_zh_translator.pdf_layout import TranslationIssue
+
+        issue = TranslationIssue(
+            page=0,
+            code="qa_failed",
+            message="QA infrastructure failed",
+            severity="error",
+        )
+
+        assert _has_blocking_qa_error([issue]) is False
+
+    def test_restore_translated_outputs_writes_via_temporary_file(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from app.api.papers import _restore_translated_outputs
+
+        target = tmp_path / "paper-mono.pdf"
+        target.write_bytes(b"modified output")
+        original_write_bytes = Path.write_bytes
+
+        def fail_direct_target_write(path, content):
+            if path == target:
+                original_write_bytes(path, b"partial")
+                raise OSError("interrupted direct write")
+            return original_write_bytes(path, content)
+
+        monkeypatch.setattr(Path, "write_bytes", fail_direct_target_write)
+
+        _restore_translated_outputs({target: b"original output"})
+
+        assert target.read_bytes() == b"original output"
 
     def test_file_exists_safe_valid(self, tmp_path):
         from app.api.papers import _file_exists_safe
