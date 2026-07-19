@@ -7682,6 +7682,63 @@ def render_line(
     )
 
 
+_FOREIGN_INK_SPAN_CACHE: Dict[Tuple[int, str, int], List[BBox]] = {}
+
+
+def _trim_formula_clip_against_foreign_ink(
+    document: object,
+    page_index: int,
+    clip: BBox,
+    *,
+    max_trim_ratio: float = 0.4,
+) -> BBox:
+    """Shrink a formula stamp clip so neighboring-line glyphs are excluded.
+
+    Inline-formula spans (e.g. a CMSY bullet) can be much taller than their
+    visible ink. Stamping with the raw span bbox copies ascenders/descenders
+    of adjacent source lines into the output ("y g" residue). Trim the clip
+    edge past intruding spans that are mostly outside the clip, bounded so a
+    genuine tall formula is never cut by more than ``max_trim_ratio``.
+    """
+    try:
+        cache_key = (id(document), str(getattr(document, "name", "")), page_index)
+        spans = _FOREIGN_INK_SPAN_CACHE.get(cache_key)
+        if spans is None:
+            if len(_FOREIGN_INK_SPAN_CACHE) > 256:
+                _FOREIGN_INK_SPAN_CACHE.clear()
+            spans = [
+                tuple(float(value) for value in span["bbox"])
+                for block in document[page_index].get_text("dict").get("blocks", [])
+                if block.get("type") == 0
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+            ]
+            _FOREIGN_INK_SPAN_CACHE[cache_key] = spans
+
+        x0, y0, x1, y1 = clip
+        height = y1 - y0
+        if height <= 0:
+            return clip
+        max_trim = height * max_trim_ratio
+        new_y0, new_y1 = y0, y1
+        for sx0, sy0, sx1, sy1 in spans:
+            if sx1 <= x0 or sx0 >= x1:
+                continue
+            span_area = max(0.1, (sx1 - sx0) * (sy1 - sy0))
+            inside = bbox_intersection_area((sx0, sy0, sx1, sy1), clip)
+            if inside / span_area >= 0.7:
+                continue  # part of the formula itself
+            if sy0 < y0 < sy1 and sy1 - y0 <= max_trim:
+                new_y0 = max(new_y0, sy1)
+            elif sy0 < y1 < sy1 and y1 - sy0 <= max_trim:
+                new_y1 = min(new_y1, sy0)
+        if new_y1 - new_y0 <= 0:
+            return clip
+        return (x0, new_y0, x1, new_y1)
+    except Exception:
+        return clip
+
+
 def emit_tokens(
     page: object,
     line: Sequence[_Token],
@@ -7747,6 +7804,13 @@ def emit_tokens(
                 source_rect.y0 -= 0.25
                 source_rect.x1 += 0.25
                 source_rect.y1 += 0.25
+                source_rect = fitz.Rect(
+                    _trim_formula_clip_against_foreign_ink(
+                        source_document,
+                        token.source_page,
+                        tuple(source_rect),
+                    )
+                )
                 scale = size / max(token.source_size, 1.0)
                 target_height = source_rect.height * scale
                 target_rect = fitz.Rect(

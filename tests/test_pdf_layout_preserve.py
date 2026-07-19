@@ -2535,6 +2535,59 @@ class TranslationUnitSourceTextsTests(unittest.TestCase):
         self.assertNotIn("actor-critic", blob)
 
 
+class FormulaStampClipTests(unittest.TestCase):
+    def _page_with_neighbor_line(self):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        # Neighboring caption line whose descenders dip into the formula clip.
+        page.insert_text((380, 84), "physically grounded", fontsize=9)
+        return document, page
+
+    def test_clip_trimmed_against_foreign_descenders(self):
+        from pdf_zh_translator.pdf_layout import _trim_formula_clip_against_foreign_ink
+
+        document, page = self._page_with_neighbor_line()
+        spans = page.get_text("dict")["blocks"][0]["lines"][0]["spans"]
+        span_bottom = spans[0]["bbox"][3]
+        # Tall formula clip starting above the neighbor's descent line.
+        clip = (386.9, span_bottom - 4.0, 396.9, span_bottom + 11.0)
+
+        trimmed = _trim_formula_clip_against_foreign_ink(document, 0, clip)
+
+        self.assertGreaterEqual(trimmed[1], span_bottom)
+        self.assertEqual(trimmed[0], clip[0])
+        self.assertEqual(trimmed[2], clip[2])
+        self.assertEqual(trimmed[3], clip[3])
+        document.close()
+
+    def test_clip_keeps_own_formula_span(self):
+        from pdf_zh_translator.pdf_layout import _trim_formula_clip_against_foreign_ink
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text((388, 92), "x", fontsize=10)
+        span = page.get_text("dict")["blocks"][0]["lines"][0]["spans"][0]
+        x0, y0, x1, y1 = span["bbox"]
+        clip = (x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0)
+
+        trimmed = _trim_formula_clip_against_foreign_ink(document, 0, clip)
+
+        self.assertEqual(trimmed, clip)
+        document.close()
+
+    def test_clip_untouched_without_intruders(self):
+        from pdf_zh_translator.pdf_layout import _trim_formula_clip_against_foreign_ink
+
+        document = fitz.open()
+        document.new_page(width=612, height=792)
+        clip = (100.0, 100.0, 120.0, 118.0)
+
+        trimmed = _trim_formula_clip_against_foreign_ink(document, 0, clip)
+
+        self.assertEqual(trimmed, clip)
+        document.close()
+
+
 class OverlappingUnitPreservationTests(unittest.TestCase):
     def test_mutually_overlapping_blocks_are_preserved_not_translated(self):
         """Interleaved borderless-table blocks cannot be translated in place:
