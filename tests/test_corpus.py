@@ -58,6 +58,33 @@ def test_packaged_corpus_has_no_conflicts():
     assert report["conflict_count"] == 0, report["conflicts"]
 
 
+def test_get_relevant_terms_requires_word_boundaries():
+    from pdf_zh_translator.corpus import get_relevant_terms
+
+    terms = get_relevant_terms(
+        [
+            "We use ranking metrics on normalized features from the Franka arm "
+            "and study interactive learning with 6-dimensional action spaces."
+        ]
+    )
+
+    assert "rank" not in terms
+    assert "norm" not in terms
+    assert "active learning" not in terms
+    assert "dimension" not in terms
+
+
+def test_get_relevant_terms_matches_simple_plurals():
+    from pdf_zh_translator.corpus import get_relevant_terms
+
+    terms = get_relevant_terms(
+        ["The quantitative results confirm that neural networks generalize."]
+    )
+
+    assert "quantitative result" in terms
+    assert "neural network" in terms
+
+
 def test_audit_terminology_usage_flags_missing_standard_translation():
     source = ["We use Retrieval-Augmented Generation in our pipeline."]
     relevant = audit_terminology_usage(source, ["译文里完全没有使用标准术语。"])
@@ -71,6 +98,20 @@ def test_audit_terminology_usage_passes_when_standard_used():
     # Output contains the standard translation, so no violation for it.
     violations = audit_terminology_usage(source, ["我们使用了神经网络架构。"])
     assert all(v["expected_zh"] != "神经网络" for v in violations)
+
+
+def test_audit_terminology_usage_lists_multiword_terms_first():
+    source = [
+        "The contrast between behavior cloning and reinforcement learning "
+        "shapes the gradient updates and the markov decision process view."
+    ]
+
+    violations = audit_terminology_usage(source, ["这段译文没有使用任何标准术语。"])
+
+    kinds = [(" " in v["en"] or "-" in v["en"]) for v in violations]
+    assert True in kinds and False in kinds
+    first_single = kinds.index(False)
+    assert all(not is_multi for is_multi in kinds[first_single:])
 
 
 def test_upsert_terms_updates_field_and_metadata(tmp_path):

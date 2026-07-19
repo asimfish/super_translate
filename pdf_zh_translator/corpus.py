@@ -266,6 +266,23 @@ def _get_flat_terms() -> List[Tuple[str, str]]:
     return _flat_terms
 
 
+_term_patterns: Dict[str, "re.Pattern[str]"] = {}
+
+
+def _term_search_pattern(en: str) -> "re.Pattern[str]":
+    """Whole-word pattern for a corpus term, tolerating a simple plural.
+
+    Substring matching produced false hits such as "ranking"→"rank",
+    "normalized"→"norm", and "interactive learning"→"active learning",
+    which polluted both translation prompts and terminology advisories.
+    """
+    pattern = _term_patterns.get(en)
+    if pattern is None:
+        pattern = re.compile(r"\b" + re.escape(en) + r"(?:e?s)?\b")
+        _term_patterns[en] = pattern
+    return pattern
+
+
 def get_relevant_terms(texts: List[str], max_terms: int = 50) -> Dict[str, str]:
     """Find terminology terms that appear in the given texts.
 
@@ -280,13 +297,8 @@ def get_relevant_terms(texts: List[str], max_terms: int = 50) -> Dict[str, str]:
     for en, zh in terms:
         if len(found) >= max_terms:
             break
-        # Use word boundary check for short terms to avoid false matches
-        if len(en) <= 3:
-            if re.search(r'\b' + re.escape(en) + r'\b', combined):
-                found[en] = zh
-        else:
-            if en in combined:
-                found[en] = zh
+        if _term_search_pattern(en).search(combined):
+            found[en] = zh
 
     return found
 
@@ -391,7 +403,13 @@ def audit_terminology_usage(
         return []
     translated_blob = "\n".join(translated_texts)
     violations: List[dict] = []
-    for en, zh in sorted(relevant.items()):
+    # Multi-word/hyphenated entries are real terminology; single generic
+    # words are closer to style suggestions, so surface them last.
+    ordered = sorted(
+        relevant.items(),
+        key=lambda item: (" " not in item[0] and "-" not in item[0], item[0]),
+    )
+    for en, zh in ordered:
         if len(violations) >= max_violations:
             break
         zh_str = str(zh).strip()
