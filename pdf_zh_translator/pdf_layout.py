@@ -4594,14 +4594,36 @@ def _zone_adjacent(candidate: BBox, zone: BBox) -> bool:
     return False
 
 
+def _record_starts_with_caption_prefix(record: _RawBlockRec) -> bool:
+    """Whether a record opens with a figure/table caption label.
+
+    Caption records ("Figure 5:" beside a two-line body with math glyphs like
+    64×64) can trip the 2D-math heuristics; flagging them as equations drops
+    the caption prefix and leaves the caption untranslated.
+    """
+    for line in record.lines:
+        compact = " ".join(strip_sentinels(line.text).split())
+        if not compact:
+            continue
+        return bool(_CAPTION_RE.match(compact))
+    return False
+
+
 def mark_equation_blocks(records: Sequence[_RawBlockRec]) -> List[bool]:
     """Flag raw blocks belonging to display-equation zones.
 
     Strong math blocks seed the zones; small math-ish neighbours touching a
     zone are absorbed iteratively. Long text paragraphs can never be absorbed.
     """
-    flags = [block_is_strong_math(record) for record in records]
-    candidates = [block_is_equation_neighbor(record) for record in records]
+    caption_guard = [_record_starts_with_caption_prefix(record) for record in records]
+    flags = [
+        not guarded and block_is_strong_math(record)
+        for record, guarded in zip(records, caption_guard)
+    ]
+    candidates = [
+        not guarded and block_is_equation_neighbor(record)
+        for record, guarded in zip(records, caption_guard)
+    ]
     changed = True
     while changed:
         changed = False

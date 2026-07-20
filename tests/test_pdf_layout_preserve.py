@@ -5478,3 +5478,44 @@ class PreservedLineKeepoutAttachmentTests(unittest.TestCase):
             for keepout in (segment.keepout_bboxes or [])
         ]
         self.assertIn(equation.bbox, attached)
+
+
+class CaptionRecordEquationGuardTests(unittest.TestCase):
+    def _caption_record(self):
+        # Real geometry from flowmatching p8: bold "Figure 5:" prefix beside
+        # the caption body, second line holding "64×64" math glyphs.
+        return _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="Figure 5:",
+                    bbox=(365.4, 625.1, 404.8, 635.0),
+                    spans=[_span("Figure 5:", (365.4, 625.1, 404.8, 635.0), flags=16)],
+                ),
+                _LineRec(
+                    text="Image quality during",
+                    bbox=(414.2, 625.1, 504.0, 635.0),
+                    spans=[_span("Image quality during", (414.2, 625.1, 504.0, 635.0))],
+                ),
+                _LineRec(
+                    text=(
+                        f"training, ImageNet 64{SENTINEL_OPEN}×{SENTINEL_CLOSE}"
+                        f"{SENTINEL_OPEN}64.{SENTINEL_CLOSE}"
+                    ),
+                    bbox=(365.4, 635.7, 473.3, 646.0),
+                    spans=[_span("training, ImageNet 64×64.", (365.4, 635.7, 473.3, 646.0))],
+                ),
+            ]
+        )
+
+    def test_caption_record_is_never_equation_flagged(self):
+        from pdf_zh_translator.pdf_layout import mark_equation_blocks
+
+        flags = mark_equation_blocks([self._caption_record()])
+
+        self.assertEqual(flags, [False])
+
+    def test_caption_prefix_survives_segmentation_via_collect_semantics(self):
+        segments = segments_from_record(7, self._caption_record())
+
+        texts = [" ".join(strip_sentinels(seg.text).split()) for seg in segments]
+        self.assertTrue(any(text.startswith("Figure 5:") for text in texts))
