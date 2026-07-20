@@ -48,8 +48,25 @@ class FailingSecondCallTranslator(Translator):
 
 
 class DroppingPlaceholderTranslator(Translator):
+    def __init__(self):
+        self.calls = 0
+
     def translate_batch(self, texts):
+        self.calls += 1
         return ["公式已翻译" for _text in texts]
+
+
+class BatchDropsSingleKeepsTranslator(Translator):
+    """Loses placeholders in batch mode, preserves them one-by-one."""
+
+    def __init__(self):
+        self.calls = []
+
+    def translate_batch(self, texts):
+        self.calls.append(list(texts))
+        if len(texts) > 1:
+            return ["占位符丢了" for _ in texts]
+        return ["译:" + texts[0]]
 
 
 class JsonFailingVendorTranslator(VendorTranslator):
@@ -248,16 +265,49 @@ class TranslatorParsingTests(unittest.TestCase):
             self.assertEqual(translated, ["译:" + source])
             self.assertEqual(wrapped.calls, 1)
 
-    def test_cached_translator_rejects_new_invalid_placeholder_output(self):
+    def test_persistently_invalid_placeholder_block_falls_back_to_source(self):
+        """A block whose placeholders keep getting mangled degrades to
+        untranslated source text instead of failing the whole document, and
+        the fallback is never persisted to the cache file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_file = Path(tmpdir) / "cache.jsonl"
             source = "Formula ⟦0⟧ remains unchanged."
-            cached = CachedTranslator(DroppingPlaceholderTranslator(), cache_file)
+            wrapped = DroppingPlaceholderTranslator()
+            cached = CachedTranslator(wrapped, cache_file)
 
-            with self.assertRaisesRegex(TranslationError, "protected placeholders"):
-                cached.translate_batch([source])
+            translated = cached.translate_batch([source])
 
-            self.assertFalse(cache_file.exists())
+            self.assertEqual(translated, [source])
+            self.assertEqual(cached.placeholder_fallbacks, [source])
+            # The offending block must be retried individually first.
+            self.assertGreater(wrapped.calls, 1)
+            # A later run must reach the supplier again, so nothing persisted.
+            persisted = (
+                cache_file.read_text(encoding="utf-8") if cache_file.exists() else ""
+            )
+            self.assertEqual(persisted.strip(), "")
+
+    def test_cached_translator_retries_placeholder_loss_item_by_item(self):
+        """A batch response that mangles placeholders is retried one block at
+        a time; only blocks that fail again abort the translation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            sources = [
+                "Formula ⟦0⟧ remains unchanged.",
+                "Equation ⟦1⟧ also stays.",
+            ]
+            wrapped = BatchDropsSingleKeepsTranslator()
+            cached = CachedTranslator(wrapped, cache_file)
+
+            translated = cached.translate_batch(sources)
+
+            self.assertEqual(
+                translated, ["译:" + sources[0], "译:" + sources[1]]
+            )
+            # First the failed batch, then each block individually.
+            self.assertEqual(
+                wrapped.calls, [sources, [sources[0]], [sources[1]]]
+            )
 
     def test_cached_translator_concurrent_writes_stay_valid_jsonl(self):
         import threading

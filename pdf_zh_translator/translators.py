@@ -24,7 +24,7 @@ import urllib.request
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 class TranslationError(RuntimeError):
@@ -82,6 +82,9 @@ class CachedTranslator(Translator):
         self.wrapped = wrapped
         self.cache_file = cache_file
         self.cache: Dict[str, str] = {}
+        # Blocks whose translation kept mangling ⟦n⟧ markers and were left in
+        # the source language instead of failing the whole document.
+        self.placeholder_fallbacks: List[str] = []
         # Guards cache-file appends so concurrent translate_batch calls (parallel
         # supplier requests) don't interleave/corrupt the JSONL.
         self._write_lock = threading.Lock()
@@ -117,20 +120,19 @@ class CachedTranslator(Translator):
                 getattr(self.wrapped, "max_batch_chars", sum(len(text) for text in missing) or 1)
             )
             for chunk in chunked_by_size(missing, batch_size, max_chars):
-                translations = self.wrapped.translate_batch(chunk)
-                invalid_count = sum(
-                    not placeholders_preserved(source, translation)
-                    for source, translation in zip(chunk, translations)
+                translations, fallback_indexes = (
+                    self._translate_chunk_preserving_placeholders(chunk)
                 )
-                if invalid_count:
-                    raise TranslationError(
-                        "translator changed protected placeholders in "
-                        f"{invalid_count}/{len(chunk)} block(s)"
-                    )
                 with self._write_lock, self.cache_file.open("a", encoding="utf-8") as handle:
-                    for source, translation in zip(chunk, translations):
+                    for index, (source, translation) in enumerate(
+                        zip(chunk, translations)
+                    ):
                         key = cache_key(source)
                         self.cache[key] = translation
+                        if index in fallback_indexes:
+                            # Untranslated fallback stays in memory for this
+                            # run only; a later retry must reach the supplier.
+                            continue
                         handle.write(
                             json.dumps(
                                 {"key": key, "source": source, "translation": translation},
@@ -140,6 +142,43 @@ class CachedTranslator(Translator):
                         )
 
         return [self.cache[cache_key(text)] for text in texts]
+
+    def _translate_chunk_preserving_placeholders(
+        self, chunk: Sequence[str]
+    ) -> Tuple[List[str], set]:
+        """Translate a chunk, retrying placeholder-mangling blocks one by one.
+
+        LLM suppliers occasionally drop or rewrite ⟦n⟧ markers for a single
+        block in a batch; retrying that block alone (fresh, smaller prompt)
+        usually recovers it, so one bad block must not abort the whole
+        translation. Blocks that fail again fall back to their source text
+        (markers intact) and are reported via ``placeholder_fallbacks``.
+        """
+        translations = list(self.wrapped.translate_batch(chunk))
+        invalid_indexes = [
+            index
+            for index, (source, translation) in enumerate(zip(chunk, translations))
+            if not placeholders_preserved(source, translation)
+        ]
+        fallback_indexes: set = set()
+        for index in invalid_indexes:
+            retried = self.wrapped.translate_batch([chunk[index]])
+            if len(retried) == 1 and placeholders_preserved(chunk[index], retried[0]):
+                translations[index] = retried[0]
+                continue
+            # Last resort: keep the source text so one stubborn block
+            # degrades to "untranslated" instead of failing the whole
+            # document; QA will flag it for the user.
+            translations[index] = chunk[index]
+            fallback_indexes.add(index)
+            self.placeholder_fallbacks.append(chunk[index])
+            print(
+                "Warning: supplier kept mangling protected placeholders for a "
+                "block; leaving it untranslated (%d chars)" % len(chunk[index]),
+                file=sys.stderr,
+                flush=True,
+            )
+        return translations, fallback_indexes
 
     def invalidate(self, texts: Sequence[str]) -> None:
         """Drop selected in-memory entries so a quality retry reaches the supplier."""
