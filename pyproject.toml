@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paper-china"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local AI-powered paper reading + Chinese translation system"
 readme = "README.md"
 # AGPL-3.0 is required: the app links pdf2zh and PyMuPDF (both AGPL-3.0).
