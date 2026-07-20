@@ -5566,6 +5566,36 @@ class FormulaFragmentToleranceTests(unittest.TestCase):
         self.assertFalse(_formula_fragment_present(fragment, translated_compact))
 
 
+class FormulaScriptNotationCompareTests(unittest.TestCase):
+    """Formulas re-rendered via script-notation fallback extract as
+    ``F^{\\x00}_{ε}``: sub/superscripts gain ^{}/_{} wrappers and glyphs the
+    fallback font lacks (like ∗) extract as NUL. Comparison must see through
+    both."""
+
+    def test_script_notation_and_nul_glyphs_match(self):
+        # Real sample from SafeTransport p5 (DeepSeek production run).
+        fragment = "H(ε) = H(F∗ε)."
+        translated_compact = (
+            "定义奖励R(ε)=-〈D,F^{\x00}F\x00_{ε}ε〉和熵"
+            "H(ε)=H(F^{\x00}=H(F\x00_{ε}).ε)."
+        )
+
+        self.assertTrue(_formula_fragment_present(fragment, translated_compact))
+
+    def test_interleaved_script_rendering_matches(self):
+        # Real sample from SafeTransport p3.
+        fragment = "a′ρ∗(s,a′)."
+        translated_compact = "ρ\x00(s,a)/P_{a}_{′}ρ^{\x00}(s,a′ρ\x00(s,a^{′}).a′)约束"
+
+        self.assertTrue(_formula_fragment_present(fragment, translated_compact))
+
+    def test_genuinely_missing_formula_still_flagged_with_script_noise(self):
+        fragment = "H(ε) = H(F∗ε)."
+        translated_compact = "页面只有P_{a}_{′}ρ^{\x00}(s,a)这一个别的公式和中文"
+
+        self.assertFalse(_formula_fragment_present(fragment, translated_compact))
+
+
 class FormulaFragmentExtractionProseTrimTests(unittest.TestCase):
     def test_leading_prose_words_are_trimmed_from_fragment(self):
         """A source block can prepend prose like 'objective),' to a formula;

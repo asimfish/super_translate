@@ -2545,8 +2545,49 @@ def _fragment_chunks_match_from(
     return True
 
 
+_SCRIPT_NOTATION_MARKER_RE = re.compile(r"[\^_]\{|\x00")
+_SCRIPT_NOTATION_LENIENT_STRIP_RE = re.compile(r"[\^_{}\x00∗⋆′†‡]")
+
+
+def _script_notation_lenient(text: str) -> str:
+    """Flatten script-notation fallback rendering for comparison.
+
+    Formulas re-rendered with the script-notation fallback extract as e.g.
+    ``F^{\x00}_{ε}``: sub/superscripts gain ``^{}``/``_{}`` wrappers and
+    glyphs missing from the fallback font extract as NUL. Drop the wrappers,
+    the NULs, and the decorative glyphs NULs usually stand for, on both
+    sides of the comparison.
+    """
+    return _SCRIPT_NOTATION_LENIENT_STRIP_RE.sub("", text)
+
+
 def _formula_fragment_present(fragment: str, translated_compact: str) -> bool:
     normalized = _normalize_formula_fragment_for_compare(fragment)
+    if _formula_fragment_present_core(normalized, translated_compact):
+        return True
+    # Sentence words glued to inline math are legitimately translated; retry
+    # the comparison on the math core only.
+    prose_trimmed = _normalize_formula_fragment_for_compare(
+        _trim_fragment_prose(fragment)
+    )
+    if prose_trimmed != normalized and _formula_fragment_present_core(
+        prose_trimmed, translated_compact
+    ):
+        return True
+    # Script-notation fallback rendering rewrites sub/superscripts; compare
+    # leniently only when the page shows evidence of that rendering.
+    if _SCRIPT_NOTATION_MARKER_RE.search(translated_compact):
+        lenient_page = _script_notation_lenient(translated_compact)
+        for candidate in dict.fromkeys((normalized, prose_trimmed)):
+            lenient_fragment = _script_notation_lenient(candidate)
+            if len(_strip_formula_compare_tail(lenient_fragment)) >= 4 and (
+                _formula_fragment_present_core(lenient_fragment, lenient_page)
+            ):
+                return True
+    return False
+
+
+def _formula_fragment_present_core(normalized: str, translated_compact: str) -> bool:
     if normalized in translated_compact:
         return True
     stripped = _strip_formula_compare_tail(normalized)
@@ -2557,17 +2598,6 @@ def _formula_fragment_present(fragment: str, translated_compact: str) -> bool:
     # consumed in reading order as a few long chunks with bounded gaps.
     if _fragment_chunks_present_in_order(stripped, translated_compact):
         return True
-    # Sentence words glued to inline math are legitimately translated; retry
-    # the comparison on the math core only.
-    prose_trimmed = _normalize_formula_fragment_for_compare(
-        _trim_fragment_prose(fragment)
-    )
-    if prose_trimmed != normalized:
-        trimmed_stripped = _strip_formula_compare_tail(prose_trimmed)
-        if len(trimmed_stripped) >= 6 and trimmed_stripped in translated_compact:
-            return True
-        if _fragment_chunks_present_in_order(trimmed_stripped, translated_compact):
-            return True
     return (
         len(stripped) >= 3
         and bool(re.search(r"[\d=+\-*/^_≤≥<>∥ρϵηαβγδ]", stripped))
