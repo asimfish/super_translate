@@ -713,6 +713,14 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
     except Exception:
         source_units = []
         preserved_regions_by_page = {}
+    # Captions anchor table envelopes yet are always translated, so their
+    # bands must not participate in preserved-region text comparison.
+    caption_bboxes_by_page: Dict[int, List[BBox]] = {}
+    for unit_block, _, _ in source_units:
+        if unit_block.block_type == "caption":
+            caption_bboxes_by_page.setdefault(unit_block.page_index, []).append(
+                expand_bbox(unit_block.bbox, 2.0)
+            )
     for warning in fragmented_prose_warnings_from_units(source_units):
         match = re.search(r"Page (\d+):", warning)
         page = int(match.group(1)) if match else 0
@@ -758,15 +766,27 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         untranslated_caption_examples: List[str] = []
         untranslated_formula_examples: List[str] = []
         preserved_changed_examples: List[str] = []
+        page_caption_bboxes = caption_bboxes_by_page.get(page_idx, [])
+        preserved_original_entries = _entries_outside_caption_bands(
+            original_region_entries,
+            page_caption_bboxes,
+        )
+        preserved_translated_entries = _entries_outside_caption_bands(
+            translated_region_entries,
+            _extend_caption_bands_for_translated(
+                page_caption_bboxes,
+                translated_region_entries,
+            ),
+        )
         for region in preserved_text_regions:
             original_region_text = _text_overlapping_region(
-                original_region_entries,
+                preserved_original_entries,
                 region,
             )
             if not original_region_text:
                 continue
             translated_region_text = _text_overlapping_region(
-                translated_region_entries,
+                preserved_translated_entries,
                 region,
             )
             if preserved_region_text_changed(original_region_text, translated_region_text):
@@ -1130,6 +1150,60 @@ def _text_entries_from_blocks(blocks: Sequence[dict]) -> List[Tuple[BBox, str]]:
             continue
         entries.extend(_overlap_text_entries_from_block(block))
     return entries
+
+
+def _extend_caption_bands_for_translated(
+    caption_bboxes: Sequence[BBox],
+    entries: Sequence[Tuple[BBox, str]],
+    *,
+    join_gap: float = 3.0,
+    max_extra: float = 60.0,
+) -> List[BBox]:
+    """Grow caption bands downward over wrapped translated caption lines.
+
+    Translated captions keep their anchor position but often wrap one or two
+    lines taller than the English source. Chain through CJK lines that start
+    inside the band so those continuation lines are excluded from
+    preserved-region comparison; English/numeric table rows stop the chain.
+    """
+    extended: List[BBox] = []
+    for band in caption_bboxes:
+        x0, y0, x1, y1 = band
+        limit = y1 + max_extra
+        changed = True
+        while changed:
+            changed = False
+            for (ex0, ey0, ex1, ey1), text in entries:
+                if ex1 <= x0 or ex0 >= x1:
+                    continue
+                if not _CJK_DETECT_RE.search(text):
+                    continue
+                if y0 <= ey0 <= y1 + join_gap and ey1 > y1 and ey1 <= limit:
+                    y1 = ey1
+                    changed = True
+        extended.append((x0, y0, x1, y1))
+    return extended
+
+
+def _entries_outside_caption_bands(
+    entries: Sequence[Tuple[BBox, str]],
+    caption_bboxes: Sequence[BBox],
+    *,
+    min_overlap_ratio: float = 0.5,
+) -> List[Tuple[BBox, str]]:
+    """Drop text entries that sit mostly inside translated-caption bands."""
+    if not caption_bboxes:
+        return list(entries)
+    kept: List[Tuple[BBox, str]] = []
+    for bbox, text in entries:
+        area = max(0.1, bbox_area(bbox))
+        inside = any(
+            bbox_intersection_area(bbox, caption_bbox) / area >= min_overlap_ratio
+            for caption_bbox in caption_bboxes
+        )
+        if not inside:
+            kept.append((bbox, text))
+    return kept
 
 
 def _text_overlapping_region(
@@ -2760,10 +2834,17 @@ def prepare_translation_units(
         # Table cells that escaped structural classification (e.g. header
         # cells merged as body prose) must stay untranslated whenever the
         # verification layer treats their enclosing envelope as preserved;
-        # translating them would flag preserved_text_changed later.
-        if preserve_graphics_text and _block_mostly_inside_preserved_regions(
-            block,
-            preserved_union.get(block.page_index, []),
+        # translating them would flag preserved_text_changed later. Captions
+        # are exempt: they anchor table envelopes (and often sit inside
+        # them), yet must always be translated — QA separately flags any
+        # caption left in English.
+        if (
+            preserve_graphics_text
+            and block.block_type != "caption"
+            and _block_mostly_inside_preserved_regions(
+                block,
+                preserved_union.get(block.page_index, []),
+            )
         ):
             skipped += 1
             continue

@@ -5236,3 +5236,139 @@ class PreservedCollisionSkipTests(unittest.TestCase):
         flagged = _candidate_bboxes_colliding_with_preserved([candidate], [preserved])
 
         self.assertEqual(flagged, [])
+
+
+class CaptionInsideEnvelopeTests(unittest.TestCase):
+    def test_caption_anchoring_table_envelope_is_still_translated(self):
+        """Captions anchor table envelopes; sitting inside one must not stop
+        their translation (regression: Table 2 caption left in English)."""
+        import unittest.mock
+
+        from pdf_zh_translator import pdf_layout
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text(
+            (350, 550),
+            "Table 2: Image super-resolution on the validation set.",
+            fontsize=9,
+        )
+        page.insert_text(
+            (61, 700),
+            "Regular body paragraphs must keep translating as before.",
+            fontsize=10,
+        )
+        # Envelope fully covering the caption band.
+        envelope = (348.0, 540.0, 504.0, 640.0)
+
+        with unittest.mock.patch.object(
+            pdf_layout,
+            "_table_region_bboxes",
+            return_value=[envelope],
+        ):
+            units, _, _ = pdf_layout.prepare_translation_units(
+                document,
+                preserve_graphics_text=True,
+            )
+        document.close()
+
+        texts = [" ".join(strip_sentinels(source).split()) for _, source, _ in units]
+        self.assertTrue(any(text.startswith("Table 2:") for text in texts))
+        self.assertTrue(any("Regular body paragraphs" in text for text in texts))
+
+    def test_translated_caption_inside_envelope_does_not_flag_preserved_change(self):
+        """QA companion: the caption band overlaps the table envelope, but a
+        translated caption must not count as preserved-region tampering."""
+        rows = [
+            ["Model", "PSNR", "SSIM"],
+            ["Baseline", "27.4", "0.81"],
+            ["Ours", "29.1", "0.86"],
+        ]
+        xs = [355, 430, 480]
+
+        original = fitz.open()
+        page = original.new_page(width=612, height=792)
+        for y, row in zip([530, 542, 554], rows):
+            for x, cell in zip(xs, row):
+                page.insert_text((x, y), cell, fontsize=9)
+        page.insert_text(
+            (350, 572),
+            "Table 2: Image super-resolution on the validation set.",
+            fontsize=9,
+        )
+        for y, row in zip([596, 608], rows[:2]):
+            for x, cell in zip(xs, row):
+                page.insert_text((x, y), cell, fontsize=9)
+
+        translated = fitz.open()
+        page = translated.new_page(width=612, height=792)
+        for y, row in zip([530, 542, 554], rows):
+            for x, cell in zip(xs, row):
+                page.insert_text((x, y), cell, fontsize=9)
+        # Translated captions typically wrap one line taller than the source;
+        # preserved table rows stay at their original positions.
+        page.insert_text(
+            (350, 572),
+            "表2：验证集上的图像超分辨率结果，",
+            fontsize=9,
+            fontname="china-ss",
+        )
+        page.insert_text(
+            (350, 584),
+            "包含全部对比方法的定量指标。",
+            fontsize=9,
+            fontname="china-ss",
+        )
+        for y, row in zip([596, 608], rows[:2]):
+            for x, cell in zip(xs, row):
+                page.insert_text((x, y), cell, fontsize=9)
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertFalse(
+            any(issue.code == "preserved_text_changed" for issue in issues),
+            [f"{i.code} p{i.page}" for i in issues],
+        )
+
+
+class CaptionBandExclusionTests(unittest.TestCase):
+    def test_entries_inside_caption_bands_are_excluded(self):
+        from pdf_zh_translator.pdf_layout import _entries_outside_caption_bands
+
+        entries = [
+            ((355.0, 530.0, 500.0, 540.0), "Model PSNR SSIM"),
+            ((350.0, 565.0, 504.0, 575.0), "Table 2: Image super-resolution."),
+            ((355.0, 590.0, 500.0, 600.0), "Baseline 27.4 0.81"),
+        ]
+        caption_bboxes = [(348.0, 563.0, 504.0, 577.0)]
+
+        kept = _entries_outside_caption_bands(entries, caption_bboxes)
+
+        self.assertEqual(len(kept), 2)
+        self.assertTrue(all("Table 2" not in text for _, text in kept))
+
+    def test_no_caption_bboxes_keeps_all_entries(self):
+        from pdf_zh_translator.pdf_layout import _entries_outside_caption_bands
+
+        entries = [((355.0, 530.0, 500.0, 540.0), "Model PSNR SSIM")]
+
+        self.assertEqual(_entries_outside_caption_bands(entries, []), entries)
+
+    def test_partial_graze_is_kept(self):
+        from pdf_zh_translator.pdf_layout import _entries_outside_caption_bands
+
+        entries = [((355.0, 558.0, 500.0, 568.0), "29.1 0.86 row overlapping slightly")]
+        caption_bboxes = [(348.0, 566.5, 504.0, 580.0)]
+
+        kept = _entries_outside_caption_bands(entries, caption_bboxes)
+
+        self.assertEqual(len(kept), 1)
