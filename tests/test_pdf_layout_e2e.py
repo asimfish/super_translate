@@ -239,3 +239,20 @@ def test_saved_pdf_subsets_large_embedded_cjk_font(tmp_path):
     reopened.close()
     assert "字体子集化" in text
     assert "图注" in text
+
+
+def test_math_symbols_fall_back_to_math_font(tmp_path):
+    """Math glyphs missing from the CJK body font (like angle brackets) must
+    pick a math-capable fallback instead of rendering notdef boxes."""
+    from pdf_zh_translator.pdf_layout import build_font_pack, pick_font_alias
+
+    warnings: list[str] = []
+    pack = build_font_pack(None, warnings)
+    if pack.math_fallback is None:
+        pytest.skip("no math fallback font on this machine")
+
+    fonts = pack.fonts_for(bold=False)
+    for char in "⟨⟩⊤≻":
+        alias = pick_font_alias(char, fonts)
+        chosen = next(font for font, name in fonts if name == alias)
+        assert chosen.has_glyph(ord(char)), (char, alias)

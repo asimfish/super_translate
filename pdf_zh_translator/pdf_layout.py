@@ -243,6 +243,18 @@ BOLD_FONT_FILE = FONTS_DIR / "HiraginoSansGB-W6.ttf"
 FALLBACK_FONT_CANDIDATES = (
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/Library/Fonts/Arial Unicode.ttf",
+    # Linux (Docker/CI/lab servers): broad Latin+symbol coverage.
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+)
+# Math-symbol fallback: CJK body fonts lack glyphs like ⟨⟩ ⊤ ≻; without a
+# math-capable face those characters render as notdef boxes.
+MATH_FALLBACK_FONT_CANDIDATES = (
+    "/System/Library/Fonts/Supplemental/STIXTwoMath.otf",
+    "/System/Library/Fonts/Supplemental/STIXGeneral.otf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuMathTeXGyre.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/opentype/stix/STIXTwoMath-Regular.otf",
+    "/usr/share/fonts/opentype/stix-word/STIX2Math.otf",
 )
 TTC_FACE_SOURCES = (
     # (destination, ttc path, face name prefix)
@@ -326,9 +338,12 @@ class FontPack:
     bold_file: Path
     fallback: Optional[object] = None
     fallback_file: Optional[Path] = None
+    math_fallback: Optional[object] = None
+    math_fallback_file: Optional[Path] = None
     regular_alias: str = "zhbody"
     bold_alias: str = "zhbold"
     fallback_alias: str = "zhfall"
+    math_fallback_alias: str = "zhmath"
 
     def fonts_for(self, bold: bool) -> List[Tuple[object, str]]:
         """Measurement font + alias, in fallback order."""
@@ -338,6 +353,8 @@ class FontPack:
             chain.append((self.fallback, self.fallback_alias))
         # Last resort: the other weight often covers extra glyphs.
         chain.append((self.regular, self.regular_alias) if bold else (self.bold, self.bold_alias))
+        if self.math_fallback is not None:
+            chain.append((self.math_fallback, self.math_fallback_alias))
         return chain
 
 
@@ -2889,7 +2906,12 @@ def _normalize_font_name(name: str) -> str:
 def inserted_font_names(font_pack: FontPack) -> set:
     """Normalized names of the CJK faces this engine inserts."""
     names = set()
-    for font in (font_pack.regular, font_pack.bold, font_pack.fallback):
+    for font in (
+        font_pack.regular,
+        font_pack.bold,
+        font_pack.fallback,
+        font_pack.math_fallback,
+    ):
         name = getattr(font, "name", None)
         if name:
             names.add(_normalize_font_name(name))
@@ -2988,6 +3010,10 @@ def build_font_pack(font_file: Optional[Path], warnings: List[str]) -> FontPack:
 
     fallback_file = find_fallback_font_file()
     fallback_font = fitz.Font(fontfile=str(fallback_file)) if fallback_file else None
+    math_file = find_math_fallback_font_file()
+    if math_file is not None and math_file == fallback_file:
+        math_file = None
+    math_font = fitz.Font(fontfile=str(math_file)) if math_file else None
 
     if font_file is not None:
         user_font = fitz.Font(fontfile=str(font_file))
@@ -2998,6 +3024,8 @@ def build_font_pack(font_file: Optional[Path], warnings: List[str]) -> FontPack:
             bold_file=Path(font_file),
             fallback=fallback_font,
             fallback_file=fallback_file,
+            math_fallback=math_font,
+            math_fallback_file=math_file,
             bold_alias="zhbody",
         )
 
@@ -3022,6 +3050,8 @@ def build_font_pack(font_file: Optional[Path], warnings: List[str]) -> FontPack:
         bold_file=bold_file,
         fallback=fallback_font,
         fallback_file=fallback_file,
+        math_fallback=math_font,
+        math_fallback_file=math_file,
         bold_alias="zhbold" if bold_file != body_file else "zhbody",
     )
 
@@ -3069,6 +3099,14 @@ def find_fallback_font_file() -> Optional[Path]:
     return None
 
 
+def find_math_fallback_font_file() -> Optional[Path]:
+    for candidate in MATH_FALLBACK_FONT_CANDIDATES:
+        path = Path(candidate).expanduser()
+        if path.is_file():
+            return path
+    return None
+
+
 def find_default_font_file() -> Optional[Path]:
     env_override = os.environ.get("PDF_ZH_FONT_FILE", "").strip()
     if env_override:
@@ -3095,6 +3133,10 @@ def register_font_pack(page: object, pack: FontPack) -> None:
         page.insert_font(fontname=pack.bold_alias, fontfile=str(pack.bold_file))
     if pack.fallback_file is not None:
         page.insert_font(fontname=pack.fallback_alias, fontfile=str(pack.fallback_file))
+    if pack.math_fallback_file is not None:
+        page.insert_font(
+            fontname=pack.math_fallback_alias, fontfile=str(pack.math_fallback_file)
+        )
 
 
 TranslationUnit = Tuple[TextBlock, str, Dict[int, str]]
