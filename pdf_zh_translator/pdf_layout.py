@@ -696,10 +696,19 @@ def create_dual_pdf(
             fitz.open(str(translated_pdf)) as trans_doc,
             fitz.open() as dual_doc,
         ):
-            for i in range(orig_doc.page_count):
-                dual_doc.insert_pdf(orig_doc, from_page=i, to_page=i)
-                if i < trans_doc.page_count:
-                    dual_doc.insert_pdf(trans_doc, from_page=i, to_page=i)
+            # Insert each source document in ONE call: per-page insert_pdf
+            # duplicates shared resources (the embedded CJK font would be
+            # copied once per page), bloating the file several-fold.
+            original_count = orig_doc.page_count
+            dual_doc.insert_pdf(orig_doc)
+            translated_count = min(trans_doc.page_count, original_count)
+            if translated_count:
+                dual_doc.insert_pdf(
+                    trans_doc, from_page=0, to_page=translated_count - 1
+                )
+            # Interleave: original page i, then its translation.
+            for i in range(translated_count):
+                dual_doc.move_page(original_count + i, 2 * i + 1)
 
             save_pdf_for_fast_web_view(dual_doc, staging_pdf)
         staging_pdf.replace(output_pdf)
