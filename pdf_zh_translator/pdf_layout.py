@@ -716,11 +716,17 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
     # Captions anchor table envelopes yet are always translated, so their
     # bands must not participate in preserved-region text comparison.
     caption_bboxes_by_page: Dict[int, List[BBox]] = {}
+    # Formula keepout lines are intentionally left verbatim inside translated
+    # paragraphs; their English connector words must not count as
+    # untranslated prose.
+    keepout_bboxes_by_page: Dict[int, List[BBox]] = {}
     for unit_block, _, _ in source_units:
         if unit_block.block_type == "caption":
             caption_bboxes_by_page.setdefault(unit_block.page_index, []).append(
                 expand_bbox(unit_block.bbox, 2.0)
             )
+        for keepout in unit_block.keepout_bboxes or []:
+            keepout_bboxes_by_page.setdefault(unit_block.page_index, []).append(keepout)
     for warning in fragmented_prose_warnings_from_units(source_units):
         match = re.search(r"Page (\d+):", warning)
         page = int(match.group(1)) if match else 0
@@ -766,6 +772,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         untranslated_caption_examples: List[str] = []
         untranslated_formula_examples: List[str] = []
         preserved_changed_examples: List[str] = []
+        page_formula_keepouts = keepout_bboxes_by_page.get(page_idx, [])
         page_caption_bboxes = caption_bboxes_by_page.get(page_idx, [])
         preserved_original_entries = _entries_outside_caption_bands(
             original_region_entries,
@@ -805,6 +812,12 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 untranslated_formula_examples.append(" ".join(text.split())[:80])
             elif _looks_like_untranslated_english(text):
                 if _block_overlaps_preserved_regions(block, preserved_regions):
+                    continue
+                if page_formula_keepouts and _block_overlaps_preserved_regions(
+                    block,
+                    page_formula_keepouts,
+                    min_total_overlap=0.5,
+                ):
                     continue
                 if (
                     _block_inside_visual_region(block, visual_regions)
@@ -5661,11 +5674,15 @@ def segments_from_record(
 
     flush_current()
     if preserved_line_bboxes:
+        # Attach with a one-line tolerance: a preserved equation line often
+        # sits in the gap between two segment bboxes, yet the reflowed text
+        # must avoid it and QA must know the line stays verbatim.
         for block in segments:
+            reach = expand_bbox(block.bbox, 8.0)
             hits = [
                 bbox
                 for bbox in preserved_line_bboxes
-                if bboxes_intersect(bbox, block.bbox)
+                if bboxes_intersect(bbox, reach)
             ]
             if hits:
                 block.keepout_bboxes = (block.keepout_bboxes or []) + hits

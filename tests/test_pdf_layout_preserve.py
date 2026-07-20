@@ -5372,3 +5372,109 @@ class CaptionBandExclusionTests(unittest.TestCase):
         kept = _entries_outside_caption_bands(entries, caption_bboxes)
 
         self.assertEqual(len(kept), 1)
+
+
+class FormulaKeepoutQaExemptionTests(unittest.TestCase):
+    def _run_verify(self, keepout_bboxes):
+        import tempfile
+        import unittest.mock
+
+        from pdf_zh_translator import pdf_layout
+
+        english_line = (
+            "ing the distribution q(x0, x1) and pW(xin|x0, x1) of the process."
+        )
+        original = fitz.open()
+        page = original.new_page(width=612, height=792)
+        page.insert_text((108, 370), english_line, fontsize=10)
+        page.insert_text(
+            (108, 500),
+            "A regular paragraph that the translator fully handles as prose.",
+            fontsize=10,
+        )
+
+        translated = fitz.open()
+        page = translated.new_page(width=612, height=792)
+        # Keepout line survives verbatim; the paragraph got translated.
+        page.insert_text((108, 370), english_line, fontsize=10)
+        page.insert_text(
+            (108, 500), "一段被完整翻译的中文正文。", fontsize=10, fontname="china-ss"
+        )
+
+        block = TextBlock(
+            page_index=0,
+            bbox=(108.0, 340.0, 504.0, 430.0),
+            text="The process combin-",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            keepout_bboxes=list(keepout_bboxes),
+        )
+
+        def fake_prepare(document, preserve_graphics_text=False, **kwargs):
+            regions_out = kwargs.get("preserved_regions_out")
+            if regions_out is not None:
+                regions_out.clear()
+            return [(block, block.text, {})], {}, 0
+
+        with unittest.mock.patch.object(
+            pdf_layout, "prepare_translation_units", side_effect=fake_prepare
+        ):
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                original_path = Path(tmpdir) / "orig.pdf"
+                translated_path = Path(tmpdir) / "zh.pdf"
+                original.save(original_path)
+                translated.save(translated_path)
+                issues = pdf_layout.verify_translation_issues(
+                    original_path, translated_path
+                )
+        original.close()
+        translated.close()
+        return issues
+
+    def test_verbatim_keepout_line_is_not_flagged_untranslated(self):
+        issues = self._run_verify(keepout_bboxes=[(108.0, 361.8, 420.0, 375.5)])
+
+        self.assertFalse(
+            any(issue.code == "untranslated_english" for issue in issues),
+            [f"{i.code} p{i.page}" for i in issues],
+        )
+
+    def test_english_line_outside_keepouts_still_flagged(self):
+        issues = self._run_verify(keepout_bboxes=[])
+
+        self.assertTrue(
+            any(issue.code == "untranslated_english" for issue in issues)
+        )
+
+
+class PreservedLineKeepoutAttachmentTests(unittest.TestCase):
+    def test_display_equation_line_attaches_to_adjacent_segments(self):
+        """A preserved equation line separating two prose runs must be
+        registered as a keepout even when segment bboxes don't touch it."""
+        prose_one = _line(
+            "Properties of the starting process that would be desirable are",
+            (108.0, 433.3, 504.0, 443.3),
+        )
+        equation = _line(
+            f"{SENTINEL_OPEN}(1) q(x_{{0}}) = p_{{0}}(x_{{0}}){SENTINEL_CLOSE} and "
+            f"{SENTINEL_OPEN}q(x_{{1}}){SENTINEL_CLOSE} to be close to "
+            f"{SENTINEL_OPEN}p_{{1}}(x_{{1}}){SENTINEL_CLOSE}",
+            (108.0, 466.0, 504.0, 476.8),
+        )
+        prose_two = _line(
+            "In the IMF or IPF, we had to choose one of these properties.",
+            (108.0, 477.0, 504.0, 487.0),
+        )
+        record = _RawBlockRec(lines=[prose_one, equation, prose_two])
+
+        segments = segments_from_record(0, record)
+
+        self.assertGreaterEqual(len(segments), 1)
+        attached = [
+            keepout
+            for segment in segments
+            for keepout in (segment.keepout_bboxes or [])
+        ]
+        self.assertIn(equation.bbox, attached)
