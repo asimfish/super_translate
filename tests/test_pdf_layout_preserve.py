@@ -2706,6 +2706,62 @@ class OverlappingUnitPreservationTests(unittest.TestCase):
 
         self.assertEqual(_overlapping_translation_block_bboxes([first, second]), [])
 
+    def test_stacked_full_width_prose_with_inflated_bboxes_is_not_flagged(self):
+        """Math-heavy paragraphs get bboxes inflated by sub/superscripts, so
+        consecutive full-column blocks interlock vertically. They are laid
+        out line by line, not overprinted, and must stay translatable
+        (SafeTransport p4 regression)."""
+        from pdf_zh_translator.pdf_layout import _overlapping_translation_block_bboxes
+
+        first = TextBlock(
+            page_index=0,
+            bbox=(108.0, 342.0, 506.0, 373.0),
+            text="Definition 5 (Safety Budget Allocation). For each constraint k,",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=(
+                (108.0, 342.0, 506.0, 353.0),
+                (108.0, 354.0, 506.0, 365.0),
+            ),
+        )
+        second = TextBlock(
+            page_index=0,
+            bbox=(108.0, 353.0, 505.0, 380.0),
+            text="distributes the budget across edges with induced capacity.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=(
+                (108.0, 366.0, 505.0, 377.0),
+                (108.0, 378.0, 505.0, 380.0),
+            ),
+        )
+        nested = TextBlock(
+            page_index=0,
+            bbox=(107.0, 442.0, 504.0, 521.0),
+            text="Lemma 6 (Flow-Occupancy Mapping). Let Phi map rho to F.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=(
+                (107.0, 442.0, 504.0, 452.0),
+                (107.0, 468.0, 504.0, 478.0),
+                (107.0, 510.0, 504.0, 521.0),
+            ),
+        )
+        continuation = TextBlock(
+            page_index=0,
+            bbox=(108.0, 454.0, 234.0, 466.0),
+            text="the realizable gamma-flow set F real",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((108.0, 454.0, 234.0, 466.0),),
+        )
+
+        flagged = _overlapping_translation_block_bboxes(
+            [first, second, nested, continuation]
+        )
+
+        self.assertEqual(flagged, [])
+
 
 class PreservedRegionUnitFilterTests(unittest.TestCase):
     def test_block_mostly_inside_preserved_regions(self):
@@ -3598,6 +3654,165 @@ class TestClassifyBlocks(unittest.TestCase):
 
         self.assertEqual(block.block_type, "metadata")
         self.assertFalse(block.should_translate)
+
+    def test_tall_industry_author_wall_is_metadata(self):
+        """Large-team author walls (30+ names over 5+ rows) exceed the old
+        90pt height cap; they are still bylines, not prose (DreamZero p1)."""
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block(
+            "Kaiyuan Zheng^{*} Shenyuan Gao^{*} Sihyun Yu^{*} George Kurian^{*} "
+            "Suneel Indupuru^{*} You Liang Tan^{*} Chuning Zhu Jiannan Xiang "
+            "Ayaan Malik Kyungmin Lee William Liang Nadun Ranawaka Jiasheng Gu "
+            "Yinzhen Xu Guanzhi Wang Fengyuan Hu Avnish Narayan Johan Bjorck "
+            "Jing Wang Gwanghyun Kim Dantong Niu Ruijie Zheng Yuqi Xie Jimmy Wu "
+            "Qi Wang Ryan Julian Danfei Xu Yilun Du Yevgen Chebotar Scott Reed "
+            "Jan Kautz Yuke Zhu^{†} Linxi \u201cJim\u201d Fan^{†} Joel Jang^{†} NVIDIA "
+            "^{†}Project Leads ^{*}Core Contributors https://dreamzero0.github.io",
+            bbox=(62.0, 124.0, 502.0, 246.0),
+        )
+
+        classify_blocks([block], 0, 792, [])
+
+        self.assertEqual(block.block_type, "metadata")
+        self.assertFalse(block.should_translate)
+
+    def test_tall_first_page_abstract_is_still_prose(self):
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block(
+            "World action models learn transferable physical priors from "
+            "large-scale video. We show that jointly predicting video and "
+            "action enables zero-shot generalization to unseen tasks in "
+            "unseen environments, and that few-shot adaptation to new "
+            "embodiments emerges from cross-embodiment pretraining. Our "
+            "results demonstrate strong improvements over prior methods "
+            "across four benchmark suites and two real robots.",
+            bbox=(62.0, 124.0, 502.0, 240.0),
+        )
+
+        classify_blocks([block], 0, 792, [])
+
+        self.assertEqual(block.block_type, "body")
+        self.assertTrue(block.should_translate)
+
+    def test_editor_name_fragments_do_not_end_bibliography(self):
+        """Reference entries wrap onto editor-name fragments like
+        'H. Wallach,' which match the '<letter>. <title>' appendix-heading
+        shape; they must neither end the bibliography nor be translated."""
+        from pdf_zh_translator import pdf_layout as layout
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        layout._bibliography_seen.clear()
+        layout._bibliography_ended = False
+        layout._bibliography_heading_size = 0.0
+
+        heading = self._make_block("References", bold=True, page=9)
+        entry = self._make_block(
+            "Emilien Dupont, Arnaud Doucet, and Yee Whye Teh. Augmented "
+            "neural odes. In",
+            bbox=(108, 678, 504, 688),
+            page=9,
+        )
+        editor_fragment = self._make_block(
+            "H. Wallach,", bbox=(118, 689, 169, 699), page=9
+        )
+        tail = self._make_block(
+            "and R. Garnett (eds.), Advances in Neural Information "
+            "Processing Systems, volume 32, 2019.",
+            bbox=(118, 700, 504, 732),
+            page=9,
+        )
+
+        try:
+            classify_blocks([heading, entry, editor_fragment, tail], 9, 792, [])
+        finally:
+            layout._bibliography_seen.clear()
+            layout._bibliography_ended = False
+            layout._bibliography_heading_size = 0.0
+
+        self.assertEqual(entry.block_type, "bibliography")
+        self.assertEqual(editor_fragment.block_type, "bibliography")
+        self.assertEqual(tail.block_type, "bibliography")
+
+    def test_appendix_heading_rejects_name_fragments(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_appendix_heading
+
+        self.assertFalse(_looks_like_appendix_heading("H. Wallach,"))
+        self.assertFalse(_looks_like_appendix_heading("A. Beygelzimer,"))
+        self.assertTrue(_looks_like_appendix_heading("A Proofs"))
+        self.assertTrue(_looks_like_appendix_heading("B Additional Experiments"))
+
+    def test_paper_checklist_ends_bibliography(self):
+        """The NeurIPS checklist follows References; its heading must end the
+        bibliography range so checklist prose gets translated."""
+        from pdf_zh_translator import pdf_layout as layout
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        layout._bibliography_seen.clear()
+        layout._bibliography_ended = False
+        layout._bibliography_heading_size = 0.0
+
+        heading = self._make_block("References", bold=True, page=12)
+        entry = self._make_block(
+            "E. Altman. Constrained Markov Decision Processes. Chapman and Hall/CRC, 1999.",
+            page=12,
+        )
+        checklist = self._make_block(
+            "NeurIPS Paper Checklist", bold=True, bbox=(108, 80, 300, 100), page=20
+        )
+        item = self._make_block("1. Claims", bbox=(120, 110, 200, 122), page=20)
+        question = self._make_block(
+            "Question: Does the paper provide open access to the data and code, "
+            "with sufficient instructions to faithfully reproduce the results? "
+            "Answer: [Yes] Justification: Anonymous code is included.",
+            bbox=(130, 130, 500, 180),
+            page=20,
+        )
+
+        try:
+            classify_blocks([heading, entry], 12, 792, [])
+            classify_blocks([checklist, item, question], 20, 792, [])
+        finally:
+            layout._bibliography_seen.clear()
+            layout._bibliography_ended = False
+            layout._bibliography_heading_size = 0.0
+
+        self.assertEqual(entry.block_type, "bibliography")
+        self.assertNotEqual(checklist.block_type, "bibliography")
+        self.assertNotEqual(item.block_type, "bibliography")
+        self.assertNotEqual(question.block_type, "bibliography")
+        self.assertTrue(question.should_translate)
+
+    def test_checklist_question_block_is_never_bibliography(self):
+        """Merged checklist blocks contain Question/Answer/Justification
+        markers; they are prose regardless of numbering that looks like a
+        reference entry."""
+        from pdf_zh_translator import pdf_layout as layout
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        layout._bibliography_seen.clear()
+        layout._bibliography_seen[11] = True
+        layout._bibliography_ended = False
+        layout._bibliography_heading_size = 0.0
+
+        block = self._make_block(
+            "5. Open access to data and code Question: Does the paper provide "
+            "open access to the data and code? Answer: [Yes] Justification: "
+            "Anonymous code is included as supplementary material.",
+            bbox=(131, 74, 506, 411),
+            page=21,
+        )
+
+        try:
+            classify_blocks([block], 21, 792, [])
+        finally:
+            layout._bibliography_seen.clear()
+            layout._bibliography_ended = False
+            layout._bibliography_heading_size = 0.0
+
+        self.assertNotEqual(block.block_type, "bibliography")
+        self.assertTrue(block.should_translate)
 
     def test_reference_entry_without_heading_is_bibliography(self):
         from pdf_zh_translator.pdf_layout import classify_blocks

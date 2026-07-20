@@ -203,3 +203,39 @@ def test_translate_pdf_invalidates_bad_cached_output_before_retry(tmp_path):
     assert any("proposed method" in text for text in translator.invalidated[0])
     assert "The proposed method" not in translated_text
     assert "所提出的方法" in translated_text
+
+
+def test_saved_pdf_subsets_large_embedded_cjk_font(tmp_path):
+    """The full CJK font file is ~16MB; the saved PDF must carry only the
+    glyphs actually used."""
+    from pdf_zh_translator.pdf_layout import (
+        find_default_font_file,
+        save_pdf_for_fast_web_view,
+    )
+
+    font_file = find_default_font_file()
+    if not font_file:
+        pytest.skip("no CJK font available on this machine")
+
+    document = fitz.open()
+    page = document.new_page(width=612, height=792)
+    page.insert_font(fontname="zhbody", fontfile=font_file)
+    page.insert_text(
+        (72, 100), "这是一段用于验证字体子集化的中文文本。", fontname="zhbody", fontsize=11
+    )
+    page.insert_text(
+        (72, 130), "第二行覆盖更多汉字：翻译、版面、公式、图注。", fontname="zhbody", fontsize=11
+    )
+
+    output_pdf = tmp_path / "subset.pdf"
+    warnings: list[str] = []
+    save_pdf_for_fast_web_view(document, output_pdf, warnings)
+    document.close()
+
+    assert output_pdf.stat().st_size < 5_000_000, warnings
+
+    reopened = fitz.open(output_pdf)
+    text = reopened[0].get_text("text")
+    reopened.close()
+    assert "字体子集化" in text
+    assert "图注" in text

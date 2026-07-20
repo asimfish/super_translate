@@ -552,17 +552,109 @@ def translate_pdf(
     return TranslationReport(input_pdf, output_pdf, page_count, len(units), skipped, warnings)
 
 
+_FONT_SUBSET_MIN_BYTES = 2_000_000
+
+
+def _subset_embedded_cjk_fonts(
+    document: object,
+    warnings: Optional[List[str]] = None,
+) -> None:
+    """Subset huge embedded fonts (CJK families) down to the used glyphs.
+
+    The translation engine embeds the full CJK font file (~16MB); a typical
+    paper uses under a thousand distinct characters (~1MB subset). Fonts use
+    Identity-H encoding, so subsetting keeps glyph IDs stable
+    (``retain_gids``) and page content streams need no rewriting.
+    """
+    try:
+        import io
+        import re as _re
+
+        from fontTools import subset
+        from fontTools.ttLib import TTFont
+    except Exception:
+        return
+
+    def _referenced_xref(value: str) -> Optional[int]:
+        match = _re.search(r"(\d+) 0 R", value)
+        return int(match.group(1)) if match else None
+
+    fontfile_xrefs: Dict[int, str] = {}
+    for page_index in range(document.page_count):
+        for font in document.get_page_fonts(page_index, full=True):
+            font_xref, font_type = font[0], font[2]
+            if font_type != "Type0":
+                continue
+            kind, descendants = document.xref_get_key(font_xref, "DescendantFonts")
+            if kind != "array":
+                continue
+            descendant_xref = _referenced_xref(descendants)
+            if descendant_xref is None:
+                continue
+            _, descriptor_value = document.xref_get_key(
+                descendant_xref, "FontDescriptor"
+            )
+            descriptor_xref = _referenced_xref(descriptor_value or "")
+            if descriptor_xref is None:
+                continue
+            for key in ("FontFile3", "FontFile2"):
+                kind, value = document.xref_get_key(descriptor_xref, key)
+                if kind != "null" and value:
+                    stream_xref = _referenced_xref(value)
+                    if stream_xref is not None:
+                        fontfile_xrefs[stream_xref] = key
+    if not fontfile_xrefs:
+        return
+
+    used_unicodes: Optional[List[int]] = None
+    for stream_xref in sorted(fontfile_xrefs):
+        try:
+            font_bytes = document.xref_stream(stream_xref)
+        except Exception:
+            continue
+        if font_bytes is None or len(font_bytes) < _FONT_SUBSET_MIN_BYTES:
+            continue
+        if used_unicodes is None:
+            used_chars: set = set()
+            for page_index in range(document.page_count):
+                used_chars.update(document[page_index].get_text("text"))
+            used_unicodes = sorted(
+                ord(char) for char in used_chars if ord(char) >= 32
+            )
+        try:
+            font = TTFont(io.BytesIO(font_bytes))
+            options = subset.Options()
+            options.retain_gids = True
+            options.notdef_outline = True
+            options.name_IDs = ["*"]
+            subsetter = subset.Subsetter(options)
+            subsetter.populate(unicodes=used_unicodes)
+            subsetter.subset(font)
+            buffer = io.BytesIO()
+            font.save(buffer)
+            new_bytes = buffer.getvalue()
+            if new_bytes and len(new_bytes) < len(font_bytes):
+                document.update_stream(stream_xref, new_bytes)
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(f"Font subsetting skipped for one font: {exc}")
+
+
 def save_pdf_for_fast_web_view(
     document: object,
     output_pdf: Path,
     warnings: Optional[List[str]] = None,
 ) -> None:
     """Save a compact, linearized PDF so PDF.js can show page 1 with range reads."""
+    _subset_embedded_cjk_fonts(document, warnings)
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     temp_pdf = output_pdf.with_name(f".{output_pdf.name}.{os.getpid()}.tmp")
     linearized_pdf = output_pdf.with_name(f".{output_pdf.name}.{os.getpid()}.linearized.tmp")
+    # garbage=2 drops unreferenced objects and compacts the xref; levels 3/4
+    # additionally deduplicate object/stream contents byte-by-byte, which
+    # takes minutes on stamp-heavy documents for no measurable size win.
     try:
-        document.save(str(temp_pdf), garbage=4, deflate=True)
+        document.save(str(temp_pdf), garbage=2, deflate=True)
         try:
             import pikepdf
 
@@ -576,7 +668,7 @@ def save_pdf_for_fast_web_view(
     except Exception as exc:
         if warnings is not None:
             warnings.append(f"Fast web PDF save failed; used standard save: {exc}")
-        document.save(str(output_pdf), garbage=4, deflate=True)
+        document.save(str(output_pdf), garbage=2, deflate=True)
     finally:
         temp_pdf.unlink(missing_ok=True)
         linearized_pdf.unlink(missing_ok=True)
@@ -1920,25 +2012,64 @@ def _block_overlaps_preserved_regions(
     return total_overlap / area >= min_total_overlap
 
 
+def _block_translates_to_words(block: TextBlock) -> bool:
+    """Whether the unit loop would actually send this block for translation.
+
+    Mirrors the word check applied when building translation units: after
+    protecting math sentinels, at least one plain word must remain.
+    """
+    try:
+        protected, _ = protect_text(block.text)
+    except Exception:
+        return True
+    bare = PLACEHOLDER_RE.sub("", protected)
+    return bool(re.search(r"[A-Za-z]{2,}", bare))
+
+
+def _blocks_ink_overlap_ratio(first: TextBlock, second: TextBlock) -> float:
+    """Overlap between two blocks measured on their line ink, not hulls.
+
+    Math-heavy paragraphs get hull bboxes inflated across display equations,
+    so consecutive full-column blocks interlock vertically while their
+    actual text lines never touch. Fall back to hulls when line boxes are
+    unavailable.
+    """
+    first_lines = first.source_line_bboxes or (first.bbox,)
+    second_lines = second.source_line_bboxes or (second.bbox,)
+    intersection = sum(
+        bbox_intersection_area(a, b) for a in first_lines for b in second_lines
+    )
+    smaller = min(
+        sum(bbox_area(a) for a in first_lines),
+        sum(bbox_area(b) for b in second_lines),
+    )
+    if smaller <= 0.0:
+        return 0.0
+    return intersection / smaller
+
+
 def _overlapping_translation_block_bboxes(
     blocks: Sequence[TextBlock],
     *,
-    min_overlap_ratio: float = 0.25,
+    min_overlap_ratio: float = 0.5,
 ) -> List[BBox]:
     """Bboxes of translation candidates that substantially overlap each other.
 
     Interleaved borderless-table extractions can yield one block nested inside
     another. Translating both overprints Chinese text at the same coordinates,
-    so such blocks must keep their original typesetting instead.
+    so such blocks must keep their original typesetting instead. Only blocks
+    that will really be translated (words survive math protection) count, and
+    overlap is measured on line ink rather than hull bboxes. Line-level
+    interlock between consecutive math-inflated paragraphs peaks around 0.3,
+    while genuine nesting/overprint approaches 1.0, hence the 0.5 bar.
     """
+    candidates = [block for block in blocks if _block_translates_to_words(block)]
     flagged: List[BBox] = []
-    for index, first in enumerate(blocks):
-        for second in blocks[index + 1 :]:
-            intersection = bbox_intersection_area(first.bbox, second.bbox)
-            if intersection <= 0.0:
+    for index, first in enumerate(candidates):
+        for second in candidates[index + 1 :]:
+            if bbox_intersection_area(first.bbox, second.bbox) <= 0.0:
                 continue
-            smaller = min(bbox_area(first.bbox), bbox_area(second.bbox))
-            if smaller <= 0.0 or intersection / smaller < min_overlap_ratio:
+            if _blocks_ink_overlap_ratio(first, second) < min_overlap_ratio:
                 continue
             flagged.append(first.bbox)
             flagged.append(second.bbox)
@@ -2084,11 +2215,41 @@ def _visible_image_stats(
         return 0, 0.0
 
 
+def _page_drawings(page: object) -> List[dict]:
+    """`page.get_drawings()` with a per-document cache.
+
+    Vector-drawing extraction is one of the most expensive PyMuPDF calls and
+    several read-only analyses need it for the same page (graphic regions,
+    visual regions, risk features, graphics counting). All call sites are
+    pre-mutation or read-only, so caching on the document is safe.
+    """
+    document = getattr(page, "parent", None)
+    number = getattr(page, "number", None)
+    if document is None or number is None:
+        try:
+            return page.get_drawings()
+        except Exception:
+            return []
+    cache = getattr(document, "_pdfzh_drawings_cache", None)
+    if cache is None:
+        cache = {}
+        try:
+            document._pdfzh_drawings_cache = cache
+        except Exception:
+            try:
+                return page.get_drawings()
+            except Exception:
+                return []
+    if number not in cache:
+        try:
+            cache[number] = page.get_drawings()
+        except Exception:
+            cache[number] = []
+    return cache[number]
+
+
 def _count_vector_graphics(page: object) -> int:
-    try:
-        drawings = page.get_drawings()
-    except Exception:
-        return 0
+    drawings = _page_drawings(page)
     count = 0
     for drawing in drawings:
         rect = drawing.get("rect")
@@ -2236,11 +2397,7 @@ def _visual_regions_for_page(
             continue
         if rect and rect.is_empty is False and rect.is_valid:
             regions.append((rect.x0, rect.y0, rect.x1, rect.y1))
-    try:
-        drawings = page.get_drawings()
-    except Exception:
-        drawings = []
-    for drawing in drawings:
+    for drawing in _page_drawings(page):
         rect = drawing.get("rect")
         if rect is None:
             continue
@@ -2665,11 +2822,7 @@ def _detect_high_risk_layout_features(
     page_text: Optional[str] = None,
 ) -> List[str]:
     features: List[str] = []
-    try:
-        drawings = page.get_drawings()
-    except Exception:
-        drawings = []
-    if len(drawings) >= 40:
+    if len(_page_drawings(page)) >= 40:
         features.append("dense vector drawing or table grid")
     if _has_table_like_text_grid(page, blocks=blocks):
         features.append("table-like text grid")
@@ -3193,6 +3346,10 @@ def _looks_like_appendix_heading(text: str, source_lines: int = 1) -> bool:
         return True
     if source_lines > 2 or len(compact) > 80:
         return False
+    # Wrapped editor-name fragments inside reference entries ("H. Wallach,")
+    # match the "<letter>. <title>" shape; headings never end mid-list.
+    if compact.endswith((",", ";")):
+        return False
     if _REFERENCE_ENTRY_RE.search(compact) or _looks_like_reference_entry_text(compact):
         return False
     match = _APPENDIX_LETTER_HEADING_RE.match(compact)
@@ -3270,11 +3427,7 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
         if bbox_is_graphic_candidate(bbox, page_rect):
             candidates.append(bbox)
 
-    try:
-        drawings = page.get_drawings()
-    except Exception:
-        drawings = []
-    for drawing in drawings:
+    for drawing in _page_drawings(page):
         rect = drawing.get("rect")
         if not isinstance(rect, fitz.Rect):
             continue
@@ -3409,20 +3562,32 @@ def looks_like_author_metadata(block: TextBlock, plain: str) -> bool:
     x0, y0, x1, y1 = block.bbox
     width = x1 - x0
     height = y1 - y0
-    if y0 > 240.0 or width < 120.0 or height > 90.0:
+    if y0 > 240.0 or width < 120.0 or height > 170.0:
         return False
     compact = " ".join(plain.split())
     lower = compact.lower()
+    name_pairs = re.findall(
+        r"\b[A-Z][a-z]+(?:[- ][A-Z][a-z]+)?\s+[A-Z][A-Za-z-]+(?:\^\{\d+\})?",
+        compact,
+    )
+    if height > 90.0:
+        # Tall blocks are usually the abstract; only industry-style author
+        # walls qualify: rows of capitalized name pairs with almost no
+        # lowercase sentence words.
+        lowercase_words = [
+            word
+            for word in re.findall(r"\b[a-z]{3,}\b", compact)
+            if not re.match(r"^https?", word)
+        ]
+        return len(name_pairs) >= 12 and len(lowercase_words) <= max(
+            3, len(name_pairs) // 6
+        )
     if re.search(r"\bauthor\s+names?\s+omitted\b|\banonymous\s+review\b|\bpaper-?\s*id\b", lower):
         return True
     affiliation_cue = re.search(
         r"\b(university|institute|department|school|college|laboratory|"
         r"hong kong|tsinghua|zhejiang|equal contribution|corresponding author)\b",
         lower,
-    )
-    name_pairs = re.findall(
-        r"\b[A-Z][a-z]+(?:[- ][A-Z][a-z]+)?\s+[A-Z][A-Za-z-]+(?:\^\{\d+\})?",
-        compact,
     )
     if affiliation_cue and len(name_pairs) >= 2:
         return True
@@ -3580,9 +3745,8 @@ def algorithm_regions_for_page(
     ]
     if not title_bboxes:
         return []
-    try:
-        drawings = page.get_drawings()
-    except Exception:
+    drawings = _page_drawings(page)
+    if not drawings:
         return []
     rules: List[BBox] = []
     for drawing in drawings:
@@ -4366,15 +4530,57 @@ _bibliography_heading_size: float = 0.0
 _bibliography_ended: bool = False
 
 
+_CHECKLIST_HEADING_RE = re.compile(
+    r"^(?:neurips\s+|icml\s+|iclr\s+)?paper\s+checklist$", re.IGNORECASE
+)
+_CHECKLIST_PROSE_RE = re.compile(
+    r"\b(?:Question|Answer|Justification|Guidelines)\s*:", re.IGNORECASE
+)
+
+
 def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> bool:
     """Check if block is in the bibliography section.
 
     Bibliography starts after a "References" heading and ends at the next
-    appendix/supplement heading.
+    appendix/supplement/checklist heading.
     """
     global _bibliography_heading_size, _bibliography_ended
     raw_text = block.text.strip()
     text = raw_text.lower()
+
+    # Check if this block IS the references heading
+    if re.match(r"^(references|bibliography|参考文献)\s*$", text, re.IGNORECASE):
+        _bibliography_seen[block.page_index] = True
+        _bibliography_heading_size = block.font_size
+        _bibliography_ended = False
+        return False  # The heading itself is translatable
+
+    # Headings that end the bibliography range must be recognized before the
+    # reference-entry shortcut: the checklist heading satisfies the
+    # reference-entry heuristics itself. Other termination cues (appendix /
+    # bold headings) must NOT fire on reference-entry-looking lines such as
+    # "H. Wallach," inside actual bibliography entries.
+    if _bibliography_seen:
+        if _CHECKLIST_HEADING_RE.match(" ".join(raw_text.split())):
+            _bibliography_ended = True
+        elif not _looks_like_reference_entry_text(raw_text):
+            if _looks_like_appendix_heading(raw_text, block.source_lines):
+                _bibliography_ended = True
+            else:
+                # Fallback: bold section headings also end the range.
+                bib_size_threshold = max(_bibliography_heading_size * 0.92, 10.5)
+                if block.bold and block.font_size >= bib_size_threshold:
+                    if _SECTION_NUM_RE.match(raw_text) or len(raw_text) < 60:
+                        _bibliography_ended = True
+
+    if _bibliography_ended:
+        return False
+
+    # Checklist prose (Question/Answer/Justification structure) is never a
+    # reference entry, even when a merged block starts with "5. Open access
+    # to data and code" style numbering.
+    if _CHECKLIST_PROSE_RE.search(raw_text):
+        return False
 
     standalone_reference = bool(
         re.match(r"^\s*\[\d+\]", raw_text)
@@ -4386,26 +4592,6 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
         bool(_bibliography_seen) or standalone_reference
     ):
         return True
-
-    # Check if this block IS the references heading
-    if re.match(r"^(references|bibliography|参考文献)\s*$", text, re.IGNORECASE):
-        _bibliography_seen[block.page_index] = True
-        _bibliography_heading_size = block.font_size
-        _bibliography_ended = False
-        return False  # The heading itself is translatable
-
-    # Check if a new appendix/supplement heading ends the bibliography range.
-    if _bibliography_seen and _looks_like_appendix_heading(raw_text, block.source_lines):
-        _bibliography_ended = True
-
-    # Fallback: bold section headings also end the bibliography range.
-    bib_size_threshold = max(_bibliography_heading_size * 0.92, 10.5)
-    if _bibliography_seen and block.bold and block.font_size >= bib_size_threshold:
-        if _SECTION_NUM_RE.match(raw_text) or len(raw_text) < 60:
-            _bibliography_ended = True
-
-    if _bibliography_ended:
-        return False
 
     # Check if we've seen references heading on a previous page or earlier on this page
     if _bibliography_seen.get(block.page_index, False):

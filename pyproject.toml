@@ -23,6 +23,8 @@ dependencies = [
     "aiosqlite>=0.19",
     "python-multipart>=0.0.6",
     "jinja2>=3.1",
+    # Font subsetting for compact CJK-embedded outputs
+    "fonttools>=4.44",
     "aiofiles>=23.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
