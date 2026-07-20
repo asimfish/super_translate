@@ -2587,6 +2587,24 @@ class FormulaStampClipTests(unittest.TestCase):
         self.assertEqual(trimmed, clip)
         document.close()
 
+    def test_span_cache_does_not_leak_across_documents(self):
+        """CPython reuses object ids, so caching must live on the document."""
+        from pdf_zh_translator.pdf_layout import _trim_formula_clip_against_foreign_ink
+
+        first, page = self._page_with_neighbor_line()
+        span_bottom = page.get_text("dict")["blocks"][0]["lines"][0]["spans"][0]["bbox"][3]
+        clip = (386.9, span_bottom - 4.0, 396.9, span_bottom + 11.0)
+        trimmed_first = _trim_formula_clip_against_foreign_ink(first, 0, clip)
+        first.close()
+
+        second = fitz.open()
+        second.new_page(width=612, height=792)
+        trimmed_second = _trim_formula_clip_against_foreign_ink(second, 0, clip)
+        second.close()
+
+        self.assertGreaterEqual(trimmed_first[1], span_bottom)
+        self.assertEqual(trimmed_second, clip)
+
 
 class OverlappingUnitPreservationTests(unittest.TestCase):
     def test_mutually_overlapping_blocks_are_preserved_not_translated(self):

@@ -7719,9 +7719,6 @@ def render_line(
     )
 
 
-_FOREIGN_INK_SPAN_CACHE: Dict[Tuple[int, str, int], List[BBox]] = {}
-
-
 def _trim_formula_clip_against_foreign_ink(
     document: object,
     page_index: int,
@@ -7738,11 +7735,14 @@ def _trim_formula_clip_against_foreign_ink(
     genuine tall formula is never cut by more than ``max_trim_ratio``.
     """
     try:
-        cache_key = (id(document), str(getattr(document, "name", "")), page_index)
-        spans = _FOREIGN_INK_SPAN_CACHE.get(cache_key)
+        # Cache spans on the document itself: module-level id()-keyed caches
+        # collide once CPython reuses object ids across documents.
+        cache: Dict[int, List[BBox]] = getattr(document, "_pdfzh_span_cache", None)
+        if cache is None:
+            cache = {}
+            document._pdfzh_span_cache = cache
+        spans = cache.get(page_index)
         if spans is None:
-            if len(_FOREIGN_INK_SPAN_CACHE) > 256:
-                _FOREIGN_INK_SPAN_CACHE.clear()
             spans = [
                 tuple(float(value) for value in span["bbox"])
                 for block in document[page_index].get_text("dict").get("blocks", [])
@@ -7750,7 +7750,7 @@ def _trim_formula_clip_against_foreign_ink(
                 for line in block.get("lines", [])
                 for span in line.get("spans", [])
             ]
-            _FOREIGN_INK_SPAN_CACHE[cache_key] = spans
+            cache[page_index] = spans
 
         x0, y0, x1, y1 = clip
         height = y1 - y0
