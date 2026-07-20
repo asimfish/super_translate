@@ -784,6 +784,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 page_caption_bboxes,
                 translated_region_entries,
             ),
+            base_bboxes=page_caption_bboxes,
         )
         for region in preserved_text_regions:
             original_region_text = _text_overlapping_region(
@@ -980,12 +981,26 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
 
         formula_fragments = _extract_formula_fragments(orig_page, blocks=orig_blocks)
         if formula_fragments:
-            trans_compact = _normalize_formula_fragment_for_compare(trans_text)
-            missing_formulas = [
-                fragment
-                for fragment in formula_fragments
-                if not _formula_fragment_present(fragment, trans_compact)
-            ]
+            missing_formulas = _missing_formula_fragments(
+                formula_fragments,
+                [
+                    _normalize_formula_fragment_for_compare(trans_text),
+                    _normalize_formula_fragment_for_compare(trans_page.get_text("text")),
+                ],
+            )
+            if missing_formulas:
+                # Reflow can push a formula onto an adjacent page; only flag
+                # fragments absent from the neighbouring pages too.
+                neighbour_compacts = [
+                    _normalize_formula_fragment_for_compare(
+                        trans_doc[neighbour_idx].get_text("text")
+                    )
+                    for neighbour_idx in (page_idx - 1, page_idx + 1)
+                    if 0 <= neighbour_idx < trans_doc.page_count
+                ]
+                missing_formulas = _missing_formula_fragments(
+                    missing_formulas, neighbour_compacts
+                )
             if missing_formulas:
                 issues.append(
                     TranslationIssue(
@@ -1203,19 +1218,56 @@ def _entries_outside_caption_bands(
     caption_bboxes: Sequence[BBox],
     *,
     min_overlap_ratio: float = 0.5,
+    base_bboxes: Optional[Sequence[BBox]] = None,
 ) -> List[Tuple[BBox, str]]:
-    """Drop text entries that sit mostly inside translated-caption bands."""
+    """Drop text entries that sit mostly inside translated-caption bands.
+
+    When ``base_bboxes`` (the unextended bands) is given, entries inside the
+    extension zone are only dropped if they carry CJK text: the downward
+    extension may vertically overlap preserved English table rows, and those
+    rows must stay visible to the preserved-region comparison.
+    """
     if not caption_bboxes:
         return list(entries)
+
+    def _mostly_inside(bbox: BBox, bands: Sequence[BBox]) -> bool:
+        area = max(0.1, bbox_area(bbox))
+        return any(
+            bbox_intersection_area(bbox, band) / area >= min_overlap_ratio
+            for band in bands
+        )
+
+    excluded_cjk_bboxes: List[BBox] = []
+    if base_bboxes is not None:
+        excluded_cjk_bboxes = [
+            bbox
+            for bbox, text in entries
+            if _CJK_DETECT_RE.search(text) and _mostly_inside(bbox, caption_bboxes)
+        ]
+
+    def _glued_to_excluded_cjk(bbox: BBox) -> bool:
+        """Same text line and horizontally adjacent to an excluded CJK entry."""
+        height = max(0.1, bbox[3] - bbox[1])
+        for other in excluded_cjk_bboxes:
+            vertical_overlap = min(bbox[3], other[3]) - max(bbox[1], other[1])
+            if vertical_overlap / height < 0.5:
+                continue
+            horizontal_gap = max(other[0] - bbox[2], bbox[0] - other[2])
+            if horizontal_gap <= 6.0:
+                return True
+        return False
+
     kept: List[Tuple[BBox, str]] = []
     for bbox, text in entries:
-        area = max(0.1, bbox_area(bbox))
-        inside = any(
-            bbox_intersection_area(bbox, caption_bbox) / area >= min_overlap_ratio
-            for caption_bbox in caption_bboxes
-        )
-        if not inside:
-            kept.append((bbox, text))
+        if _mostly_inside(bbox, caption_bboxes):
+            if (
+                base_bboxes is None
+                or _mostly_inside(bbox, base_bboxes)
+                or _CJK_DETECT_RE.search(text)
+                or _glued_to_excluded_cjk(bbox)
+            ):
+                continue
+        kept.append((bbox, text))
     return kept
 
 
@@ -2313,6 +2365,186 @@ def _strip_formula_compare_tail(text: str) -> str:
     return current
 
 
+def _missing_formula_fragments(
+    fragments: Sequence[str],
+    translated_compacts: Sequence[str],
+) -> List[str]:
+    """Fragments absent from every extraction view of the translated page.
+
+    Block-joined and raw text extraction can order 2D math (sub/superscripts,
+    stacked operators) differently; a fragment present in either view
+    survived translation.
+    """
+    return [
+        fragment
+        for fragment in fragments
+        if not any(
+            _formula_fragment_present(fragment, compact)
+            for compact in translated_compacts
+        )
+    ]
+
+
+def _longest_prefix_present(stripped: str, translated_compact: str) -> int:
+    low, high = 0, len(stripped)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if stripped[:mid] in translated_compact:
+            low = mid
+        else:
+            high = mid - 1
+    return low
+
+
+_MATH_FUNCTION_WORDS = frozenset(
+    {
+        "arg",
+        "min",
+        "max",
+        "exp",
+        "log",
+        "ln",
+        "sin",
+        "cos",
+        "tan",
+        "sup",
+        "inf",
+        "lim",
+        "det",
+        "tr",
+        "diag",
+        "std",
+        "var",
+        "softmax",
+        "relu",
+        "st",
+    }
+)
+
+
+def _trim_fragment_prose(text: str) -> str:
+    """Drop leading/trailing prose words from a formula fragment.
+
+    Source lines often prepend or append sentence words to inline math
+    (e.g. ``objective), g'(e) = -H(F*e).``); the prose is legitimately
+    translated, so only the math core must survive verbatim.
+    """
+
+    def _is_prose_word(word: str) -> bool:
+        cleaned = word.strip("()[]{},.;:")
+        return (
+            cleaned.isascii()
+            and cleaned.isalpha()
+            and len(cleaned) >= 3
+            and cleaned.lower() not in _MATH_FUNCTION_WORDS
+        )
+
+    words = text.split()
+    if len(words) > 1:
+        start, end = 0, len(words)
+        while start < end and _is_prose_word(words[start]):
+            start += 1
+        while end > start and _is_prose_word(words[end - 1]):
+            end -= 1
+        trimmed = " ".join(words[start:end])
+        return trimmed if trimmed else text
+    return _trim_compact_fragment_prose(text)
+
+
+_COMPACT_PROSE_LEAD_RE = re.compile(r"^[A-Za-z]{3,}[)\],.;:]*")
+_COMPACT_PROSE_TAIL_RE = re.compile(r"[(\[,;:]*[A-Za-z]{3,}[.,;:]*$")
+
+
+def _trim_compact_fragment_prose(compact: str) -> str:
+    """Prose trim for fragments already stripped of whitespace."""
+    original = compact
+    while True:
+        match = _COMPACT_PROSE_LEAD_RE.match(compact)
+        if not match:
+            break
+        word = match.group(0).rstrip(")],.;:").lower()
+        if word in _MATH_FUNCTION_WORDS:
+            break
+        compact = compact[match.end() :]
+    while True:
+        match = _COMPACT_PROSE_TAIL_RE.search(compact)
+        if not match:
+            break
+        word = match.group(0).strip("([,;:.").lower()
+        if word in _MATH_FUNCTION_WORDS:
+            break
+        compact = compact[: match.start()]
+    return compact if compact else original
+
+
+_FRAGMENT_CHUNK_MAX_GAP = 160
+_FRAGMENT_CHUNK_MAX_COUNT = 4
+_FRAGMENT_STRUCTURAL_CHARS = frozenset("()[]{}|,;.:⟩⟨")
+
+
+def _fragment_chunks_present_in_order(stripped: str, translated_compact: str) -> bool:
+    """Match a fragment as an ordered sequence of contiguous chunks.
+
+    Re-extracted math often interleaves with translated prose (sub/superscript
+    spans migrate between lines). Accept the fragment when its characters can
+    be consumed left-to-right in at most a few long chunks with bounded gaps.
+    Structural characters stranded by script migration may be skipped.
+    """
+    if len(stripped) < 4:
+        return False
+    first_chunk_len = _longest_prefix_present(stripped, translated_compact)
+    if first_chunk_len < 2:
+        return False
+    first_chunk = stripped[:first_chunk_len]
+    anchor = translated_compact.find(first_chunk)
+    anchors_tried = 0
+    while anchor >= 0 and anchors_tried < 8:
+        if _fragment_chunks_match_from(
+            stripped, translated_compact, anchor, first_chunk_len
+        ):
+            return True
+        anchors_tried += 1
+        anchor = translated_compact.find(first_chunk, anchor + 1)
+    return False
+
+
+def _fragment_chunks_match_from(
+    stripped: str,
+    translated_compact: str,
+    anchor: int,
+    first_chunk_len: int,
+) -> bool:
+    window_end = anchor + len(stripped) * 10 + 300
+    position = anchor + first_chunk_len
+    remaining = stripped[first_chunk_len:]
+    chunks_used = 1
+    while remaining:
+        if chunks_used >= _FRAGMENT_CHUNK_MAX_COUNT:
+            return False
+        search_region = translated_compact[position:window_end]
+        # Longest prefix of the remainder present in the search region.
+        low, high = 0, len(remaining)
+        while low < high:
+            mid = (low + high + 1) // 2
+            if remaining[:mid] in search_region:
+                low = mid
+            else:
+                high = mid - 1
+        min_chunk = 1 if (low == len(remaining) or len(remaining) <= 2) else 2
+        if low < min_chunk:
+            if remaining[0] in _FRAGMENT_STRUCTURAL_CHARS:
+                remaining = remaining[1:]
+                continue
+            return False
+        found_at = search_region.find(remaining[:low])
+        if found_at > _FRAGMENT_CHUNK_MAX_GAP:
+            return False
+        position += found_at + low
+        remaining = remaining[low:]
+        chunks_used += 1
+    return True
+
+
 def _formula_fragment_present(fragment: str, translated_compact: str) -> bool:
     normalized = _normalize_formula_fragment_for_compare(fragment)
     if normalized in translated_compact:
@@ -2320,8 +2552,24 @@ def _formula_fragment_present(fragment: str, translated_compact: str) -> bool:
     stripped = _strip_formula_compare_tail(normalized)
     if len(stripped) >= 6 and stripped in translated_compact:
         return True
+    # Sub/superscript glyphs migrate across physical lines when a formula is
+    # stamped or re-extracted: accept the fragment when its characters can be
+    # consumed in reading order as a few long chunks with bounded gaps.
+    if _fragment_chunks_present_in_order(stripped, translated_compact):
+        return True
+    # Sentence words glued to inline math are legitimately translated; retry
+    # the comparison on the math core only.
+    prose_trimmed = _normalize_formula_fragment_for_compare(
+        _trim_fragment_prose(fragment)
+    )
+    if prose_trimmed != normalized:
+        trimmed_stripped = _strip_formula_compare_tail(prose_trimmed)
+        if len(trimmed_stripped) >= 6 and trimmed_stripped in translated_compact:
+            return True
+        if _fragment_chunks_present_in_order(trimmed_stripped, translated_compact):
+            return True
     return (
-        len(stripped) >= 4
+        len(stripped) >= 3
         and bool(re.search(r"[\d=+\-*/^_≤≥<>∥ρϵηαβγδ]", stripped))
         and stripped in translated_compact
     )

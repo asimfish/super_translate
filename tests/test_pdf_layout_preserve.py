@@ -5519,3 +5519,180 @@ class CaptionRecordEquationGuardTests(unittest.TestCase):
 
         texts = [" ".join(strip_sentinels(seg.text).split()) for seg in segments]
         self.assertTrue(any(text.startswith("Figure 5:") for text in texts))
+
+
+class FormulaFragmentToleranceTests(unittest.TestCase):
+    def test_script_split_fragment_matches_by_window(self):
+        """Sub/superscript stream-order divergence keeps a long contiguous run
+        of the fragment on the page; that must count as present."""
+        fragment = "H(ε)=H(F∗ε)."
+        # Page text carries the run split right before the superscript ε.
+        translated_compact = "版面文字H(ε)=H(F∗其余行内容ε⟩继续"
+
+        self.assertTrue(_formula_fragment_present(fragment, translated_compact))
+
+    def test_fully_missing_fragment_is_still_flagged(self):
+        fragment = "H(ε)=H(F∗ε)."
+        translated_compact = "这页只有无关文本和另一个公式ψ(x)=0"
+
+        self.assertFalse(_formula_fragment_present(fragment, translated_compact))
+
+    def test_fragment_interleaved_with_translation_filler_matches(self):
+        """A formula whose pieces survive in order, separated by translated
+        prose, is still present on the page."""
+        fragment = "ψ-1t(y)=y-µt(x1)"
+        translated_compact = "版面。ψ-1t中文占位译文。ψt中文占位译文。(y)=y-µt(x1)第121段"
+
+        self.assertTrue(_formula_fragment_present(fragment, translated_compact))
+
+    def test_short_fragment_with_displaced_math_symbol_matches(self):
+        fragment = "L−1 = √"
+        translated_compact = "用于检查版面。L-1=中文占位译文。√第207段中文占位译文。"
+
+        self.assertTrue(_formula_fragment_present(fragment, translated_compact))
+
+    def test_reordered_pieces_do_not_match(self):
+        """Pieces must appear in reading order; reversed pieces mean the
+        formula was rewritten."""
+        fragment = "ψ-1t(y)=y-µt(x1)"
+        translated_compact = "(y)=y-µt(x1)中文占位译文。ψ-1t结尾"
+
+        self.assertFalse(_formula_fragment_present(fragment, translated_compact))
+
+    def test_altered_value_is_still_flagged(self):
+        fragment = "α+β=γ2/4x"
+        translated_compact = "正文α+β=δ2/4x其余"
+
+        self.assertFalse(_formula_fragment_present(fragment, translated_compact))
+
+
+class FormulaFragmentExtractionProseTrimTests(unittest.TestCase):
+    def test_leading_prose_words_are_trimmed_from_fragment(self):
+        """A source block can prepend prose like 'objective),' to a formula;
+        the prose is legitimately translated, so it must not be part of the
+        fragment we require verbatim."""
+        from pdf_zh_translator.pdf_layout import _trim_fragment_prose
+
+        self.assertEqual(
+            _trim_fragment_prose("objective), g′(ε) = −H(F∗ε)."),
+            "g′(ε) = −H(F∗ε).",
+        )
+
+    def test_trailing_prose_words_are_trimmed(self):
+        from pdf_zh_translator.pdf_layout import _trim_fragment_prose
+
+        self.assertEqual(
+            _trim_fragment_prose("H(ε) = H(F∗ε), therefore"),
+            "H(ε) = H(F∗ε),",
+        )
+
+    def test_math_function_names_are_kept(self):
+        from pdf_zh_translator.pdf_layout import _trim_fragment_prose
+
+        self.assertEqual(
+            _trim_fragment_prose("arg min F(x) = exp(−x)"),
+            "arg min F(x) = exp(−x)",
+        )
+
+    def test_majority_deleted_fragment_is_still_flagged(self):
+        fragment = "∥Ξ-1n(A)∥2≤√L-1(1-ω)"
+        # Only a short head survives (formula largely overwritten).
+        translated_compact = "前文∥Ξ-1后文完全不同"
+
+        self.assertFalse(_formula_fragment_present(fragment, translated_compact))
+
+
+class CaptionBandExtensionBlockerTests(unittest.TestCase):
+    def test_preserved_table_rows_survive_band_extension(self):
+        """A wrapped caption chains downward over CJK lines, but preserved
+        English table rows inside the grown vertical range must remain
+        visible to the preserved-region comparison."""
+        from pdf_zh_translator.pdf_layout import (
+            _entries_outside_caption_bands,
+            _extend_caption_bands_for_translated,
+        )
+
+        band = (100.0, 400.0, 500.0, 497.0)
+        wrapped = ((110.0, 495.0, 480.0, 508.0), "中文图注换行第二行")
+        left_body = [
+            ((110.0, 509.0, 300.0, 521.0), "左栏中文正文第一行"),
+            ((110.0, 522.0, 300.0, 534.0), "左栏中文正文第二行"),
+        ]
+        table_rows = [
+            ((330.0, 520.0, 490.0, 529.0), "DSBM-IMF-OT 53.42 0.085"),
+            ((330.0, 529.0, 490.0, 538.0), "DSBM-Identity 65.19 0.054"),
+        ]
+        entries = [wrapped, *left_body, *table_rows]
+
+        extended = _extend_caption_bands_for_translated([band], entries)
+        kept = _entries_outside_caption_bands(entries, extended, base_bboxes=[band])
+
+        kept_texts = [text for _, text in kept]
+        self.assertIn("DSBM-IMF-OT 53.42 0.085", kept_texts)
+        self.assertIn("DSBM-Identity 65.19 0.054", kept_texts)
+        self.assertNotIn("中文图注换行第二行", kept_texts)
+
+    def test_non_cjk_caption_tail_fragment_is_excluded(self):
+        """A wrapped caption line can end with a non-CJK fragment (e.g.
+        '×64.') extracted as its own entry; being glued to an excluded CJK
+        line, it is caption content, not preserved-table text."""
+        from pdf_zh_translator.pdf_layout import (
+            _entries_outside_caption_bands,
+            _extend_caption_bands_for_translated,
+        )
+
+        band = (360.0, 620.0, 506.0, 648.0)
+        entries = [
+            ((363.0, 648.0, 383.0, 657.0), "分辨率为64"),
+            ((385.0, 648.0, 403.0, 657.0), "×64."),
+        ]
+
+        extended = _extend_caption_bands_for_translated([band], entries)
+        kept = _entries_outside_caption_bands(entries, extended, base_bboxes=[band])
+
+        self.assertEqual(kept, [])
+
+    def test_wrapped_caption_lines_are_still_excluded(self):
+        from pdf_zh_translator.pdf_layout import (
+            _entries_outside_caption_bands,
+            _extend_caption_bands_for_translated,
+        )
+
+        band = (100.0, 400.0, 500.0, 430.0)
+        entries = [
+            ((110.0, 429.0, 480.0, 441.0), "中文图注换行第二行"),
+            ((110.0, 441.0, 480.0, 453.0), "中文图注换行第三行"),
+        ]
+
+        extended = _extend_caption_bands_for_translated([band], entries)
+        kept = _entries_outside_caption_bands(entries, extended, base_bboxes=[band])
+
+        self.assertEqual(kept, [])
+
+
+class FormulaCompareDualSourceTests(unittest.TestCase):
+    def test_fragment_present_in_any_source_is_not_missing(self):
+        """Block-joined and raw extraction can order 2D math differently;
+        presence in either source means the formula survived."""
+        from pdf_zh_translator.pdf_layout import _missing_formula_fragments
+
+        fragment = "ψ-1t(y)=y-µt(x1)"
+        blocks_compact = "打乱后的(y)ψ-1t=y-µt(x1)顺序"
+        raw_compact = "正确顺序里ψ-1t(y)=y-µt(x1)出现"
+
+        missing = _missing_formula_fragments(
+            [fragment], [blocks_compact, raw_compact]
+        )
+
+        self.assertEqual(missing, [])
+
+    def test_fragment_absent_from_all_sources_is_missing(self):
+        from pdf_zh_translator.pdf_layout import _missing_formula_fragments
+
+        fragment = "ψ-1t(y)=y-µt(x1)"
+
+        missing = _missing_formula_fragments(
+            [fragment], ["无关文本一", "无关文本二"]
+        )
+
+        self.assertEqual(missing, [fragment])
