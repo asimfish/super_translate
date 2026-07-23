@@ -4551,8 +4551,17 @@ def _promote_table_component_blocks(blocks: Sequence[TextBlock]) -> None:
                 and block.font_size
                 <= max(caption.font_size for caption in anchors_above) + 0.75
             )
+            # A block beside the region qualifies only as an overflowing
+            # cell: it must actually touch the region horizontally (the
+            # 48pt pad covers above/below attachment, not a column gutter)
+            # and must not read like a prose paragraph.
+            is_side_cell_overflow = (
+                overlaps_vertically
+                and horizontal_gap <= 8.0
+                and substantial_prose_word_count(plain) < TABLE_HEADER_PROSE_WORD_LIMIT
+            )
             if (
-                not overlaps_vertically
+                not is_side_cell_overflow
                 and not is_header
                 and not is_group_label_after
                 and not is_caption_table_fragment
