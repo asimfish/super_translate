@@ -12,6 +12,7 @@ from pdf_zh_translator.translators import (
     Translator,
     VendorTranslator,
     cache_key,
+    placeholders_preserved,
     chunked_by_size,
     coerce_plain_translation,
     coerce_translation_list,
@@ -286,6 +287,38 @@ class TranslatorParsingTests(unittest.TestCase):
                 cache_file.read_text(encoding="utf-8") if cache_file.exists() else ""
             )
             self.assertEqual(persisted.strip(), "")
+
+    def test_marker_dense_block_recovers_via_split_translation(self):
+        """Object-Centric p6 regression: a long block with 15 placeholders
+        mangled markers in every full-block call; translating it in two
+        halves recovers instead of leaking the English source."""
+        long_source = (
+            "We conduct experiments with ResNet50 ⟦0⟧, ResNet101, V2-99 ⟦1⟧ "
+            "and ViT ⟦2⟧ backbones under different pre-training settings. "
+            "Following previous methods ⟦3⟧, the performance of ResNet50 and "
+            "ResNet101 models with pre-trained weights ImageNet ⟦4⟧ and "
+            "nuImages ⟦5⟧ are provided on the nuScenes val set thoroughly."
+        )
+
+        class ManglesLongKeepsHalves(Translator):
+            def translate_batch(self, texts):
+                outputs = []
+                for text in texts:
+                    if text == long_source:
+                        outputs.append("翻译丢失占位符")
+                    else:
+                        outputs.append("译:" + text)
+                return outputs
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            cached = CachedTranslator(ManglesLongKeepsHalves(), cache_file)
+
+            translated = cached.translate_batch([long_source])
+
+            self.assertNotEqual(translated, [long_source])
+            self.assertTrue(placeholders_preserved(long_source, translated[0]))
+            self.assertEqual(cached.placeholder_fallbacks, [])
 
     def test_cached_translator_retries_placeholder_loss_item_by_item(self):
         """A batch response that mangles placeholders is retried one block at

@@ -41,6 +41,19 @@ def placeholders_preserved(source: str, translation: str) -> bool:
     )
 
 
+def _sentence_split_point(text: str, *, min_part_chars: int = 80) -> Optional[int]:
+    """Split offset nearest the middle on a sentence boundary, else None."""
+    middle = len(text) / 2.0
+    candidates = [
+        match.end()
+        for match in re.finditer(r"[.!?]\s+", text)
+        if min_part_chars <= match.end() <= len(text) - min_part_chars
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda offset: abs(offset - middle))
+
+
 class Translator:
     """Interface for batch translators."""
 
@@ -166,6 +179,12 @@ class CachedTranslator(Translator):
             if len(retried) == 1 and placeholders_preserved(chunk[index], retried[0]):
                 translations[index] = retried[0]
                 continue
+            # Marker-dense blocks fail repeatedly in the same prompt shape;
+            # splitting halves the markers per call and changes the context.
+            recovered = self._translate_split_preserving_placeholders(chunk[index])
+            if recovered is not None:
+                translations[index] = recovered
+                continue
             # Last resort: keep the source text so one stubborn block
             # degrades to "untranslated" instead of failing the whole
             # document; QA will flag it for the user.
@@ -179,6 +198,25 @@ class CachedTranslator(Translator):
                 flush=True,
             )
         return translations, fallback_indexes
+
+    def _translate_split_preserving_placeholders(
+        self, text: str
+    ) -> Optional[str]:
+        """Recover a marker-mangling block by translating it in two halves."""
+        split_at = _sentence_split_point(text)
+        if split_at is None:
+            return None
+        parts = [text[:split_at].strip(), text[split_at:].strip()]
+        outputs: List[str] = []
+        for part in parts:
+            translated = self.wrapped.translate_batch([part])
+            if len(translated) != 1 or not placeholders_preserved(part, translated[0]):
+                return None
+            outputs.append(translated[0].strip())
+        combined = " ".join(outputs)
+        if not placeholders_preserved(text, combined):
+            return None
+        return combined
 
     def invalidate(self, texts: Sequence[str]) -> None:
         """Drop selected in-memory entries so a quality retry reaches the supplier."""
