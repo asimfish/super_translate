@@ -6117,3 +6117,59 @@ class FormulaCompareDualSourceTests(unittest.TestCase):
         )
 
         self.assertEqual(missing, [fragment])
+
+
+def test_table_region_envelopes_split_side_by_side_tables():
+    """Object-Centric p8: two tables side by side (Table 7 left, Table 8
+    right) must not chain into one full-width envelope that swallows the
+    prose around them and trips preserved-text QA."""
+    caption7 = TextBlock(
+        0,
+        (59.0, 253.0, 281.0, 277.0),
+        "Table 7. Number of frames (N) for long-term fusion.",
+        9.0,
+        (0.0, 0.0, 0.0),
+        block_type="caption",
+    )
+    caption8 = TextBlock(
+        0,
+        (309.0, 253.0, 545.0, 295.0),
+        "Table 8. Form of the temporal propagation.",
+        9.0,
+        (0.0, 0.0, 0.0),
+        block_type="caption",
+    )
+    cells = []
+    for row in range(5):
+        y = 284.0 + row * 9.5
+        for x0, x1 in ((83.0, 87.0), (124.0, 141.0), (191.0, 208.0), (264.0, 278.0)):
+            cells.append(
+                TextBlock(
+                    0,
+                    (x0, y, x1, y + 8.0),
+                    "0.31",
+                    9.0,
+                    (0.0, 0.0, 0.0),
+                    block_type="table",
+                )
+            )
+    for row in range(4):
+        y = 315.0 + row * 8.5
+        for x0, x1 in ((419.0, 433.0), (470.0, 484.0), (526.0, 538.0)):
+            cells.append(
+                TextBlock(
+                    0,
+                    (x0, y, x1, y + 7.0),
+                    "0.31",
+                    9.0,
+                    (0.0, 0.0, 0.0),
+                    block_type="table",
+                )
+            )
+    blocks = [caption7, caption8, *cells]
+
+    regions = _table_region_bboxes(blocks)
+
+    left = (59.0, 284.0, 281.0, 284.0 + 4 * 9.5 + 8.0)
+    right = (309.0, 315.0, 545.0, 315.0 + 3 * 8.5 + 7.0)
+    assert regions == [left, right]

@@ -4299,49 +4299,126 @@ def _table_region_bboxes(blocks: Sequence[TextBlock]) -> List[BBox]:
         return []
 
     components: List[List[BBox]] = []
-    current: List[BBox] = []
-    current_bottom = 0.0
-    for block in table_blocks:
-        caption_between = current and any(
-            caption.bbox[1] >= current_bottom and caption.bbox[3] <= block.bbox[1]
-            for caption in caption_blocks
-        )
-        if current and (
-            block.bbox[1] - current_bottom > _TABLE_COMPONENT_MAX_VERTICAL_GAP
-            or caption_between
-        ):
+    for group in _partition_table_blocks_by_caption(table_blocks, table_captions):
+        current: List[BBox] = []
+        current_bottom = 0.0
+        for block in group:
+            caption_between = current and any(
+                caption.bbox[1] >= current_bottom and caption.bbox[3] <= block.bbox[1]
+                for caption in caption_blocks
+            )
+            if current and (
+                block.bbox[1] - current_bottom > _TABLE_COMPONENT_MAX_VERTICAL_GAP
+                or caption_between
+            ):
+                components.append(current)
+                current = []
+            current.append(block.bbox)
+            current_bottom = max(current_bottom, block.bbox[3]) if len(current) > 1 else block.bbox[3]
+        if current:
             components.append(current)
-            current = []
-        current.append(block.bbox)
-        current_bottom = max(current_bottom, block.bbox[3]) if len(current) > 1 else block.bbox[3]
-    if current:
-        components.append(current)
 
     regions: List[BBox] = []
     for component in components:
-        region = union_bbox(component)
-        anchors = [
-            caption
-            for caption in table_captions
-            if (
-                caption.bbox[3] <= region[1]
-                and region[1] - caption.bbox[3] <= _TABLE_CAPTION_MAX_ABOVE_GAP
-            )
-            or (
-                caption.bbox[1] >= region[3]
-                and caption.bbox[1] - region[3] <= _TABLE_CAPTION_MAX_BELOW_GAP
-            )
-        ]
-        if anchors:
-            regions.append(
-                (
-                    min(region[0], *(caption.bbox[0] for caption in anchors)),
-                    region[1],
-                    max(region[2], *(caption.bbox[2] for caption in anchors)),
-                    region[3],
+        for sub_component in _split_table_component_columns(component):
+            region = union_bbox(sub_component)
+            anchors = [
+                caption
+                for caption in table_captions
+                if (
+                    (
+                        caption.bbox[3] <= region[1]
+                        and region[1] - caption.bbox[3] <= _TABLE_CAPTION_MAX_ABOVE_GAP
+                    )
+                    or (
+                        caption.bbox[1] >= region[3]
+                        and caption.bbox[1] - region[3] <= _TABLE_CAPTION_MAX_BELOW_GAP
+                    )
                 )
-            )
+                and caption.bbox[0] < region[2]
+                and caption.bbox[2] > region[0]
+            ]
+            if anchors:
+                regions.append(
+                    (
+                        min(region[0], *(caption.bbox[0] for caption in anchors)),
+                        region[1],
+                        max(region[2], *(caption.bbox[2] for caption in anchors)),
+                        region[3],
+                    )
+                )
     return regions
+
+
+def _partition_table_blocks_by_caption(
+    table_blocks: Sequence[TextBlock],
+    table_captions: Sequence[TextBlock],
+) -> List[List[TextBlock]]:
+    """Assign table blocks to the x-band of their owning caption.
+
+    Side-by-side tables (two captions at the same y with disjoint x-ranges)
+    would otherwise chain into a single vertical component whose envelope
+    swallows the prose around both tables. With fewer than two captions
+    there is nothing to partition.
+    """
+    if len(table_captions) < 2:
+        return [list(table_blocks)]
+    captions = sorted(table_captions, key=lambda caption: caption.bbox[0])
+    groups: List[List[TextBlock]] = [[] for _ in captions]
+    for block in table_blocks:
+        bx0, _, bx1, _ = block.bbox
+        best_index = 0
+        best_score = float("-inf")
+        for index, caption in enumerate(captions):
+            cx0, _, cx1, _ = caption.bbox
+            overlap = min(bx1, cx1) - max(bx0, cx0)
+            # Prefer the caption whose band the block overlaps; fall back to
+            # the horizontally nearest one (negative distance).
+            score = overlap if overlap > 0 else -(min(abs(bx0 - cx1), abs(cx0 - bx1)))
+            if score > best_score:
+                best_score = score
+                best_index = index
+        groups[best_index].append(block)
+    return [group for group in groups if group]
+
+
+def _split_table_component_columns(component: Sequence[BBox]) -> List[List[BBox]]:
+    """Split side-by-side tables chained into one vertical component.
+
+    Two tables printed in separate columns connect through the vertical-gap
+    rule, and their union envelope swallows the prose around them (a QA
+    false positive when that prose is translated). Row spans expose the
+    gutter: rows whose x-spans never intersect belong to different tables.
+    """
+    rows: List[List[BBox]] = []
+    for bbox in sorted(component, key=lambda b: ((b[1] + b[3]) / 2.0, b[0])):
+        for row in rows:
+            if any(_bboxes_share_y_band(bbox, existing) for existing in row):
+                row.append(bbox)
+                break
+        else:
+            rows.append([bbox])
+    clusters: List[List[object]] = []
+    for row in rows:
+        row_x0 = min(b[0] for b in row)
+        row_x1 = max(b[2] for b in row)
+        for cluster in clusters:
+            if min(row_x1, cluster[1]) - max(row_x0, cluster[0]) > 0:
+                cluster[0] = min(cluster[0], row_x0)
+                cluster[1] = max(cluster[1], row_x1)
+                cluster[2].extend(row)
+                break
+        else:
+            clusters.append([row_x0, row_x1, list(row)])
+    return [cluster[2] for cluster in clusters]
+
+
+def _bboxes_share_y_band(first: BBox, second: BBox) -> bool:
+    min_height = min(first[3] - first[1], second[3] - second[1])
+    if min_height <= 0:
+        return False
+    overlap = min(first[3], second[3]) - max(first[1], second[1])
+    return overlap >= 0.5 * min_height
 
 
 def _looks_like_table_header_text(text: str) -> bool:
