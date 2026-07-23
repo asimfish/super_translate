@@ -162,3 +162,30 @@ retried from the UI.
 - **Local only (no server)**: skip Docker entirely — `pip install -e .`,
   `python -m uvicorn app.main:app --port 8001`, open `http://localhost:8001`.
   No token needed for loopback use.
+
+## Current production deployment (bjxy_5090 + frp)
+
+The live instance runs directly on the bjxy_5090 host (no Docker) and is
+exposed through an frp TCP tunnel because the frp server's domain is blocked
+for HTTP by the cloud provider, so the public entry is the bare IP:port.
+
+- App: `uvicorn app.main:app --host 127.0.0.1 --port 18001 --workers 1`
+  inside tmux session `super_translate` on bjxy_5090 (state in
+  `~/super_translate/data/`, config in `~/super_translate/.env`).
+- Tunnel: `frpc` (tmux session `frpc_web`) forwards
+  `140.143.251.219:28001` → `127.0.0.1:18001`.
+  Public URL: `http://140.143.251.219:28001` (HTTP only — the API token is
+  sent plaintext, use it on trusted networks).
+- Process guard (user crontab, `crontab -l` to inspect):
+  `@reboot` and every 5 minutes run `scripts/start_server.sh`, which
+  idempotently recreates both tmux sessions (a dead process ends its tmux
+  session, so the next run restarts it).
+- Backups: `scripts/backup_data.sh` runs daily at 03:17 and snapshots the
+  SQLite DB (via `sqlite3 .backup`), uploaded papers, terminology candidates
+  and `.env` into `~/backups/super_translate/YYYY-MM-DD/`, keeping 14 days.
+  Translated PDFs are excluded (regenerable from papers + cache).
+  Restore: stop the app, copy the snapshot files back over `data/`, restart.
+- Deploying code changes: `git push` to GitHub, then on bjxy_5090
+  `cd ~/super_translate && git pull`, restart by killing the tmux session
+  (`tmux kill-session -t super_translate`) — the 5-minute cron job brings it
+  back, or run `scripts/start_server.sh` manually.
