@@ -2119,17 +2119,30 @@ def _candidate_bboxes_colliding_with_preserved(
     """
     flagged: List[BBox] = []
     for block in candidates:
-        bx0, by0, bx1, by1 = block.bbox
-        for region in preserved_regions:
-            rx0, ry0, rx1, ry1 = region
-            x_overlap = min(bx1, rx1) - max(bx0, rx0)
-            y_overlap = min(by1, ry1) - max(by0, ry0)
-            if x_overlap < min_penetration or y_overlap < min_penetration:
-                continue
-            region_area = max(0.1, (rx1 - rx0) * (ry1 - ry0))
-            if (x_overlap * y_overlap) / region_area >= min_area_ratio:
-                flagged.append(block.bbox)
+        # Redaction happens on line bboxes for multi-line blocks, so collision
+        # must be measured there too: a paragraph that wraps around a table
+        # has a hull covering the table but lines that never touch it.
+        probe_bboxes = (
+            block.redact_bboxes
+            or list(block.source_line_bboxes)
+            or [block.bbox]
+        )
+        hit = False
+        for bx0, by0, bx1, by1 in probe_bboxes:
+            for region in preserved_regions:
+                rx0, ry0, rx1, ry1 = region
+                x_overlap = min(bx1, rx1) - max(bx0, rx0)
+                y_overlap = min(by1, ry1) - max(by0, ry0)
+                if x_overlap < min_penetration or y_overlap < min_penetration:
+                    continue
+                region_area = max(0.1, (rx1 - rx0) * (ry1 - ry0))
+                if (x_overlap * y_overlap) / region_area >= min_area_ratio:
+                    hit = True
+                    break
+            if hit:
                 break
+        if hit:
+            flagged.append(block.bbox)
     return flagged
 
 
@@ -5059,20 +5072,37 @@ EQUATION_NEIGHBOR_GAP = 9.0
 EQUATION_NEIGHBOR_SIDE_GAP = 48.0
 
 
+def _record_prose_line_count(record: _RawBlockRec) -> int:
+    return sum(
+        1
+        for line in record.lines
+        if substantial_prose_word_count(" ".join(strip_sentinels(line.text).split()))
+        >= 6
+    )
+
+
 def block_is_strong_math(record: _RawBlockRec) -> bool:
     """Blocks that are unambiguously display-equation material."""
-    for line in record.lines:
-        compact = "".join(strip_sentinels(line.text).split())
-        if compact and EQUATION_NUMBER_RE.fullmatch(compact):
-            return True
-        if any(ord(char) < 32 or char in _BIG_OPERATOR_CHARS for char in compact):
-            return True
+    # PyMuPDF can merge prose paragraphs and their display equations into one
+    # raw block; several full prose lines mean this is a paragraph carrying
+    # equations (handled line-wise by formula keepouts), not an equation.
+    prose_lines = _record_prose_line_count(record)
+    mostly_prose = prose_lines >= 3 or (
+        len(record.lines) > 0 and prose_lines / len(record.lines) >= 0.5
+    )
+    if not mostly_prose:
+        for line in record.lines:
+            compact = "".join(strip_sentinels(line.text).split())
+            if compact and EQUATION_NUMBER_RE.fullmatch(compact):
+                return True
+            if any(ord(char) < 32 or char in _BIG_OPERATOR_CHARS for char in compact):
+                return True
     if record.sentinel_ratio() >= 0.5:
         return True
     # Two physical lines overlapping vertically = 2D math layout (sub/sup).
     # Requires real math content: section headings ("3.4" + title) also arrive
     # as two side-by-side "lines" but carry no math-font spans.
-    if record.sentinel_ratio() >= 0.05:
+    if not mostly_prose and record.sentinel_ratio() >= 0.05:
         for first, second in zip(record.lines, record.lines[1:]):
             overlap = min(first.bbox[3], second.bbox[3]) - max(first.bbox[1], second.bbox[1])
             if overlap >= 1.5:
@@ -5228,9 +5258,16 @@ def record_is_table(record: _RawBlockRec) -> bool:
     Sequential paragraph lines never overlap vertically; two-line headings
     ("3.4" + title) are excluded by the minimum line count. Some PDFs also split
     a normal prose line into two same-baseline text objects; those have only a
-    small horizontal gap and must stay mergeable as paragraph text."""
+    small horizontal gap and must stay mergeable as paragraph text.
+
+    A paragraph wrapping display equations looks tabular: each equation plus
+    its right-aligned number forms a "row" with a wide horizontal gap. Several
+    full prose lines mean this is such a paragraph, not a table."""
     lines = record.lines
     if len(lines) < 3:
+        return False
+    prose_lines = _record_prose_line_count(record)
+    if prose_lines >= 3 or prose_lines / len(lines) >= 0.5:
         return False
     table_rows = 0
     for row in group_same_y_lines(lines):

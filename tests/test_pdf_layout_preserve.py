@@ -5736,6 +5736,88 @@ class CaptionRecordEquationGuardTests(unittest.TestCase):
         self.assertTrue(any(text.startswith("Figure 5:") for text in texts))
 
 
+class MixedProseEquationBlockTests(unittest.TestCase):
+    def _record(self, line_texts, *, y0=100.0):
+        from pdf_zh_translator.pdf_layout import _LineRec, _RawBlockRec
+
+        lines = []
+        y = y0
+        for text in line_texts:
+            lines.append(
+                _LineRec(text=text, bbox=(72.0, y, 520.0, y + 11.0), spans=[])
+            )
+            y += 12.0
+        return _RawBlockRec(lines=lines)
+
+    def test_paragraph_with_embedded_display_equation_is_not_strong_math(self):
+        """PyMuPDF merges prose paragraphs and their display equations into
+        one raw block; an equation number line like '(11)' must not flag the
+        whole prose block as an equation (Flow Matching p4 regression)."""
+        from pdf_zh_translator.pdf_layout import block_is_strong_math
+
+        record = self._record(
+            [
+                "There is an infinite number of vector fields that generate a",
+                "particular probability path, e.g. by adding a divergence free",
+                "component to the continuity equation before training starts.",
+                "\ue000ψ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000) =\ue001\ue000σ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000_{1}\ue001\ue000)\ue001",
+                "(11)",
+                "When x is distributed as a standard Gaussian, the transformation",
+                "maps to a normally distributed random variable with known mean.",
+            ]
+        )
+
+        self.assertFalse(block_is_strong_math(record))
+
+    def test_equation_with_number_line_is_still_strong_math(self):
+        from pdf_zh_translator.pdf_layout import block_is_strong_math
+
+        record = self._record(
+            [
+                "\ue000ψ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000) =\ue001\ue000σ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000_{1}\ue001\ue000)\ue001\ue000x\ue001\ue000+\ue001\ue000µ\ue001\ue000_{t}\ue001",
+                "(11)",
+            ]
+        )
+
+        self.assertTrue(block_is_strong_math(record))
+
+    def _equation_row_lines(self, y, formula):
+        from pdf_zh_translator.pdf_layout import _LineRec
+
+        return [
+            _LineRec(text=formula, bbox=(250.0, y, 360.0, y + 11.0), spans=[]),
+            _LineRec(text="(11)", bbox=(487.0, y, 504.0, y + 10.0), spans=[]),
+        ]
+
+    def test_paragraph_carrying_equations_is_not_a_table(self):
+        """Equation + right-aligned number pairs mimic table rows (wide
+        horizontal gap on one y-band); surrounding prose lines must veto the
+        table verdict (Flow Matching p4 regression)."""
+        from pdf_zh_translator.pdf_layout import _LineRec, _RawBlockRec, record_is_table
+
+        prose = [
+            "There is an infinite number of vector fields that generate a",
+            "particular probability path, e.g. by adding a divergence free",
+            "component to the continuity equation before training starts.",
+        ]
+        lines = [
+            _LineRec(text=text, bbox=(72.0, 100.0 + i * 12.0, 520.0, 111.0 + i * 12.0), spans=[])
+            for i, text in enumerate(prose)
+        ]
+        lines += self._equation_row_lines(140.0, "ψ_{t}(x) =σ_{t}")
+        lines += self._equation_row_lines(152.0, "[ψ_{t}]_{∗}p(x)")
+
+        self.assertFalse(record_is_table(_RawBlockRec(lines=lines)))
+
+    def test_bare_equation_rows_still_look_like_table(self):
+        from pdf_zh_translator.pdf_layout import _RawBlockRec, record_is_table
+
+        lines = self._equation_row_lines(100.0, "ψ_{t}")
+        lines += self._equation_row_lines(112.0, "σ_{t}")
+
+        self.assertTrue(record_is_table(_RawBlockRec(lines=lines)))
+
+
 class FormulaFragmentToleranceTests(unittest.TestCase):
     def test_script_split_fragment_matches_by_window(self):
         """Sub/superscript stream-order divergence keeps a long contiguous run
