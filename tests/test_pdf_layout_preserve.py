@@ -5452,6 +5452,58 @@ class PreservedCollisionSkipTests(unittest.TestCase):
 
         self.assertEqual(flagged, [])
 
+    def test_wraparound_paragraph_lines_clear_of_float_are_not_flagged(self):
+        """Flow Matching p9: a full-width paragraph wrapping a float table has
+        a hull covering the cells, but its lines stay in the text column, so
+        line-level probing must let it translate."""
+        from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved
+
+        candidate = TextBlock(
+            page_index=0,
+            bbox=(108.0, 474.0, 504.0, 593.0),
+            text="Lastly, we experimented with Flow Matching for conditional image generation.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=(
+                (108.0, 474.0, 338.0, 484.0),
+                (108.0, 485.0, 338.0, 495.0),
+                (108.0, 496.0, 338.0, 506.0),
+            ),
+        )
+        cell = (350.0, 480.0, 379.0, 499.0)
+
+        flagged = _candidate_bboxes_colliding_with_preserved([candidate], [cell])
+
+        self.assertEqual(flagged, [])
+
+    def test_formula_dense_carved_block_keeps_hull_test(self):
+        """IPMF p21: prose tails carved around preserved inline math have
+        ragged left edges; reflow re-wraps from the hull origin and would
+        overprint the preserved formula, so the hull test must flag it."""
+        from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved
+
+        candidate = TextBlock(
+            page_index=0,
+            bbox=(108.0, 355.0, 504.0, 383.0),
+            text=(
+                "˜PS^{−}^{1}^{/}^{2 and "
+                "P^{′^{′ bound their spectral norms"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=(
+                (307.0, 355.0, 374.0, 368.0),
+                (368.0, 355.0, 420.0, 371.0),
+                (108.0, 368.0, 312.0, 382.0),
+                (306.0, 371.0, 504.0, 383.0),
+            ),
+        )
+        preserved = (108.0, 355.0, 307.0, 370.0)
+
+        flagged = _candidate_bboxes_colliding_with_preserved([candidate], [preserved])
+
+        self.assertEqual(flagged, [candidate.bbox])
+
 
 class CaptionInsideEnvelopeTests(unittest.TestCase):
     def test_caption_anchoring_table_envelope_is_still_translated(self):
@@ -5816,6 +5868,48 @@ class MixedProseEquationBlockTests(unittest.TestCase):
         lines += self._equation_row_lines(112.0, "σ_{t}")
 
         self.assertTrue(record_is_table(_RawBlockRec(lines=lines)))
+
+    def test_prose_majority_with_fragile_overlap_stays_strong_math(self):
+        """IPMF p27: a prose-majority record whose lines share area with 2D
+        math fragments (sub/superscript towers) cannot be processed line-wise
+        without erasing the neighbour's glyphs; the prose guard must yield."""
+        from pdf_zh_translator.pdf_layout import (
+            _LineRec,
+            _RawBlockRec,
+            block_is_strong_math,
+        )
+
+        prose = [
+            "and Ch(C2) is 1-Lipschitz w.r.t. the Frobenius norm (Wihler,",
+            "2009, Thm. 1.1). Note that the bound holds for all cases here.",
+            "It can be shown from the orthogonality of K that this works.",
+            "Therefore the mapping is contractive in the Frobenius norm.",
+        ]
+        lines = [
+            _LineRec(text=text, bbox=(108.0, 100.0 + i * 12.0, 504.0, 111.0 + i * 12.0), spans=[])
+            for i, text in enumerate(prose)
+        ]
+        # Superscript tower sharing area with the following prose line.
+        lines.append(
+            _LineRec(
+                text="\ue000∥\ue001\ue000K\ue001\ue000d\ue001\ue000C\ue001\ue000∥\ue001\ue000^{\ue001\ue0002\ue001",
+                bbox=(120.0, 146.0, 200.0, 158.0),
+                spans=[],
+            )
+        )
+        lines.append(
+            _LineRec(
+                text=(
+                    "\ue000_{\ue001\ue000F\ue001\ue000}\ue001 \ue000=\ue001 "
+                    "\ue000T\ue001\ue000r\ue001\ue000[\ue001\ue000(\ue001\ue000K\ue001dC)] "
+                    "= 0 since K dK is skew-symmetric here."
+                ),
+                bbox=(120.0, 150.0, 480.0, 161.0),
+                spans=[],
+            )
+        )
+
+        self.assertTrue(block_is_strong_math(_RawBlockRec(lines=lines)))
 
 
 class FormulaFragmentToleranceTests(unittest.TestCase):

@@ -2116,17 +2116,29 @@ def _candidate_bboxes_colliding_with_preserved(
     whose bbox meaningfully covers one (e.g. a mis-segmented caption cell
     overhanging a label) would first redact that ink away and then overprint
     it. Such candidates keep their original typesetting instead.
+
+    Probe granularity depends on the block. A clean prose paragraph wrapping
+    a float table has a hull covering the cells but lines that never touch
+    them, so line-level probing lets it translate. A formula-dense block, or
+    one whose lines were carved around preserved inline math (ragged left
+    edges), is reflowed from its hull origin and will overprint the region,
+    so it must keep the conservative hull test.
     """
     flagged: List[BBox] = []
     for block in candidates:
-        # Redaction happens on line bboxes for multi-line blocks, so collision
-        # must be measured there too: a paragraph that wraps around a table
-        # has a hull covering the table but lines that never touch it.
-        probe_bboxes = (
-            block.redact_bboxes
-            or list(block.source_line_bboxes)
-            or [block.bbox]
+        text = block.text or ""
+        formula_dense = (
+            len(text) > 0 and sentinel_char_count(text) / len(text) >= 0.15
         )
+        lines = list(block.source_line_bboxes)
+        ragged = bool(lines) and (
+            sum(1 for line in lines if line[0] > block.bbox[0] + 20.0) / len(lines)
+            >= 0.5
+        )
+        if formula_dense or ragged:
+            probe_bboxes = [block.bbox]
+        else:
+            probe_bboxes = lines or [block.bbox]
         hit = False
         for bx0, by0, bx1, by1 in probe_bboxes:
             for region in preserved_regions:
@@ -5081,6 +5093,24 @@ def _record_prose_line_count(record: _RawBlockRec) -> int:
     )
 
 
+def _record_has_fragile_line_overlap(record: _RawBlockRec) -> bool:
+    """Area-intersecting line pairs involving a prose line.
+
+    Such records carry 2D math typesetting whose glyphs share area with a
+    line that would be redacted and re-inserted; line-wise processing cannot
+    preserve them, so the record must keep its original rendering."""
+    for first, second in zip(record.lines, record.lines[1:]):
+        v_overlap = min(first.bbox[3], second.bbox[3]) - max(first.bbox[1], second.bbox[1])
+        if v_overlap < 1.5:
+            continue
+        h_overlap = min(first.bbox[2], second.bbox[2]) - max(first.bbox[0], second.bbox[0])
+        if h_overlap <= 0:
+            continue
+        if line_is_prose(first) or line_is_prose(second):
+            return True
+    return False
+
+
 def block_is_strong_math(record: _RawBlockRec) -> bool:
     """Blocks that are unambiguously display-equation material."""
     # PyMuPDF can merge prose paragraphs and their display equations into one
@@ -5090,6 +5120,8 @@ def block_is_strong_math(record: _RawBlockRec) -> bool:
     mostly_prose = prose_lines >= 3 or (
         len(record.lines) > 0 and prose_lines / len(record.lines) >= 0.5
     )
+    if mostly_prose and _record_has_fragile_line_overlap(record):
+        mostly_prose = False
     if not mostly_prose:
         for line in record.lines:
             compact = "".join(strip_sentinels(line.text).split())
@@ -5268,7 +5300,8 @@ def record_is_table(record: _RawBlockRec) -> bool:
         return False
     prose_lines = _record_prose_line_count(record)
     if prose_lines >= 3 or prose_lines / len(lines) >= 0.5:
-        return False
+        if not _record_has_fragile_line_overlap(record):
+            return False
     table_rows = 0
     for row in group_same_y_lines(lines):
         if row_has_table_gap(row):
