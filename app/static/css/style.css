@@ -798,3 +798,39 @@ select:focus-visible {
     width: auto;
   }
 }
+
+/* Login modal */
+.login-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.login-card {
+  background: var(--panel-bg, #1e1e2e);
+  color: inherit;
+  border-radius: 12px;
+  padding: 32px;
+  width: 340px;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+.login-card h2 { margin: 0; font-size: 20px; }
+.login-hint { margin: 0; font-size: 13px; opacity: 0.7; }
+.login-card input {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+}
+.login-card input:focus { outline: 2px solid var(--primary, #4f7cff); }
+.login-error { color: var(--error, #e5534b); font-size: 13px; min-height: 18px; }
+.current-user { font-size: 13px; opacity: 0.85; margin-right: 4px; }

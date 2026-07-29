@@ -23,13 +23,89 @@ function authHeaders(extra = {}) {
   return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
 }
 
+// === Login ===
+let loginPromptPromise = null;
+
+function showLoginModal() {
+  document.getElementById('login-modal')?.classList.remove('hidden');
+  setTimeout(() => document.getElementById('login-username')?.focus(), 50);
+}
+
+function hideLoginModal() {
+  document.getElementById('login-modal')?.classList.add('hidden');
+  const err = document.getElementById('login-error');
+  if (err) err.textContent = '';
+}
+
+function updateCurrentUserBadge() {
+  const username = localStorage.getItem('paperChinaUsername') || '';
+  const badge = document.getElementById('current-user');
+  const logoutBtn = document.getElementById('btn-logout');
+  if (badge) {
+    badge.textContent = username ? `👤 ${username}` : '';
+    badge.classList.toggle('hidden', !username);
+  }
+  logoutBtn?.classList.toggle('hidden', !username);
+}
+
+function requestLogin() {
+  // Single shared promise: concurrent 401s open only one modal.
+  if (!loginPromptPromise) {
+    loginPromptPromise = new Promise((resolve) => {
+      const form = document.getElementById('login-form');
+      if (!form) { resolve(false); return; }
+      showLoginModal();
+      const onSubmit = async (e) => {
+        e.preventDefault();
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+        const err = document.getElementById('login-error');
+        const submitBtn = document.getElementById('login-submit');
+        err.textContent = '';
+        submitBtn.disabled = true;
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+          });
+          if (!res.ok) {
+            err.textContent = (await res.json()).detail || '登录失败';
+            return;
+          }
+          const data = await res.json();
+          localStorage.setItem('paperChinaApiToken', data.token);
+          localStorage.setItem('paperChinaUsername', data.username);
+          form.removeEventListener('submit', onSubmit);
+          hideLoginModal();
+          updateCurrentUserBadge();
+          resolve(true);
+        } catch {
+          err.textContent = '网络错误，请重试';
+        } finally {
+          submitBtn.disabled = false;
+        }
+      };
+      form.addEventListener('submit', onSubmit);
+    }).finally(() => { loginPromptPromise = null; });
+  }
+  return loginPromptPromise;
+}
+
+function logout() {
+  localStorage.removeItem('paperChinaApiToken');
+  localStorage.removeItem('paperChinaUsername');
+  updateCurrentUserBadge();
+  showLoginModal();
+  loadPapers();
+}
+
 async function apiFetch(url, options = {}, retryAuth = true) {
   const headers = authHeaders(options.headers || {});
   const res = await fetch(url, { ...options, headers });
   if (res.status === 401 && retryAuth) {
-    const token = prompt('请输入 API Token');
-    if (token) {
-      localStorage.setItem('paperChinaApiToken', token.trim());
+    localStorage.removeItem('paperChinaApiToken');
+    if (await requestLogin()) {
       return apiFetch(url, options, false);
     }
   }
@@ -1691,6 +1767,7 @@ function toastInfo(msg) { showToast(msg, 'info'); }
 const actionHandlers = {
   'show-upload': showUpload,
   'show-library': showLibrary,
+  'logout': logout,
   'batch-translate': batchTranslate,
   'do-upload': doUpload,
   'cancel-upload': cancelUpload,
@@ -1816,5 +1893,6 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('DOMContentLoaded', () => {
   initDropZone();
   initResizer();
+  updateCurrentUserBadge();
   loadPapers();
 });

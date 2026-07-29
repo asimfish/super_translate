@@ -3648,3 +3648,81 @@ class TestCliFunction:
         with patch("sys.argv", ["paper-china", "--open"]):
             cli()
         mock_open.assert_called_once_with("http://127.0.0.1:8000")
+
+
+class TestAuthLogin:
+    """Username/password login and per-user token gating."""
+
+    def test_login_success_returns_token(self, client):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+
+        user = SimpleNamespace(token="user-tok-1", username="liyufeng", access_scope="liyufeng")
+        with patch("app.api.auth.authenticate_user", new=AsyncMock(return_value=user)):
+            res = client.post(
+                "/api/auth/login",
+                json={"username": "liyufeng", "password": "pw"},
+            )
+        assert res.status_code == 200
+        body = res.json()
+        assert body == {
+            "token": "user-tok-1",
+            "username": "liyufeng",
+            "access_scope": "liyufeng",
+        }
+
+    def test_login_rejects_bad_credentials(self, client):
+        from unittest.mock import AsyncMock, patch
+
+        with patch("app.api.auth.authenticate_user", new=AsyncMock(return_value=None)):
+            res = client.post(
+                "/api/auth/login",
+                json={"username": "liyufeng", "password": "wrong"},
+            )
+        assert res.status_code == 401
+
+    def test_login_reachable_without_token_when_api_token_set(self, client):
+        from pydantic import SecretStr
+        from unittest.mock import AsyncMock, patch
+        from types import SimpleNamespace
+
+        from app.core.config import settings
+
+        user = SimpleNamespace(token="user-tok-1", username="u", access_scope="u")
+        with (
+            patch.object(settings, "api_token", SecretStr("admin-tok")),
+            patch("app.api.auth.authenticate_user", new=AsyncMock(return_value=user)),
+        ):
+            login_res = client.post("/api/auth/login", json={"username": "u", "password": "p"})
+            assert login_res.status_code == 200
+            # ...while other API endpoints still reject token-less requests.
+            papers_res = client.get("/api/papers/")
+            assert papers_res.status_code == 401
+
+    def test_user_token_grants_its_scope(self, client):
+        from pydantic import SecretStr
+        from unittest.mock import AsyncMock, patch
+
+        from app.core.config import settings
+
+        with (
+            patch.object(settings, "api_token", SecretStr("admin-tok")),
+            patch(
+                "app.core.users.refresh_token_scopes",
+                new=AsyncMock(return_value={"user-tok-1": "liyufeng"}),
+            ),
+            patch(
+                "app.main.refresh_token_scopes",
+                new=AsyncMock(return_value={"user-tok-1": "liyufeng"}),
+            ),
+        ):
+            res = client.get(
+                "/api/stats",
+                headers={"Authorization": "Bearer user-tok-1"},
+            )
+            assert res.status_code == 200
+            res = client.get(
+                "/api/stats",
+                headers={"Authorization": "Bearer someone-else"},
+            )
+            assert res.status_code == 401

@@ -175,3 +175,51 @@ async def test_start_translation_update_filters_by_access_scope():
     assert db.committed is True
     assert "papers.access_scope = 'team-a'" in _sql(db.queries[0])
     assert mock_schedule.call_count == 1
+
+
+def test_api_access_decision_accepts_extra_user_token_scope():
+    decision = api_access_decision(
+        authorization="Bearer user-token-1",
+        client_host="203.0.113.10",
+        api_token="",
+        workspace_tokens="",
+        allow_unauthenticated_remote=False,
+        extra_token_scopes=(("user-token-1", "liyufeng"),),
+    )
+    assert decision.allowed is True
+    assert decision.authenticated is True
+    assert decision.scope == "liyufeng"
+
+
+def test_api_access_decision_rejects_unknown_user_token():
+    decision = api_access_decision(
+        authorization="Bearer wrong-token",
+        client_host="203.0.113.10",
+        api_token="",
+        workspace_tokens="",
+        allow_unauthenticated_remote=False,
+        extra_token_scopes=(("user-token-1", "liyufeng"),),
+    )
+    assert decision.allowed is False
+    assert decision.status_code == 401
+
+
+def test_password_hash_roundtrip():
+    from app.core.users import hash_password, verify_password
+
+    stored = hash_password("s3cret!")
+    assert stored.startswith("pbkdf2$")
+    assert verify_password("s3cret!", stored) is True
+    assert verify_password("wrong", stored) is False
+    assert verify_password("s3cret!", "garbage") is False
+    assert verify_password("s3cret!", "pbkdf2$notanumber$zz$yy") is False
+
+
+def test_validate_username_rules():
+    from app.core.users import validate_username
+
+    assert validate_username("liyufeng") == "liyufeng"
+    with pytest.raises(ValueError):
+        validate_username("bad name")
+    with pytest.raises(ValueError):
+        validate_username("")

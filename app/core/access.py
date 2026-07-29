@@ -95,9 +95,10 @@ def api_access_decision(
     api_token: str,
     workspace_tokens: str,
     allow_unauthenticated_remote: bool,
+    extra_token_scopes: tuple[tuple[str, str], ...] = (),
 ) -> AccessDecision:
     """Authorize an API request and resolve its workspace scope."""
-    token_scopes = configured_token_scopes(api_token, workspace_tokens)
+    token_scopes = configured_token_scopes(api_token, workspace_tokens) + extra_token_scopes
     if token_scopes:
         provided = bearer_token_from_header(authorization)
         for expected, scope in token_scopes:
@@ -128,7 +129,10 @@ def api_access_decision(
     return AccessDecision(allowed=True, scope=scope, authenticated=False)
 
 
-def access_decision_for_request(request: Request) -> AccessDecision:
+def access_decision_for_request(
+    request: Request,
+    extra_token_scopes: tuple[tuple[str, str], ...] = (),
+) -> AccessDecision:
     """Resolve access for a FastAPI request using current settings."""
     return api_access_decision(
         authorization=request.headers.get("Authorization", ""),
@@ -136,12 +140,16 @@ def access_decision_for_request(request: Request) -> AccessDecision:
         api_token=settings.api_token.get_secret_value(),
         workspace_tokens=settings.workspace_tokens,
         allow_unauthenticated_remote=settings.allow_unauthenticated_remote,
+        extra_token_scopes=extra_token_scopes,
     )
 
 
-def get_request_access_scope(request: Request) -> str:
+async def get_request_access_scope(request: Request) -> str:
     """FastAPI dependency returning the current request's isolated scope."""
-    decision = access_decision_for_request(request)
+    from app.core.users import refresh_token_scopes
+
+    user_scopes = tuple((await refresh_token_scopes()).items())
+    decision = access_decision_for_request(request, extra_token_scopes=user_scopes)
     if not decision.allowed:
         raise HTTPException(decision.status_code, decision.detail)
     return decision.scope

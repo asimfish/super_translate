@@ -19,11 +19,13 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from app import __version__
+from app.api.auth import router as auth_router
 from app.api.papers import router as papers_router
 from app.core.access import access_decision_for_request, get_request_access_scope
 from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
 from app.core.rate_limit import RateLimitMiddleware
+from app.core.users import refresh_token_scopes
 
 # Stats cache with async lock, partitioned by workspace access scope so one
 # workspace can never observe another workspace's aggregate counters.
@@ -309,8 +311,12 @@ async def enforce_api_access(request: Request, call_next: RequestResponseEndpoin
         return await call_next(request)
     if request.method == "OPTIONS":
         return await call_next(request)
+    # The login endpoint must stay reachable without a token.
+    if request.url.path == "/api/auth/login":
+        return await call_next(request)
 
-    decision = access_decision_for_request(request)
+    user_scopes = tuple((await refresh_token_scopes()).items())
+    decision = access_decision_for_request(request, extra_token_scopes=user_scopes)
     if not decision.allowed:
         return JSONResponse(status_code=decision.status_code, content={"detail": decision.detail})
 
@@ -363,6 +369,7 @@ async def validation_exception_handler(
 
 
 app.include_router(papers_router)
+app.include_router(auth_router)
 
 static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
