@@ -6329,6 +6329,25 @@ def line_tail_bbox_from_cue(line: _LineRec, cue: str) -> Optional[BBox]:
     return union_bbox(bboxes) if bboxes else None
 
 
+def _line_has_same_baseline_word_neighbors(
+    record: "_RawBlockRec", line_index: int
+) -> bool:
+    """Whether other short fragments share this line's baseline band.
+
+    Heavily justified prose makes PyMuPDF report every word as its own
+    "line"; a word that happens to be a heading keyword ("experiments")
+    must not split the paragraph as a structural heading.
+    """
+    line = record.lines[line_index]
+    neighbors = 0
+    for other_index, other in enumerate(record.lines):
+        if other_index == line_index:
+            continue
+        if abs(other.bbox[1] - line.bbox[1]) <= 2.0:
+            neighbors += 1
+    return neighbors >= 2
+
+
 def segments_from_record(
     page_index: int, record: _RawBlockRec, equation_record: bool = False
 ) -> List[TextBlock]:
@@ -6418,7 +6437,8 @@ def segments_from_record(
     for line_index, line in enumerate(record.lines):
         if skip_line_index == line_index:
             continue
-        if not equation_record and line_looks_like_section_heading(line):
+        word_fragment = _line_has_same_baseline_word_neighbors(record, line_index)
+        if not equation_record and not word_fragment and line_looks_like_section_heading(line):
             flush_current()
             heading = heading_block_from_line(page_index, line)
             if heading is not None:
@@ -6427,7 +6447,11 @@ def segments_from_record(
         next_physical_line = (
             record.lines[line_index + 1] if line_index + 1 < len(record.lines) else None
         )
-        if not equation_record and line_looks_like_runin_bold_heading(line, next_physical_line):
+        if (
+            not equation_record
+            and not word_fragment
+            and line_looks_like_runin_bold_heading(line, next_physical_line)
+        ):
             flush_current()
             heading = heading_block_from_line(page_index, line)
             if heading is not None:

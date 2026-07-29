@@ -6230,3 +6230,49 @@ def test_table_region_envelopes_split_side_by_side_tables():
     left = (59.0, 284.0, 281.0, 284.0 + 4 * 9.5 + 8.0)
     right = (309.0, 315.0, 545.0, 315.0 + 3 * 8.5 + 7.0)
     assert regions == [left, right]
+
+
+class JustifiedWordFragmentTests(unittest.TestCase):
+    def test_justified_keyword_word_does_not_split_paragraph(self):
+        """oc p6 (5.2): heavy justification makes PyMuPDF report every word of
+        the first line as its own line; the word "experiments" is a structural
+        heading keyword but here it is mid-sentence and must not split the
+        paragraph into overlapping fragments."""
+        from pdf_zh_translator.pdf_layout import (
+            _LineRec,
+            _RawBlockRec,
+            segments_from_record,
+        )
+
+        def word_line(text, bbox):
+            return _LineRec(
+                text=text,
+                bbox=bbox,
+                spans=[{"text": text, "bbox": bbox, "size": 9.0, "flags": 4, "color": 0}],
+            )
+
+        words = ["We", "conduct", "experiments", "with", "ResNet50", "[13],"]
+        xs = [62.1, 86.1, 128.7, 188.2, 217.0, 267.3]
+        xe = [75.1, 117.7, 177.2, 205.9, 256.3, 286.4]
+        lines = [
+            word_line(w, (x0, 461.7, x1, 471.6))
+            for w, x0, x1 in zip(words, xs, xe)
+        ]
+        lines.append(
+            word_line(
+                "ResNet101, V2-99 [21] and ViT [8] backbones under differ-",
+                (50.1, 473.6, 286.4, 483.6),
+            )
+        )
+        lines.append(
+            word_line(
+                "ent pre-training. Following previous methods [27, 30, 39],",
+                (50.1, 485.6, 286.4, 495.5),
+            )
+        )
+
+        segments = segments_from_record(0, _RawBlockRec(lines=lines), equation_record=False)
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0].block_type, "body")
+        self.assertIn("We conduct experiments with", segments[0].text)
