@@ -63,6 +63,26 @@ Security notes:
   pins it).
 - The web UI asks for the token once and stores it in browser local storage.
 
+### User accounts (multi-user)
+
+On top of the raw API token, the app supports per-user login accounts. Each
+account gets an isolated paper library (its own access scope) and logs in
+with username + password from the web UI; the issued token is cached in the
+browser, so one login sticks per browser.
+
+```bash
+# Create the first account; --scope local inherits the pre-existing library
+.venv/bin/python scripts/manage_users.py create <username> --scope local
+# Later accounts get their own isolated library (default scope: username)
+.venv/bin/python scripts/manage_users.py create <username>
+.venv/bin/python scripts/manage_users.py list
+.venv/bin/python scripts/manage_users.py reset-password <username>
+```
+
+Passwords are stored as PBKDF2 hashes. On HTTP-only deployments the login
+request itself travels in plaintext — prefer HTTPS (or an SSH tunnel) on
+untrusted networks.
+
 ## 3. Launch
 
 ```bash
@@ -189,3 +209,11 @@ for HTTP by the cloud provider, so the public entry is the bare IP:port.
   `cd ~/super_translate && git pull`, restart by killing the tmux session
   (`tmux kill-session -t super_translate`) — the 5-minute cron job brings it
   back, or run `scripts/start_server.sh` manually.
+- Accounts: `liyufeng` (scope `local`, sees the shared library) was created
+  with `scripts/manage_users.py create liyufeng --scope local`.
+- Output size: translated PDFs used to balloon 2-3x because each preserved
+  formula re-copied the page's images; `save_pdf_for_fast_web_view` now
+  dedupes identical image streams, and `scripts/dedupe_translations.py`
+  shrinks the existing library in place (453MB → 261MB on first run).
+  The public tunnel sustains ~1MB/s, so file size is the main lever on
+  viewer responsiveness.
