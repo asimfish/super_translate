@@ -241,6 +241,51 @@ def test_saved_pdf_subsets_large_embedded_cjk_font(tmp_path):
     assert "图注" in text
 
 
+def test_saved_pdf_dedupes_repeated_images(tmp_path):
+    """show_pdf_page copies a source page's images once per call; the saved
+    output must not carry dozens of byte-identical image streams."""
+    import pikepdf
+
+    from pdf_zh_translator.pdf_layout import save_pdf_for_fast_web_view
+
+    source = fitz.open()
+    src_page = source.new_page(width=200, height=200)
+    pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 64, 64))
+    pixmap.clear_with(200)
+    src_page.insert_image(fitz.Rect(0, 0, 200, 200), pixmap=pixmap)
+
+    document = fitz.open()
+    for _ in range(3):
+        page = document.new_page(width=612, height=792)
+        for row in range(4):
+            page.show_pdf_page(
+                fitz.Rect(50, 50 + row * 100, 250, 150 + row * 100),
+                source,
+                0,
+                clip=fitz.Rect(0, 0, 200, 200),
+            )
+
+    output_pdf = tmp_path / "deduped.pdf"
+    warnings: list[str] = []
+    save_pdf_for_fast_web_view(document, output_pdf, warnings)
+    document.close()
+    source.close()
+
+    image_sizes = []
+    with pikepdf.open(output_pdf) as pdf:
+        for obj in pdf.objects:
+            if isinstance(obj, pikepdf.Stream) and obj.get("/Subtype") == pikepdf.Name("/Image"):
+                image_sizes.append(len(obj.read_raw_bytes()))
+    large = [size for size in image_sizes if size > 1024]
+    assert len(large) <= 1, f"expected one canonical image copy, got sizes {image_sizes}"
+
+    reopened = fitz.open(output_pdf)
+    for page in reopened:
+        pixmap = page.get_pixmap(dpi=36)
+        assert pixmap.width > 0
+    reopened.close()
+
+
 def test_math_symbols_fall_back_to_math_font(tmp_path):
     """Math glyphs missing from the CJK body font (like angle brackets) must
     pick a math-capable fallback instead of rendering notdef boxes."""

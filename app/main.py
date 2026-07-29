@@ -320,6 +320,10 @@ async def enforce_api_access(request: Request, call_next: RequestResponseEndpoin
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
     response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        # Fingerprinted-by-etag assets; cache for an hour so repeat visits do
+        # not revalidate every JS/CSS file through the (slow) public tunnel.
+        response.headers.setdefault("Cache-Control", "public, max-age=3600")
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "0"

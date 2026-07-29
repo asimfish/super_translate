@@ -657,6 +657,73 @@ def _subset_embedded_cjk_fonts(
                 warnings.append(f"Font subsetting skipped for one font: {exc}")
 
 
+def dedupe_pdf_images(pdf: object) -> int:
+    """Alias byte-identical image XObjects inside an open pikepdf document.
+
+    Repeated ``show_pdf_page`` calls (one per preserved formula) copy the
+    source page's images into the target document once per call, so a
+    math-heavy paper can carry dozens of orphan copies of the same figure.
+    Hash every image stream, point references at the first copy, and turn the
+    redundant copies into valid 1x1 gray pixels (blanking them outright makes
+    some viewers log "image width is zero" errors). Returns the number of
+    duplicate images neutralized.
+    """
+    import hashlib
+
+    import pikepdf
+
+    canonical: dict[str, object] = {}
+    duplicates: dict[tuple[int, int], object] = {}
+    for obj in pdf.objects:
+        if isinstance(obj, pikepdf.Stream) and obj.get("/Subtype") == pikepdf.Name("/Image"):
+            try:
+                digest = hashlib.md5(obj.read_raw_bytes()).hexdigest()
+            except Exception:
+                continue
+            if digest in canonical:
+                duplicates[obj.objgen] = canonical[digest]
+            else:
+                canonical[digest] = obj
+    if not duplicates:
+        return 0
+
+    visited: set[tuple[int, int]] = set()
+
+    def _rewrite(container: object) -> None:
+        if isinstance(container, pikepdf.Dictionary):
+            items = list(container.items())
+        else:
+            items = list(enumerate(container))
+        for key, value in items:
+            if not isinstance(value, pikepdf.Object):
+                continue
+            if value.is_indirect and value.objgen in duplicates:
+                container[key] = duplicates[value.objgen]
+            elif isinstance(value, (pikepdf.Dictionary, pikepdf.Array)):
+                objgen = value.objgen if value.is_indirect else None
+                if objgen is not None:
+                    if objgen in visited:
+                        continue
+                    visited.add(objgen)
+                _rewrite(value)
+
+    for obj in pdf.objects:
+        if isinstance(obj, (pikepdf.Dictionary, pikepdf.Array)):
+            _rewrite(obj)
+
+    for obj in pdf.objects:
+        if obj.objgen in duplicates:
+            for key in list(obj.keys()):
+                if key not in ("/Type", "/Subtype", "/Length"):
+                    del obj[key]
+            obj["/Width"] = 1
+            obj["/Height"] = 1
+            obj["/ColorSpace"] = pikepdf.Name("/DeviceGray")
+            obj["/BitsPerComponent"] = 8
+            obj.write(b"\x00")
+    return len(duplicates)
+
+
 def save_pdf_for_fast_web_view(
     document: object,
     output_pdf: Path,
@@ -676,6 +743,7 @@ def save_pdf_for_fast_web_view(
             import pikepdf
 
             with pikepdf.open(temp_pdf) as pdf:
+                dedupe_pdf_images(pdf)
                 pdf.save(linearized_pdf, linearize=True, compress_streams=True)
             linearized_pdf.replace(output_pdf)
         except Exception as exc:
