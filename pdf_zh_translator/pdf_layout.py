@@ -112,7 +112,7 @@ _HEADING_RE = re.compile(
     r"^(?:\d+(?:\.\d+)*\.?\s|[A-Z]\.\s)",
 )
 _NUMBERED_HEADING_LINE_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
-_APPENDIX_STYLE_HEADING_LINE_RE = re.compile(r"^[A-Z]\.\s+\S")
+_APPENDIX_STYLE_HEADING_LINE_RE = re.compile(r"^[A-Z]\.(?:\d+\.)*\s*\S")
 _STRUCTURE_HEADING_WORDS = {
     "abstract",
     "introduction",
@@ -257,9 +257,25 @@ MATH_FALLBACK_FONT_CANDIDATES = (
     "/usr/share/fonts/opentype/stix-word/STIX2Math.otf",
 )
 TTC_FACE_SOURCES = (
-    # (destination, ttc path, face name prefix)
-    (BODY_FONT_FILE, "/System/Library/Fonts/Supplemental/Songti.ttc", "Songti SC Regular"),
-    (BOLD_FONT_FILE, "/System/Library/Fonts/Hiragino Sans GB.ttc", "Hiragino Sans GB W6"),
+    # (destination, ((ttc path, face name prefix), ...)) — candidates are tried
+    # in order: macOS system collections first, then Linux Noto CJK. Without a
+    # real bold face, headings silently render with the regular font.
+    (
+        BODY_FONT_FILE,
+        (
+            ("/System/Library/Fonts/Supplemental/Songti.ttc", "Songti SC Regular"),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "Noto Sans CJK JP"),
+            ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", "Noto Serif CJK JP"),
+        ),
+    ),
+    (
+        BOLD_FONT_FILE,
+        (
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", "Hiragino Sans GB W6"),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "Noto Sans CJK JP"),
+            ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc", "Noto Serif CJK JP"),
+        ),
+    ),
 )
 
 
@@ -3150,16 +3166,21 @@ def build_font_pack(font_file: Optional[Path], warnings: List[str]) -> FontPack:
 
 
 def ensure_font_pack_files(warnings: List[str]) -> Tuple[Optional[Path], Optional[Path]]:
-    """Extract Songti SC Regular (body) and Hiragino W6 (headings) from the
-    system TTC collections into the repo, once."""
+    """Extract body/heading faces from system TTC collections into the repo,
+    once. Each destination tries its candidate collections in order (macOS
+    system fonts, then Linux Noto CJK)."""
     results: List[Optional[Path]] = []
-    for destination, ttc_path, face_name in TTC_FACE_SOURCES:
+    for destination, candidates in TTC_FACE_SOURCES:
         if destination.is_file():
             results.append(destination)
             continue
-        extracted = extract_ttc_face(Path(ttc_path), face_name, destination)
+        extracted = None
+        for ttc_path, face_name in candidates:
+            extracted = extract_ttc_face(Path(ttc_path), face_name, destination)
+            if extracted is not None:
+                break
         if extracted is None:
-            warnings.append("Could not extract %s from %s" % (face_name, ttc_path))
+            warnings.append("Could not extract a face for %s" % destination.name)
         results.append(extracted)
     return results[0], results[1]
 
@@ -4195,6 +4216,15 @@ def _promote_equation_table_neighbor_blocks(
             continue
         plain = " ".join(strip_sentinels(block.text).split())
         if not plain or len(plain) > 180 or block.font_size > 11.5:
+            continue
+        # Section headings are structural anchors, never table components; a
+        # wide envelope reaching across the column gutter must not swallow
+        # them (oc p9: "A.2. Additional Details" next to Algorithm 1 cells).
+        # Table header rows mis-classified as headings ("2 Cos. alignment…")
+        # carry no section-number pattern and still promote.
+        if block.block_type == "heading" and re.match(
+            r"^(?:\d+\.\d|\d+\.\s|[A-Z]\.\d|[A-Z]\.\s)", plain
+        ):
             continue
         for envelope in envelopes:
             horizontal_gap = max(
@@ -5247,12 +5277,37 @@ def _record_prose_line_count(record: _RawBlockRec) -> int:
     )
 
 
+def _line_is_pure_math_fragment(line: _LineRec) -> bool:
+    """A non-prose line carrying no real prose words at all.
+
+    Wrapped prose lines whose inline math sits on its own physical line
+    ("_{t}_{−}_{1} can be cal-") mix a few lowercase prose words between the
+    sentinel fragments; pure math towers ("∥KdC∥^{2") have none. Lowercase
+    multi-letter words are the tell: math variables are single letters,
+    concatenated symbol runs keep their uppercase, and known math functions
+    are excluded via _MATH_WORDS.
+    """
+    if line_is_prose(line):
+        return False
+    bare = strip_sentinels(line.text)
+    return not any(
+        len(word) >= 2 and word.islower() and word.lower() not in _MATH_WORDS
+        for word in _PROSE_WORD_RE.findall(bare)
+    )
+
+
 def _record_has_fragile_line_overlap(record: _RawBlockRec) -> bool:
-    """Area-intersecting line pairs involving a prose line.
+    """Area-intersecting pairs of a prose line and a PURE math fragment.
 
     Such records carry 2D math typesetting whose glyphs share area with a
     line that would be redacted and re-inserted; line-wise processing cannot
-    preserve them, so the record must keep its original rendering."""
+    preserve them, so the record must keep its original rendering.
+
+    A prose line overlapping another prose-mixed line (a wrapped sentence
+    whose inline sub/superscripts sit on their own physical line) is normal
+    paragraph typesetting that formula keepouts already handle; counting it
+    here would condemn whole paragraphs to the equation/table skip path.
+    """
     for first, second in zip(record.lines, record.lines[1:]):
         v_overlap = min(first.bbox[3], second.bbox[3]) - max(first.bbox[1], second.bbox[1])
         if v_overlap < 1.5:
@@ -5260,7 +5315,9 @@ def _record_has_fragile_line_overlap(record: _RawBlockRec) -> bool:
         h_overlap = min(first.bbox[2], second.bbox[2]) - max(first.bbox[0], second.bbox[0])
         if h_overlap <= 0:
             continue
-        if line_is_prose(first) or line_is_prose(second):
+        if line_is_prose(first) and _line_is_pure_math_fragment(second):
+            return True
+        if line_is_prose(second) and _line_is_pure_math_fragment(first):
             return True
     return False
 
@@ -5830,7 +5887,7 @@ def line_looks_like_section_heading(line: _LineRec) -> bool:
         prefix = _SECTION_NUM_RE.match(compact)
         tail = compact[prefix.end() :].strip() if prefix else compact
     elif appendix_match:
-        prefix = re.match(r"^[A-Z]\.\s+", compact)
+        prefix = re.match(r"^[A-Z]\.(?:\d+\.?)*\s*", compact)
         tail = compact[prefix.end() :].strip() if prefix else compact
     else:
         tail = compact
@@ -5880,6 +5937,35 @@ def body_block_from_line(
 def line_looks_like_summary_leadin(line: _LineRec) -> bool:
     compact = " ".join(strip_sentinels(line.text).split()).strip()
     return bool(re.match(r"^In\s+summary\b", compact, re.IGNORECASE))
+
+
+def line_looks_like_runin_bold_heading(line: _LineRec, next_line: Optional[_LineRec]) -> bool:
+    """Fully-bold short line ending in a period, continued on the same
+    baseline by a non-bold line: a run-in paragraph heading that PyMuPDF
+    split into two physical lines ("Analysis of Moving Objects." + "In this
+    section, ..."). split_bold_leadin_line only fires when both halves share
+    one line record, so this catches the two-record shape.
+    """
+    if next_line is None:
+        return False
+    compact = " ".join(strip_sentinels(line.text).split()).strip()
+    if not compact or not compact.endswith(".") or len(compact) > 80:
+        return False
+    if sentinel_char_count(line.text):
+        return False
+    words = _PROSE_WORD_RE.findall(compact)
+    if not 2 <= len(words) <= 8:
+        return False
+    spans = [s for s in line.spans if normalize_span_text(s.get("text", "")).strip()]
+    if not spans or not all(int(s.get("flags", 0)) & FLAG_BOLD for s in spans):
+        return False
+    next_spans = [s for s in next_line.spans if normalize_span_text(s.get("text", "")).strip()]
+    if not next_spans or any(int(s.get("flags", 0)) & FLAG_BOLD for s in next_spans):
+        return False
+    # Same baseline band, continuation starts to the right of the heading.
+    if abs(next_line.bbox[1] - line.bbox[1]) > 2.0:
+        return False
+    return next_line.bbox[0] >= line.bbox[2] - 2.0
 
 
 def accumulator_is_hyphenated_caption(accumulator: "_SegmentAccumulator") -> bool:
@@ -6337,6 +6423,20 @@ def segments_from_record(
             heading = heading_block_from_line(page_index, line)
             if heading is not None:
                 segments.append(heading)
+                continue
+        next_physical_line = (
+            record.lines[line_index + 1] if line_index + 1 < len(record.lines) else None
+        )
+        if not equation_record and line_looks_like_runin_bold_heading(line, next_physical_line):
+            flush_current()
+            heading = heading_block_from_line(page_index, line)
+            if heading is not None:
+                segments.append(heading)
+                current_min_y0 = max(
+                    current_min_y0 or float("-inf"),
+                    heading.bbox[3] + max(1.0, heading.font_size * 0.12),
+                )
+                current_inline_prefix_right = heading.bbox[2]
                 continue
         if not equation_record and line_looks_like_summary_leadin(line):
             flush_current()

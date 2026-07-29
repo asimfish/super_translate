@@ -5911,8 +5911,65 @@ class MixedProseEquationBlockTests(unittest.TestCase):
 
         self.assertTrue(block_is_strong_math(_RawBlockRec(lines=lines)))
 
+    def test_wrapped_prose_with_inline_subscripts_is_not_condemned(self):
+        """oc p4 (4.3): a long prose paragraph whose wrapped line carries an
+        inline subscript on its own physical line, ending with a display
+        equation number, must stay translatable — it is normal paragraph
+        typesetting, not 2D math sharing area with prose."""
+        from pdf_zh_translator.pdf_layout import (
+            _LineRec,
+            _RawBlockRec,
+            block_is_strong_math,
+            record_is_table,
+        )
 
-class FormulaFragmentToleranceTests(unittest.TestCase):
+        sentences = [
+            "As illustrated in Fig. 4, the propagation transformer con-",
+            "sists of three main components: (1) the motion-aware layer",
+            "normalization module implicitly updates the object state ac-",
+            "cording to the context embedding and motion information",
+            "recorded in the memory queue; (2) the hybrid attention re-",
+            "places the default self-attention operation. It plays the role",
+            "of temporal modeling and removing duplicated predictions;",
+            "Motion-aware Layer Normalization is designed to model",
+            "the movement of objects. For simplicity, we take the trans-",
+            "formation process from the last frame as the exam-",
+            "ple and adopt the same operation for other previous frames.",
+            "Given the ego pose matrix from the last frame and",
+            "current frame, the ego transfo-",
+        ]
+        lines = [
+            _LineRec(text=text, bbox=(309.0, 316.0 + i * 12.0, 545.0, 326.0 + i * 12.0), spans=[])
+            for i, text in enumerate(sentences)
+        ]
+        # Wrapped line mixing an inline subscript tower with hyphenated prose;
+        # it overlaps the previous prose line's area (PDF line leading).
+        lines.append(
+            _LineRec(
+                text="_{t}_{−}_{1} can be cal-",
+                bbox=(309.0, 466.0, 400.0, 477.0),
+                spans=[],
+            )
+        )
+        # Display equation tail + its number.
+        lines.append(
+            _LineRec(text="E^{t}", bbox=(400.0, 480.0, 430.0, 492.0), spans=[])
+        )
+        lines.append(
+            _LineRec(text="_{t}_{−}_{1} =E^{inv}", bbox=(400.0, 488.0, 500.0, 500.0), spans=[])
+        )
+        lines.append(
+            _LineRec(text="t", bbox=(470.0, 494.0, 480.0, 504.0), spans=[])
+        )
+        lines.append(
+            _LineRec(text="(8)", bbox=(533.0, 486.0, 545.0, 496.0), spans=[])
+        )
+
+        record = _RawBlockRec(lines=lines)
+        self.assertFalse(block_is_strong_math(record))
+        self.assertFalse(record_is_table(record))
+
+
     def test_script_split_fragment_matches_by_window(self):
         """Sub/superscript stream-order divergence keeps a long contiguous run
         of the fragment on the page; that must count as present."""
