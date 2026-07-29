@@ -6471,6 +6471,14 @@ def segments_from_record(
         if not equation_record and accumulator_is_hyphenated_caption(current):
             _accumulate_line(current, line)
             continue
+        if not equation_record and current.lines:
+            # A caption opener fused into a record that begins with figure
+            # labels must start its own segment; otherwise the translated
+            # caption anchors at the labels' bbox and overprints the figure
+            # (oc p4 Figure 4: labels + caption in one raw block).
+            compact_line = " ".join(strip_sentinels(line.text).split()).strip()
+            if _CAPTION_RE.match(compact_line):
+                flush_current()
         if not equation_record:
             split = split_bold_leadin_line(line)
             if split is not None:
