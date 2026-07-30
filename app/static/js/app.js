@@ -707,6 +707,104 @@ if (typeof pdfjsLib !== 'undefined') {
   }
 }
 
+// === Reader display mode (pdf.js vs per-page images) ===
+// The public tunnel can drop to ~100-400KB/s; pdf.js range requests on a
+// 10MB+ PDF feel broken at that speed, while a ~150KB page JPEG is fine.
+// Mode: 'auto' (probe once per session) | 'pdf' | 'image', persisted.
+let readerModePreference = localStorage.getItem('paperChinaReaderMode') || 'auto';
+let sessionSlowConnection = null;
+
+async function detectSlowConnection() {
+  if (sessionSlowConnection !== null) return sessionSlowConnection;
+  try {
+    const t0 = performance.now();
+    const res = await fetch('/static/js/app.js', { cache: 'no-store' });
+    const buf = await res.arrayBuffer();
+    const secs = Math.max((performance.now() - t0) / 1000, 0.001);
+    sessionSlowConnection = (buf.byteLength / secs) < 400 * 1024;
+  } catch {
+    sessionSlowConnection = false;
+  }
+  return sessionSlowConnection;
+}
+
+function effectiveReaderMode() {
+  if (readerModePreference !== 'auto') return readerModePreference;
+  return sessionSlowConnection ? 'image' : 'pdf';
+}
+
+function updateReaderModeButton() {
+  const btn = document.getElementById('btn-reader-mode');
+  if (!btn) return;
+  const mode = effectiveReaderMode();
+  btn.textContent = mode === 'image' ? '极速模式: 开' : '极速模式: 关';
+  btn.title = mode === 'image'
+    ? '当前为页图模式（慢速网络优化），点击切换到 PDF 原文模式'
+    : '当前为 PDF 模式，点击切换到页图模式（慢速网络更快）';
+}
+
+function toggleReaderMode() {
+  const current = effectiveReaderMode();
+  readerModePreference = current === 'image' ? 'pdf' : 'image';
+  localStorage.setItem('paperChinaReaderMode', readerModePreference);
+  updateReaderModeButton();
+  if (currentPaper) openReader(currentPaper.id);
+}
+
+async function loadPanelDocument(panel, loadId) {
+  if (effectiveReaderMode() === 'image') {
+    return loadImageDocument(panel, loadId);
+  }
+  return loadPdfDocument(panel, `/api/papers/${currentPaper.id}/view/${panel}`, loadId);
+}
+
+async function loadImageDocument(panel, loadId = currentLoadId) {
+  const container = document.getElementById(`pdf-container-${panel}`);
+  container.textContent = '';
+  const pageCount = currentPaper.page_count || 1;
+  const wrappers = [];
+  for (let i = 0; i < pageCount; i++) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'pdf-page-wrapper';
+    wrapper.style.minHeight = '800px';
+    wrapper.dataset.pageIdx = i;
+    wrapper.innerHTML = '<div class="pdf-page-loading">加载中...</div>';
+    container.appendChild(wrapper);
+    wrappers.push(wrapper);
+  }
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      observer.unobserve(entry.target);
+      loadPreviewImage(panel, entry.target, loadId);
+    }
+  }, { root: container, rootMargin: '600px' });
+  wrappers.forEach((w) => observer.observe(w));
+  if (renderObservers[panel]) renderObservers[panel].disconnect();
+  renderObservers[panel] = observer;
+}
+
+async function loadPreviewImage(panel, wrapper, loadId) {
+  const page = parseInt(wrapper.dataset.pageIdx, 10) + 1;
+  try {
+    const res = await apiFetch(`/api/papers/${currentPaper.id}/preview/${panel}/${page}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    if (loadId !== currentLoadId) return;
+    const url = URL.createObjectURL(blob);
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = `第 ${page} 页`;
+    img.style.width = '100%';
+    img.style.display = 'block';
+    img.onload = () => { wrapper.style.minHeight = ''; };
+    wrapper.textContent = '';
+    wrapper.appendChild(img);
+  } catch {
+    wrapper.innerHTML = '<div class="pdf-page-loading">本页加载失败</div>';
+  }
+}
+
 async function openReader(paperId) {
   // Cancel any ongoing load
   const loadId = ++currentLoadId;
@@ -758,7 +856,9 @@ async function openReader(paperId) {
   pageWrappers = { original: [], translated: [] };
 
   // Load original PDF first enough to show the first page quickly.
-  await loadPdfDocument('original', `/api/papers/${paperId}/view/original`, loadId);
+  await detectSlowConnection();
+  updateReaderModeButton();
+  await loadPanelDocument('original', loadId);
   if (loadId !== currentLoadId) return;
 
   const btnTranslate = document.getElementById('btn-translate');
@@ -767,7 +867,7 @@ async function openReader(paperId) {
   if (currentPaper.has_translated) {
     placeholder.classList.add('hidden');
     document.getElementById('pdf-container-translated').classList.remove('hidden');
-    void loadPdfDocument('translated', `/api/papers/${paperId}/view/translated`, loadId)
+    void loadPanelDocument('translated', loadId)
       .then(() => {
         if (loadId === currentLoadId) requestAnimationFrame(() => syncScrollFromPanel('original'));
       });
@@ -1768,6 +1868,7 @@ const actionHandlers = {
   'show-upload': showUpload,
   'show-library': showLibrary,
   'logout': logout,
+  'toggle-reader-mode': toggleReaderMode,
   'batch-translate': batchTranslate,
   'do-upload': doUpload,
   'cancel-upload': cancelUpload,
@@ -1894,5 +1995,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initDropZone();
   initResizer();
   updateCurrentUserBadge();
+  updateReaderModeButton();
   loadPapers();
 });

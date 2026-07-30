@@ -2270,6 +2270,75 @@ async def view_translated(
     return await _serve_paper_file(paper, "translated_filename", settings.translations_path)
 
 
+_PREVIEW_DPI = 110
+_PREVIEW_JPEG_QUALITY = 75
+
+
+def _render_page_preview(pdf_path: Path, page_number: int, out_path: Path) -> None:
+    """Render one PDF page to a JPEG preview (cached alongside translations)."""
+    import fitz
+
+    document = fitz.open(str(pdf_path))
+    try:
+        page = document[page_number - 1]
+        pixmap = page.get_pixmap(dpi=_PREVIEW_DPI)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(pixmap.tobytes("jpeg", jpg_quality=_PREVIEW_JPEG_QUALITY))
+    finally:
+        document.close()
+
+
+@router.get("/{paper_id}/preview/{which}/{page_number}")
+async def preview_page(
+    paper_id: str,
+    which: str,
+    page_number: int,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
+) -> FileResponse:
+    """Per-page JPEG preview for slow connections.
+
+    The public tunnel sustains only ~0.1-1MB/s, so streaming an 11MB PDF
+    through pdf.js range requests feels sluggish; a ~150KB page image is
+    what actually makes the reader usable on that link. Rendered on demand
+    and cached on disk (cleared with the translation outputs on re-run).
+    """
+    if which not in ("original", "translated"):
+        raise HTTPException(400, "which must be 'original' or 'translated'")
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
+    if which == "original":
+        pdf_path = _get_paper_file(paper, "stored_filename", settings.papers_path)
+        pdf_path = await asyncio.to_thread(safe_pdf_for_use, pdf_path)
+    else:
+        if paper.translation_status != TranslationStatus.COMPLETED.value:
+            raise HTTPException(409, "Translation not completed yet")
+        pdf_path = _get_paper_file(paper, "translated_filename", settings.translations_path)
+    if not 1 <= page_number <= max(paper.page_count, 1):
+        raise HTTPException(404, "Page out of range")
+
+    cache_path = (
+        settings.translations_path
+        / paper.id
+        / "preview"
+        / which
+        / f"{pdf_path.stat().st_mtime_ns}-{page_number}.jpg"
+    )
+    if not cache_path.exists():
+        # Drop stale previews for other revisions of the same PDF.
+        for stale in cache_path.parent.glob("*.jpg"):
+            stale.unlink(missing_ok=True)
+        try:
+            await asyncio.to_thread(_render_page_preview, pdf_path, page_number, cache_path)
+        except Exception as exc:
+            logger.warning("Preview render failed for %s page %d: %s", paper_id, page_number, exc)
+            raise HTTPException(500, "Preview render failed") from None
+    return FileResponse(
+        cache_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 @router.get("/{paper_id}/qa-report")
 async def get_qa_report(
     paper_id: str,

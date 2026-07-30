@@ -3859,3 +3859,80 @@ class TestSelfHealingRetry:
 
         assert mock_translate.call_count == 2
         assert paper.translation_status == "failed"
+
+
+class TestPagePreviewEndpoint:
+    """Per-page JPEG preview for slow connections."""
+
+    def _paper(self, tmp_path, translated=True):
+        import fitz
+
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        (translations_dir / "paper123").mkdir(parents=True)
+        for path in (papers_dir / "test.pdf", translations_dir / "paper123" / "test-mono.pdf"):
+            doc = fitz.open()
+            page = doc.new_page(width=612, height=792)
+            page.insert_text((72, 100), "Preview test page.")
+            doc.save(path)
+            doc.close()
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translated_filename = "paper123/test-mono.pdf" if translated else None
+        paper.translation_status = "completed" if translated else "pending"
+        paper.page_count = 1
+        return paper, papers_dir, translations_dir
+
+    def test_preview_renders_jpeg_and_caches(self, client, tmp_path):
+        from unittest.mock import patch
+        from app.api.papers import _render_page_preview
+
+        paper, papers_dir, translations_dir = self._paper(tmp_path)
+        with (
+            patch("app.api.papers._get_paper_or_404", new=AsyncMock(return_value=paper)),
+            patch("app.api.papers.settings") as mock_settings,
+        ):
+            mock_settings.papers_path = papers_dir
+            mock_settings.translations_path = translations_dir
+            mock_settings.base_dir = tmp_path
+            with patch("app.api.papers.safe_pdf_for_use", side_effect=lambda p: p):
+                res = client.get("/api/papers/paper123/preview/translated/1")
+                assert res.status_code == 200
+                assert res.headers["content-type"] == "image/jpeg"
+                assert res.content[:2] == b"\xff\xd8"
+                # Second call serves the cached file (no re-render).
+                with patch("app.api.papers._render_page_preview", side_effect=AssertionError("re-render")):
+                    res2 = client.get("/api/papers/paper123/preview/translated/1")
+                    assert res2.status_code == 200
+
+    def test_preview_rejects_out_of_range_page(self, client, tmp_path):
+        from unittest.mock import patch
+
+        paper, papers_dir, translations_dir = self._paper(tmp_path)
+        with (
+            patch("app.api.papers._get_paper_or_404", new=AsyncMock(return_value=paper)),
+            patch("app.api.papers.settings") as mock_settings,
+        ):
+            mock_settings.papers_path = papers_dir
+            mock_settings.translations_path = translations_dir
+            mock_settings.base_dir = tmp_path
+            res = client.get("/api/papers/paper123/preview/translated/99")
+            assert res.status_code == 404
+
+    def test_preview_original_works(self, client, tmp_path):
+        from unittest.mock import patch
+
+        paper, papers_dir, translations_dir = self._paper(tmp_path)
+        with (
+            patch("app.api.papers._get_paper_or_404", new=AsyncMock(return_value=paper)),
+            patch("app.api.papers.settings") as mock_settings,
+            patch("app.api.papers.safe_pdf_for_use", side_effect=lambda p: p),
+        ):
+            mock_settings.papers_path = papers_dir
+            mock_settings.translations_path = translations_dir
+            mock_settings.base_dir = tmp_path
+            res = client.get("/api/papers/paper123/preview/original/1")
+            assert res.status_code == 200
+            assert res.headers["content-type"] == "image/jpeg"
