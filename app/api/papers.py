@@ -1355,64 +1355,87 @@ async def _do_translate(
     # Phase 2: Run translation (no DB session held)
     on_progress = _create_progress_handler(paper_id, loop, job_id=job_id)
 
-    try:
-        trans_result = await asyncio.to_thread(
-            translate_pdf_sync,
-            input_path,
-            output_dir,
-            config,
-            on_progress,
-        )
-    except TranslationCancelledError:
-        await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)
-        return
-    except Exception as e:
-        elapsed = time.monotonic() - start_time
-        logger.exception("Translation crashed for paper %s", paper_id)
-        _append_log(paper_id, loop, f"翻译失败: {sanitize_error(e)} (耗时 {elapsed:.0f}秒)")
-        async with async_session() as db:
-            result = await db.execute(select(Paper).where(Paper.id == paper_id))
-            paper = result.scalar_one_or_none()
-            if paper:
-                paper.translation_status = TranslationStatus.FAILED.value
-                paper.translation_error = sanitize_error(e)
-                await _update_translation_job(
-                    db,
-                    job_id,
-                    status=TranslationJobStatus.FAILED.value,
-                    error=sanitize_error(e),
-                    finished=True,
-                )
-                await db.commit()
-        cleanup_output_dir(output_dir)
-        _clear_cancel_requested(paper_id)
-        return
+    # Phase 2: Run translation (no DB session held)
+    on_progress = _create_progress_handler(paper_id, loop, job_id=job_id)
 
+    # Self-healing: when QA only flags untranslated blocks (supplier echoed the
+    # source or fell back to it), run one more full pass. Cached blocks resolve
+    # instantly; the untranslated blocks were never cached, so they are
+    # regenerated with fresh supplier calls.
+    max_attempts = 1 + _SELF_HEAL_MAX_RETRIES
+    trans_result = None
     qa_failure_error: str | None = None
-    if trans_result.success and trans_result.mono_path:
+    for attempt in range(1, max_attempts + 1):
         try:
-            unresolved_issues = await asyncio.to_thread(
-                _run_post_translation_qa,
-                paper_id,
-                loop,
+            trans_result = await asyncio.to_thread(
+                translate_pdf_sync,
                 input_path,
-                trans_result,
-                qa_mode=qa_mode,
-                max_passes=qa_max_passes,
-                job_id=job_id,
+                output_dir,
+                config,
+                on_progress,
             )
         except TranslationCancelledError:
             await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)
             return
-        if _has_blocking_qa_error(unresolved_issues):
-            qa_failure_error = _qa_failure_error_message(unresolved_issues, blocking=True)
-        elif _has_unresolved_error(unresolved_issues):
-            qa_failure_error = _qa_failure_error_message(unresolved_issues, blocking=False)
-            _append_log(
-                paper_id,
-                loop,
-                "译后检查失败：仍有未解决问题，已保留译文并生成 QA 报告供复核",
-            )
+        except Exception as e:
+            elapsed = time.monotonic() - start_time
+            logger.exception("Translation crashed for paper %s", paper_id)
+            _append_log(paper_id, loop, f"翻译失败: {sanitize_error(e)} (耗时 {elapsed:.0f}秒)")
+            async with async_session() as db:
+                result = await db.execute(select(Paper).where(Paper.id == paper_id))
+                paper = result.scalar_one_or_none()
+                if paper:
+                    paper.translation_status = TranslationStatus.FAILED.value
+                    paper.translation_error = sanitize_error(e)
+                    await _update_translation_job(
+                        db,
+                        job_id,
+                        status=TranslationJobStatus.FAILED.value,
+                        error=sanitize_error(e),
+                        finished=True,
+                    )
+                    await db.commit()
+            cleanup_output_dir(output_dir)
+            _clear_cancel_requested(paper_id)
+            return
+
+        qa_failure_error = None
+        unresolved_issues: list = []
+        if trans_result.success and trans_result.mono_path:
+            try:
+                unresolved_issues = await asyncio.to_thread(
+                    _run_post_translation_qa,
+                    paper_id,
+                    loop,
+                    input_path,
+                    trans_result,
+                    qa_mode=qa_mode,
+                    max_passes=qa_max_passes,
+                    job_id=job_id,
+                )
+            except TranslationCancelledError:
+                await _finalize_cancelled_translation(
+                    paper_id, loop, output_dir, start_time, job_id
+                )
+                return
+            if _has_blocking_qa_error(unresolved_issues):
+                qa_failure_error = _qa_failure_error_message(unresolved_issues, blocking=True)
+            elif _has_unresolved_error(unresolved_issues):
+                if attempt < max_attempts and _only_self_healable_errors(unresolved_issues):
+                    _append_log(
+                        paper_id,
+                        loop,
+                        "检测到疑似漏翻,自动重试一次翻译 (已翻译块走缓存,仅重新生成漏翻块)",
+                    )
+                    _set_translation_stage(paper_id, loop, "漏翻重试", job_id=job_id)
+                    continue
+                qa_failure_error = _qa_failure_error_message(unresolved_issues, blocking=False)
+                _append_log(
+                    paper_id,
+                    loop,
+                    "译后检查失败：仍有未解决问题，已保留译文并生成 QA 报告供复核",
+                )
+        break
 
     elapsed = time.monotonic() - start_time
     terminal_job_status: str | None = None
@@ -1739,6 +1762,25 @@ def _has_fixable_layout_issue(issues: list) -> bool:
 
 def _has_unresolved_error(issues: list) -> bool:
     return any(getattr(issue, "severity", "warning") == "error" for issue in issues)
+
+
+# QA error classes a fresh translation pass can plausibly fix: the supplier
+# echoed the source text or the pipeline fell back to it. Layout/structural
+# errors (overlaps, missing images, ...) do not benefit from re-translation.
+_SELF_HEALABLE_QA_CODES = {
+    "untranslated_english",
+    "untranslated_caption",
+    "untranslated_formula_explanation",
+}
+_SELF_HEAL_MAX_RETRIES = 1
+
+
+def _only_self_healable_errors(issues: list) -> bool:
+    """Whether every error-severity issue is a re-translatable untranslated case."""
+    errors = [issue for issue in issues if getattr(issue, "severity", "warning") == "error"]
+    return bool(errors) and all(
+        getattr(issue, "code", "") in _SELF_HEALABLE_QA_CODES for issue in errors
+    )
 
 
 _QA_ERROR_LABELS = {

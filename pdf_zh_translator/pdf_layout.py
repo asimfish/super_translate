@@ -1746,7 +1746,10 @@ def _looks_like_compact_control_table_row(text: str) -> bool:
 
 def _looks_like_author_or_affiliation_text(text: str) -> bool:
     compact = " ".join(text.split())
-    if "@" in compact or re.search(r"\{[^{}]{3,80}\}", compact):
+    # Brace groups only signal affiliation e-mail lists ("{alice,bob}@edu");
+    # a bare "{traj}" from a restored LaTeX subscript must not exempt a whole
+    # formula-dense paragraph from untranslated-English detection.
+    if "@" in compact or re.search(r"\{[^{}]{2,60}(?:,[^{}]{1,60})+\}", compact):
         return True
     authorish = re.sub(r"(?<=[a-z])\d+(?=[A-Z])", " ", compact)
     names = re.findall(r"\b[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+)+", authorish)

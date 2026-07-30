@@ -3726,3 +3726,136 @@ class TestAuthLogin:
                 headers={"Authorization": "Bearer someone-else"},
             )
             assert res.status_code == 401
+
+
+class TestSelfHealingRetry:
+    """QA untranslated-only failures trigger one automatic re-translation."""
+
+    def _paper(self):
+        paper = MagicMock()
+        paper.id = "paper123"
+        paper.stored_filename = "test.pdf"
+        paper.translated_filename = None
+        paper.dual_filename = None
+        paper.translation_status = "pending"
+        paper.page_count = 1
+        paper.file_size = 1024
+        paper.translation_log = ""
+        return paper
+
+    def test_only_self_healable_errors_classifier(self):
+        from types import SimpleNamespace
+
+        from app.api.papers import _only_self_healable_errors
+
+        issue = lambda code, severity="error": SimpleNamespace(code=code, severity=severity)
+        assert _only_self_healable_errors([issue("untranslated_english")]) is True
+        assert _only_self_healable_errors(
+            [issue("untranslated_english"), issue("untranslated_caption")]
+        ) is True
+        assert _only_self_healable_errors(
+            [issue("untranslated_english"), issue("text_overlap")]
+        ) is False
+        assert _only_self_healable_errors([issue("high_risk_layout", "warning")]) is False
+        assert _only_self_healable_errors([]) is False
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_untranslated_only_failure_retries_once(self, mock_settings, mock_translate, tmp_path):
+        from types import SimpleNamespace as NS
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = self._paper()
+        db = TestRunTranslation._setup_db_mock(self, paper)
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+        TestRunTranslation._write_valid_pdf(self, papers_dir / "test.pdf", "Original.")
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        TestRunTranslation._write_valid_pdf(self, mono_path, "译文内容。")
+        mock_translate.return_value = TranslationResult(mono_path=mono_path)
+
+        qa_results = [
+            [NS(page=6, code="untranslated_english", message="漏翻", severity="error")],
+            [],
+        ]
+        with (
+            patch("app.core.database.async_session",
+                  TestRunTranslation._make_async_session_mock(self, db)),
+            patch("app.api.papers._run_post_translation_qa", side_effect=qa_results),
+        ):
+            _run_translation("paper123", "google", "fast")
+
+        assert mock_translate.call_count == 2
+        assert paper.translation_status == "completed"
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_layout_error_does_not_retry(self, mock_settings, mock_translate, tmp_path):
+        from types import SimpleNamespace as NS
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = self._paper()
+        db = TestRunTranslation._setup_db_mock(self, paper)
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+        TestRunTranslation._write_valid_pdf(self, papers_dir / "test.pdf", "Original.")
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        TestRunTranslation._write_valid_pdf(self, mono_path, "译文内容。")
+        mock_translate.return_value = TranslationResult(mono_path=mono_path)
+
+        qa_results = [[NS(page=2, code="text_overlap", message="重叠", severity="error")]]
+        with (
+            patch("app.core.database.async_session",
+                  TestRunTranslation._make_async_session_mock(self, db)),
+            patch("app.api.papers._run_post_translation_qa", side_effect=qa_results),
+        ):
+            _run_translation("paper123", "google", "fast")
+
+        assert mock_translate.call_count == 1
+        assert paper.translation_status == "failed"
+
+    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers.settings")
+    def test_persistent_untranslated_fails_after_one_retry(
+        self, mock_settings, mock_translate, tmp_path
+    ):
+        from types import SimpleNamespace as NS
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = self._paper()
+        db = TestRunTranslation._setup_db_mock(self, paper)
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+        TestRunTranslation._write_valid_pdf(self, papers_dir / "test.pdf", "Original.")
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        TestRunTranslation._write_valid_pdf(self, mono_path, "译文内容。")
+        mock_translate.return_value = TranslationResult(mono_path=mono_path)
+
+        qa_results = [
+            [NS(page=6, code="untranslated_english", message="漏翻", severity="error")],
+            [NS(page=6, code="untranslated_english", message="漏翻", severity="error")],
+        ]
+        with (
+            patch("app.core.database.async_session",
+                  TestRunTranslation._make_async_session_mock(self, db)),
+            patch("app.api.papers._run_post_translation_qa", side_effect=qa_results),
+        ):
+            _run_translation("paper123", "google", "fast")
+
+        assert mock_translate.call_count == 2
+        assert paper.translation_status == "failed"
