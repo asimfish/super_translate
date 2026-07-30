@@ -4079,13 +4079,27 @@ def _equation_table_region_bboxes(
     records: Sequence[_RawBlockRec],
     equation_flags: Sequence[bool],
 ) -> List[BBox]:
-    """Return cell-level regions for numeric tables skipped as equations."""
+    """Return cell-level regions for numeric tables skipped as equations.
+
+    Prose-dominant sentence lines are excluded: they are extracted as
+    translatable blocks (formula cells stay protected by placeholder
+    markers), so treating them as preserved regions would both hide them
+    from translation and falsely condemn their Chinese text as
+    preserved-area changes.
+    """
     regions: List[BBox] = []
     for record, is_equation in zip(records, equation_flags):
         if not is_equation or not record_is_table(record):
             continue
-        cells = [line.bbox for line in record.lines if strip_sentinels(line.text).strip()]
-        regions.extend(cells or [record.bbox])
+        cells = [
+            line.bbox
+            for line in record.lines
+            if strip_sentinels(line.text).strip()
+            and not _line_is_prose_dominant_sentence(line)
+        ]
+        if not cells and not any(strip_sentinels(line.text).strip() for line in record.lines):
+            cells = [record.bbox]
+        regions.extend(cells)
     return list(dict.fromkeys(regions))
 
 
@@ -4278,6 +4292,16 @@ def _promote_equation_table_neighbor_blocks(
             if (
                 not center_inside_table
                 and substantial_prose_word_count(plain) >= TABLE_HEADER_PROSE_WORD_LIMIT
+            ):
+                continue
+            # A sentence ending in ":" introduces what follows (an equation, a
+            # list); it is never a table header ("This leads to the Static SB
+            # problem:" above equation (2) on IPMF p3).
+            if (
+                not center_inside_table
+                and plain.endswith(":")
+                and len(_prose_words(plain)) >= 3
+                and _PROSE_VERB_RE.search(plain)
             ):
                 continue
             block.block_type = "table"
@@ -5800,22 +5824,38 @@ def line_formula_prefix_prose_tail(line: _LineRec) -> Optional[_LineRec]:
     return None
 
 
+_PROSE_VERB_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been|has|have|shows?|gives?|"
+    r"exceeds?|matches?|compares?|between|versus|with|from|toward|"
+    # Math-paper prose verbs: formula explanations ("we denote the
+    # density at...", "let q be the process...") are sentences too.
+    r"denotes?|defines?|lets?|consider|assumes?|supposes?|obtains?|"
+    r"recall|notes?|states?|yields?|writes?|chooses?|called|leads?)\b",
+    re.IGNORECASE,
+)
+
+
+def _prose_words(text: str) -> List[str]:
+    return [word for word in _PROSE_WORD_RE.findall(text) if word.lower() not in _MATH_WORDS]
+
+
+def _line_is_prose_dominant_sentence(line: _LineRec) -> bool:
+    """A complete English sentence that merely carries inline math (≥4 prose
+    words plus a verb), as opposed to a display formula with a short prose
+    connective ("and q(x1) to be close to p1(x1)")."""
+    bare = strip_sentinels(line.text)
+    return len(_prose_words(bare)) >= 4 and bool(_PROSE_VERB_RE.search(bare))
+
+
 def line_is_prose(line: _LineRec) -> bool:
     """Inside an equation zone, full English sentences (e.g. a Remark line or
     a short connective like 'the forward equation is' that PyMuPDF glued onto
     the equation block) must still be translated."""
     bare = strip_sentinels(line.text)
-    words = [word for word in _PROSE_WORD_RE.findall(bare) if word.lower() not in _MATH_WORDS]
+    words = _prose_words(bare)
     has_formula_tail = line_has_translatable_formula_tail(line)
     has_short_fragment = line_has_short_formula_prose_fragment(line)
-    strong_mixed_prose = len(words) >= 5 and bool(
-        re.search(
-            r"\b(?:is|are|was|were|be|been|has|have|shows?|gives?|"
-            r"exceeds?|matches?|compares?|between|versus|with|from|toward)\b",
-            bare,
-            re.IGNORECASE,
-        )
-    )
+    strong_mixed_prose = len(words) >= 5 and bool(_PROSE_VERB_RE.search(bare))
     comparison_text = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", bare)
     metric_comparison = bool(
         re.search(r"\bis\b.*\bversus\b", comparison_text, re.IGNORECASE)
@@ -6408,7 +6448,13 @@ def segments_from_record(
             if block is not None:
                 block.nowrap = True
                 block.no_merge = True
-                block.block_type = "table"
+                if _line_is_prose_dominant_sentence(line):
+                    # Full sentences wedged between formula rows ("This leads
+                    # to the Static SB problem:") are translatable; the redact
+                    # bbox stays trimmed against neighbouring formula cells.
+                    block.block_type = "body"
+                else:
+                    block.block_type = "table"
                 block.redact_bboxes = [equation_table_prose_redact_bbox(line, record.lines)]
                 segments.append(block)
         return segments
@@ -6580,7 +6626,11 @@ def segments_from_record(
             _accumulate_line(current, line)
             current_has_inline_tail = True
             continue
-        elif is_display_equation_line(line.text):
+        elif is_display_equation_line(line.text) and not _line_is_prose_dominant_sentence(line):
+            # A full English sentence stays translatable even when its inline
+            # math makes it look like a display equation — the math is
+            # placeholder-protected anyway ("where Π(p0,p1) ⊂ P is the subset
+            # of joint distributions..." on IPMF p3).
             flush_current()
             preserved_line_bboxes.append(line.bbox)
             continue

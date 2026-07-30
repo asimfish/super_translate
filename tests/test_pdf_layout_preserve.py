@@ -6330,3 +6330,45 @@ class TranslationEchoDetectionTests(unittest.TestCase):
             block_type="body",
         )
         self.assertFalse(_translated_block_still_english(block, "StreamPETR"))
+
+
+class EquationTableProseSentenceTests(unittest.TestCase):
+    def test_sentence_between_formula_rows_stays_translatable(self):
+        """IPMF p3: 'This leads to the Static SB problem:' wedged above the
+        rows of display equation (2) must be extracted as a translatable
+        sentence, not condemned as a table cell; the formula rows themselves
+        stay preserved."""
+        from pdf_zh_translator.pdf_layout import (
+            _equation_table_region_bboxes,
+            _LineRec,
+            _RawBlockRec,
+            segments_from_record,
+        )
+
+        def line(text, y0, x0=108.0, x1=300.0):
+            return _LineRec(
+                text=text,
+                bbox=(x0, y0, x1, y0 + 10.0),
+                spans=[{"text": text, "bbox": (x0, y0, x1, y0 + 10.0), "size": 9.0, "flags": 4, "color": 0}],
+            )
+
+        lines = [
+            line("This leads to the Static SB problem:", 513.0),
+            line("min", 528.0, 108.0, 130.0),
+            line("_{q}_{∈}Π(_{p}_{0}_{,p}_{1}_{)}KL", 528.0, 200.0, 330.0),
+            line("q(x_{0}, x_{1})||p^{W}^{ϵ}(x_{0}, x_{1})", 552.0, 108.0, 300.0),
+            line("(2)", 552.0, 480.0, 504.0),
+        ]
+        record = _RawBlockRec(lines=lines)
+
+        segments = segments_from_record(0, record, equation_record=True)
+        bodies = [s for s in segments if s.block_type == "body"]
+        self.assertEqual(len(bodies), 1)
+        self.assertIn("Static SB problem", bodies[0].text)
+
+        from pdf_zh_translator.pdf_layout import record_is_table
+
+        self.assertTrue(record_is_table(record))
+        regions = _equation_table_region_bboxes([record], [True])
+        self.assertNotIn(lines[0].bbox, regions)
+        self.assertIn(lines[1].bbox, regions)
