@@ -72,8 +72,8 @@ def test_reader_pdf_open_renders_first_page_before_background_work():
     )
     assert "wrapper.innerHTML = '<div class=\"pdf-page-loading\">加载中...</div>';" in js
     assert ".pdf-page-loading" in css
-    assert "void loadPdfDocument('translated'" in js
-    assert "await loadPdfDocument('translated'" not in js
+    assert "void loadPanelDocument('translated'" in js
+    assert "await loadPanelDocument('translated'" not in js
 
 
 def test_translation_progress_ui_has_client_eta_smoothing():
