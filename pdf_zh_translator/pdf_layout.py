@@ -2312,13 +2312,46 @@ def _restore_unit_translation(
     return clean_translation(restored), missing
 
 
+def _translation_echoes_source(block: TextBlock, translated_text: str) -> bool:
+    """The result is word-for-word the source: the supplier echoed it or the
+    placeholder fallback kept it. The legitimately-English exemptions do not
+    apply here — a prose block that should have been translated is never
+    correctly left identical to its source, whatever it looks like."""
+    if _CJK_DETECT_RE.search(translated_text):
+        return False
+    source = " ".join(strip_sentinels(block.text).split())
+    source_words = [
+        word.lower()
+        for word in _PROSE_WORD_RE.findall(source)
+        if word.lower() not in _MATH_WORDS
+    ]
+    if len(source_words) < 5:
+        return False
+    result_words = [
+        word.lower()
+        for word in _PROSE_WORD_RE.findall(translated_text)
+        if word.lower() not in _MATH_WORDS
+    ]
+    if not result_words:
+        return False
+    import difflib
+
+    return (
+        difflib.SequenceMatcher(
+            None, " ".join(source_words), " ".join(result_words)
+        ).ratio()
+        >= 0.75
+    )
+
+
 def _translated_block_still_english(block: TextBlock, translated_text: str) -> bool:
     if not block.should_translate:
         return False
     if block.block_type in ("algorithm", "bibliography", "equation", "figure_label", "footer"):
         return False
     return (
-        _looks_like_untranslated_english(translated_text)
+        _translation_echoes_source(block, translated_text)
+        or _looks_like_untranslated_english(translated_text)
         or _contains_untranslated_english_run(translated_text)
         or _translation_contains_commentary(translated_text)
     )

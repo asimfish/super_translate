@@ -6276,3 +6276,57 @@ class JustifiedWordFragmentTests(unittest.TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0].block_type, "body")
         self.assertIn("We conduct experiments with", segments[0].text)
+
+
+class TranslationEchoDetectionTests(unittest.TestCase):
+    def test_formula_dense_echo_is_flagged(self):
+        """IPMF p3: the restored echo of a formula-explanation block must be
+        flagged even though it trips the reference/author exemptions."""
+        from pdf_zh_translator.pdf_layout import _translated_block_still_english
+
+        block = TextBlock(
+            page_index=2,
+            bbox=(108.0, 415.0, 504.0, 440.0),
+            text=(
+                "where Π_{N}(p_{0}, p_{1})⊂P_{2,ac}(R^{D×(N+2)}) is the subset of "
+                "discrete stochastic processes with marginals q(x_{0}) = p_{0}(x_{0}). "
+                "The objective function in (1) admits a decomposition into simpler terms."
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="body",
+        )
+        echo = block.text
+        self.assertTrue(_translated_block_still_english(block, echo))
+
+    def test_genuine_translation_is_not_flagged(self):
+        from pdf_zh_translator.pdf_layout import _translated_block_still_english
+
+        block = TextBlock(
+            page_index=2,
+            bbox=(108.0, 415.0, 504.0, 440.0),
+            text="where Π_{N}(p_{0}, p_{1}) is the subset of discrete stochastic processes with given marginals.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="body",
+        )
+        translated = "其中 Π_{N}(p_{0}, p_{1}) 是具有给定边缘分布的离散随机过程子集。"
+        self.assertFalse(_translated_block_still_english(block, translated))
+
+    def test_short_proper_noun_identity_is_not_flagged(self):
+        """Blocks under five prose words may legitimately stay as-is (proper
+        nouns); the echo check must not condemn them."""
+        from pdf_zh_translator.pdf_layout import _translated_block_still_english
+
+        block = TextBlock(
+            page_index=0,
+            bbox=(108.0, 100.0, 200.0, 112.0),
+            text="StreamPETR",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="body",
+        )
+        self.assertFalse(_translated_block_still_english(block, "StreamPETR"))

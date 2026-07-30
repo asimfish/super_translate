@@ -57,6 +57,18 @@ class DroppingPlaceholderTranslator(Translator):
         return ["公式已翻译" for _text in texts]
 
 
+class EchoingTranslator(Translator):
+    """Mangles every marker-bearing call and echoes marker-free prose, so
+    every recovery stage (single, split, prose segments) fails."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def translate_batch(self, texts):
+        self.calls += 1
+        return ["丢失占位符" if "⟦" in text else text for text in texts]
+
+
 class BatchDropsSingleKeepsTranslator(Translator):
     """Loses placeholders in batch mode, preserves them one-by-one."""
 
@@ -269,11 +281,13 @@ class TranslatorParsingTests(unittest.TestCase):
     def test_persistently_invalid_placeholder_block_falls_back_to_source(self):
         """A block whose placeholders keep getting mangled degrades to
         untranslated source text instead of failing the whole document, and
-        the fallback is never persisted to the cache file."""
+        the fallback is never persisted to the cache file. The supplier here
+        cannot even translate marker-free prose fragments (it echoes
+        English), so every recovery stage gives up."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_file = Path(tmpdir) / "cache.jsonl"
             source = "Formula ⟦0⟧ remains unchanged."
-            wrapped = DroppingPlaceholderTranslator()
+            wrapped = EchoingTranslator()
             cached = CachedTranslator(wrapped, cache_file)
 
             translated = cached.translate_batch([source])
@@ -287,6 +301,38 @@ class TranslatorParsingTests(unittest.TestCase):
                 cache_file.read_text(encoding="utf-8") if cache_file.exists() else ""
             )
             self.assertEqual(persisted.strip(), "")
+
+    def test_marker_dense_block_recovers_via_prose_segments(self):
+        """IPMF p3 regression: a formula-dense block whose markers get mangled
+        in every marker-bearing call (batch, single, and both halves) is
+        recovered by translating only the prose runs between markers and
+        splicing the original markers back."""
+        source = (
+            "where Π⟦0⟧ is the subset of discrete stochastic processes with "
+            "marginals ⟦1⟧. The objective function in (1) admits a "
+            "decomposition KL ⟦2⟧ into simpler terms."
+        )
+
+        class ManglesMarkersKeepsProse(Translator):
+            def translate_batch(self, texts):
+                outputs = []
+                for text in texts:
+                    if "⟦" in text:
+                        outputs.append("翻译丢失占位符")
+                    else:
+                        outputs.append("译:" + text)
+                return outputs
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            cached = CachedTranslator(ManglesMarkersKeepsProse(), cache_file)
+
+            translated = cached.translate_batch([source])
+
+            self.assertNotEqual(translated, [source])
+            self.assertTrue(placeholders_preserved(source, translated[0]))
+            self.assertIn("译:", translated[0])
+            self.assertEqual(cached.placeholder_fallbacks, [])
 
     def test_marker_dense_block_recovers_via_split_translation(self):
         """Object-Centric p6 regression: a long block with 15 placeholders

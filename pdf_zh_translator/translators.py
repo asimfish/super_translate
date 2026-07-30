@@ -185,6 +185,12 @@ class CachedTranslator(Translator):
             if recovered is not None:
                 translations[index] = recovered
                 continue
+            # Second recovery: translate only the prose runs between markers
+            # (nothing left to mangle) and splice the markers back.
+            recovered = self._translate_via_prose_segments(chunk[index])
+            if recovered is not None:
+                translations[index] = recovered
+                continue
             # Last resort: keep the source text so one stubborn block
             # degrades to "untranslated" instead of failing the whole
             # document; QA will flag it for the user.
@@ -198,6 +204,42 @@ class CachedTranslator(Translator):
                 flush=True,
             )
         return translations, fallback_indexes
+
+    def _translate_via_prose_segments(self, text: str) -> Optional[str]:
+        """Recover a persistently-mangling block by translating only its prose.
+
+        The block is cut at every ⟦n⟧ marker; each prose run is translated on
+        its own, so the supplier never sees a marker it could mangle, and the
+        original markers are spliced back verbatim. Returns None when the
+        supplier cannot produce Chinese for the prose either (caller then
+        keeps the source so QA flags it).
+        """
+        markers = _CACHE_PLACEHOLDER_RE.findall(text)
+        if not markers:
+            return None
+        segments = _CACHE_PLACEHOLDER_RE.split(text)
+        translated_segments: List[str] = []
+        for segment in segments:
+            segment = segment.strip()
+            if len(segment) < 2 or not re.search(r"[A-Za-z]", segment):
+                translated_segments.append(segment)
+                continue
+            translated = self.wrapped.translate_batch([segment])
+            if len(translated) != 1 or not translated[0].strip():
+                return None
+            translated_segments.append(translated[0].strip())
+        parts: List[str] = []
+        for position, segment in enumerate(translated_segments):
+            if segment:
+                parts.append(segment)
+            if position < len(markers):
+                parts.append(markers[position])
+        combined = " ".join(parts)
+        if not placeholders_preserved(text, combined):
+            return None
+        if not re.search(r"[一-鿿]", combined):
+            return None
+        return combined
 
     def _translate_split_preserving_placeholders(
         self, text: str
