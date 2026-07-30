@@ -2271,19 +2271,24 @@ async def view_translated(
 
 
 _PREVIEW_DPI = 110
-_PREVIEW_JPEG_QUALITY = 75
+_PREVIEW_WEBP_QUALITY = 72
 
 
 def _render_page_preview(pdf_path: Path, page_number: int, out_path: Path) -> None:
-    """Render one PDF page to a JPEG preview (cached alongside translations)."""
+    """Render one PDF page to a WebP preview (cached alongside translations).
+
+    WebP at ~90KB/page vs ~150KB for JPEG — every kilobyte matters through
+    the throttled public tunnel."""
     import fitz
+    from PIL import Image
 
     document = fitz.open(str(pdf_path))
     try:
         page = document[page_number - 1]
         pixmap = page.get_pixmap(dpi=_PREVIEW_DPI)
+        image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_bytes(pixmap.tobytes("jpeg", jpg_quality=_PREVIEW_JPEG_QUALITY))
+        image.save(out_path, "WEBP", quality=_PREVIEW_WEBP_QUALITY, method=4)
     finally:
         document.close()
 
@@ -2321,11 +2326,11 @@ async def preview_page(
         / paper.id
         / "preview"
         / which
-        / f"{pdf_path.stat().st_mtime_ns}-{page_number}.jpg"
+        / f"{pdf_path.stat().st_mtime_ns}-{page_number}.webp"
     )
     if not cache_path.exists():
         # Drop stale previews for other revisions of the same PDF.
-        for stale in cache_path.parent.glob("*.jpg"):
+        for stale in cache_path.parent.glob("*.webp"):
             stale.unlink(missing_ok=True)
         try:
             await asyncio.to_thread(_render_page_preview, pdf_path, page_number, cache_path)
@@ -2334,7 +2339,7 @@ async def preview_page(
             raise HTTPException(500, "Preview render failed") from None
     return FileResponse(
         cache_path,
-        media_type="image/jpeg",
+        media_type="image/webp",
         headers={"Cache-Control": "private, max-age=3600"},
     )
 

@@ -3900,8 +3900,8 @@ class TestPagePreviewEndpoint:
             with patch("app.api.papers.safe_pdf_for_use", side_effect=lambda p: p):
                 res = client.get("/api/papers/paper123/preview/translated/1")
                 assert res.status_code == 200
-                assert res.headers["content-type"] == "image/jpeg"
-                assert res.content[:2] == b"\xff\xd8"
+                assert res.headers["content-type"] == "image/webp"
+                assert res.content[:4] == b"RIFF"
                 # Second call serves the cached file (no re-render).
                 with patch("app.api.papers._render_page_preview", side_effect=AssertionError("re-render")):
                     res2 = client.get("/api/papers/paper123/preview/translated/1")
@@ -3935,4 +3935,4 @@ class TestPagePreviewEndpoint:
             mock_settings.base_dir = tmp_path
             res = client.get("/api/papers/paper123/preview/original/1")
             assert res.status_code == 200
-            assert res.headers["content-type"] == "image/jpeg"
+            assert res.headers["content-type"] == "image/webp"
