@@ -229,10 +229,14 @@ FONT_SEARCH_ROOTS = (
     Path("/usr/local/share/fonts"),
 )
 FONT_SEARCH_PATTERNS = (
+    # Serif (Song/Ming) first: matches the preferred Songti SC look.
+    "NotoSerifCJK*-Regular.*",
+    "NotoSerifCJK-Regular.*",
+    "SourceHanSerif*-Regular.*",
     "NotoSansCJK*-Regular.*",
     "NotoSansCJK-Regular.*",
-    "NotoSerifCJK*-Regular.*",
     "SourceHanSans*-Regular.*",
+    "NotoSerifCJK*Regular*.ttc",
     "NotoSansCJK*Regular*.ttc",
 )
 
@@ -260,20 +264,25 @@ TTC_FACE_SOURCES = (
     # (destination, ((ttc path, face name prefix), ...)) — candidates are tried
     # in order: macOS system collections first, then Linux Noto CJK. Without a
     # real bold face, headings silently render with the regular font.
+    # On Linux the body uses Noto SERIF CJK SC: the Song/Ming serif style
+    # matches the macOS Songti SC look (and SC faces carry the correct
+    # simplified-Chinese glyph forms, unlike the JP faces).
     (
         BODY_FONT_FILE,
         (
             ("/System/Library/Fonts/Supplemental/Songti.ttc", "Songti SC Regular"),
-            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "Noto Sans CJK JP"),
+            ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", "Noto Serif CJK SC"),
             ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", "Noto Serif CJK JP"),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "Noto Sans CJK SC"),
         ),
     ),
     (
         BOLD_FONT_FILE,
         (
             ("/System/Library/Fonts/Hiragino Sans GB.ttc", "Hiragino Sans GB W6"),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "Noto Sans CJK SC"),
             ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "Noto Sans CJK JP"),
-            ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc", "Noto Serif CJK JP"),
+            ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc", "Noto Serif CJK SC"),
         ),
     ),
 )
