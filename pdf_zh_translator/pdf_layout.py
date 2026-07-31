@@ -6452,6 +6452,33 @@ def _line_has_same_baseline_word_neighbors(
     return neighbors >= 2
 
 
+def _prose_line_shares_math_row(record: "_RawBlockRec", line_index: int) -> bool:
+    """Whether a prose line vertically overlaps a TALLER non-prose line of the
+    same equation record — i.e. it sits on the display equation's visual row
+    ("where U(a,b) = {...}" beside "min <C,P> −εH(P), (1)", whose subscript
+    towers make the math line ~1.5x taller than the prose). Extracting it
+    for reflow would tear it out of the equation and overprint the formula.
+    Inline-height formula fragments sharing a prose baseline are normal
+    text and must not trigger this.
+    """
+    line = record.lines[line_index]
+    line_height = max(1.0, line.bbox[3] - line.bbox[1])
+    for other_index, other in enumerate(record.lines):
+        if other_index == line_index or line_is_prose(other):
+            continue
+        overlap = min(line.bbox[3], other.bbox[3]) - max(line.bbox[1], other.bbox[1])
+        if overlap < 1.5:
+            continue
+        other_height = other.bbox[3] - other.bbox[1]
+        compact_other = "".join(strip_sentinels(other.text).split())
+        is_numbered_equation = bool(
+            compact_other and EQUATION_NUMBER_RE.fullmatch(compact_other)
+        )
+        if other_height >= line_height * 1.5 or is_numbered_equation:
+            return True
+    return False
+
+
 def segments_from_record(
     page_index: int, record: _RawBlockRec, equation_record: bool = False
 ) -> List[TextBlock]:
@@ -6647,6 +6674,13 @@ def segments_from_record(
                     _accumulate_line(current, line)
                     current_has_inline_tail = True
                     continue
+                flush_current()
+                preserved_line_bboxes.append(line.bbox)
+                continue
+            if _prose_line_shares_math_row(record, line_index):
+                # The prose sits on the display equation's own visual row
+                # (the "where U(a,b) = {...}" clause beside "min ... (1)");
+                # tearing it out for reflow overprints the preserved formula.
                 flush_current()
                 preserved_line_bboxes.append(line.bbox)
                 continue

@@ -6421,3 +6421,38 @@ class CaptionBandGlueScopeTests(unittest.TestCase):
         extended = _extend_caption_bands_for_translated([band], entries)
         kept = _entries_outside_caption_bands(entries, extended, base_bboxes=[band])
         self.assertEqual(kept, [])
+
+
+class DisplayEquationRowTests(unittest.TestCase):
+    def test_where_clause_on_numbered_equation_row_stays_preserved(self):
+        """MCF p3 eq (1): the 'where U(a,b) = {...}' clause shares the visual
+        row with 'min <C,P> −εH(P), (1)' (subscript towers make the math
+        lines ~1.7x taller). Extracting it for reflow overprints the
+        preserved formula."""
+        from pdf_zh_translator.pdf_layout import (
+            _LineRec,
+            _RawBlockRec,
+            segments_from_record,
+        )
+
+        def line(text, x0, x1, y0, y1):
+            return _LineRec(
+                text=text,
+                bbox=(x0, y0, x1, y1),
+                spans=[{"text": text, "bbox": (x0, y0, x1, y1), "size": 10.0, "flags": 4, "color": 0}],
+            )
+
+        record = _RawBlockRec(
+            lines=[
+                line("min", 133.0, 149.0, 147.1, 157.1),
+                line("_{P}_{∈}_{U}_{(}_{a}_{,}_{b}_{)} <C,P>−ϵH(P),", 123.0, 245.0, 147.0, 163.9),
+                line("where", 257.0, 281.0, 147.3, 157.3),
+                line("U(a,b) ={P∈R^{+}", 291.0, 374.0, 145.3, 159.6),
+                line("_{mn}|P1_{n} =a,P^{⊤}1_{m} =b}", 368.0, 478.0, 145.2, 158.9),
+                line("(1)", 493.0, 505.0, 147.3, 157.3),
+            ]
+        )
+
+        segments = segments_from_record(0, record, equation_record=True)
+
+        self.assertEqual(segments, [])
