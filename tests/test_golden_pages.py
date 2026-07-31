@@ -35,6 +35,9 @@ GOLDEN_PAGES = [
     # HDFlow p15: tall inline fractions and a short "Let" formula lead must
     # remain anchored while the surrounding explanation is translated.
     "hdflow_p15_inline_formula.pdf",
+    # CDGS p24: clipped sprite bboxes must not turn adjacent task-description
+    # lists into figure labels; action-call chains remain verbatim pseudocode.
+    "cdgs_p24_clipped_sprites.pdf",
 ]
 
 

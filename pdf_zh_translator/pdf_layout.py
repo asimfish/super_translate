@@ -2245,18 +2245,9 @@ def _candidate_bboxes_colliding_with_preserved(
             probe_bboxes = [block.bbox]
         else:
             probe_bboxes = lines or [block.bbox]
-        # The block's own placeholder-protected math is preserved by design
-        # (keepout slots route around it); it is not foreign ink to avoid.
-        own_math = list(block.keepout_bboxes or []) + list(block.source_math_bboxes or [])
         hit = False
         for bx0, by0, bx1, by1 in probe_bboxes:
             for region in preserved_regions:
-                if own_math and any(
-                    bbox_intersection_area(region, own) / max(0.1, bbox_area(region))
-                    >= 0.5
-                    for own in own_math
-                ):
-                    continue
                 rx0, ry0, rx1, ry1 = region
                 x_overlap = min(bx1, rx1) - max(bx0, rx0)
                 y_overlap = min(by1, ry1) - max(by0, ry0)
@@ -3659,14 +3650,15 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
         raise RuntimeError("PyMuPDF is required. Install with: pip install -e .") from exc
 
     page_rect = page.rect
-    candidates: List[BBox] = []
+    image_candidates: List[BBox] = []
     for raw_block in page.get_text("dict").get("blocks", []):
         if raw_block.get("type") == 0 or "bbox" not in raw_block:
             continue
         bbox = tuple(float(value) for value in raw_block["bbox"])
         if bbox_is_graphic_candidate(bbox, page_rect):
-            candidates.append(bbox)
+            image_candidates.append(bbox)
 
+    drawing_candidates: List[BBox] = []
     for drawing in _page_drawings(page):
         rect = drawing.get("rect")
         if not isinstance(rect, fitz.Rect):
@@ -3675,7 +3667,18 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
         if _looks_like_page_background_rule(bbox, page_rect):
             continue
         if bbox_is_graphic_candidate(bbox, page_rect):
-            candidates.append(bbox)
+            drawing_candidates.append(bbox)
+
+    candidates = [
+        bbox
+        for bbox in image_candidates
+        if not _image_bbox_clipped_by_wide_drawing_band(
+            bbox,
+            drawing_candidates,
+            page_rect,
+        )
+    ]
+    candidates.extend(drawing_candidates)
 
     merged = merge_nearby_bboxes(candidates, GRAPHIC_REGION_CLUSTER_GAP)
     output: List[BBox] = []
@@ -3684,6 +3687,33 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
             continue
         output.append(expand_bbox_to_page(bbox, GRAPHIC_REGION_PADDING, page_rect))
     return output
+
+
+def _image_bbox_clipped_by_wide_drawing_band(
+    image_bbox: BBox,
+    drawing_bboxes: Sequence[BBox],
+    page_rect: object,
+) -> bool:
+    """Ignore an image's un-clipped sprite bbox when a drawing gives its band.
+
+    Some TeX figures place the same tall sprite repeatedly under a short clip
+    path. PyMuPDF reports the full transformed image bbox, which can cover
+    nearby prose, while a wide drawing rectangle still records the visible
+    figure band. In that shape the drawing is the reliable region envelope.
+    """
+    image_width = image_bbox[2] - image_bbox[0]
+    image_height = image_bbox[3] - image_bbox[1]
+    page_width = max(float(page_rect.width), 1.0)
+    for drawing_bbox in drawing_bboxes:
+        drawing_width = drawing_bbox[2] - drawing_bbox[0]
+        drawing_height = drawing_bbox[3] - drawing_bbox[1]
+        if drawing_width < max(page_width * 0.30, image_width * 2.0):
+            continue
+        if drawing_height > image_height * 0.75:
+            continue
+        if bbox_intersection_area(image_bbox, drawing_bbox) > 4.0:
+            return True
+    return False
 
 
 def bbox_is_graphic_candidate(bbox: BBox, page_rect: object) -> bool:
@@ -3757,6 +3787,8 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
     if block.block_type == "heading":
         return False
     if block.block_type == "table" and block.nowrap and block.no_merge:
+        return True
+    if looks_like_action_skeleton_sequence(plain):
         return True
     if looks_like_preserved_diagram_label(plain):
         return True
@@ -3874,6 +3906,17 @@ def looks_like_preserved_diagram_label(plain: str) -> bool:
     ):
         return True
     return False
+
+
+def looks_like_action_skeleton_sequence(plain: str) -> bool:
+    """Function-call action chains are pseudocode, not translatable prose."""
+    compact = " ".join(strip_sentinels(plain).split()).strip()
+    call_pattern = r"[A-Za-z][A-Za-z0-9_-]*\s*\([^()]{0,100}\)"
+    if re.fullmatch(call_pattern, compact):
+        return True
+    calls = re.findall(rf"\b{call_pattern}", compact)
+    arrows = re.findall(r"(?:→|⇒|->)", compact)
+    return len(calls) >= 2 and bool(arrows)
 
 
 def looks_like_vertical_margin_metadata(block: TextBlock, plain: str) -> bool:
@@ -7393,6 +7436,8 @@ def _looks_like_inline_heading_pair(prev: TextBlock, nxt: TextBlock) -> bool:
     if not prev.bold or prev.source_lines != 1:
         return False
     if nxt.block_type != "body" or nxt.bold:
+        return False
+    if looks_like_action_skeleton_sequence(strip_sentinels(nxt.text)):
         return False
     if abs(prev.font_size - nxt.font_size) > 2.0:
         return False

@@ -107,6 +107,30 @@ class PreserveOriginalBlockTests(unittest.TestCase):
 
         self.assertFalse(should_preserve_original_block(block, []))
 
+    def test_preserves_function_call_action_chain(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(150.0, 280.0, 500.0, 292.0),
+            text=(
+                "pick(hook) -> pull(cube, hook) -> place(hook) -> pick(cube)"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        self.assertTrue(should_preserve_original_block(block, []))
+
+    def test_preserves_wrapped_action_chain_tail(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(163.8, 363.1, 232.4, 373.0),
+            text="place(cube, rack)",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        self.assertTrue(should_preserve_original_block(block, []))
+
     def test_overlap_entries_use_line_bboxes_not_outer_table_block(self):
         block = {
             "bbox": (100.0, 100.0, 500.0, 160.0),
@@ -2980,6 +3004,30 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         self.assertAlmostEqual(merged[0].font_size, first_line.font_size)
         self.assertIn("Experimental Results. Figure 3", merged[0].text)
 
+    def test_keeps_action_skeleton_chain_separate_from_run_in_label(self):
+        label = TextBlock(
+            page_index=0,
+            bbox=(155.3, 282.8, 234.3, 292.8),
+            text="Action Skeleton:",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            bold=True,
+            starts_bold=True,
+            block_type="heading",
+            source_lines=1,
+        )
+        chain = TextBlock(
+            page_index=0,
+            bbox=(234.3, 282.5, 481.9, 292.8),
+            text="pick(hook) -> pull(cube, hook) -> place(hook) -> pick(cube)",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="body",
+            source_lines=1,
+        )
+
+        self.assertEqual(len(merge_paragraph_blocks([label, chain])), 2)
+
     def test_merges_caption_fragments_split_by_inline_formula(self):
         caption = TextBlock(
             page_index=19,
@@ -5172,6 +5220,30 @@ class TestTranslationVerification(unittest.TestCase):
         document.close()
         self.assertEqual(count, 1)
         self.assertGreater(area, 10000.0)
+
+    def test_sprite_image_bbox_defers_to_wide_visible_drawing_band(self):
+        from pdf_zh_translator.pdf_layout import (
+            _image_bbox_clipped_by_wide_drawing_band,
+        )
+
+        page_rect = SimpleNamespace(width=612.0, height=792.0)
+        image_bbox = (153.6, 387.1, 227.4, 632.9)
+        drawing_bands = [(167.4, 387.0, 444.6, 436.2)]
+
+        self.assertTrue(
+            _image_bbox_clipped_by_wide_drawing_band(
+                image_bbox,
+                drawing_bands,
+                page_rect,
+            )
+        )
+        self.assertFalse(
+            _image_bbox_clipped_by_wide_drawing_band(
+                (120.0, 200.0, 500.0, 500.0),
+                drawing_bands,
+                page_rect,
+            )
+        )
 
     def test_visual_regions_include_text_dict_image_blocks(self):
         class FakePage:
