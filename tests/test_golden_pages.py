@@ -29,6 +29,9 @@ GOLDEN_PAGES = [
     # IPMF p3: prose sentences wedged inside an equation zone must be
     # translated without the preserved formula rows being flagged changed.
     "ipmf_p3_equation_zone.pdf",
+    # MCF p5: the fraction rows of display equation (8) must stay with the
+    # equation, not be glued onto the preceding paragraph and redacted.
+    "mcf_p5_fraction_equation.pdf",
     # DynaGuide p1: a final word split from a figure-internal label must not
     # be translated independently over the original diagram text.
     "dynaguide_p1_figure_label.pdf",
@@ -104,8 +107,8 @@ def test_golden_page_has_no_ink_overlap(tmp_path, fixture):
     preserved-region registry and against other translated spans.
     """
     from pdf_zh_translator.pdf_layout import (
-        bbox_intersection_area,
         bbox_area,
+        bbox_intersection_area,
         prepare_translation_units,
     )
 
@@ -173,3 +176,18 @@ def test_golden_page_has_no_ink_overlap(tmp_path, fixture):
                     )
     translated.close()
     assert violations == []
+
+
+def test_cdgs_clipped_sprite_page_translates_all_action_labels():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "cdgs_p24_clipped_sprites.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    labels = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+        if "Action Skeleton" in strip_sentinels(block.text)
+    ]
+    source.close()
+
+    assert len(labels) == 4

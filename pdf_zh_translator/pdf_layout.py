@@ -419,9 +419,11 @@ def translate_pdf(
         )
     except Exception:
         pass
+    preserved_regions: Dict[int, List[BBox]] = {}
     units, gutter_rects, skipped = prepare_translation_units(
         document,
         preserve_graphics_text=preserve_graphics_text,
+        preserved_regions_out=(preserved_regions if preserve_graphics_text else None),
     )
     warnings.extend(fragmented_prose_warnings_from_units(units))
 
@@ -516,6 +518,19 @@ def translate_pdf(
         page_items: List[Tuple[TextBlock, str]] = []
         item_centered_flags: List[bool] = []
         for (block, translated_text), centered in zip(candidate_items, centered_flags):
+            adjacent_preserved = _side_adjacent_preserved_regions(
+                block,
+                preserved_regions.get(page_index, []),
+            )
+            if adjacent_preserved:
+                block = replace(
+                    block,
+                    keepout_bboxes=list(
+                        dict.fromkeys(
+                            [*(block.keepout_bboxes or []), *adjacent_preserved]
+                        )
+                    ),
+                )
             # Preserve anchored labels, but keep visually centered captions centered.
             if block.block_type == "caption" and caption_should_center(block, page_width):
                 block = center_caption_bbox(block, page_width)
@@ -927,6 +942,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
     # Captions anchor table envelopes yet are always translated, so their
     # bands must not participate in preserved-region text comparison.
     caption_bboxes_by_page: Dict[int, List[BBox]] = {}
+    preserved_label_bboxes_by_page: Dict[int, List[BBox]] = {}
     # Formula keepout lines are intentionally left verbatim inside translated
     # paragraphs; their English connector words must not count as
     # untranslated prose.
@@ -936,6 +952,29 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             caption_bboxes_by_page.setdefault(unit_block.page_index, []).append(
                 expand_bbox(unit_block.bbox, 2.0)
             )
+        unit_plain = " ".join(strip_sentinels(unit_block.text).split()).strip()
+        if (
+            unit_block.block_type == "heading"
+            and len(unit_plain) <= 90
+            and unit_plain.endswith((":", "："))
+            and any(
+                bboxes_intersect(
+                    expand_bbox(unit_block.bbox, 3.0),
+                    expand_bbox(region, 3.0),
+                )
+                for region in preserved_regions_by_page.get(
+                    unit_block.page_index,
+                    [],
+                )
+            )
+        ):
+            # A translated run-in label may share one QA-merged row with
+            # preserved pseudocode ("Action Skeleton:" + pick(...) -> ...).
+            # Exempt only the compact heading bbox; the code remains compared.
+            preserved_label_bboxes_by_page.setdefault(
+                unit_block.page_index,
+                [],
+            ).append(expand_bbox(unit_block.bbox, 3.0))
         for keepout in unit_block.keepout_bboxes or []:
             keepout_bboxes_by_page.setdefault(unit_block.page_index, []).append(keepout)
     for warning in fragmented_prose_warnings_from_units(source_units):
@@ -985,9 +1024,17 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         preserved_changed_examples: List[str] = []
         page_formula_keepouts = keepout_bboxes_by_page.get(page_idx, [])
         page_caption_bboxes = caption_bboxes_by_page.get(page_idx, [])
+        page_preserved_label_bboxes = preserved_label_bboxes_by_page.get(
+            page_idx,
+            [],
+        )
         preserved_original_entries = _entries_outside_caption_bands(
             original_region_entries,
             page_caption_bboxes,
+        )
+        preserved_original_entries = _entries_outside_caption_bands(
+            preserved_original_entries,
+            page_preserved_label_bboxes,
         )
         preserved_translated_entries = _entries_outside_caption_bands(
             translated_region_entries,
@@ -996,6 +1043,11 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 translated_region_entries,
             ),
             base_bboxes=page_caption_bboxes,
+        )
+        preserved_translated_entries = _entries_outside_caption_bands(
+            preserved_translated_entries,
+            page_preserved_label_bboxes,
+            base_bboxes=page_preserved_label_bboxes,
         )
         for region in preserved_text_regions:
             original_region_text = _text_overlapping_region(
@@ -2266,6 +2318,33 @@ def _candidate_bboxes_colliding_with_preserved(
     return flagged
 
 
+def _side_adjacent_preserved_regions(
+    block: TextBlock,
+    preserved_regions: Sequence[BBox],
+    *,
+    max_gap: float = 4.0,
+) -> List[BBox]:
+    """Preserved ink immediately beside a translated run-in label.
+
+    Redaction margins around labels such as ``Action Skeleton:`` must not
+    erase the first glyph of adjacent pseudocode on the same baseline.
+    """
+    bx0, by0, bx1, by1 = block.bbox
+    block_height = max(by1 - by0, 1.0)
+    adjacent: List[BBox] = []
+    for region in preserved_regions:
+        rx0, ry0, rx1, ry1 = region
+        region_height = max(ry1 - ry0, 1.0)
+        vertical_overlap = min(by1, ry1) - max(by0, ry0)
+        if vertical_overlap / min(block_height, region_height) < 0.5:
+            continue
+        is_right_neighbor = rx0 >= bx1 - 1.0 and rx0 - bx1 <= max_gap
+        is_left_neighbor = rx1 <= bx0 + 1.0 and bx0 - rx1 <= max_gap
+        if is_right_neighbor or is_left_neighbor:
+            adjacent.append(region)
+    return adjacent
+
+
 def _block_mostly_inside_preserved_regions(
     block: TextBlock,
     regions: Sequence[BBox],
@@ -3447,7 +3526,13 @@ def prepare_translation_units(
                 block,
                 graphic_regions.get(block.page_index, []),
             ):
-                preserved_union.setdefault(block.page_index, []).append(block.bbox)
+                regions = (
+                    list(block.source_line_bboxes)
+                    if looks_like_action_skeleton_sequence(block.text)
+                    and block.source_line_bboxes
+                    else [block.bbox]
+                )
+                preserved_union.setdefault(block.page_index, []).extend(regions)
         for page_index in range(document.page_count):
             page_blocks = [block for block in blocks if block.page_index == page_index]
             preserved_union.setdefault(page_index, []).extend(
@@ -4216,6 +4301,36 @@ def _equation_table_region_bboxes(
     return list(dict.fromkeys(regions))
 
 
+def _equation_zone_cluster_has_number(
+    records: Sequence["_RawBlockRec"],
+    equation_flags: Sequence[bool],
+    record_index: int,
+    *,
+    max_gap: float = 30.0,
+) -> bool:
+    """Whether a vertically-adjacent equation-flagged record carries an
+    equation number — i.e. this record is one row of a multi-record display
+    equation, not an inline formula between prose."""
+    record = records[record_index]
+    for offset in (-2, -1, 1, 2):
+        other_index = record_index + offset
+        if not 0 <= other_index < len(records) or not equation_flags[other_index]:
+            continue
+        other = records[other_index]
+        vertical_gap = max(
+            record.bbox[1] - other.bbox[3],
+            other.bbox[1] - record.bbox[3],
+            0.0,
+        )
+        if vertical_gap > max_gap:
+            continue
+        for line in other.lines:
+            compact = "".join(strip_sentinels(line.text).split())
+            if compact and EQUATION_NUMBER_RE.fullmatch(compact):
+                return True
+    return False
+
+
 def _inline_formula_bridge_block(
     page_index: int,
     records: Sequence[_RawBlockRec],
@@ -4232,6 +4347,11 @@ def _inline_formula_bridge_block(
         or not record.lines
         or any(line_is_prose(line) for line in record.lines)
     ):
+        return None
+    # One row of a numbered display equation (e.g. the fraction rows of
+    # MCF eq (8)) must never be glued into the preceding paragraph —
+    # redacting it hollows out the equation.
+    if _equation_zone_cluster_has_number(records, equation_flags, record_index):
         return None
 
     if not _is_strict_inline_formula_bridge(records, record_index):

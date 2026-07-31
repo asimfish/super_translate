@@ -1536,7 +1536,7 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(len(bridge.source_math_bboxes), 2)
 
     def test_formula_rich_block_uses_prose_font_size(self):
-        from pdf_zh_translator.pdf_layout import _SegmentAccumulator, _accumulate_line
+        from pdf_zh_translator.pdf_layout import _accumulate_line, _SegmentAccumulator
 
         prose_bbox = (75.4, 69.9, 88.0, 80.7)
         math_bboxes = [
@@ -5635,6 +5635,20 @@ if __name__ == "__main__":
 
 
 class PreservedCollisionSkipTests(unittest.TestCase):
+    def test_side_adjacent_preserved_code_becomes_redaction_keepout(self):
+        from pdf_zh_translator.pdf_layout import _side_adjacent_preserved_regions
+
+        label = TextBlock(
+            page_index=0,
+            bbox=(155.3, 352.0, 235.1, 362.1),
+            text="Action Skeleton:",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        code = (235.1, 351.8, 504.0, 362.1)
+
+        self.assertEqual(_side_adjacent_preserved_regions(label, [code]), [code])
+
     def test_candidate_colliding_with_preserved_label_is_flagged(self):
         from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved
 
