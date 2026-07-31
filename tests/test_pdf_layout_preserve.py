@@ -4607,6 +4607,14 @@ class TestTranslationVerification(unittest.TestCase):
             )
         )
 
+    def test_formula_explanation_detector_flags_distribution_prose(self):
+        self.assertTrue(
+            _looks_like_untranslated_formula_explanation(
+                "to represent the distributions pθ(τ1|qs, τ2) and "
+                "pθ(τK|τK−1, qg). This corresponds to the training objective"
+            )
+        )
+
     def test_retry_detector_flags_english_run_inside_chinese_caption(self):
         block = TextBlock(
             page_index=17,

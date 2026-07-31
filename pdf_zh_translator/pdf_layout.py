@@ -99,7 +99,8 @@ _ENGLISH_CAPTION_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _FORMULA_EXPLANATION_RE = re.compile(
-    r"^(?:where|with|here|for all|such that|subject to)\b",
+    r"^(?:(?:where|with|here|for all|such that|subject to)\b|"
+    r"to\s+(?:represent|denote|model|condition)\b|this\s+corresponds\b)",
     re.IGNORECASE,
 )
 _ACADEMIC_BOX_PROSE_RE = re.compile(
@@ -2490,6 +2491,7 @@ def _translated_block_still_english(block: TextBlock, translated_text: str) -> b
         _translation_echoes_source(block, translated_text)
         or _looks_like_untranslated_english(translated_text)
         or _contains_untranslated_english_run(translated_text)
+        or _looks_like_untranslated_formula_explanation(translated_text)
         or _translation_contains_commentary(translated_text)
     )
 
@@ -4326,9 +4328,11 @@ def _equation_table_region_bboxes(
     for record, is_equation in zip(records, equation_flags):
         if not is_equation or not record_is_table(record):
             continue
+        prose_prefix_count = _prose_wrapped_numbered_equation_prefix_count(record)
         cells = [
             line.bbox
-            for line in record.lines
+            for index, line in enumerate(record.lines)
+            if index >= prose_prefix_count
             if strip_sentinels(line.text).strip()
             and not _line_is_prose_dominant_sentence(line)
         ]
@@ -6126,6 +6130,97 @@ def _line_is_prose_dominant_sentence(line: _LineRec) -> bool:
     return len(_prose_words(bare)) >= 4 and bool(_PROSE_VERB_RE.search(bare))
 
 
+_EQUATION_EXPLANATION_VERB_RE = re.compile(
+    r"\b(?:train(?:s|ed|ing)?|represent(?:s|ed|ing)?|corresponds?|"
+    r"condition(?:s|ed|ing)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _line_is_equation_explanation(line: _LineRec) -> bool:
+    bare = strip_sentinels(line.text)
+    return _line_is_prose_dominant_sentence(line) or (
+        len(_prose_words(bare)) >= 5
+        and bool(_EQUATION_EXPLANATION_VERB_RE.search(bare))
+    )
+
+
+def _prose_wrapped_numbered_equation_prefix_count(record: _RawBlockRec) -> int:
+    """Count leading explanation lines before a numbered display equation."""
+    has_equation_number = any(
+        EQUATION_NUMBER_RE.fullmatch("".join(strip_sentinels(line.text).split()))
+        for line in record.lines
+    )
+    math_lines = [
+        line
+        for line in record.lines
+        if sentinel_char_count(line.text) >= 2
+        and not _line_is_equation_explanation(line)
+    ]
+    if (
+        not has_equation_number
+        or len(math_lines) < 3
+        or not any(_line_is_equation_explanation(line) for line in record.lines)
+    ):
+        return 0
+
+    prefix_count = 0
+    for index, line in enumerate(record.lines):
+        if _line_is_equation_explanation(line):
+            prefix_count += 1
+            continue
+        next_line = record.lines[index + 1] if index + 1 < len(record.lines) else None
+        plain = " ".join(strip_sentinels(line.text).split()).strip()
+        short_continuation = bool(
+            prefix_count
+            and not sentence_final_text(record.lines[index - 1].text)
+            and not sentinel_char_count(line.text)
+            and 1 <= len(_prose_words(plain)) <= 3
+            and next_line is not None
+            and sentinel_char_count(next_line.text) >= 2
+        )
+        if short_continuation:
+            prefix_count += 1
+            continue
+        break
+    return prefix_count
+
+
+def _prose_wrapped_numbered_equation_segments(
+    page_index: int,
+    record: _RawBlockRec,
+) -> Optional[List[TextBlock]]:
+    """Split prose above a numbered display equation misdetected as a table."""
+    prose_prefix_count = _prose_wrapped_numbered_equation_prefix_count(record)
+    if not prose_prefix_count:
+        return None
+
+    segments: List[TextBlock] = []
+    prose = _SegmentAccumulator()
+    for index, line in enumerate(record.lines):
+        if index < prose_prefix_count:
+            _accumulate_line(prose, line)
+            continue
+        cell = _SegmentAccumulator()
+        _accumulate_line(cell, line)
+        block = cell.flush(page_index)
+        if block is not None:
+            block.block_type = "table"
+            block.should_translate = False
+            block.nowrap = True
+            block.no_merge = True
+            segments.append(block)
+
+    prose_block = prose.flush(page_index)
+    if prose_block is not None:
+        prose_block.block_type = "body"
+        prose_block.should_translate = True
+        prose_block.no_merge = True
+        prose_block.nowrap = False
+        segments.insert(0, prose_block)
+    return segments
+
+
 def line_is_prose(line: _LineRec) -> bool:
     """Inside an equation zone, full English sentences (e.g. a Remark line or
     a short connective like 'the forward equation is' that PyMuPDF glued onto
@@ -6744,6 +6839,13 @@ def segments_from_record(
 
     segments: List[TextBlock] = []
     table_record = record_is_table(record)
+    if table_record:
+        prose_equation_segments = _prose_wrapped_numbered_equation_segments(
+            page_index,
+            record,
+        )
+        if prose_equation_segments is not None:
+            return prose_equation_segments
     if equation_record and table_record:
         for line in record.lines:
             if not line_is_prose(line):

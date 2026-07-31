@@ -44,6 +44,9 @@ GOLDEN_PAGES = [
     # ComDiffuser p19: Table 9's caption opener must not merge backward into
     # the math-heavy final table row and become ineligible for translation.
     "comdiffuser_p19_table_caption.pdf",
+    # ComDiffuser p4: prose carrying two inline distributions directly above
+    # equation (4) must translate instead of being preserved as a table row.
+    "comdiffuser_p4_formula_explanation.pdf",
 ]
 
 
@@ -219,3 +222,19 @@ def test_cdgs_clipped_sprite_page_preserves_every_action_call(tmp_path):
 
     assert call_re.findall(translated_text) == call_re.findall(source_text)
     assert len(arrow_re.findall(translated_text)) == len(arrow_re.findall(source_text))
+
+
+def test_comdiffuser_formula_explanation_is_a_translation_unit():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "comdiffuser_p4_formula_explanation.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+    ]
+    source.close()
+
+    explanation = next(text for text in texts if "to represent the distributions" in text)
+    assert explanation.startswith("Representing Initial States and Goals.")
+    assert explanation.endswith("training objective")
