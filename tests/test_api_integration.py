@@ -3746,7 +3746,7 @@ class TestSelfHealingRetry:
     def test_only_self_healable_errors_classifier(self):
         from types import SimpleNamespace
 
-        from app.api.papers import _only_self_healable_errors
+        from app.api.papers import _has_self_healable_error, _only_self_healable_errors
 
         issue = lambda code, severity="error": SimpleNamespace(code=code, severity=severity)
         assert _only_self_healable_errors([issue("untranslated_english")]) is True
@@ -3758,6 +3758,14 @@ class TestSelfHealingRetry:
         ) is False
         assert _only_self_healable_errors([issue("high_risk_layout", "warning")]) is False
         assert _only_self_healable_errors([]) is False
+
+        # Mixed failures still deserve one retry when a self-healable error
+        # is present alongside a non-healable one.
+        assert _has_self_healable_error(
+            [issue("untranslated_caption"), issue("preserved_text_changed")]
+        ) is True
+        assert _has_self_healable_error([issue("preserved_text_changed")]) is False
+        assert _has_self_healable_error([issue("high_risk_layout", "warning")]) is False
 
     @patch("app.api.papers.translate_pdf_sync")
     @patch("app.api.papers.settings")

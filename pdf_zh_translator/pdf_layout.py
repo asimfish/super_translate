@@ -1457,14 +1457,21 @@ def _entries_outside_caption_bands(
         ]
 
     def _glued_to_excluded_cjk(bbox: BBox) -> bool:
-        """Same text line and horizontally adjacent to an excluded CJK entry."""
+        """Inline continuation of an excluded CJK caption line.
+
+        Only fragments that START AFTER the CJK line's right edge count —
+        they read as the same sentence ("分辨率为64" + "×64."). Entries
+        horizontally overlapping the caption line are content underneath it
+        (e.g. table header cells) and must stay visible to the comparison.
+        The gap is capped at a single space: table cells sitting after a
+        wrapped caption line start farther away.
+        """
         height = max(0.1, bbox[3] - bbox[1])
         for other in excluded_cjk_bboxes:
             vertical_overlap = min(bbox[3], other[3]) - max(bbox[1], other[1])
             if vertical_overlap / height < 0.5:
                 continue
-            horizontal_gap = max(other[0] - bbox[2], bbox[0] - other[2])
-            if horizontal_gap <= 6.0:
+            if 0.0 <= bbox[0] - other[2] <= 3.0:
                 return True
         return False
 
@@ -4778,6 +4785,15 @@ def classify_blocks(
             continue
 
         if block.block_type == "table" and block.nowrap and block.no_merge:
+            # Caption-pattern text ("Table 4: ...", "Figure 2: ...") is never
+            # a table cell even when its record looked tabular — captions must
+            # always be translated, and QA flags any left in English.
+            if _CAPTION_RE.match(plain):
+                block.block_type = "caption"
+                block.preserve_position = True
+                block.should_translate = True
+                block.bold_prefix = block.bold_prefix or bool(block.bold_terms)
+                continue
             block.should_translate = False
             block.preserve_position = True
             continue

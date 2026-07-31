@@ -1421,7 +1421,7 @@ async def _do_translate(
             if _has_blocking_qa_error(unresolved_issues):
                 qa_failure_error = _qa_failure_error_message(unresolved_issues, blocking=True)
             elif _has_unresolved_error(unresolved_issues):
-                if attempt < max_attempts and _only_self_healable_errors(unresolved_issues):
+                if attempt < max_attempts and _has_self_healable_error(unresolved_issues):
                     _append_log(
                         paper_id,
                         loop,
@@ -1780,6 +1780,22 @@ def _only_self_healable_errors(issues: list) -> bool:
     errors = [issue for issue in issues if getattr(issue, "severity", "warning") == "error"]
     return bool(errors) and all(
         getattr(issue, "code", "") in _SELF_HEALABLE_QA_CODES for issue in errors
+    )
+
+
+def _has_self_healable_error(issues: list) -> bool:
+    """Whether any error is a re-translatable untranslated case.
+
+    Mixed failures (e.g. untranslated captions plus a preserved-region
+    complaint) still deserve one retry: the pass is nearly free thanks to
+    the translation cache, the untranslated blocks regenerate, and the
+    final QA gate decides the outcome anyway — the alternative is certain
+    failure.
+    """
+    return any(
+        getattr(issue, "severity", "warning") == "error"
+        and getattr(issue, "code", "") in _SELF_HEALABLE_QA_CODES
+        for issue in issues
     )
 
 

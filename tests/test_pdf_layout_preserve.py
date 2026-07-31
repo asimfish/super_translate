@@ -6372,3 +6372,52 @@ class EquationTableProseSentenceTests(unittest.TestCase):
         regions = _equation_table_region_bboxes([record], [True])
         self.assertNotIn(lines[0].bbox, regions)
         self.assertIn(lines[1].bbox, regions)
+
+
+class CaptionBandGlueScopeTests(unittest.TestCase):
+    def test_table_header_under_caption_extension_is_kept(self):
+        """MCF p9: a 3-line wrapped translated caption extends its band into
+        the table header zone; header cells overlapping the caption line
+        horizontally are content UNDER it, not caption fragments."""
+        from pdf_zh_translator.pdf_layout import (
+            _entries_outside_caption_bands,
+            _extend_caption_bands_for_translated,
+        )
+
+        band = (155.1, 89.0, 453.9, 103.0)
+        entries = [
+            ((184.1, 89.7, 237.4, 102.9), "表2：中小型"),
+            ((163.5, 100.5, 257.9, 113.7), "NETGEN数据集上最小"),
+            ((273.9, 111.3, 338.1, 124.5), "费用流的评估。"),
+            ((170.9, 106.5, 197.7, 113.7), "Methods"),
+            ((263.0, 102.3, 294.0, 110.3), "100 × 100"),
+            ((259.0, 110.0, 269.0, 118.0), "obj"),
+        ]
+        extended = _extend_caption_bands_for_translated([band], entries)
+        kept_texts = [
+            text
+            for _, text in _entries_outside_caption_bands(
+                entries, extended, base_bboxes=[band]
+            )
+        ]
+        self.assertIn("Methods", kept_texts)
+        self.assertIn("100 × 100", kept_texts)
+        self.assertIn("obj", kept_texts)
+        self.assertNotIn("表2：中小型", kept_texts)
+
+    def test_inline_caption_continuation_is_dropped(self):
+        """A fragment starting right after the CJK line's right edge is an
+        inline continuation of the caption and stays excluded."""
+        from pdf_zh_translator.pdf_layout import (
+            _entries_outside_caption_bands,
+            _extend_caption_bands_for_translated,
+        )
+
+        band = (360.0, 620.0, 506.0, 648.0)
+        entries = [
+            ((363.0, 648.0, 383.0, 657.0), "分辨率为64"),
+            ((385.0, 648.0, 403.0, 657.0), "×64."),
+        ]
+        extended = _extend_caption_bands_for_translated([band], entries)
+        kept = _entries_outside_caption_bands(entries, extended, base_bboxes=[band])
+        self.assertEqual(kept, [])
