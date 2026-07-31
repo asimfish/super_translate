@@ -710,39 +710,79 @@ def _subset_embedded_cjk_fonts(
 
 
 def dedupe_pdf_images(pdf: object) -> int:
-    """Alias byte-identical image XObjects inside an open pikepdf document.
+    """Alias semantically identical image XObjects in a pikepdf document.
 
     Repeated ``show_pdf_page`` calls (one per preserved formula) copy the
     source page's images into the target document once per call, so a
     math-heavy paper can carry dozens of orphan copies of the same figure.
-    Hash every image stream, point references at the first copy, and turn the
-    redundant copies into valid 1x1 gray pixels (blanking them outright makes
-    some viewers log "image width is zero" errors). Returns the number of
-    duplicate images neutralized.
+    Pixel streams alone are not a safe identity: two icons can share a solid
+    RGB stream while using different soft masks. Include the image dictionary
+    and dependent streams in the fingerprint, point references at the first
+    equivalent copy, and turn only fully unreferenced copies into valid 1x1
+    gray pixels. Returns the number of duplicate images neutralized.
     """
     import hashlib
 
     import pikepdf
 
-    canonical: dict[str, object] = {}
+    fingerprint_cache: dict[tuple[int, int], tuple] = {}
+    fingerprint_stack: set[tuple[int, int]] = set()
+
+    def _dictionary_fingerprint(value: object) -> tuple:
+        return (
+            "dict",
+            tuple(
+                sorted(
+                    (str(key), _fingerprint(item))
+                    for key, item in value.items()
+                    if str(key) != "/Length"
+                )
+            ),
+        )
+
+    def _fingerprint(value: object) -> tuple:
+        if isinstance(value, pikepdf.Stream):
+            objgen = value.objgen if value.is_indirect else None
+            if objgen is not None and objgen in fingerprint_cache:
+                return fingerprint_cache[objgen]
+            if objgen is not None and objgen in fingerprint_stack:
+                return ("cycle", str(objgen))
+            if objgen is not None:
+                fingerprint_stack.add(objgen)
+            result = (
+                "stream",
+                hashlib.sha256(value.read_raw_bytes()).hexdigest(),
+                _dictionary_fingerprint(value),
+            )
+            if objgen is not None:
+                fingerprint_stack.remove(objgen)
+                fingerprint_cache[objgen] = result
+            return result
+        if isinstance(value, pikepdf.Dictionary):
+            return _dictionary_fingerprint(value)
+        if isinstance(value, pikepdf.Array):
+            return ("array", tuple(_fingerprint(item) for item in value))
+        return ("value", type(value).__name__, str(value))
+
+    canonical: dict[tuple, object] = {}
     duplicates: dict[tuple[int, int], object] = {}
     for obj in pdf.objects:
         if isinstance(obj, pikepdf.Stream) and obj.get("/Subtype") == pikepdf.Name("/Image"):
             try:
-                digest = hashlib.md5(obj.read_raw_bytes()).hexdigest()
+                signature = _fingerprint(obj)
             except Exception:
                 continue
-            if digest in canonical:
-                duplicates[obj.objgen] = canonical[digest]
+            if signature in canonical:
+                duplicates[obj.objgen] = canonical[signature]
             else:
-                canonical[digest] = obj
+                canonical[signature] = obj
     if not duplicates:
         return 0
 
     visited: set[tuple[int, int]] = set()
 
     def _rewrite(container: object) -> None:
-        if isinstance(container, pikepdf.Dictionary):
+        if isinstance(container, (pikepdf.Dictionary, pikepdf.Stream)):
             items = list(container.items())
         else:
             items = list(enumerate(container))
@@ -751,7 +791,7 @@ def dedupe_pdf_images(pdf: object) -> int:
                 continue
             if value.is_indirect and value.objgen in duplicates:
                 container[key] = duplicates[value.objgen]
-            elif isinstance(value, (pikepdf.Dictionary, pikepdf.Array)):
+            elif isinstance(value, (pikepdf.Dictionary, pikepdf.Array, pikepdf.Stream)):
                 objgen = value.objgen if value.is_indirect else None
                 if objgen is not None:
                     if objgen in visited:
@@ -760,11 +800,38 @@ def dedupe_pdf_images(pdf: object) -> int:
                 _rewrite(value)
 
     for obj in pdf.objects:
-        if isinstance(obj, (pikepdf.Dictionary, pikepdf.Array)):
+        if isinstance(obj, (pikepdf.Dictionary, pikepdf.Array, pikepdf.Stream)):
             _rewrite(obj)
 
+    remaining_references: set[tuple[int, int]] = set()
+    visited.clear()
+
+    def _find_remaining_references(container: object) -> None:
+        if isinstance(container, (pikepdf.Dictionary, pikepdf.Stream)):
+            values = list(container.values())
+        else:
+            values = list(container)
+        for value in values:
+            if not isinstance(value, pikepdf.Object):
+                continue
+            if value.is_indirect and value.objgen in duplicates:
+                remaining_references.add(value.objgen)
+                continue
+            if isinstance(value, (pikepdf.Dictionary, pikepdf.Array, pikepdf.Stream)):
+                objgen = value.objgen if value.is_indirect else None
+                if objgen is not None:
+                    if objgen in visited:
+                        continue
+                    visited.add(objgen)
+                _find_remaining_references(value)
+
     for obj in pdf.objects:
-        if obj.objgen in duplicates:
+        if isinstance(obj, (pikepdf.Dictionary, pikepdf.Array, pikepdf.Stream)):
+            _find_remaining_references(obj)
+
+    neutralized = 0
+    for obj in pdf.objects:
+        if obj.objgen in duplicates and obj.objgen not in remaining_references:
             for key in list(obj.keys()):
                 if key not in ("/Type", "/Subtype", "/Length"):
                     del obj[key]
@@ -773,7 +840,8 @@ def dedupe_pdf_images(pdf: object) -> int:
             obj["/ColorSpace"] = pikepdf.Name("/DeviceGray")
             obj["/BitsPerComponent"] = 8
             obj.write(b"\x00")
-    return len(duplicates)
+            neutralized += 1
+    return neutralized
 
 
 def save_pdf_for_fast_web_view(

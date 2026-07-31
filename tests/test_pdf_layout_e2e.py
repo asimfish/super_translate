@@ -1,5 +1,7 @@
 """End-to-end PDF layout tests for native translation."""
 
+from collections import Counter
+from pathlib import Path
 from unittest.mock import patch
 
 import fitz
@@ -278,6 +280,40 @@ def test_saved_pdf_dedupes_repeated_images(tmp_path):
                 image_sizes.append(len(obj.read_raw_bytes()))
     large = [size for size in image_sizes if size > 1024]
     assert len(large) <= 1, f"expected one canonical image copy, got sizes {image_sizes}"
+
+
+def test_saved_pdf_keeps_images_with_distinct_soft_masks(tmp_path):
+    """Equal RGB streams with different soft masks are different icons."""
+    from pdf_zh_translator.pdf_layout import save_pdf_for_fast_web_view
+
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "comdiffuser_p4_masked_icons.pdf"
+    )
+    source = fitz.open(fixture)
+    source_shapes = Counter(
+        (image[2], image[3]) for image in source[0].get_images(full=True)
+    )
+    output_pdf = tmp_path / "masked-icons.pdf"
+    warnings: list[str] = []
+    save_pdf_for_fast_web_view(source, output_pdf, warnings)
+    source.close()
+
+    output = fitz.open(output_pdf)
+    output_images = output[0].get_images(full=True)
+    output_shapes = Counter((image[2], image[3]) for image in output_images)
+    output.close()
+
+    assert source_shapes[(64, 64)] == 2
+    assert output_shapes[(64, 64)] >= source_shapes[(64, 64)], warnings
+    assert len(
+        {
+            (image[0], image[1])
+            for image in output_images
+            if (image[2], image[3]) == (64, 64)
+        }
+    ) >= 2
 
     reopened = fitz.open(output_pdf)
     for page in reopened:
