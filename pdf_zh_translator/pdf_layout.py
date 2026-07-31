@@ -1567,6 +1567,26 @@ def _text_overlapping_region(
 
 
 def preserved_region_text_changed(original_text: str, translated_text: str) -> bool:
+    action_call_re = re.compile(
+        r"\b(?:pick|pull|place|push)\s*\([^()]{0,120}\)",
+        re.IGNORECASE,
+    )
+    original_actions = [
+        " ".join(call.lower().split())
+        for call in action_call_re.findall(original_text)
+    ]
+    if original_actions:
+        translated_actions = [
+            " ".join(call.lower().split())
+            for call in action_call_re.findall(translated_text)
+        ]
+        original_arrows = len(re.findall(r"(?:→|⇒|->)", original_text))
+        translated_arrows = len(re.findall(r"(?:→|⇒|->)", translated_text))
+        if (
+            original_actions != translated_actions
+            or original_arrows != translated_arrows
+        ):
+            return True
     original_words = [
         word.lower()
         for word in _ASCII_WORD_DETECT_RE.findall(original_text)
@@ -8029,7 +8049,12 @@ def expand_heading_bbox(block: TextBlock) -> TextBlock:
     x0, y0, x1, y1 = block.bbox
     pad_y = max(1.0, block.font_size * 0.18)
     pad_x = max(2.0, block.font_size * 0.35)
-    return replace(block, bbox=(x0, y0 - pad_y, x1 + pad_x, y1 + pad_y))
+    redacts = block.redact_bboxes or [block.bbox]
+    return replace(
+        block,
+        bbox=(x0, y0 - pad_y, x1 + pad_x, y1 + pad_y),
+        redact_bboxes=redacts,
+    )
 
 
 def relax_caption_boxes(page: object, items: Sequence[Tuple[TextBlock, str]]) -> None:

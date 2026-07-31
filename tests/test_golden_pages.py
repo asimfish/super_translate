@@ -191,3 +191,28 @@ def test_cdgs_clipped_sprite_page_translates_all_action_labels():
     source.close()
 
     assert len(labels) == 4
+
+
+def test_cdgs_clipped_sprite_page_preserves_every_action_call(tmp_path):
+    import re
+
+    input_pdf = FIXTURES / "cdgs_p24_clipped_sprites.pdf"
+    output_pdf = tmp_path / "cdgs-out.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_GoldenStubTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    call_re = re.compile(r"\b(?:pick|pull|place|push)\s*\([^()]+\)")
+    arrow_re = re.compile(r"(?:→|⇒|->)")
+    source = fitz.open(input_pdf)
+    translated = fitz.open(output_pdf)
+    source_text = source[0].get_text("text")
+    translated_text = translated[0].get_text("text")
+    source.close()
+    translated.close()
+
+    assert call_re.findall(translated_text) == call_re.findall(source_text)
+    assert len(arrow_re.findall(translated_text)) == len(arrow_re.findall(source_text))

@@ -47,6 +47,7 @@ from pdf_zh_translator.pdf_layout import (
     classify_blocks,
     clean_translation,
     collect_text_blocks,
+    expand_heading_bbox,
     fragmented_prose_warnings_from_units,
     graphic_regions_for_page,
     insert_translated_text,
@@ -4151,6 +4152,13 @@ class TestClassifyBlocks(unittest.TestCase):
         self.assertTrue(preserved_region_text_changed("91.2", "19.2"))
         self.assertFalse(preserved_region_text_changed("91.2 ± 0.4", "91.2 ± 0.4"))
 
+    def test_preserved_region_text_changed_detects_clipped_action_call(self):
+        original = "pick(hook) → pull(cube, hook) → place(hook) → pick(cube)"
+        clipped = "ick(hook) → pull(cube, hook) → place(hook) → pick(cube)"
+
+        self.assertTrue(preserved_region_text_changed(original, clipped))
+        self.assertFalse(preserved_region_text_changed(original, original))
+
     def test_preserved_region_normalizes_unicode_minus_in_exponent(self):
         self.assertFalse(preserved_region_text_changed("5.8e−6", "5.8e-6"))
 
@@ -5670,6 +5678,23 @@ if __name__ == "__main__":
 
 
 class PreservedCollisionSkipTests(unittest.TestCase):
+    def test_heading_expansion_keeps_original_redaction_bbox(self):
+        source_bbox = (155.3, 352.0, 235.1, 362.1)
+        label = TextBlock(
+            page_index=0,
+            bbox=source_bbox,
+            text="Action Skeleton:",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+        )
+
+        expanded = expand_heading_bbox(label)
+
+        self.assertGreater(expanded.bbox[2], source_bbox[2])
+        self.assertLess(expanded.bbox[1], source_bbox[1])
+        self.assertEqual(expanded.redact_bboxes, [source_bbox])
+
     def test_side_adjacent_preserved_code_becomes_redaction_keepout(self):
         from pdf_zh_translator.pdf_layout import _side_adjacent_preserved_regions
 
