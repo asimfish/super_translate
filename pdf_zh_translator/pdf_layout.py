@@ -7691,6 +7691,11 @@ def relax_caption_boxes(page: object, items: Sequence[Tuple[TextBlock, str]]) ->
     for block in blocks:
         if block.block_type != "caption":
             continue
+        # Nowrap captions render a single line at their original anchor;
+        # growing the box downward only recentres that line into whatever
+        # sits below (a table's first row on MCF p16/p17).
+        if block.nowrap:
+            continue
         x0, y0, x1, y1 = block.bbox
         next_y = page_bottom
         for other in blocks:
