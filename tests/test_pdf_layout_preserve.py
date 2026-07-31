@@ -42,6 +42,7 @@ from pdf_zh_translator.pdf_layout import (
     _visual_min_zone_intersects_graphics,
     _visual_regions_for_page,
     apply_inline_bold,
+    can_merge_blocks,
     caption_should_center,
     center_caption_bbox,
     classify_blocks,
@@ -5694,6 +5695,36 @@ class PreservedCollisionSkipTests(unittest.TestCase):
         self.assertGreater(expanded.bbox[2], source_bbox[2])
         self.assertLess(expanded.bbox[1], source_bbox[1])
         self.assertEqual(expanded.redact_bboxes, [source_bbox])
+
+    def test_caption_opener_does_not_merge_backward_into_table_tail(self):
+        table_tail = TextBlock(
+            page_index=0,
+            bbox=(108.0, 508.0, 462.0, 529.4),
+            text="Large 77 ± 4 Giant 61 ± 5",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        caption = TextBlock(
+            page_index=0,
+            bbox=(108.0, 537.5, 504.0, 547.6),
+            text="Table 9: Quantitative Results with Inverse Dynamics Models of Different",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            bold=True,
+        )
+        continuation = TextBlock(
+            page_index=0,
+            bbox=(108.0, 548.4, 150.0, 558.5),
+            text="Horizons.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+            bold=True,
+            no_merge=True,
+        )
+
+        self.assertFalse(can_merge_blocks(table_tail, caption))
+        self.assertTrue(can_merge_blocks(caption, continuation))
 
     def test_side_adjacent_preserved_code_becomes_redaction_keepout(self):
         from pdf_zh_translator.pdf_layout import _side_adjacent_preserved_regions

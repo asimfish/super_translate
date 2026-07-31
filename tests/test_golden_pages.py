@@ -41,6 +41,9 @@ GOLDEN_PAGES = [
     # CDGS p24: clipped sprite bboxes must not turn adjacent task-description
     # lists into figure labels; action-call chains remain verbatim pseudocode.
     "cdgs_p24_clipped_sprites.pdf",
+    # ComDiffuser p19: Table 9's caption opener must not merge backward into
+    # the math-heavy final table row and become ineligible for translation.
+    "comdiffuser_p19_table_caption.pdf",
 ]
 
 

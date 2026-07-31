@@ -7552,6 +7552,11 @@ def can_merge_blocks(
 ) -> bool:
     if _looks_like_caption_continuation_pair(prev, nxt):
         return True
+    if _CAPTION_RE.match(strip_sentinels(nxt.text).lstrip()):
+        # A caption opener belongs to the float below the preceding table
+        # rows, never to those rows. It may still absorb its own continuation
+        # on the next iteration through _looks_like_caption_continuation_pair.
+        return False
     if _looks_like_inline_heading_pair(prev, nxt):
         if graphic_regions and bbox_crosses_graphic_region(
             union_bbox([prev.bbox, nxt.bbox]),
