@@ -168,6 +168,17 @@ MATH_FONT_RE = re.compile(
     re.IGNORECASE,
 )
 PLACEHOLDER_RE = re.compile(r"\u27e6\s*(\d+)\s*\u27e7")
+_STRUCTURED_PROMPT_CUE_RE = re.compile(
+    r"\b(?:available\s+(?:primitives?|predicates?|scene\s+objects?)|"
+    r"object\s+relationships?|human\s+instruction|goal\s+predicate\s+set|"
+    r"top\s+\d+\s+robot\s+action\s+sequences?)\b|"
+    r"(?:可用(?:原语|谓词|场景物体)|物体关系|人类指令|目标谓词集|"
+    r"机(?:器|器)人动作序(?:列|列))",
+    re.IGNORECASE,
+)
+_SINGLE_QUOTED_LITERAL_RE = re.compile(
+    r"(?:'[^'\n]{1,240}'|\u2019[^\u2019\n]{1,240}\u2019)"
+)
 # One or more sentinel groups, optionally space-separated; must not consume
 # the whitespace after the final group.
 SENTINEL_RUN_RE = re.compile(
@@ -1660,6 +1671,12 @@ def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 35 or _is_reference_or_formula_text(compact):
         return False
+    prompt_remainder = _without_structured_prompt_lists(compact)
+    if (
+        prompt_remainder != compact
+        and len(_CJK_DETECT_RE.findall(compact)) >= 2
+    ):
+        compact = " ".join(prompt_remainder.split())
     if _looks_like_model_or_identifier_list_text(compact):
         return False
     if _looks_like_prompt_output_field_list(compact):
@@ -7163,8 +7180,54 @@ def protect_text(text: str) -> Tuple[str, Dict[int, str]]:
     protected = SENTINEL_RUN_RE.sub(stash_sentinel_run, text)
     protected = URL_RE.sub(stash_url, protected)
     protected = CITATION_RE.sub(lambda m: stash(m.group(0)), protected)
+    prompt_spans = _structured_prompt_list_spans(protected)
+    replacements: List[Tuple[int, int, str]] = []
+    for start, end in prompt_spans:
+        fragment = protected[start:end]
+        if "\u27e6" in fragment or "\u27e7" in fragment:
+            continue
+        replacements.append((start, end, stash(fragment)))
+    for start, end, placeholder in reversed(replacements):
+        protected = protected[:start] + placeholder + protected[end:]
     protected = MATH_TOKEN_RE.sub(stash_math_token, protected)
     return protected, mapping
+
+
+def _structured_prompt_list_spans(text: str) -> List[Tuple[int, int]]:
+    """Return balanced code-list spans from robotics prompt examples."""
+    if not _STRUCTURED_PROMPT_CUE_RE.search(strip_sentinels(text)):
+        return []
+    spans: List[Tuple[int, int]] = []
+    depth = 0
+    start = -1
+    for index, char in enumerate(text):
+        if char == "[":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "]" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                fragment = text[start : index + 1]
+                if _SINGLE_QUOTED_LITERAL_RE.search(fragment):
+                    spans.append((start, index + 1))
+                start = -1
+    return spans
+
+
+def _without_structured_prompt_lists(text: str) -> str:
+    """Remove preserved prompt code before untranslated-prose scoring."""
+    spans = _structured_prompt_list_spans(text)
+    if not spans:
+        return text
+    pieces: List[str] = []
+    cursor = 0
+    for start, end in spans:
+        pieces.append(text[cursor:start])
+        pieces.append(" ")
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)
 
 
 def normalize_protected_formula_fragment(fragment: str) -> str:

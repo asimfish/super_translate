@@ -66,6 +66,7 @@ from pdf_zh_translator.pdf_layout import (
     redact_original_text,
     relax_caption_boxes,
     requested_translation_font_size,
+    restore_text,
     segments_from_record,
     should_preserve_original_block,
     strip_sentinels,
@@ -603,6 +604,23 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         self.assertIn("_{t}:", mapping.values())
         self.assertEqual(len(mapping), 3)
         self.assertNotRegex(text, r"[ᵃ-ᵿ₀-ₜ]")
+
+    def test_protect_text_preserves_structured_prompt_code_lists(self):
+        source = (
+            "Available primitives: ['pick(a)', 'place(a, b)'] "
+            "Available scene objects: ['table', 'yellow box'] "
+            "Human instruction: Move the yellow box onto the table."
+        )
+
+        protected, mapping = protect_text(source)
+        restored, missing = restore_text(protected, mapping)
+
+        self.assertNotIn("pick(a)", protected)
+        self.assertNotIn("yellow box']", protected)
+        self.assertIn("Human instruction", protected)
+        self.assertEqual(restored, source)
+        self.assertEqual(missing, [])
+        self.assertEqual(len(mapping), 2)
 
     def test_parse_block_lines_expands_normal_font_formula_operands(self):
         raw_block = {
@@ -4544,6 +4562,23 @@ class TestTranslationVerification(unittest.TestCase):
             _looks_like_untranslated_english(
                 "The proposed model improves retrieval quality substantially across "
                 "multiple long horizon manipulation tasks."
+            )
+        )
+
+    def test_untranslated_detector_ignores_preserved_prompt_code_in_chinese(self):
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "目标谓词集：[['under(yellow box, rack)', 'under(blue box, rack)']] "
+                "最优1个机器人动作序列：['push(yellow box, hook, rack)', "
+                "'push(red box, hook, rack)']"
+            )
+        )
+
+    def test_untranslated_detector_still_flags_english_prompt_prose(self):
+        self.assertTrue(
+            _looks_like_untranslated_english(
+                "目标谓词集：[['under(yellow box, rack)']] Human instruction: "
+                "Move both colored boxes beneath the rack before returning the hook."
             )
         )
 
