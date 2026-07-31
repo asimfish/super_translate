@@ -1395,15 +1395,18 @@ def _extend_caption_bands_for_translated(
     caption_bboxes: Sequence[BBox],
     entries: Sequence[Tuple[BBox, str]],
     *,
-    join_gap: float = 3.0,
+    join_gap: float = 18.0,
     max_extra: float = 60.0,
 ) -> List[BBox]:
     """Grow caption bands downward over wrapped translated caption lines.
 
     Translated captions keep their anchor position but often wrap one or two
-    lines taller than the English source. Chain through CJK lines that start
-    inside the band so those continuation lines are excluded from
-    preserved-region comparison; English/numeric table rows stop the chain.
+    lines taller than the English source — and when the translation needs
+    one line more than the source bbox held, the orphan tail lands a full
+    line-height below, just above the table's header row. Chain through CJK
+    lines that start inside the band so those continuation lines are
+    excluded from preserved-region comparison; English/numeric table rows
+    stop the chain only indirectly (they are never CJK).
     """
     extended: List[BBox] = []
     for band in caption_bboxes:
