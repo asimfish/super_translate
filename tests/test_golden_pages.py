@@ -94,11 +94,11 @@ def test_golden_page_has_no_error_issues(tmp_path, fixture):
 
 @pytest.mark.parametrize("fixture", GOLDEN_PAGES)
 def test_golden_page_has_no_ink_overlap(tmp_path, fixture):
-    """Reflowed CJK text must not sit mostly inside preserved regions.
+    """Reflowed CJK text must not overlap preserved or translated ink.
 
     Text-level QA can miss geometric collisions when the overlapping text is
     itself Chinese; this checks every CJK span in the output against the
-    preserved-region registry (formula rows, table cells, algorithm floats).
+    preserved-region registry and against other translated spans.
     """
     from pdf_zh_translator.pdf_layout import (
         bbox_intersection_area,
@@ -132,8 +132,7 @@ def test_golden_page_has_no_ink_overlap(tmp_path, fixture):
     translated = fitz.open(output_pdf)
     for page_index in range(translated.page_count):
         regions = preserved.get(page_index, [])
-        if not regions:
-            continue
+        cjk_spans = []
         for block in translated[page_index].get_text("dict")["blocks"]:
             if block.get("type") != 0:
                 continue
@@ -143,6 +142,7 @@ def test_golden_page_has_no_ink_overlap(tmp_path, fixture):
                     if not cjk_re.search(text):
                         continue
                     bbox = tuple(float(v) for v in span["bbox"])
+                    cjk_spans.append((bbox, text))
                     area = max(bbox_area(bbox), 0.1)
                     for region in regions:
                         ratio = bbox_intersection_area(bbox, region) / area
@@ -151,5 +151,22 @@ def test_golden_page_has_no_ink_overlap(tmp_path, fixture):
                                 f"p{page_index + 1} span {text[:20]!r} overlaps "
                                 f"preserved region {region} by {ratio:.0%}"
                             )
+        for index, (first_bbox, first_text) in enumerate(cjk_spans):
+            first_area = max(bbox_area(first_bbox), 0.1)
+            for second_bbox, second_text in cjk_spans[index + 1 :]:
+                smaller_area = min(
+                    first_area,
+                    max(bbox_area(second_bbox), 0.1),
+                )
+                ratio = (
+                    bbox_intersection_area(first_bbox, second_bbox)
+                    / smaller_area
+                )
+                if ratio >= 0.5:
+                    violations.append(
+                        f"p{page_index + 1} translated spans "
+                        f"{first_text[:16]!r} and {second_text[:16]!r} "
+                        f"overlap by {ratio:.0%}"
+                    )
     translated.close()
     assert violations == []

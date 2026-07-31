@@ -419,13 +419,9 @@ def translate_pdf(
         )
     except Exception:
         pass
-    preserved_regions: Dict[int, List[BBox]] = {}
-    equation_rows: Dict[int, List[BBox]] = {}
     units, gutter_rects, skipped = prepare_translation_units(
         document,
         preserve_graphics_text=preserve_graphics_text,
-        preserved_regions_out=preserved_regions,
-        equation_rows_out=equation_rows,
     )
     warnings.extend(fragmented_prose_warnings_from_units(units))
 
@@ -510,10 +506,6 @@ def translate_pdf(
         relax_caption_boxes(page, candidate_items)
         # Float obstacles (figures/tables/captions) that reflowed CJK must avoid.
         page_floats = list(_visual_regions_for_page(page))
-        # Display-equation rows are preserved in place; reflowed text must
-        # route around them rather than overprint the math.
-        page_floats.extend(equation_rows.get(page_index, []))
-        page_floats.extend(preserved_regions.get(page_index, []))
         page_floats.extend(
             block.bbox
             for block, _ in candidate_items
@@ -6795,11 +6787,20 @@ def _accumulate_line(accumulator: "_SegmentAccumulator", line: _LineRec) -> None
     accumulator.prose_bboxes.extend(line.prose_bboxes)
     accumulator.math_bboxes.extend(line.math_bboxes)
     accumulator.math_run_bboxes.extend(line.math_run_bboxes)
+    prose_bboxes = set(line.prose_bboxes)
     for span in line.spans:
-        if "bbox" in span:
-            accumulator.bboxes.append(tuple(float(x) for x in span["bbox"]))
+        span_bbox = (
+            tuple(float(x) for x in span["bbox"])
+            if "bbox" in span
+            else None
+        )
+        if span_bbox is not None:
+            accumulator.bboxes.append(span_bbox)
         if "size" in span:
-            accumulator.font_sizes.append(float(span["size"]))
+            span_size = float(span["size"])
+            accumulator.font_sizes.append(span_size)
+            if span_bbox in prose_bboxes:
+                accumulator.prose_font_sizes.append(span_size)
         if "color" in span:
             accumulator.colors.append(int_to_rgb(span["color"]))
         span_chars = len(normalize_span_text(span.get("text", "")).strip())
@@ -6821,6 +6822,7 @@ class _SegmentAccumulator:
     line_bboxes: List[BBox] = field(default_factory=list)
     bboxes: List[BBox] = field(default_factory=list)
     font_sizes: List[float] = field(default_factory=list)
+    prose_font_sizes: List[float] = field(default_factory=list)
     colors: List[Color] = field(default_factory=list)
     bold_chars: int = 0
     total_chars: int = 0
@@ -6847,7 +6849,10 @@ class _SegmentAccumulator:
             page_index=page_index,
             bbox=union_bbox(self.bboxes),
             text=text,
-            font_size=median_or_default(self.font_sizes, 9.0),
+            font_size=median_or_default(
+                self.prose_font_sizes or self.font_sizes,
+                9.0,
+            ),
             color=dominant_color(self.colors),
             bold=bold,
             starts_bold=self.starts_bold,
@@ -7498,11 +7503,28 @@ def _looks_like_formula_rich_continuation_pair(prev: TextBlock, nxt: TextBlock) 
         return False
     reference = max(prev.font_size, nxt.font_size, 1.0)
     gap = nxt.bbox[1] - prev.bbox[3]
-    if gap < -reference * 1.55 or gap > reference * 0.85:
-        return False
     next_plain = strip_sentinels(nxt.text).lstrip()
     starts_formula_tail = nxt.text.lstrip().startswith(SENTINEL_OPEN)
     starts_continuation = bool(re.match(r"^(?:[a-z]|\d+\s+(?:is|since|and)\b)", next_plain))
+    previous_plain = strip_sentinels(prev.text).rstrip()
+    deep_formula_bridge = (
+        starts_formula_tail
+        and gap >= -reference * 2.4
+        and (
+            prev.text.rstrip().endswith(SENTINEL_CLOSE)
+            or bool(
+                re.search(
+                    r"(?:\b(?:with|approximately|as|of|to)|[=≈≤≥])\s*$",
+                    previous_plain,
+                    re.IGNORECASE,
+                )
+            )
+        )
+    )
+    if gap > reference * 0.85 or (
+        gap < -reference * 1.55 and not deep_formula_bridge
+    ):
+        return False
     if sentence_final_text(prev.text) and not (starts_formula_tail or starts_continuation):
         return False
 

@@ -1511,6 +1511,49 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertIn("sqrt", strip_sentinels(bridge.text))
         self.assertEqual(len(bridge.source_math_bboxes), 2)
 
+    def test_formula_rich_block_uses_prose_font_size(self):
+        from pdf_zh_translator.pdf_layout import _SegmentAccumulator, _accumulate_line
+
+        prose_bbox = (75.4, 69.9, 88.0, 80.7)
+        math_bboxes = [
+            (88.0 + index * 8.0, 69.9, 96.0 + index * 8.0, 80.7)
+            for index in range(5)
+        ]
+        spans = [
+            {
+                "text": "Let",
+                "bbox": prose_bbox,
+                "size": 10.0,
+                "flags": 0,
+                "color": 0,
+            }
+        ]
+        spans.extend(
+            {
+                "text": symbol,
+                "bbox": bbox,
+                "size": 5.0,
+                "flags": 0,
+                "color": 0,
+            }
+            for symbol, bbox in zip("abcde", math_bboxes)
+        )
+        line = _LineRec(
+            text=f"Let{SENTINEL_OPEN}abcde{SENTINEL_CLOSE}",
+            bbox=(75.4, 69.9, 128.0, 80.7),
+            spans=spans,
+            prose_bboxes=[prose_bbox],
+            math_bboxes=math_bboxes,
+            math_run_bboxes=[(88.0, 69.9, 128.0, 80.7)],
+        )
+        accumulator = _SegmentAccumulator()
+
+        _accumulate_line(accumulator, line)
+        block = accumulator.flush(0)
+
+        self.assertIsNotNone(block)
+        self.assertEqual(block.font_size, 10.0)
+
     def test_short_formula_fragment_bridges_nearby_formula_rich_prose(self):
         prose = _RawBlockRec(
             lines=[
@@ -3078,6 +3121,64 @@ class PreserveGraphicsTextTests(unittest.TestCase):
 
         self.assertEqual(len(merged), 1)
         self.assertIn("represents the difference", merged[0].text)
+
+    def test_merges_deeply_overlapping_inline_fraction_continuations(self):
+        first = TextBlock(
+            page_index=14,
+            bbox=(75.4, 85.6, 543.1, 120.8),
+            text=(
+                "The noise magnitude is approximately "
+                f"{SENTINEL_OPEN}sqrt(d) approximately{SENTINEL_CLOSE}"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        second = TextBlock(
+            page_index=14,
+            bbox=(75.1, 100.9, 541.4, 159.7),
+            text=(
+                f"{SENTINEL_OPEN}sqrt(d){SENTINEL_CLOSE}. The components are "
+                "independent and the accumulated error tends to scale with"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        third = TextBlock(
+            page_index=14,
+            bbox=(75.4, 138.6, 541.4, 169.4),
+            text=(
+                f"{SENTINEL_OPEN}sqrt(d){SENTINEL_CLOSE} in expectation, as the "
+                "contributions from different dimensions accumulate."
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        merged = merge_paragraph_blocks([first, second, third])
+
+        self.assertEqual(len(merged), 1)
+        self.assertIn("different dimensions", merged[0].text)
+
+    def test_does_not_merge_deep_overlap_without_formula_bridge_cue(self):
+        first = TextBlock(
+            page_index=0,
+            bbox=(75.0, 100.0, 543.0, 140.0),
+            text=(
+                f"A paragraph contains {SENTINEL_OPEN}x{SENTINEL_CLOSE} "
+                "but ends with unrelated prose"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        unrelated = TextBlock(
+            page_index=0,
+            bbox=(75.0, 118.0, 543.0, 160.0),
+            text=f"{SENTINEL_OPEN}y{SENTINEL_CLOSE} starts another paragraph",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        self.assertEqual(len(merge_paragraph_blocks([first, unrelated])), 2)
 
     def test_merges_same_line_formula_tail_before_metric_comparison(self):
         first = TextBlock(
