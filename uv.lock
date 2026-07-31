@@ -2839,12 +2839,13 @@ wheels = [
 
 [[package]]
 name = "paper-china"
-version = "0.3.0"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiosqlite" },
     { name = "fastapi" },
+    { name = "fonttools" },
     { name = "jinja2" },
     { name = "pdf2zh" },
     { name = "pydantic" },
@@ -2869,6 +2870,7 @@ requires-dist = [
     { name = "aiofiles", specifier = ">=23.0" },
     { name = "aiosqlite", specifier = ">=0.19" },
     { name = "fastapi", specifier = ">=0.104" },
+    { name = "fonttools", specifier = ">=4.44" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "pdf2zh", specifier = ">=1.8" },

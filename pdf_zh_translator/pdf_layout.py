@@ -419,9 +419,13 @@ def translate_pdf(
         )
     except Exception:
         pass
+    preserved_regions: Dict[int, List[BBox]] = {}
+    equation_rows: Dict[int, List[BBox]] = {}
     units, gutter_rects, skipped = prepare_translation_units(
         document,
         preserve_graphics_text=preserve_graphics_text,
+        preserved_regions_out=preserved_regions,
+        equation_rows_out=equation_rows,
     )
     warnings.extend(fragmented_prose_warnings_from_units(units))
 
@@ -506,6 +510,10 @@ def translate_pdf(
         relax_caption_boxes(page, candidate_items)
         # Float obstacles (figures/tables/captions) that reflowed CJK must avoid.
         page_floats = list(_visual_regions_for_page(page))
+        # Display-equation rows are preserved in place; reflowed text must
+        # route around them rather than overprint the math.
+        page_floats.extend(equation_rows.get(page_index, []))
+        page_floats.extend(preserved_regions.get(page_index, []))
         page_floats.extend(
             block.bbox
             for block, _ in candidate_items
@@ -2245,16 +2253,27 @@ def _candidate_bboxes_colliding_with_preserved(
             probe_bboxes = [block.bbox]
         else:
             probe_bboxes = lines or [block.bbox]
+        # The block's own placeholder-protected math is preserved by design
+        # (keepout slots route around it); it is not foreign ink to avoid.
+        own_math = list(block.keepout_bboxes or []) + list(block.source_math_bboxes or [])
         hit = False
         for bx0, by0, bx1, by1 in probe_bboxes:
             for region in preserved_regions:
+                if own_math and any(
+                    bbox_intersection_area(region, own) / max(0.1, bbox_area(region))
+                    >= 0.5
+                    for own in own_math
+                ):
+                    continue
                 rx0, ry0, rx1, ry1 = region
                 x_overlap = min(bx1, rx1) - max(bx0, rx0)
                 y_overlap = min(by1, ry1) - max(by0, ry0)
                 if x_overlap < min_penetration or y_overlap < min_penetration:
                     continue
+                probe_area = max(0.1, (bx1 - bx0) * (by1 - by0))
                 region_area = max(0.1, (rx1 - rx0) * (ry1 - ry0))
-                if (x_overlap * y_overlap) / region_area >= min_area_ratio:
+                smaller_area = min(probe_area, region_area)
+                if (x_overlap * y_overlap) / smaller_area >= min_area_ratio:
                     hit = True
                     break
             if hit:
@@ -3386,6 +3405,7 @@ def prepare_translation_units(
     preserve_graphics_text: bool = False,
     *,
     preserved_regions_out: Optional[Dict[int, List[BBox]]] = None,
+    equation_rows_out: Optional[Dict[int, List[BBox]]] = None,
 ) -> Tuple[List[TranslationUnit], Dict[int, List[BBox]], int]:
     """Shared extraction pipeline for both `translate` and `export`.
 
@@ -3398,12 +3418,20 @@ def prepare_translation_units(
 
     algorithm_regions: Dict[int, List[BBox]] = {}
     equation_table_regions: Dict[int, List[BBox]] = {}
+    display_equation_regions: Dict[int, List[BBox]] = {}
     compute_preserved = preserve_graphics_text or preserved_regions_out is not None
     raw_blocks, gutter_rects = collect_text_blocks(
         document,
         algorithm_regions_out=(algorithm_regions if compute_preserved else None),
         equation_table_regions_out=equation_table_regions,
+        # Always collected: reflow avoidance uses them even when preserved
+        # graphics mode is off.
+        display_equation_regions_out=display_equation_regions,
     )
+    if equation_rows_out is not None:
+        equation_rows_out.clear()
+        for page_index, page_rows in display_equation_regions.items():
+            equation_rows_out[page_index] = list(page_rows)
     analyze_graphics = compute_preserved
     graphic_regions = collect_graphic_regions(document) if analyze_graphics else {}
     blocks = merge_paragraph_blocks(
@@ -4009,6 +4037,7 @@ def collect_text_blocks(
     *,
     algorithm_regions_out: Optional[Dict[int, List[BBox]]] = None,
     equation_table_regions_out: Optional[Dict[int, List[BBox]]] = None,
+    display_equation_regions_out: Optional[Dict[int, List[BBox]]] = None,
 ) -> Tuple[List[TextBlock], Dict[int, List[BBox]]]:
     """Extract text blocks and the bboxes of stripped gutter line numbers.
 
@@ -4042,6 +4071,36 @@ def collect_text_blocks(
             page_table_regions = _equation_table_region_bboxes(records, equation_flags)
             if page_table_regions:
                 equation_table_regions_out[page_index] = page_table_regions
+        if display_equation_regions_out is not None:
+            # Register display-equation ROWS (y-bands holding formula lines)
+            # so extraction filtering, reflow avoidance, and QA all share one
+            # preserved-region registry instead of each guessing separately.
+            # The region spans only the formula lines themselves: a prose line
+            # in the same band at a different x (a translatable explanation)
+            # stays outside, while a clause wedged BETWEEN formula chunks of
+            # the same row ("where U(a,b) = {...}" in MCF eq (1)) is covered
+            # by the union and kept with the equation.
+            row_regions: List[BBox] = []
+            for record, is_equation in zip(records, equation_flags):
+                if not is_equation:
+                    continue
+                formula_lines_in_record = [
+                    line for line in record.lines if not line_is_prose(line)
+                ]
+                # Only display-equation-DOMINANT records register rows. A
+                # prose paragraph carrying inline math (placeholder-kept)
+                # would otherwise register its own fragments and get its
+                # extracted prose blocks condemned by the collision checks.
+                if len(formula_lines_in_record) <= len(record.lines) / 2.0:
+                    continue
+                for row in group_same_y_lines(record.lines):
+                    formula_bboxes = [
+                        line.bbox for line in row if not line_is_prose(line)
+                    ]
+                    if formula_bboxes:
+                        row_regions.append(union_bbox(formula_bboxes))
+            if row_regions:
+                display_equation_regions_out[page_index] = list(dict.fromkeys(row_regions))
         formula_lines = [
             line
             for record, is_equation in zip(records, equation_flags)
@@ -4227,7 +4286,7 @@ def _inline_formula_record_touches_formula_prose(
                 continue
             record_height = max(1.0, record_bbox[3] - record_bbox[1])
             line_height = max(1.0, line.bbox[3] - line.bbox[1])
-            if record_height > max(line_height * 1.8, line_height + 6.0):
+            if record_height > max(line_height * 2.2, line_height + 10.0):
                 continue
             vertical_overlap = min(record_bbox[3], line.bbox[3]) - max(
                 record_bbox[1], line.bbox[1]
@@ -7390,7 +7449,11 @@ def _looks_like_same_line_formula_split(prev: TextBlock, nxt: TextBlock) -> bool
         and len(next_compact) <= 80
         and next_word_count <= 2
     )
-    if previous_word_count < 3:
+    previous_outside_math = " ".join(
+        _text_outside_sentinels(prev.text).split()
+    ).casefold()
+    short_formula_lead = previous_outside_math in {"let", "where", "with"}
+    if previous_word_count < 3 and not short_formula_lead:
         return False
     if next_word_count < 2 and not short_formula_continuation:
         return False

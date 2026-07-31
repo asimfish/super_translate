@@ -1640,6 +1640,35 @@ class FormulaTailProseTests(unittest.TestCase):
 
         self.assertIsNone(bridge)
 
+    def test_tall_inline_fraction_touching_formula_prose_is_exposed(self):
+        prose = _RawBlockRec(
+            lines=[
+                _line(
+                    "The loss uses "
+                    f"{SENTINEL_OPEN}L_total{SENTINEL_CLOSE} in training.",
+                    (80.0, 100.0, 270.0, 110.0),
+                )
+            ]
+        )
+        fraction_line = _line(
+            f"{SENTINEL_OPEN}a/b{SENTINEL_CLOSE}",
+            (270.0, 93.0, 292.0, 113.0),
+        )
+        fraction_line.math_bboxes = [fraction_line.bbox]
+        fraction_line.math_run_bboxes = [fraction_line.bbox]
+        fraction = _RawBlockRec(lines=[fraction_line])
+
+        bridge = _inline_formula_bridge_block(
+            0,
+            [prose, fraction],
+            [True, True],
+            [False, False],
+            1,
+        )
+
+        self.assertIsNotNone(bridge)
+        self.assertEqual(strip_sentinels(bridge.text), "a/b")
+
     def test_display_formula_record_is_not_an_inline_bridge(self):
         previous = _RawBlockRec(
             lines=[_line("where we use", (108.0, 100.0, 170.0, 111.0))]
@@ -3016,6 +3045,39 @@ class PreserveGraphicsTextTests(unittest.TestCase):
 
         self.assertEqual(len(merged), 1)
         self.assertIn("On the planted regime", merged[0].text)
+
+    def test_merges_short_math_lead_with_same_line_formula_prose(self):
+        lead = TextBlock(
+            page_index=14,
+            bbox=(75.4, 66.8, 176.8, 80.7),
+            text=(
+                f"Let{SENTINEL_OPEN}delta(z_0)={SENTINEL_CLOSE} "
+                f"{SENTINEL_OPEN}exp(-E(z_0|c)){SENTINEL_CLOSE}"
+            ),
+            font_size=5.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_line_bboxes=(
+                (75.4, 69.9, 122.7, 80.7),
+                (144.2, 66.8, 176.8, 75.3),
+            ),
+        )
+        continuation = TextBlock(
+            page_index=14,
+            bbox=(126.7, 69.8, 542.1, 86.0),
+            text=(
+                f"{SENTINEL_OPEN}E_q[exp(-E)]-E(z_0|c){SENTINEL_CLOSE} "
+                "represents the difference between the ideal and approximate weighting"
+            ),
+            font_size=5.0,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((126.7, 69.8, 542.1, 86.0),),
+        )
+
+        merged = merge_paragraph_blocks([lead, continuation])
+
+        self.assertEqual(len(merged), 1)
+        self.assertIn("represents the difference", merged[0].text)
 
     def test_merges_same_line_formula_tail_before_metric_comparison(self):
         first = TextBlock(
@@ -5434,6 +5496,25 @@ class PreservedCollisionSkipTests(unittest.TestCase):
         )
 
         self.assertEqual(flagged, [])
+
+    def test_small_label_fragment_overlapping_larger_figure_label_is_flagged(self):
+        from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved
+
+        candidate = TextBlock(
+            page_index=0,
+            bbox=(453.8, 639.0, 480.4, 648.5),
+            text="Behaviors",
+            font_size=5.7,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((453.8, 639.0, 480.4, 648.5),),
+        )
+        figure_label = (439.2, 632.1, 496.7, 641.6)
+
+        flagged = _candidate_bboxes_colliding_with_preserved(
+            [candidate], [figure_label]
+        )
+
+        self.assertEqual(flagged, [candidate.bbox])
 
     def test_hairline_touch_is_not_flagged(self):
         from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved
