@@ -1801,9 +1801,25 @@ def _is_reference_or_formula_text(text: str) -> bool:
     )
 
 
+def _looks_like_split_parenthetical_gloss(text: str) -> bool:
+    """A title-cased English glossary term split after its opening parenthesis."""
+    match = re.fullmatch(
+        r"(?P<term>[A-Z][A-Za-z]*(?:-[A-Z]?[A-Za-z]+)?"
+        r"(?:\s+[A-Z][A-Za-z]*(?:-[A-Z]?[A-Za-z]+)?){1,7})"
+        r"[)\uff09](?P<suffix>.*)",
+        text,
+    )
+    if match is None:
+        return False
+    suffix = match.group("suffix")
+    return bool(_CJK_DETECT_RE.search(suffix)) and not re.search(r"[.!?]", suffix)
+
+
 def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 35 or _is_reference_or_formula_text(compact):
+        return False
+    if _looks_like_split_parenthetical_gloss(compact):
         return False
     prompt_remainder = _without_structured_prompt_lists(compact)
     if (
@@ -2633,6 +2649,19 @@ def _translation_retains_source_prose_run(
 
     def prose_word_segments(text: str) -> List[List[str]]:
         plain = strip_sentinels(text)
+        if _CJK_DETECT_RE.search(plain):
+            # Academic Chinese commonly keeps the English term in parentheses
+            # on first mention. It is an intentional glossary, not an
+            # untranslated prose run, provided the surrounding result is CJK.
+            parenthetical_re = re.compile(
+                r"(?:\([^()\n]{1,180}\)|\uff08[^\uff08\uff09\n]{1,180}\uff09)"
+            )
+            plain = parenthetical_re.sub(
+                lambda match: "\n"
+                if re.search(r"[A-Za-z]", match.group(0))
+                else match.group(0),
+                plain,
+            )
         for boundary_re in (EMAIL_RE, AUTHOR_YEAR_CITATION_RE, CITATION_RE):
             plain = boundary_re.sub("\n", plain)
         return [
@@ -4251,6 +4280,29 @@ def looks_like_preserved_diagram_label(plain: str) -> bool:
     return False
 
 
+def looks_like_parallel_figure_label_row(block: TextBlock, plain: str) -> bool:
+    """Detect separate figure labels extracted as one same-baseline block."""
+    line_bboxes = tuple(block.source_line_bboxes)
+    if block.source_lines < 3 or len(line_bboxes) < 3:
+        return False
+    if block.bbox[3] - block.bbox[1] > max(18.0, block.font_size * 1.8):
+        return False
+    compact = " ".join(strip_sentinels(plain).split()).strip()
+    if not compact or re.search(r"[.!?;:。！？；：]", compact):
+        return False
+    words = _PROSE_WORD_RE.findall(compact)
+    if len(words) < len(line_bboxes) or len(words) > len(line_bboxes) * 4:
+        return False
+    centers = [(bbox[1] + bbox[3]) / 2.0 for bbox in line_bboxes]
+    if max(centers) - min(centers) > max(1.5, block.font_size * 0.25):
+        return False
+    ordered = sorted(line_bboxes, key=lambda bbox: bbox[0])
+    return all(
+        right[0] - left[2] >= max(10.0, block.font_size)
+        for left, right in zip(ordered, ordered[1:])
+    )
+
+
 def looks_like_action_skeleton_sequence(plain: str) -> bool:
     """Function-call action chains are pseudocode, not translatable prose."""
     compact = " ".join(strip_sentinels(plain).split()).strip()
@@ -5366,6 +5418,11 @@ def classify_blocks(
         # Inside image zone
         in_image = any(_block_in_zone(block.bbox, z) for z in image_zones)
         if in_image:
+            if looks_like_parallel_figure_label_row(block, text):
+                block.block_type = "figure_label"
+                block.should_translate = False
+                block.preserve_position = True
+                continue
             if len(text) <= _FIGURE_LABEL_MAX_LEN and not _CAPTION_RE.match(text):
                 block.block_type = "figure_label"
                 block.should_translate = False

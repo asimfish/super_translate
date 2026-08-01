@@ -4033,6 +4033,30 @@ class TestClassifyBlocks(unittest.TestCase):
         self.assertEqual(block.block_type, "figure_label")
         self.assertFalse(block.should_translate)
 
+    def test_parallel_figure_task_labels_remain_preserved(self):
+        labels = (
+            (75.0, 143.5, 115.0, 155.7),
+            (155.0, 143.5, 198.0, 155.7),
+            (240.0, 143.5, 278.0, 155.7),
+            (316.0, 143.5, 367.0, 155.7),
+            (398.0, 143.5, 447.0, 155.7),
+        )
+        block = TextBlock(
+            page_index=0,
+            bbox=(75.0, 143.5, 447.0, 155.7),
+            text="Close Jar Drag Stick Insert Peg Meat off Grill Open Drawer",
+            font_size=9.04,
+            color=(0.0, 0.0, 0.0),
+            source_lines=5,
+            source_line_bboxes=labels,
+        )
+        block.redact_bboxes = list(labels)
+
+        classify_blocks([block], 0, 792, [(20.0, 0.0, 612.0, 410.0)])
+
+        self.assertEqual(block.block_type, "figure_label")
+        self.assertFalse(block.should_translate)
+
     def test_author_metadata_is_not_translated(self):
         from pdf_zh_translator.pdf_layout import classify_blocks
 
@@ -4756,6 +4780,21 @@ class TestTranslationVerification(unittest.TestCase):
             _looks_like_untranslated_english(
                 "（1.36× wall-clock, 20.1% conflict reduction）和Glucose 4.2"
                 "（1.10×, 6.0%）中的"
+            )
+        )
+
+    def test_untranslated_detector_allows_split_parenthetical_gloss(self):
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "Diffusion Probabilistic Model）（Sohl-Dickstein 等人，"
+            )
+        )
+
+    def test_untranslated_detector_still_flags_unparenthesized_english(self):
+        self.assertTrue(
+            _looks_like_untranslated_english(
+                "Diffusion Probabilistic Model improves generation quality "
+                "across diverse tasks and environments."
             )
         )
 
@@ -6838,6 +6877,50 @@ class JustifiedWordFragmentTests(unittest.TestCase):
 
 
 class TranslationEchoDetectionTests(unittest.TestCase):
+    def test_parenthetical_english_gloss_is_not_flagged_as_untranslated(self):
+        from pdf_zh_translator.pdf_layout import _translation_retains_source_prose_run
+
+        block = TextBlock(
+            page_index=7,
+            bbox=(307.4, 666.7, 543.1, 713.4),
+            text=(
+                "We evaluate on a benchmark designed for offline goal-conditioned "
+                "reinforcement learning that assesses long-horizon reasoning."
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="body",
+        )
+        translated = (
+            "本文在专为离线目标条件强化学习（Offline Goal-Conditioned "
+            "Reinforcement Learning）设计的基准上进行评估。"
+        )
+
+        self.assertFalse(_translation_retains_source_prose_run(block, translated))
+
+    def test_english_run_outside_gloss_is_still_flagged(self):
+        from pdf_zh_translator.pdf_layout import _translation_retains_source_prose_run
+
+        block = TextBlock(
+            page_index=7,
+            bbox=(307.4, 666.7, 543.1, 713.4),
+            text=(
+                "We evaluate offline goal-conditioned reinforcement learning "
+                "across diverse and challenging tasks."
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="body",
+        )
+        contaminated = (
+            "本文开展评估。offline goal-conditioned reinforcement learning "
+            "across diverse and challenging tasks."
+        )
+
+        self.assertTrue(_translation_retains_source_prose_run(block, contaminated))
+
     def test_short_academic_heading_echo_is_flagged(self):
         block = TextBlock(
             page_index=4,
