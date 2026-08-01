@@ -1023,11 +1023,15 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
     # bands must not participate in preserved-region text comparison.
     caption_bboxes_by_page: Dict[int, List[BBox]] = {}
     preserved_label_bboxes_by_page: Dict[int, List[BBox]] = {}
+    translation_units_by_page: Dict[int, List[TextBlock]] = {}
     # Formula keepout lines are intentionally left verbatim inside translated
     # paragraphs; their English connector words must not count as
     # untranslated prose.
     keepout_bboxes_by_page: Dict[int, List[BBox]] = {}
     for unit_block, _, _ in source_units:
+        translation_units_by_page.setdefault(unit_block.page_index, []).append(
+            unit_block
+        )
         if unit_block.block_type == "caption":
             caption_bboxes_by_page.setdefault(unit_block.page_index, []).append(
                 expand_bbox(unit_block.bbox, 2.0)
@@ -1169,6 +1173,20 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 ):
                     continue
                 untranslated_examples.append(" ".join(text.split())[:80])
+
+        for source_block in translation_units_by_page.get(page_idx, []):
+            translated_unit_text = _text_overlapping_region(
+                translated_region_entries,
+                expand_bbox(source_block.bbox, 2.0),
+            )
+            if not _translation_retains_source_prose_run(
+                source_block,
+                translated_unit_text,
+            ):
+                continue
+            example = " ".join(translated_unit_text.split())[:80]
+            if example and example not in untranslated_examples:
+                untranslated_examples.append(example)
 
         if untranslated_examples:
             issues.append(
@@ -2550,6 +2568,57 @@ def _translation_echoes_source(block: TextBlock, translated_text: str) -> bool:
     )
 
 
+def _translation_retains_source_prose_run(
+    block: TextBlock,
+    translated_text: str,
+    min_run: int = 5,
+) -> bool:
+    """Whether a result kept a long contiguous prose phrase from its source.
+
+    Region-level QA needs this because formula-heavy paragraphs can be split
+    into several short output blocks, each below the generic English ratio
+    threshold. Technical names shorter than five words remain allowed.
+    """
+    if not block.should_translate:
+        return False
+    if block.block_type in (
+        "algorithm",
+        "bibliography",
+        "equation",
+        "figure_label",
+        "footer",
+    ):
+        return False
+    if URL_RE.search(strip_sentinels(block.text)) or URL_RE.search(translated_text):
+        return False
+
+    def prose_words(text: str) -> List[str]:
+        return [
+            word
+            for word in _PROSE_WORD_RE.findall(strip_sentinels(text))
+            if word.lower() not in _MATH_WORDS
+        ]
+
+    source_words = prose_words(block.text)
+    result_words = [word.lower() for word in prose_words(translated_text)]
+    if len(source_words) < min_run * 2 or len(result_words) < min_run:
+        return False
+    source_runs = [
+        source_words[index : index + min_run]
+        for index in range(len(source_words) - min_run + 1)
+    ]
+    result_runs = {
+        tuple(result_words[index : index + min_run])
+        for index in range(len(result_words) - min_run + 1)
+    }
+    for source_run in source_runs:
+        if sum(word[:1].islower() for word in source_run) < 3:
+            continue
+        if tuple(word.lower() for word in source_run) in result_runs:
+            return True
+    return False
+
+
 def _translated_block_still_english(block: TextBlock, translated_text: str) -> bool:
     if not block.should_translate:
         return False
@@ -2557,6 +2626,7 @@ def _translated_block_still_english(block: TextBlock, translated_text: str) -> b
         return False
     return (
         _translation_echoes_source(block, translated_text)
+        or _translation_retains_source_prose_run(block, translated_text)
         or _looks_like_untranslated_english(translated_text)
         or _contains_untranslated_english_run(translated_text)
         or _looks_like_untranslated_formula_explanation(translated_text)
@@ -6893,6 +6963,63 @@ def _prose_line_shares_math_row(record: "_RawBlockRec", line_index: int) -> bool
     return False
 
 
+def _fragmented_inline_math_paragraph_block(
+    page_index: int,
+    record: _RawBlockRec,
+    equation_record: bool,
+) -> Optional[TextBlock]:
+    """Recover prose paragraphs misclassified as display-equation records.
+
+    Narrow columns with dense inline subscripts can be split into alternating
+    prose and tiny math-only lines. Preserving those tiny lines tears words
+    such as ``approximation`` apart and leaves English behind. A real display
+    equation normally has a numbered or wide math row, so require neither and
+    keep the whole paragraph as one placeholder-protected translation unit.
+    """
+    if not equation_record or record_is_table(record):
+        return None
+    if len(record.lines) < 3:
+        return None
+
+    prose_lines = [line for line in record.lines if line_is_prose(line)]
+    math_fragments = [line for line in record.lines if not line_is_prose(line)]
+    if (
+        len(prose_lines) < 2
+        or len(prose_lines) / len(record.lines) < 0.3
+        or not math_fragments
+    ):
+        return None
+
+    plain = strip_sentinels(record.bare_text())
+    if len(_prose_words(plain)) < 20:
+        return None
+    if sum(plain.count(mark) for mark in ".!?") < 1:
+        return None
+    if any(
+        EQUATION_NUMBER_RE.fullmatch("".join(strip_sentinels(line.text).split()))
+        for line in record.lines
+    ):
+        return None
+
+    record_width = max(1.0, record.bbox[2] - record.bbox[0])
+    if any(
+        (line.bbox[2] - line.bbox[0]) / record_width > 0.75
+        for line in math_fragments
+    ):
+        return None
+
+    paragraph = _SegmentAccumulator()
+    for line in record.lines:
+        _accumulate_line(paragraph, line)
+    block = paragraph.flush(page_index)
+    if block is None:
+        return None
+    block.block_type = "body"
+    block.no_merge = True
+    block.nowrap = False
+    return block
+
+
 def segments_from_record(
     page_index: int, record: _RawBlockRec, equation_record: bool = False
 ) -> List[TextBlock]:
@@ -6914,6 +7041,13 @@ def segments_from_record(
         )
         if prose_equation_segments is not None:
             return prose_equation_segments
+    fragmented_paragraph = _fragmented_inline_math_paragraph_block(
+        page_index,
+        record,
+        equation_record,
+    )
+    if fragmented_paragraph is not None:
+        return [fragmented_paragraph]
     if equation_record and table_record:
         for line in record.lines:
             if not line_is_prose(line):

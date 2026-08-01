@@ -47,6 +47,12 @@ GOLDEN_PAGES = [
     # ComDiffuser p4: prose carrying two inline distributions directly above
     # equation (4) must translate instead of being preserved as a table row.
     "comdiffuser_p4_formula_explanation.pdf",
+    # DynaGuide p4: a narrow paragraph fragmented around many inline formulas
+    # must translate as a whole while the adjacent algorithm stays untouched.
+    "dynaguide_p4_fragmented_inline_math.pdf",
+    # DynaGuide p26: prose ending in an inline Gaussian before a display
+    # derivation must not be mistaken for part of the preserved equation.
+    "dynaguide_p26_formula_explanation.pdf",
 ]
 
 
@@ -238,3 +244,124 @@ def test_comdiffuser_formula_explanation_is_a_translation_unit():
     explanation = next(text for text in texts if "to represent the distributions" in text)
     assert explanation.startswith("Representing Initial States and Goals.")
     assert explanation.endswith("training objective")
+
+
+@pytest.mark.parametrize(
+    ("fixture", "needle", "expected_start", "expected_end"),
+    [
+        (
+            "dynaguide_p4_fragmented_inline_math.pdf",
+            "reasonable approximation of",
+            "With this dynamics model trained",
+            "and planning [57].",
+        ),
+        (
+            "dynaguide_p26_formula_explanation.pdf",
+            "The log probability can be computed as follows:",
+            "We start from the very rough approximation",
+            "computed as follows:",
+        ),
+    ],
+)
+def test_dynaguide_fragmented_formula_prose_is_one_translation_unit(
+    fixture,
+    needle,
+    expected_start,
+    expected_end,
+):
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / fixture)
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+    ]
+    source.close()
+
+    paragraph = next(text for text in texts if needle in text)
+    assert paragraph.startswith(expected_start)
+    assert paragraph.endswith(expected_end)
+
+
+def test_source_unit_qa_flags_formula_adjacent_source_phrase():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _translation_retains_source_prose_run,
+    )
+
+    block = TextBlock(
+        page_index=0,
+        bbox=(108.0, 430.0, 504.0, 476.0),
+        text=(
+            "We start from a rough Gaussian approximation. "
+            "The log probability can be computed as follows:"
+        ),
+        font_size=9.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    assert _translation_retains_source_prose_run(
+        block,
+        "概率建模如下。The log probability can be computed as follows:",
+    )
+
+
+def test_source_unit_qa_allows_short_technical_name():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _translation_retains_source_prose_run,
+    )
+
+    block = TextBlock(
+        page_index=0,
+        bbox=(108.0, 430.0, 504.0, 476.0),
+        text=(
+            "We use a Vision Language Action model to control the robot "
+            "during long-horizon manipulation."
+        ),
+        font_size=9.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    assert not _translation_retains_source_prose_run(
+        block,
+        "我们使用 Vision Language Action model 控制机器人完成长程操作。",
+    )
+
+
+def test_source_unit_qa_allows_named_program_and_url():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _translation_retains_source_prose_run,
+    )
+
+    program = TextBlock(
+        page_index=0,
+        bbox=(108.0, 430.0, 504.0, 476.0),
+        text=(
+            "This work was supported by the NSF Graduate Research "
+            "Fellowships Program and our university."
+        ),
+        font_size=9.0,
+        color=(0.0, 0.0, 0.0),
+    )
+    linked = TextBlock(
+        page_index=0,
+        bbox=(108.0, 480.0, 504.0, 526.0),
+        text=(
+            "Please see the submission guidelines at "
+            "https://nips.cc/public/guides/CodeSubmissionPolicy for details."
+        ),
+        font_size=9.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    assert not _translation_retains_source_prose_run(
+        program,
+        "本研究受 NSF Graduate Research Fellowships Program 资助。",
+    )
+    assert not _translation_retains_source_prose_run(
+        linked,
+        "请参阅 https://nips.cc/public/guides/CodeSubmissionPolicy。",
+    )
