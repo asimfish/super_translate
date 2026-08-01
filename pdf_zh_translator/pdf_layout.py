@@ -5518,6 +5518,8 @@ def _formula_like_plain_span_text(text: str) -> bool:
     stripped = text.strip()
     if not stripped or len(stripped) > 80:
         return False
+    if len(stripped) > 1 and stripped.lower() in _SHORT_PROSE_WORDS:
+        return False
     words = _PROSE_WORD_RE.findall(stripped)
     if any(len(word) > 2 and word.lower() not in _MATH_WORDS for word in words):
         return False

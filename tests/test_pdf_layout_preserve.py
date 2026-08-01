@@ -660,6 +660,48 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         )
         self.assertGreaterEqual(line.math_run_bboxes[0][2], 329.0)
 
+    def test_parse_block_lines_keeps_short_preposition_outside_formula(self):
+        raw_block = {
+            "type": 0,
+            "bbox": (366.9, 624.0, 397.9, 638.8),
+            "lines": [
+                {
+                    "bbox": (366.9, 624.0, 397.9, 638.8),
+                    "spans": [
+                        _span(
+                            "i",
+                            (366.9, 631.1, 369.8, 638.1),
+                            size=6.97,
+                            font="CMMI7",
+                            flags=6,
+                        ),
+                        _span(" ", (369.8, 628.8, 376.5, 638.8)),
+                        _span("in", (376.5, 626.0, 384.2, 636.0), flags=5),
+                        _span(
+                            " z",
+                            (384.2, 626.1, 391.8, 636.1),
+                            font="CMBX10",
+                            flags=21,
+                        ),
+                        _span(
+                            "+",
+                            (391.8, 624.7, 397.9, 631.7),
+                            size=6.97,
+                            font="CMR7",
+                            flags=5,
+                        ),
+                    ],
+                }
+            ],
+        }
+
+        record, _ = parse_block_lines(raw_block, page_width=612.0)
+
+        self.assertIsNotNone(record)
+        protected, mapping = protect_text(record.lines[0].text)
+        self.assertIn("in", protected)
+        self.assertTrue(all("in" not in fragment for fragment in mapping.values()))
+
     def test_short_prose_before_display_equation_stays_translatable(self):
         record = _RawBlockRec(
             lines=[

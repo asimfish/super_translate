@@ -288,7 +288,11 @@ def test_dynaguide_fragmented_formula_prose_is_one_translation_unit(
 
 
 def test_dynaguide_unnumbered_display_formula_is_not_a_translation_unit():
-    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+    from pdf_zh_translator.pdf_layout import (
+        prepare_translation_units,
+        protect_text,
+        strip_sentinels,
+    )
 
     source = fitz.open(
         FIXTURES / "dynaguide_p26_unnumbered_display_formula.pdf"
@@ -300,7 +304,14 @@ def test_dynaguide_unnumbered_display_formula_is_not_a_translation_unit():
     ]
     source.close()
 
-    assert any("There are different ways of combining" in text for text in texts)
+    paragraph_index = next(
+        index
+        for index, text in enumerate(texts)
+        if "There are different ways of combining" in text
+    )
+    protected, mapping = protect_text(units[paragraph_index][0].text)
+    assert "in" in protected
+    assert all("in" not in fragment for fragment in mapping.values())
     assert not any(text.startswith("2σ ||") for text in texts)
 
 
