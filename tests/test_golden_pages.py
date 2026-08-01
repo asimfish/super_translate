@@ -53,6 +53,9 @@ GOLDEN_PAGES = [
     # DynaGuide p26: prose ending in an inline Gaussian before a display
     # derivation must not be mistaken for part of the preserved equation.
     "dynaguide_p26_formula_explanation.pdf",
+    # DynaGuide p26: the final row of an unnumbered multi-line derivation must
+    # remain native instead of being translated with the following paragraph.
+    "dynaguide_p26_unnumbered_display_formula.pdf",
 ]
 
 
@@ -282,6 +285,23 @@ def test_dynaguide_fragmented_formula_prose_is_one_translation_unit(
     paragraph = next(text for text in texts if needle in text)
     assert paragraph.startswith(expected_start)
     assert paragraph.endswith(expected_end)
+
+
+def test_dynaguide_unnumbered_display_formula_is_not_a_translation_unit():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(
+        FIXTURES / "dynaguide_p26_unnumbered_display_formula.pdf"
+    )
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+    ]
+    source.close()
+
+    assert any("There are different ways of combining" in text for text in texts)
+    assert not any(text.startswith("2σ ||") for text in texts)
 
 
 def test_source_unit_qa_flags_formula_adjacent_source_phrase():

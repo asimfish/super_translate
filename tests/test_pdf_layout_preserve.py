@@ -1756,6 +1756,43 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertIsNotNone(bridge)
         self.assertEqual(strip_sentinels(bridge.text), "a/b")
 
+    def test_unnumbered_display_formula_tail_is_not_an_inline_bridge(self):
+        previous_line = _line(
+            f"{SENTINEL_OPEN}2 sigma (z_i-z_hat)^T(z_i-z_hat)+C{SENTINEL_CLOSE}",
+            (226.6, 570.6, 370.3, 594.6),
+        )
+        previous_line.math_bboxes = [previous_line.bbox]
+        previous_line.math_run_bboxes = [previous_line.bbox]
+        previous_row = _RawBlockRec(lines=[previous_line])
+
+        target_line = _line(
+            f"{SENTINEL_OPEN}2 sigma ||z_i-z_hat||^2+C{SENTINEL_CLOSE}",
+            (226.6, 596.7, 318.9, 622.6),
+        )
+        target_line.math_bboxes = [target_line.bbox]
+        target_line.math_run_bboxes = [target_line.bbox]
+        target = _RawBlockRec(lines=[target_line])
+
+        following = _RawBlockRec(
+            lines=[
+                _line(
+                    "There are different ways of combining multiple "
+                    f"{SENTINEL_OPEN}z_i{SENTINEL_CLOSE} values.",
+                    (107.7, 624.1, 504.4, 636.1),
+                )
+            ]
+        )
+
+        bridge = _inline_formula_bridge_block(
+            0,
+            [previous_row, target, following],
+            [True, True, False],
+            [False, False, False],
+            1,
+        )
+
+        self.assertIsNone(bridge)
+
     def test_display_formula_record_is_not_an_inline_bridge(self):
         previous = _RawBlockRec(
             lines=[_line("where we use", (108.0, 100.0, 170.0, 111.0))]

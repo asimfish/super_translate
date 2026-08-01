@@ -4510,6 +4510,61 @@ def _equation_zone_cluster_has_number(
     return False
 
 
+def _equation_zone_cluster_has_distinct_math_row(
+    records: Sequence["_RawBlockRec"],
+    equation_flags: Sequence[bool],
+    record_index: int,
+    *,
+    max_gap: float = 8.0,
+) -> bool:
+    """Whether an equation-only record is one row of a multiline display.
+
+    Unnumbered derivations are often emitted as several adjacent raw records.
+    Their final row can sit within a point or two of the following paragraph,
+    which otherwise makes it look like a detached inline-math fragment. Keep
+    that row in the original equation when another aligned math row is nearby.
+    """
+    record = records[record_index]
+    width = max(1.0, record.bbox[2] - record.bbox[0])
+    height = max(1.0, record.bbox[3] - record.bbox[1])
+    center_x = (record.bbox[0] + record.bbox[2]) / 2.0
+
+    for other_index, (other, is_equation) in enumerate(
+        zip(records, equation_flags)
+    ):
+        if other_index == record_index or not is_equation:
+            continue
+        if not other.lines or any(line_is_prose(line) for line in other.lines):
+            continue
+
+        other_width = max(1.0, other.bbox[2] - other.bbox[0])
+        other_height = max(1.0, other.bbox[3] - other.bbox[1])
+        vertical_overlap = min(record.bbox[3], other.bbox[3]) - max(
+            record.bbox[1], other.bbox[1]
+        )
+        if vertical_overlap >= 0.5 * min(height, other_height):
+            continue
+        vertical_gap = max(
+            record.bbox[1] - other.bbox[3],
+            other.bbox[1] - record.bbox[3],
+            0.0,
+        )
+        if vertical_gap > max_gap:
+            continue
+
+        horizontal_overlap = min(record.bbox[2], other.bbox[2]) - max(
+            record.bbox[0], other.bbox[0]
+        )
+        other_center_x = (other.bbox[0] + other.bbox[2]) / 2.0
+        aligned = horizontal_overlap >= 0.25 * min(width, other_width)
+        similarly_centered = abs(center_x - other_center_x) <= 0.6 * max(
+            width, other_width
+        )
+        if aligned or similarly_centered:
+            return True
+    return False
+
+
 def _inline_formula_bridge_block(
     page_index: int,
     records: Sequence[_RawBlockRec],
@@ -4527,10 +4582,14 @@ def _inline_formula_bridge_block(
         or any(line_is_prose(line) for line in record.lines)
     ):
         return None
-    # One row of a numbered display equation (e.g. the fraction rows of
-    # MCF eq (8)) must never be glued into the preceding paragraph —
-    # redacting it hollows out the equation.
-    if _equation_zone_cluster_has_number(records, equation_flags, record_index):
+    # One row of a display equation (e.g. the fraction rows of MCF eq (8),
+    # or an unnumbered multi-line derivation) must never be glued into the
+    # adjacent paragraph: redacting it hollows out the equation.
+    if _equation_zone_cluster_has_number(
+        records, equation_flags, record_index
+    ) or _equation_zone_cluster_has_distinct_math_row(
+        records, equation_flags, record_index
+    ):
         return None
 
     if not _is_strict_inline_formula_bridge(records, record_index):
