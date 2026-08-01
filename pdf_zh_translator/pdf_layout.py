@@ -3804,7 +3804,8 @@ def prepare_translation_units(
             skipped += 1
             continue
         plain = strip_sentinels(block.text)
-        if not is_translatable(plain):
+        formula_prose = _looks_like_translatable_formula_prose_block(block)
+        if not is_translatable(plain) and not formula_prose:
             skipped += 1
             continue
         protected, mapping = protect_text(block.text)
@@ -4076,11 +4077,43 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
         return True
     if looks_like_translatable_graphic_prose(block, plain):
         return False
+    if _looks_like_translatable_formula_prose_block(block):
+        return False
     if block_overlaps_graphic_region(block.bbox, graphic_regions):
         return True
     if math_heavy_block(block):
         return True
     return False
+
+
+def _looks_like_translatable_formula_prose_block(block: TextBlock) -> bool:
+    # Structural classification may relabel formula_prose as body, so retain
+    # the extraction marker through its no-merge flag and formula anchors.
+    if not block.no_merge:
+        return False
+    outside = " ".join(SENTINEL_RUN_RE.sub(" ", block.text).split())
+    if not block.source_math_bboxes:
+        return False
+    cue = _FORMULA_PROSE_SUFFIX_CUE_RE.search(outside)
+    if cue is None:
+        return False
+    prose_words = [
+        word
+        for word in re.findall(r"[A-Za-z]{2,}", outside)
+        if word.lower() not in _MATH_WORDS | _SHORT_PROSE_WORDS
+    ]
+    cue_word = re.search(r"[A-Za-z]+", cue.group(0))
+    cue_name = cue_word.group(0).lower() if cue_word else ""
+    if cue_name == "where":
+        explains_formula = bool(
+            re.search(r"\b(?:is|are|denotes?|represents?)\b", outside, re.IGNORECASE)
+            and len(prose_words) >= 2
+        )
+        chained_definition = " and " in f" {outside.lower()} " and len(
+            block.source_math_bboxes
+        ) >= 2
+        return explains_formula or chained_definition
+    return len(prose_words) >= 3
 
 
 def _is_low_font_graphic_content(
@@ -5531,6 +5564,55 @@ def _span_is_adjacent_math_script(
     return False
 
 
+def _span_is_prose_word_fragment(
+    span_index: int,
+    spans: Sequence[dict],
+    *,
+    line_max_size: float,
+) -> bool:
+    """Keep short italic prose out of formula placeholders.
+
+    TeX PDFs sometimes split the final letter of an italic theorem word into
+    its own span (``ga`` + ``p``), which otherwise looks exactly like a
+    single-letter math variable. Full-size connector words such as ``as`` are
+    also prose even when the theorem font is italic.
+    """
+    span = spans[span_index]
+    text = normalize_span_text(span.get("text", ""))
+    stripped = text.strip()
+    if not stripped or MATH_FONT_RE.search(str(span.get("font", ""))):
+        return False
+    size = float(span.get("size", line_max_size))
+    if line_max_size > 0 and size < line_max_size * 0.85:
+        return False
+    if stripped.lower() in _SHORT_PROSE_WORDS and len(stripped) >= 2:
+        return True
+    if not re.fullmatch(r"[A-Za-z]{1,2}", stripped):
+        return False
+
+    for neighbor_index in (span_index - 1, span_index + 1):
+        if neighbor_index < 0 or neighbor_index >= len(spans):
+            continue
+        neighbor = spans[neighbor_index]
+        neighbor_text = normalize_span_text(neighbor.get("text", ""))
+        if MATH_FONT_RE.search(str(neighbor.get("font", ""))):
+            continue
+        neighbor_size = float(neighbor.get("size", line_max_size))
+        if abs(neighbor_size - size) > max(0.8, line_max_size * 0.12):
+            continue
+        if _span_horizontal_gap(span, neighbor) > 0.8:
+            continue
+        if neighbor_index < span_index:
+            neighbor_piece = re.search(r"([A-Za-z]{2,})$", neighbor_text)
+            joined = (neighbor_piece.group(1) if neighbor_piece else "") + stripped
+        else:
+            neighbor_piece = re.match(r"([A-Za-z]{2,})", neighbor_text)
+            joined = stripped + (neighbor_piece.group(1) if neighbor_piece else "")
+        if len(joined) >= 3:
+            return True
+    return False
+
+
 def _formula_like_plain_span_text(text: str) -> bool:
     """Return whether a normal-font span is formula syntax rather than prose."""
     stripped = text.strip()
@@ -5675,16 +5757,23 @@ def parse_block_lines(
             span = spans[span_index]
             span_text = normalize_span_text(span.get("text", ""))
             span_size = float(span.get("size", line_max_size))
-            if is_math_span(
-                span.get("font", ""),
-                int(span.get("flags", 0)),
-                span_text,
-                span_size,
-                line_max_size,
-            ) or _span_is_adjacent_math_script(
+            if not _span_is_prose_word_fragment(
                 span_index,
                 spans,
                 line_max_size=line_max_size,
+            ) and (
+                is_math_span(
+                    span.get("font", ""),
+                    int(span.get("flags", 0)),
+                    span_text,
+                    span_size,
+                    line_max_size,
+                )
+                or _span_is_adjacent_math_script(
+                    span_index,
+                    spans,
+                    line_max_size=line_max_size,
+                )
             ):
                 math_like_indexes.append(span_index)
         expanded_math_indexes = _expanded_math_span_indexes(
@@ -6384,6 +6473,17 @@ def _line_is_equation_explanation(line: _LineRec) -> bool:
     return _line_is_prose_dominant_sentence(line) or (
         len(_prose_words(bare)) >= 5
         and bool(_EQUATION_EXPLANATION_VERB_RE.search(bare))
+    ) or (
+        sentinel_char_count(line.text) > 0
+        and bool(re.match(r"\s*(?:where|when|if)\b", bare, re.IGNORECASE))
+        and bool(
+            re.search(
+                r"\b(?:is|are|denotes?|represents?|initializ(?:e|es|ed|ing))\b",
+                bare,
+                re.IGNORECASE,
+            )
+        )
+        and len(_prose_words(bare)) >= 2
     )
 
 
@@ -6518,7 +6618,11 @@ def line_is_short_prose_before_formula(line: _LineRec, next_line: _LineRec) -> b
         return False
     if sentence_final_text(bare) or looks_like_math(bare):
         return False
-    words = [word for word in _PROSE_WORD_RE.findall(bare) if word.lower() not in _MATH_WORDS]
+    words = [
+        word
+        for word in re.findall(r"[A-Za-z]{2,}", bare)
+        if word.lower() not in _MATH_WORDS
+    ]
     if not 1 <= len(words) <= 4:
         return False
     next_compact = "".join(strip_sentinels(next_line.text).split())
@@ -7150,6 +7254,127 @@ def _math_line_prose_fragments(line: _LineRec) -> List[_LineRec]:
     return fragments
 
 
+_FORMULA_PROSE_SUFFIX_CUE_RE = re.compile(
+    r"^[\s\.,;:)]*(?:as|where|when|if|hence|therefore|thus|then)\b",
+    re.IGNORECASE,
+)
+
+
+def _math_line_formula_prose_suffix(line: _LineRec) -> Optional[_LineRec]:
+    """Return a sentence suffix interleaved with inline math.
+
+    A display formula can end with ``. As <math>, <math> approaches ...`` or
+    ``, where <math> is ...``. Translating each normal-font run separately
+    produces one-word requests and lets broad repair redactions erase the
+    preceding formula. Reparse only the suffix so its formulas become normal
+    placeholders while the formula prefix remains fixed source ink.
+    """
+    if not line.math_bboxes or not line.prose_bboxes or len(line.spans) < 2:
+        return None
+    prose_bboxes = set(line.prose_bboxes)
+    first_span = line.spans[0]
+    first_bbox = (
+        tuple(float(value) for value in first_span["bbox"])
+        if "bbox" in first_span
+        else None
+    )
+    if first_bbox in prose_bboxes and _line_is_equation_explanation(line):
+        return None
+    for span_index, span in enumerate(line.spans):
+        bbox = (
+            tuple(float(value) for value in span["bbox"])
+            if "bbox" in span
+            else None
+        )
+        if bbox not in prose_bboxes:
+            continue
+        tail_spans = list(line.spans[span_index:])
+        tail_text = "".join(
+            normalize_span_text(candidate.get("text", "")) for candidate in tail_spans
+        )
+        cue_match = _FORMULA_PROSE_SUFFIX_CUE_RE.search(tail_text)
+        prose_words = [
+            word
+            for word in re.findall(r"[A-Za-z]{2,}", tail_text)
+            if word.lower() not in _MATH_WORDS
+        ]
+        prefix_has_math = any(
+            math_bbox[2] <= (bbox[0] if bbox is not None else line.bbox[0]) + 0.8
+            for math_bbox in line.math_bboxes
+        )
+        prefix_prose_bboxes = set(line.prose_bboxes)
+        prefix_has_prose_words = any(
+            tuple(float(value) for value in candidate["bbox"]) in prefix_prose_bboxes
+            and bool(re.search(r"[A-Za-z]{2,}", normalize_span_text(candidate.get("text", ""))))
+            for candidate in line.spans[:span_index]
+            if "bbox" in candidate
+        )
+        tail_has_math = any(
+            candidate_bbox in set(line.math_bboxes)
+            for candidate in tail_spans
+            if "bbox" in candidate
+            for candidate_bbox in [tuple(float(value) for value in candidate["bbox"])]
+        )
+        cue_suffix = (
+            prefix_has_math
+            and cue_match is not None
+            and len(prose_words) >= 2
+            and tail_has_math
+        )
+        sentence_after_formula = (
+            prefix_has_math
+            and not prefix_has_prose_words
+            and len(prose_words) >= 3
+            and bool(re.match(r"^\s*[.;]\s+[A-Z]", tail_text))
+        )
+        if not cue_suffix and not sentence_after_formula:
+            continue
+        tail_boxes = [
+            tuple(float(value) for value in candidate["bbox"])
+            for candidate in tail_spans
+            if "bbox" in candidate
+        ]
+        if not tail_boxes:
+            continue
+        tail_bbox = union_bbox(tail_boxes)
+        parsed, _ = parse_block_lines(
+            {"lines": [{"bbox": tail_bbox, "spans": tail_spans}]},
+            page_width=max(2000.0, line.bbox[2] + 1000.0),
+        )
+        if parsed is not None and len(parsed.lines) == 1:
+            return parsed.lines[0]
+    return None
+
+
+def _line_continues_hyphenated_formula_prose(
+    line: _LineRec,
+    current: "_SegmentAccumulator",
+) -> bool:
+    if not current.lines or not strip_sentinels(current.lines[-1]).rstrip().endswith("-"):
+        return False
+    bare = strip_sentinels(line.text).lstrip()
+    if not re.match(r"[a-z]{3,}", bare) or not line.prose_bboxes:
+        return False
+    previous_bbox = current.line_bboxes[-1]
+    gap = line.bbox[1] - previous_bbox[3]
+    return -2.0 <= gap <= max(16.0, (previous_bbox[3] - previous_bbox[1]) * 1.8)
+
+
+def _line_is_display_formula_cluster_member(
+    record: _RawBlockRec,
+    line_index: int,
+) -> bool:
+    line = record.lines[line_index]
+    for other_index, other in enumerate(record.lines):
+        if other_index == line_index or line_is_prose(other):
+            continue
+        x_overlap = min(line.bbox[2], other.bbox[2]) - max(line.bbox[0], other.bbox[0])
+        y_overlap = min(line.bbox[3], other.bbox[3]) - max(line.bbox[1], other.bbox[1])
+        if x_overlap > 0.5 and y_overlap > 0.5:
+            return True
+    return False
+
+
 def _fragmented_inline_math_paragraph_block(
     page_index: int,
     record: _RawBlockRec,
@@ -7333,9 +7558,9 @@ def segments_from_record(
             block.source_line_bboxes = tuple(fragment.prose_bboxes)
             segments.append(block)
 
-    skip_line_index: Optional[int] = None
+    skip_line_indexes: set[int] = set()
     for line_index, line in enumerate(record.lines):
-        if skip_line_index == line_index:
+        if line_index in skip_line_indexes:
             continue
         word_fragment = _line_has_same_baseline_word_neighbors(record, line_index)
         if not equation_record and not word_fragment and line_looks_like_section_heading(line):
@@ -7401,6 +7626,56 @@ def segments_from_record(
                 if line_starts_with_leadin_marker(leadin):
                     current_no_merge = True
                 line = tail
+        if equation_record and _line_continues_hyphenated_formula_prose(line, current):
+            _accumulate_line(current, line)
+            current_has_inline_tail = True
+            continue
+        formula_prose_suffix = _math_line_formula_prose_suffix(line)
+        if formula_prose_suffix is not None:
+            flush_current()
+            sentence = _SegmentAccumulator()
+            _accumulate_line(sentence, formula_prose_suffix)
+            continuation_index = line_index + 1
+            while (
+                continuation_index < len(record.lines)
+                and not sentence_final_text(sentence.lines[-1])
+            ):
+                next_line = record.lines[continuation_index]
+                next_plain = strip_sentinels(next_line.text).lstrip()
+                vertical_gap = next_line.bbox[1] - sentence.line_bboxes[-1][3]
+                if (
+                    next_line.prose_bboxes
+                    and re.match(r"[a-z]", next_plain)
+                    and -2.0 <= vertical_gap <= 16.0
+                ):
+                    _accumulate_line(sentence, next_line)
+                    skip_line_indexes.add(continuation_index)
+                    continuation_index += 1
+                    continue
+                break
+            block = sentence.flush(page_index)
+            if block is not None:
+                prefix_keepouts = [
+                    bbox
+                    for bbox in line.math_run_bboxes
+                    if bbox[2] <= formula_prose_suffix.bbox[0] + 0.8
+                ]
+                block.block_type = "formula_prose"
+                block.no_merge = True
+                block.nowrap = False
+                block.keepout_bboxes = prefix_keepouts or None
+                if prefix_keepouts and block.redact_bboxes:
+                    prefix_lines = [
+                        _LineRec(text="", bbox=keepout, spans=[])
+                        for keepout in prefix_keepouts
+                    ]
+                    block.redact_bboxes = [
+                        trim_redact_bbox_against_formula_lines(redact, prefix_lines)
+                        for redact in block.redact_bboxes
+                    ]
+                segments.append(block)
+                preserved_line_bboxes.extend(prefix_keepouts)
+            continue
         prose_fragments = _math_line_prose_fragments(line)
         compact_length = len("".join(strip_sentinels(line.text).split()))
         math_ratio = (
@@ -7411,6 +7686,7 @@ def segments_from_record(
         if (
             not equation_record
             and prose_fragments
+            and not _line_is_equation_explanation(line)
             and (
                 not line_is_prose(line)
                 or (
@@ -7436,7 +7712,7 @@ def segments_from_record(
                 block = formula_prefix_tail_block(page_index, prose_tail, next_line)
                 if block is not None:
                     segments.append(block)
-                    skip_line_index = line_index + 1
+                    skip_line_indexes.add(line_index + 1)
                     continue
             line = prose_tail
         if equation_record:
@@ -7444,7 +7720,11 @@ def segments_from_record(
                 compact_length
                 and math_ratio >= 0.55
             )
-            if prose_fragments and math_dominant:
+            if (
+                prose_fragments
+                and math_dominant
+                and not _line_is_equation_explanation(line)
+            ):
                 append_math_line_prose_fragments(line, prose_fragments)
                 continue
             if not line_is_prose(line):
@@ -7459,6 +7739,18 @@ def segments_from_record(
                 if next_line is not None and line_is_short_prose_before_formula(line, next_line):
                     _accumulate_line(current, line)
                     current_has_inline_tail = True
+                    continue
+                previous_tail = (
+                    strip_sentinels(current.lines[-1]).strip().lower()
+                    if current.lines
+                    else ""
+                )
+                if (
+                    previous_tail == "as"
+                    and _line_is_display_formula_cluster_member(record, line_index)
+                ):
+                    flush_current()
+                    preserved_line_bboxes.append(line.bbox)
                     continue
                 if line_continues_inline_formula_tail(line, current):
                     _accumulate_line(current, line)
@@ -8092,6 +8384,8 @@ def can_merge_blocks(
     nxt: TextBlock,
     graphic_regions: Sequence[BBox] = (),
 ) -> bool:
+    if _looks_like_academic_formula_statement_pair(prev, nxt):
+        return True
     if _looks_like_caption_continuation_pair(prev, nxt):
         return True
     if _CAPTION_RE.match(strip_sentinels(nxt.text).lstrip()):
@@ -8155,6 +8449,41 @@ def can_merge_blocks(
     ):
         return False
     return True
+
+
+_ACADEMIC_FORMULA_STATEMENT_RE = re.compile(
+    r"^(?:Definition|Proposition|Theorem|Lemma|Corollary|Remark)\s+\d",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_academic_formula_statement_pair(
+    prev: TextBlock,
+    nxt: TextBlock,
+) -> bool:
+    """Join a boxed theorem split around a tall display-style fraction."""
+    if prev.page_index != nxt.page_index or sentence_final_text(prev.text):
+        return False
+    previous = " ".join(strip_sentinels(prev.text).split())
+    following = " ".join(strip_sentinels(nxt.text).split())
+    if not _ACADEMIC_FORMULA_STATEMENT_RE.match(previous):
+        return False
+    hyphenated_continuation = previous.endswith("-")
+    if not re.match(r"^[a-z]", following) or (
+        len(_prose_words(following)) < 4 and not hyphenated_continuation
+    ):
+        return False
+    if not (prev.keepout_bboxes and nxt.keepout_bboxes):
+        return False
+    if abs(prev.font_size - nxt.font_size) > 1.5:
+        return False
+    reference = max(prev.font_size, nxt.font_size, 1.0)
+    gap = nxt.bbox[1] - prev.bbox[3]
+    if gap > reference or gap < -reference * 1.5:
+        return False
+    overlap = min(prev.bbox[2], nxt.bbox[2]) - max(prev.bbox[0], nxt.bbox[0])
+    narrower = min(prev.bbox[2] - prev.bbox[0], nxt.bbox[2] - nxt.bbox[0])
+    return narrower > 0 and overlap / narrower >= 0.7
 
 
 def _looks_like_caption_continuation_pair(prev: TextBlock, nxt: TextBlock) -> bool:

@@ -42,6 +42,9 @@ GOLDEN_PAGES = [
     # HDFlow p2: prose split beside and inside a multi-line forward-process
     # equation must translate while every display-math span remains intact.
     "hdflow_p2_formula_prose.pdf",
+    # HDFlow p5: boxed proposition prose split around a tall fraction and a
+    # formula-heavy where-clause must translate as complete statements.
+    "hdflow_p5_formula_explanations.pdf",
     # CDGS p24: clipped sprite bboxes must not turn adjacent task-description
     # lists into figure labels; action-call chains remain verbatim pseudocode.
     "cdgs_p24_clipped_sprites.pdf",
@@ -322,6 +325,7 @@ def test_dynaguide_unnumbered_display_formula_is_not_a_translation_unit():
 def test_hdflow_forward_process_translates_all_formula_adjacent_prose():
     from pdf_zh_translator.pdf_layout import (
         SENTINEL_RUN_RE,
+        bbox_intersection_area,
         prepare_translation_units,
         protect_text,
         strip_sentinels,
@@ -339,7 +343,12 @@ def test_hdflow_forward_process_translates_all_formula_adjacent_prose():
     texts = [" ".join(strip_sentinels(block.text).split()) for block in forward_units]
     assert any("according to a variance schedule" in text for text in texts)
     assert any("A key property is that we can" in text for text in texts)
-    assert any(text == "distribution" for text in texts)
+    assert any(
+        "As" in text
+        and "approaches an isotropic Gaussian distribution" in text
+        for text in texts
+    )
+    assert any("where" in text and "and" in text for text in texts)
 
     sample = next(
         block
@@ -350,6 +359,62 @@ def test_hdflow_forward_process_translates_all_formula_adjacent_prose():
     assert not re.search(r"\bx⟦", protected)
     assert any("x_{ℓ}" in formula for formula in mapping.values())
     assert len(SENTINEL_RUN_RE.findall(sample.text)) == len(sample.source_math_bboxes)
+
+    gaussian = next(
+        block
+        for block in forward_units
+        if "approaches an isotropic Gaussian" in strip_sentinels(block.text)
+    )
+    gaussian_protected, gaussian_mapping = protect_text(gaussian.text)
+    assert "As⟦" in gaussian_protected
+    assert any("ℓ→L" in formula and "x_{L}" in formula for formula in gaussian_mapping.values())
+    assert any("N(0,I)" in formula for formula in gaussian_mapping.values())
+
+    # The product lower limit sits less than one point above the wrapped
+    # ``distribution`` line. No redaction may intersect it, even before the
+    # normal redaction margin is applied.
+    product_lower_limit = (316.8489, 489.8888, 341.1045, 502.1877)
+    assert all(
+        bbox_intersection_area(redact, product_lower_limit) == 0
+        for redact in gaussian.redact_bboxes or []
+    )
+
+
+def test_hdflow_boxed_formula_explanations_are_complete_units():
+    from pdf_zh_translator.pdf_layout import (
+        prepare_translation_units,
+        protect_text,
+        strip_sentinels,
+    )
+
+    source = fitz.open(FIXTURES / "hdflow_p5_formula_explanations.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+
+    theorem = next(
+        block
+        for block, _, _ in units
+        if "Proposition 4.2" in strip_sentinels(block.text)
+    )
+    theorem_text = " ".join(strip_sentinels(theorem.text).split())
+    assert "guidance gap" in theorem_text
+    assert "high-dimensional latent spaces" in theorem_text
+    assert "constant independent of dimensionality" in theorem_text
+    theorem_protected, theorem_mapping = protect_text(theorem.text)
+    assert "guidance gap" in theorem_protected
+    assert "ga⟦" not in theorem_protected
+    assert any("z_{t}" in formula for formula in theorem_mapping.values())
+
+    guidance = next(
+        block
+        for block, _, _ in units
+        if "is the EBM guidance and" in strip_sentinels(block.text)
+    )
+    guidance_text = " ".join(strip_sentinels(guidance.text).split())
+    assert guidance_text.startswith("where")
+    guidance_protected, guidance_mapping = protect_text(guidance.text)
+    assert "where⟦" in guidance_protected
+    assert len(guidance_mapping) >= 2
 
 
 def test_source_unit_qa_flags_formula_adjacent_source_phrase():
