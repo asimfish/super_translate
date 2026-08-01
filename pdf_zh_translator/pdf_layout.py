@@ -107,6 +107,15 @@ _ACADEMIC_BOX_PROSE_RE = re.compile(
     r"^(?:Theorem|Lemma|Assumption|Definition|Proposition|Corollary|Remark|Proof)\b",
     re.IGNORECASE,
 )
+_ACADEMIC_LABEL_HEADING_RE = re.compile(
+    r"^(?:Theorem|Lemma|Assumption|Definition|Proposition|Corollary|Remark|Proof|"
+    r"Claim|Observation)(?:\s+\d+(?:\.\d+)*)?(?:\s*\([^()\n]{1,60}\))?[.:]?$",
+    re.IGNORECASE,
+)
+_ACADEMIC_STEP_HEADING_RE = re.compile(
+    r"^Step\s+\d+(?:\.\d+)*\s*:\s*[A-Za-z][A-Za-z0-9 ()/+\-]{1,80}\.?$",
+    re.IGNORECASE,
+)
 _ENUMERATED_ACADEMIC_BOX_RE = re.compile(r"^\(?[ivx]{1,4}\)\s+[A-Z]", re.IGNORECASE)
 # Heading patterns: "1 Introduction", "2.1 Background", "A. Appendix"
 _HEADING_RE = re.compile(
@@ -1188,9 +1197,18 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 translated_region_entries,
                 expand_bbox(source_block.bbox, 2.0),
             )
-            if not _translation_retains_source_prose_run(
-                source_block,
-                translated_unit_text,
+            source_plain = " ".join(strip_sentinels(source_block.text).split())
+            translated_plain = " ".join(translated_unit_text.split())
+            short_structure_echo = (
+                looks_like_academic_structure_heading(source_block, source_plain)
+                and source_plain.casefold() in translated_plain.casefold()
+            )
+            if (
+                not short_structure_echo
+                and not _translation_retains_source_prose_run(
+                    source_block,
+                    translated_unit_text,
+                )
             ):
                 continue
             example = " ".join(translated_unit_text.split())[:80]
@@ -2542,7 +2560,18 @@ def _restore_unit_translation(
         mapping,
         preserve_indices=block.preserved_math_placeholders if block is not None else (),
     )
-    return clean_translation(restored), missing
+    cleaned = clean_translation(restored)
+    if block is not None and block.preserved_math_placeholders:
+        # Separate source formula runs stay separate after translators or the
+        # spacing normalizer collapse their two-space boundary. Otherwise the
+        # sentinel matcher merges the runs, formula anchors no longer align,
+        # and rendering falls back to duplicate hidden/visible formula text.
+        cleaned = re.sub(
+            rf"{re.escape(SENTINEL_CLOSE)}\s?{re.escape(SENTINEL_OPEN)}",
+            SENTINEL_CLOSE + "  " + SENTINEL_OPEN,
+            cleaned,
+        )
+    return cleaned, missing
 
 
 def _translation_echoes_source(block: TextBlock, translated_text: str) -> bool:
@@ -2558,7 +2587,8 @@ def _translation_echoes_source(block: TextBlock, translated_text: str) -> bool:
         for word in _PROSE_WORD_RE.findall(source)
         if word.lower() not in _MATH_WORDS
     ]
-    if len(source_words) < 5:
+    short_structure_heading = looks_like_academic_structure_heading(block, source)
+    if len(source_words) < 5 and not short_structure_heading:
         return False
     result_words = [
         word.lower()
@@ -4794,6 +4824,8 @@ def _promote_equation_table_neighbor_blocks(
         # them (oc p9: "A.2. Additional Details" next to Algorithm 1 cells).
         # Table header rows mis-classified as headings ("2 Cos. alignment…")
         # carry no section-number pattern and still promote.
+        if looks_like_academic_structure_heading(block, plain):
+            continue
         if block.block_type == "heading" and re.match(
             r"^(?:\d+\.\d|\d+\.\s|[A-Z]\.\d|[A-Z]\.\s)", plain
         ):
@@ -5266,12 +5298,13 @@ def classify_blocks(
     Priority order:
     1. Equation zone → equation (should_translate=False)
     2. Algorithm → algorithm (should_translate=False)
-    3. Inside image zone + short label → figure_label (should_translate=False)
-    4. Caption pattern → caption (preserve_position=True)
-    5. Bold + numbered + short → heading
-    6. Bibliography → bibliography (should_translate=False)
-    7. Footer → footer (should_translate=False)
-    8. Otherwise → body
+    3. Academic structure label → heading
+    4. Inside image zone + short label → figure_label (should_translate=False)
+    5. Caption pattern → caption (preserve_position=True)
+    6. Bold + numbered + short → heading
+    7. Bibliography → bibliography (should_translate=False)
+    8. Footer → footer (should_translate=False)
+    9. Otherwise → body
     """
     for block in blocks:
         text = block.text.strip()
@@ -5314,6 +5347,14 @@ def classify_blocks(
         if getattr(block, "_equation_zone", False):
             block.block_type = "equation"
             block.should_translate = False
+            continue
+
+        if looks_like_academic_structure_heading(block, plain):
+            block.block_type = "heading"
+            block.should_translate = True
+            block.bold = True
+            block.no_merge = True
+            block.preserve_position = True
             continue
 
         if looks_like_preserved_diagram_label(text):
@@ -5373,6 +5414,28 @@ def classify_blocks(
         block.should_translate = True
 
     _promote_table_component_blocks(blocks)
+
+
+def looks_like_academic_structure_heading(block: TextBlock, plain: str) -> bool:
+    """Recognize standalone theorem labels and bold procedural step headings.
+
+    Dense vector theorem boxes can be mistaken for figures or equation tables.
+    Requiring a bold, normal-size, one-line label keeps diagram annotations and
+    compact table cells on the preservation path.
+    """
+    compact = " ".join(strip_sentinels(plain).split()).strip()
+    if (
+        not compact
+        or len(compact) > 120
+        or not block.bold
+        or block.source_lines > 2
+        or block.font_size < 8.8
+    ):
+        return False
+    return bool(
+        _ACADEMIC_LABEL_HEADING_RE.fullmatch(compact)
+        or _ACADEMIC_STEP_HEADING_RE.fullmatch(compact)
+    )
 
 
 # Track whether we've seen a "References" heading per page

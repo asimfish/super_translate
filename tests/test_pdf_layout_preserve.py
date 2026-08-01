@@ -732,6 +732,33 @@ def _line(text, bbox, is_cell=False):
 
 
 class TableDetectionTests(unittest.TestCase):
+    def test_academic_structure_heading_is_not_promoted_to_equation_table(self):
+        for text in (
+            "Definition 4.1.",
+            "Step 1: Guided Sampling.",
+            "Step 2: Manifold Projection.",
+            "Proposition 4.3.",
+        ):
+            heading = TextBlock(
+                page_index=0,
+                bbox=(120.0, 100.0, 260.0, 110.0),
+                text=text,
+                font_size=9.9,
+                color=(0.0, 0.0, 0.0),
+                bold=True,
+                source_lines=1,
+                block_type="heading",
+                should_translate=True,
+            )
+
+            _promote_equation_table_neighbor_blocks(
+                [heading],
+                [(100.0, 112.0, 300.0, 140.0)],
+            )
+
+            self.assertEqual(heading.block_type, "heading")
+            self.assertTrue(heading.should_translate)
+
     def test_equation_table_cells_promote_adjacent_text_but_not_following_prose(self):
         header = TextBlock(
             page_index=0,
@@ -1989,6 +2016,37 @@ class FormulaTailProseTests(unittest.TestCase):
 
         self.assertEqual(_align_formula_anchors(anchors, 2), anchors)
         self.assertEqual(_align_formula_anchors(anchors, 1), ())
+
+    def test_restored_formula_runs_keep_anchor_boundaries(self):
+        from pdf_zh_translator.pdf_layout import _restore_unit_translation
+
+        anchors = (
+            (100.0, 100.0, 120.0, 110.0),
+            (120.0, 104.0, 135.0, 112.0),
+        )
+        block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 260.0, 130.0),
+            text="formula",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            preserved_math_placeholders=(0, 1),
+            formula_anchors=anchors,
+        )
+
+        restored, missing = _restore_unit_translation(
+            "结果 ⟦0⟧ ⟦1⟧ 成立",
+            {0: "z^{temp}", 1: "_{ℓ-1}"},
+            block,
+        )
+        tokens = _tokenize_translation_with_formula_clips(restored, block)
+
+        self.assertEqual(missing, [])
+        self.assertEqual(len(SENTINEL_RUN_RE.findall(restored)), 2)
+        self.assertTrue(any(token.kind == "formula" for token in tokens))
+        self.assertFalse(
+            any(token.kind == "word" and "_{" in token.text for token in tokens)
+        )
 
     def test_formula_tokenizer_falls_back_to_visible_text_when_anchors_mismatch(self):
         block = TextBlock(
@@ -3952,6 +4010,29 @@ class TestClassifyBlocks(unittest.TestCase):
         self.assertTrue(block.preserve_position)
         self.assertTrue(block.should_translate)
 
+    def test_academic_structure_headings_override_dense_vector_image_zone(self):
+        blocks = [
+            self._make_block("Definition 4.1.", bold=True),
+            self._make_block("Step 1: Guided Sampling.", bold=True),
+            self._make_block("Step 2: Manifold Projection.", bold=True),
+            self._make_block("Proposition 4.3.", bold=True),
+        ]
+
+        classify_blocks(blocks, 0, 792, [(20.0, 0.0, 612.0, 487.0)])
+
+        self.assertTrue(all(block.block_type == "heading" for block in blocks))
+        self.assertTrue(all(block.should_translate for block in blocks))
+        self.assertTrue(all(block.preserve_position for block in blocks))
+
+    def test_small_figure_academic_label_remains_preserved(self):
+        block = self._make_block("Definition 4.1.", bold=True)
+        block.font_size = 7.5
+
+        classify_blocks([block], 0, 792, [(20.0, 0.0, 612.0, 487.0)])
+
+        self.assertEqual(block.block_type, "figure_label")
+        self.assertFalse(block.should_translate)
+
     def test_author_metadata_is_not_translated(self):
         from pdf_zh_translator.pdf_layout import classify_blocks
 
@@ -4889,6 +4970,38 @@ class TestTranslationVerification(unittest.TestCase):
             (88, 120),
             "Question: Does the paper fully disclose all the information needed to "
             "reproduce the main experimental results?",
+        )
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(any(issue.code == "untranslated_english" for issue in issues))
+
+    def test_verification_flags_short_academic_heading_echo(self):
+        original = fitz.open()
+        page = original.new_page(width=360, height=360)
+        page.insert_text(
+            (30, 60),
+            "Step 1: Guided Sampling.",
+            fontsize=10,
+            fontname="hebo",
+        )
+
+        translated = fitz.open()
+        page = translated.new_page(width=360, height=360)
+        page.insert_text(
+            (30, 60),
+            "Step 1: Guided Sampling.",
+            fontsize=10,
+            fontname="hebo",
         )
 
         import tempfile
@@ -6725,6 +6838,21 @@ class JustifiedWordFragmentTests(unittest.TestCase):
 
 
 class TranslationEchoDetectionTests(unittest.TestCase):
+    def test_short_academic_heading_echo_is_flagged(self):
+        block = TextBlock(
+            page_index=4,
+            bbox=(55.4, 353.4, 164.9, 363.4),
+            text="Step 1: Guided Sampling.",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            bold=True,
+            source_lines=1,
+            should_translate=True,
+            block_type="heading",
+        )
+
+        self.assertTrue(_translated_block_still_english(block, block.text))
+
     def test_formula_dense_echo_is_flagged(self):
         """IPMF p3: the restored echo of a formula-explanation block must be
         flagged even though it trips the reference/author exemptions."""
