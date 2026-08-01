@@ -187,6 +187,15 @@ SENTINEL_RUN_RE = re.compile(
 )
 CITATION_RE = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
 URL_RE = re.compile(r"(?:https?://|www\.)\S+")
+EMAIL_RE = re.compile(
+    r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b",
+    re.IGNORECASE,
+)
+AUTHOR_YEAR_CITATION_RE = re.compile(
+    r"[\(\uff08][^()\uff08\uff09\n]{0,160}\b(?:19|20)\d{2}[a-z]?\b"
+    r"[^()\uff08\uff09\n]{0,80}[\)\uff09]",
+    re.IGNORECASE,
+)
 URL_TRAILING_PUNCT = ").,;:!?]\u3002\uff0c\uff1b"
 # Characters that mark a whitespace-delimited token as inline math.
 # U+27E6/27E7 (the placeholder brackets) are deliberately excluded.
@@ -2592,30 +2601,39 @@ def _translation_retains_source_prose_run(
     if URL_RE.search(strip_sentinels(block.text)) or URL_RE.search(translated_text):
         return False
 
-    def prose_words(text: str) -> List[str]:
+    def prose_word_segments(text: str) -> List[List[str]]:
+        plain = strip_sentinels(text)
+        for boundary_re in (EMAIL_RE, AUTHOR_YEAR_CITATION_RE, CITATION_RE):
+            plain = boundary_re.sub("\n", plain)
         return [
-            word
-            for word in _PROSE_WORD_RE.findall(strip_sentinels(text))
-            if word.lower() not in _MATH_WORDS
+            [
+                word
+                for word in re.findall(r"[A-Za-z]{2,}", segment)
+                if word.lower() not in _MATH_WORDS
+            ]
+            for segment in plain.splitlines()
+            if segment.strip()
         ]
 
-    source_words = prose_words(block.text)
-    result_words = [word.lower() for word in prose_words(translated_text)]
-    if len(source_words) < min_run * 2 or len(result_words) < min_run:
+    source_segments = prose_word_segments(block.text)
+    result_segments = prose_word_segments(translated_text)
+    if (
+        sum(len(segment) for segment in source_segments) < min_run
+        or sum(len(segment) for segment in result_segments) < min_run
+    ):
         return False
-    source_runs = [
-        source_words[index : index + min_run]
-        for index in range(len(source_words) - min_run + 1)
-    ]
     result_runs = {
-        tuple(result_words[index : index + min_run])
-        for index in range(len(result_words) - min_run + 1)
+        tuple(word.lower() for word in segment[index : index + min_run])
+        for segment in result_segments
+        for index in range(len(segment) - min_run + 1)
     }
-    for source_run in source_runs:
-        if sum(word[:1].islower() for word in source_run) < 3:
-            continue
-        if tuple(word.lower() for word in source_run) in result_runs:
-            return True
+    for segment in source_segments:
+        for index in range(len(segment) - min_run + 1):
+            source_run = segment[index : index + min_run]
+            if sum(word[:1].islower() for word in source_run) < 3:
+                continue
+            if tuple(word.lower() for word in source_run) in result_runs:
+                return True
     return False
 
 
@@ -5518,7 +5536,8 @@ def _formula_like_plain_span_text(text: str) -> bool:
     stripped = text.strip()
     if not stripped or len(stripped) > 80:
         return False
-    if len(stripped) > 1 and stripped.lower() in _SHORT_PROSE_WORDS:
+    wordish = re.sub(r"^[^A-Za-z]+|[^A-Za-z]+$", "", stripped).lower()
+    if len(wordish) > 1 and wordish in _SHORT_PROSE_WORDS:
         return False
     words = _PROSE_WORD_RE.findall(stripped)
     if any(len(word) > 2 and word.lower() not in _MATH_WORDS for word in words):
@@ -5541,6 +5560,21 @@ def _expanded_math_span_indexes(
 ) -> set[int]:
     """Include adjacent normal-font numeric/operator spans in a formula run."""
     expanded = set(seed_indexes)
+    for index, span in enumerate(spans[:-1]):
+        text = normalize_span_text(span.get("text", ""))
+        following = spans[index + 1]
+        following_text = normalize_span_text(following.get("text", ""))
+        following_size = float(following.get("size", line_max_size))
+        if (
+            re.fullmatch(r"[A-Za-z]", text.strip())
+            and re.fullmatch(r"[A-Za-z0-9]", following_text.strip())
+            and following_size < line_max_size * 0.85
+            and _span_horizontal_gap(span, following) <= LINE_NUMBER_NEIGHBOR_GAP
+        ):
+            # Bold vector bases such as ``x`` are often set in CMBX while the
+            # numeric subscript uses ordinary CMR7, so neither span is a math
+            # seed on its own. Their size/adjacency pair is unambiguous.
+            expanded.update((index, index + 1))
     for index, span in enumerate(spans):
         text = normalize_span_text(span.get("text", ""))
         if _formula_like_plain_span_text(text) and re.search(
@@ -5561,17 +5595,26 @@ def _expanded_math_span_indexes(
                 continue
             stripped = text.strip()
             if re.fullmatch(r"[a-z]", stripped):
-                previous_text = (
-                    normalize_span_text(spans[index - 1].get("text", "")).rstrip()
-                    if index > 0
-                    else ""
-                )
-                next_text = (
-                    normalize_span_text(spans[index + 1].get("text", "")).lstrip()
-                    if index + 1 < len(spans)
-                    else ""
-                )
-                if previous_text[-1:].isalpha() or next_text[:1].isalpha():
+                split_word_neighbor = False
+                if index > 0 and not text[:1].isspace():
+                    previous = spans[index - 1]
+                    previous_text = normalize_span_text(previous.get("text", ""))
+                    split_word_neighbor = bool(
+                        previous_text[-1:].isalpha()
+                        and not _span_is_math_neighbor(previous, line_max_size)
+                    )
+                if (
+                    not split_word_neighbor
+                    and index + 1 < len(spans)
+                    and not text[-1:].isspace()
+                ):
+                    following = spans[index + 1]
+                    next_text = normalize_span_text(following.get("text", ""))
+                    split_word_neighbor = bool(
+                        next_text[:1].isalpha()
+                        and not _span_is_math_neighbor(following, line_max_size)
+                    )
+                if split_word_neighbor:
                     continue
             if any(
                 _span_horizontal_gap(span, spans[math_index]) <= threshold
@@ -6810,7 +6853,7 @@ def current_expects_preserved_formula_tail(current: "_SegmentAccumulator") -> bo
     tail = re.sub(r"\s+", " ", strip_sentinels(current.lines[-1]).strip().lower())
     if not tail:
         return False
-    if tail.endswith(("+", "=", ":=", ",")):
+    if tail.endswith(("+", "=", ":=", ":", "：", ",")):
         return True
     return bool(
         re.search(
@@ -7008,6 +7051,7 @@ def _prose_line_shares_math_row(record: "_RawBlockRec", line_index: int) -> bool
     """
     line = record.lines[line_index]
     line_height = max(1.0, line.bbox[3] - line.bbox[1])
+    line_center = (line.bbox[1] + line.bbox[3]) / 2.0
     for other_index, other in enumerate(record.lines):
         if other_index == line_index or line_is_prose(other):
             continue
@@ -7015,6 +7059,10 @@ def _prose_line_shares_math_row(record: "_RawBlockRec", line_index: int) -> bool
         if overlap < 1.5:
             continue
         other_height = other.bbox[3] - other.bbox[1]
+        other_center = (other.bbox[1] + other.bbox[3]) / 2.0
+        baseline_tolerance = max(2.0, min(line_height, other_height) * 0.45)
+        if abs(other_center - line_center) > baseline_tolerance:
+            continue
         compact_other = "".join(strip_sentinels(other.text).split())
         is_numbered_equation = bool(
             compact_other and EQUATION_NUMBER_RE.fullmatch(compact_other)
@@ -7022,6 +7070,84 @@ def _prose_line_shares_math_row(record: "_RawBlockRec", line_index: int) -> bool
         if other_height >= line_height * 1.5 or is_numbered_equation:
             return True
     return False
+
+
+def _math_line_prose_fragments(line: _LineRec) -> List[_LineRec]:
+    """Extract normal-font prose runs embedded in a math-dominant line.
+
+    Display equations are sometimes emitted as one physical line whose final
+    span starts a sentence, or whose next line begins with a prose word before
+    another inline formula. Only those prose spans are redacted and translated;
+    all intervening math remains at its source position.
+    """
+    prose_bboxes = set(line.prose_bboxes)
+    if not prose_bboxes or not line.math_bboxes:
+        return []
+
+    groups: List[List[dict]] = []
+    current: List[dict] = []
+    for span in line.spans:
+        bbox = (
+            tuple(float(value) for value in span["bbox"])
+            if "bbox" in span
+            else None
+        )
+        if (
+            bbox in prose_bboxes
+            and normalize_span_text(span.get("text", "")).strip()
+            and re.search(r"[A-Za-z]", normalize_span_text(span.get("text", "")))
+        ):
+            current.append(span)
+            continue
+        if current:
+            groups.append(current)
+            current = []
+    if current:
+        groups.append(current)
+
+    fragments: List[_LineRec] = []
+    for spans in groups:
+        text = "".join(normalize_span_text(span.get("text", "")) for span in spans)
+        prose_words = [
+            word
+            for word in re.findall(r"[A-Za-z]{2,}", text)
+            if word.lower() not in _MATH_WORDS
+        ]
+        significant = [
+            word
+            for word in prose_words
+            if word.lower() not in _MATH_WORDS | _FORMULA_CONTEXT_WORDS
+        ]
+        connector = significant and significant[0].lower() in {
+            "and",
+            "as",
+            "for",
+            "if",
+            "where",
+            "with",
+        }
+        if not significant or (
+            len(prose_words) == 1
+            and len(significant[0]) < 8
+            and not connector
+        ):
+            continue
+        boxes = [
+            tuple(float(value) for value in span["bbox"])
+            for span in spans
+            if "bbox" in span
+        ]
+        if not boxes:
+            continue
+        fragments.append(
+            _LineRec(
+                text=text.strip(),
+                bbox=union_bbox(boxes),
+                spans=list(spans),
+                prose_bboxes=boxes,
+            )
+        )
+    return fragments
 
 
 def _fragmented_inline_math_paragraph_block(
@@ -7186,6 +7312,27 @@ def segments_from_record(
         current_min_y0 = None
         current_inline_prefix_right = None
 
+    def append_math_line_prose_fragments(
+        source_line: _LineRec,
+        fragments: Sequence[_LineRec],
+    ) -> None:
+        flush_current()
+        math_keepouts = list(source_line.math_run_bboxes or source_line.math_bboxes)
+        preserved_line_bboxes.extend(math_keepouts)
+        for fragment in fragments:
+            fragment_accumulator = _SegmentAccumulator()
+            _accumulate_line(fragment_accumulator, fragment)
+            block = fragment_accumulator.flush(page_index)
+            if block is None:
+                continue
+            block.block_type = "formula_prose"
+            block.no_merge = True
+            block.nowrap = True
+            block.redact_bboxes = list(fragment.prose_bboxes)
+            block.keepout_bboxes = list(math_keepouts) or None
+            block.source_line_bboxes = tuple(fragment.prose_bboxes)
+            segments.append(block)
+
     skip_line_index: Optional[int] = None
     for line_index, line in enumerate(record.lines):
         if skip_line_index == line_index:
@@ -7254,6 +7401,26 @@ def segments_from_record(
                 if line_starts_with_leadin_marker(leadin):
                     current_no_merge = True
                 line = tail
+        prose_fragments = _math_line_prose_fragments(line)
+        compact_length = len("".join(strip_sentinels(line.text).split()))
+        math_ratio = (
+            sentinel_char_count(line.text) / compact_length
+            if compact_length
+            else 0.0
+        )
+        if (
+            not equation_record
+            and prose_fragments
+            and (
+                not line_is_prose(line)
+                or (
+                    line.text.lstrip().startswith(SENTINEL_OPEN)
+                    and math_ratio >= 0.30
+                )
+            )
+        ):
+            append_math_line_prose_fragments(line, prose_fragments)
+            continue
         continues_existing_formula = bool(
             current.lines
             and any(SENTINEL_OPEN in current_line for current_line in current.lines)
@@ -7273,6 +7440,13 @@ def segments_from_record(
                     continue
             line = prose_tail
         if equation_record:
+            math_dominant = bool(
+                compact_length
+                and math_ratio >= 0.55
+            )
+            if prose_fragments and math_dominant:
+                append_math_line_prose_fragments(line, prose_fragments)
+                continue
             if not line_is_prose(line):
                 next_line = (
                     record.lines[line_index + 1]
@@ -7289,6 +7463,9 @@ def segments_from_record(
                 if line_continues_inline_formula_tail(line, current):
                     _accumulate_line(current, line)
                     current_has_inline_tail = True
+                    continue
+                if prose_fragments:
+                    append_math_line_prose_fragments(line, prose_fragments)
                     continue
                 flush_current()
                 preserved_line_bboxes.append(line.bbox)

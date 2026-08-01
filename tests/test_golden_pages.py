@@ -7,6 +7,7 @@ runs with a deterministic Chinese stub translator, and the standard
 verification must report no error-severity issues.
 """
 
+import re
 from pathlib import Path
 
 import fitz
@@ -38,6 +39,9 @@ GOLDEN_PAGES = [
     # HDFlow p15: tall inline fractions and a short "Let" formula lead must
     # remain anchored while the surrounding explanation is translated.
     "hdflow_p15_inline_formula.pdf",
+    # HDFlow p2: prose split beside and inside a multi-line forward-process
+    # equation must translate while every display-math span remains intact.
+    "hdflow_p2_formula_prose.pdf",
     # CDGS p24: clipped sprite bboxes must not turn adjacent task-description
     # lists into figure labels; action-call chains remain verbatim pseudocode.
     "cdgs_p24_clipped_sprites.pdf",
@@ -315,6 +319,39 @@ def test_dynaguide_unnumbered_display_formula_is_not_a_translation_unit():
     assert not any(text.startswith("2σ ||") for text in texts)
 
 
+def test_hdflow_forward_process_translates_all_formula_adjacent_prose():
+    from pdf_zh_translator.pdf_layout import (
+        SENTINEL_RUN_RE,
+        prepare_translation_units,
+        protect_text,
+        strip_sentinels,
+    )
+
+    source = fitz.open(FIXTURES / "hdflow_p2_formula_prose.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    forward_units = [
+        block
+        for block, _, _ in units
+        if 410.0 <= block.bbox[1] <= 515.0
+    ]
+    source.close()
+
+    texts = [" ".join(strip_sentinels(block.text).split()) for block in forward_units]
+    assert any("according to a variance schedule" in text for text in texts)
+    assert any("A key property is that we can" in text for text in texts)
+    assert any(text == "distribution" for text in texts)
+
+    sample = next(
+        block
+        for block in forward_units
+        if "at any timestep" in strip_sentinels(block.text)
+    )
+    protected, mapping = protect_text(sample.text)
+    assert not re.search(r"\bx⟦", protected)
+    assert any("x_{ℓ}" in formula for formula in mapping.values())
+    assert len(SENTINEL_RUN_RE.findall(sample.text)) == len(sample.source_math_bboxes)
+
+
 def test_source_unit_qa_flags_formula_adjacent_source_phrase():
     from pdf_zh_translator.pdf_layout import (
         TextBlock,
@@ -395,4 +432,98 @@ def test_source_unit_qa_allows_named_program_and_url():
     assert not _translation_retains_source_prose_run(
         linked,
         "请参阅 https://nips.cc/public/guides/CodeSubmissionPolicy。",
+    )
+
+
+def test_source_unit_qa_allows_affiliation_email_identity():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _translation_retains_source_prose_run,
+    )
+
+    block = TextBlock(
+        page_index=0,
+        bbox=(55.4, 656.9, 290.9, 677.4),
+        text=(
+            "Peking University Galbot University of Toronto. "
+            "Correspondence to: Nandiraju Gireesh "
+            "<2401112103@stu.pku.edu.cn>."
+        ),
+        font_size=8.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    assert not _translation_retains_source_prose_run(
+        block,
+        "北京大学 Galbot 多伦多大学。通讯作者：Nandiraju Gireesh "
+        "<2401112103@stu.pku.edu.cn>。",
+    )
+
+
+def test_source_unit_qa_allows_term_before_author_year_citation():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _translation_retains_source_prose_run,
+    )
+
+    block = TextBlock(
+        page_index=1,
+        bbox=(307.4, 647.5, 543.1, 705.5),
+        text=(
+            "For conditional generation, classifier-free guidance (CFG) "
+            "(Ho & Salimans, 2022) is commonly used. The model is trained "
+            "on conditional and unconditional inputs."
+        ),
+        font_size=9.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    assert not _translation_retains_source_prose_run(
+        block,
+        "对于条件生成，通常采用无分类器引导（Classifier-Free Guidance, CFG）"
+        "（Ho 和 Salimans，2022）。模型在条件输入和无条件输入上训练。",
+    )
+
+
+def test_source_unit_qa_still_flags_prose_after_author_year_citation():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _translation_retains_source_prose_run,
+    )
+
+    block = TextBlock(
+        page_index=1,
+        bbox=(307.4, 647.5, 543.1, 705.5),
+        text=(
+            "Classifier-free guidance (Ho & Salimans, 2022) is commonly used. "
+            "The model is trained on both conditional and unconditional inputs."
+        ),
+        font_size=9.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    assert _translation_retains_source_prose_run(
+        block,
+        "常用无分类器引导（Ho 和 Salimans，2022）。"
+        "The model is trained on both conditional and unconditional inputs.",
+    )
+
+
+def test_source_unit_qa_flags_short_formula_adjacent_phrase():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _translation_retains_source_prose_run,
+    )
+
+    block = TextBlock(
+        page_index=1,
+        bbox=(412.4, 452.8, 541.4, 462.9),
+        text="A key property is that we can",
+        font_size=10.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    assert _translation_retains_source_prose_run(
+        block,
+        "A key property is that we can",
     )
