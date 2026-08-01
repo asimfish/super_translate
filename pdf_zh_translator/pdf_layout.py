@@ -7626,7 +7626,17 @@ def segments_from_record(
                 if line_starts_with_leadin_marker(leadin):
                     current_no_merge = True
                 line = tail
-        if equation_record and _line_continues_hyphenated_formula_prose(line, current):
+        if not equation_record and next_physical_line is not None:
+            continuation_probe = _SegmentAccumulator()
+            _accumulate_line(continuation_probe, line)
+            if _line_continues_hyphenated_formula_prose(
+                next_physical_line,
+                continuation_probe,
+            ):
+                _accumulate_line(current, line)
+                current_has_inline_tail = True
+                continue
+        if _line_continues_hyphenated_formula_prose(line, current):
             _accumulate_line(current, line)
             current_has_inline_tail = True
             continue

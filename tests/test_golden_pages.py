@@ -416,6 +416,19 @@ def test_hdflow_boxed_formula_explanations_are_complete_units():
     assert "where⟦" in guidance_protected
     assert len(guidance_mapping) >= 2
 
+    caption = next(
+        block
+        for block, _, _ in units
+        if strip_sentinels(block.text).startswith("Figure 2.")
+    )
+    caption_text = " ".join(strip_sentinels(caption.text).split())
+    assert "To prevent manifold deviation" in caption_text
+    assert "manifold devia-" not in caption_text
+    caption_protected, caption_mapping = protect_text(caption.text)
+    assert not re.search(r"(?:^|\s)tion,", caption_protected)
+    assert sum(formula == "z^{temp}" for formula in caption_mapping.values()) == 2
+    assert sum(formula == "_{ℓ}_{−}_{1}" for formula in caption_mapping.values()) == 2
+
 
 def test_source_unit_qa_flags_formula_adjacent_source_phrase():
     from pdf_zh_translator.pdf_layout import (
