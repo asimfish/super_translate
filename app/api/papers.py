@@ -1252,6 +1252,92 @@ async def _finalize_cancelled_translation(
     _clear_cancel_requested(paper_id)
 
 
+async def _run_translate_in_worker(
+    input_path: Path,
+    output_dir: Path,
+    config: TranslationConfig,
+    on_progress: Callable[[float], None],
+    *,
+    paper_id: str = "",
+) -> TranslationResult:
+    """Run the translation pipeline in a dedicated subprocess.
+
+    A native-layer crash (PyMuPDF/pikepdf heap corruption) then kills only
+    the worker; the web server stays up and the job fails cleanly instead of
+    taking the whole service down (observed on PhiZero, 2026-08-05:
+    "free(): invalid next size" crashed the process mid-translation).
+    Progress arrives via a JSONL file the worker appends to; cancellation
+    terminates the worker.
+    """
+    import dataclasses
+    import sys
+
+    spec = {
+        "input_path": str(input_path),
+        "output_dir": str(output_dir),
+        "config": {**dataclasses.asdict(config), "quality": config.quality.value},
+    }
+    spec_path = output_dir / ".worker_spec.json"
+    progress_file = output_dir / ".worker_progress.jsonl"
+    result_file = output_dir / ".worker_result.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    env = dict(os.environ, PYTHONFAULTHANDLER="1")
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "app.services.worker",
+        str(spec_path),
+        cwd=str(settings.base_dir),
+        env=env,
+        # stderr inherits the server log so faulthandler stacks are kept.
+        stdout=asyncio.subprocess.DEVNULL,
+    )
+
+    last_progress = -1.0
+    deadline = time.monotonic() + settings.translation_timeout_seconds
+    while proc.returncode is None:
+        if _is_cancel_requested(paper_id):
+            with contextlib.suppress(ProcessLookupError):
+                proc.terminate()
+            await proc.wait()
+            raise TranslationCancelledError("Translation cancelled by user")
+        if time.monotonic() > deadline:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+            return TranslationResult(error="Translation timed out")
+        if progress_file.exists():
+            try:
+                last_line = (
+                    progress_file.read_text(encoding="utf-8").strip().splitlines()[-1]
+                )
+                pct = float(json.loads(last_line)["progress"])
+                if pct > last_progress:
+                    last_progress = pct
+                    on_progress(pct)
+            except (json.JSONDecodeError, IndexError, ValueError, KeyError):
+                pass
+        try:
+            await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=1.5)
+        except TimeoutError:
+            pass
+
+    if result_file.exists():
+        try:
+            data = json.loads(result_file.read_text(encoding="utf-8"))
+            return TranslationResult(
+                mono_path=Path(data["mono_path"]) if data.get("mono_path") else None,
+                dual_path=Path(data["dual_path"]) if data.get("dual_path") else None,
+                error=data.get("error"),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+    return TranslationResult(
+        error=f"Translation worker exited unexpectedly (code {proc.returncode})"
+    )
+
+
 async def _do_translate(
     paper_id: str,
     config: TranslationConfig,
@@ -1367,12 +1453,12 @@ async def _do_translate(
     qa_failure_error: str | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            trans_result = await asyncio.to_thread(
-                translate_pdf_sync,
+            trans_result = await _run_translate_in_worker(
                 input_path,
                 output_dir,
                 config,
                 on_progress,
+                paper_id=paper_id,
             )
         except TranslationCancelledError:
             await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)

@@ -1972,7 +1972,7 @@ class TestRunTranslation:
         document.save(path)
         document.close()
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_successful_translation(self, mock_settings, mock_translate, tmp_path):
         from app.api.papers import _run_translation
@@ -2010,7 +2010,7 @@ class TestRunTranslation:
         assert paper.translation_status == "completed"
         assert paper.translation_progress == 1.0
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_translation_uses_safe_pdf_sidecar(self, mock_settings, mock_translate, tmp_path):
         from app.api.papers import _run_translation
@@ -2049,7 +2049,7 @@ class TestRunTranslation:
         assert mock_translate.call_args.args[0] == safe_path
         assert mock_qa.call_args.args[2] == safe_path
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_qa_error_fails_translation_but_keeps_outputs(
         self, mock_settings, mock_translate, tmp_path
@@ -2102,7 +2102,7 @@ class TestRunTranslation:
         assert paper.translated_filename == "paper123/test-mono.pdf"
         assert mono_path.exists()
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_blocking_qa_error_fails_translation(
         self, mock_settings, mock_translate, tmp_path
@@ -2155,7 +2155,7 @@ class TestRunTranslation:
         assert paper.translated_filename == "paper123/test-mono.pdf"
         assert mono_path.exists()
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_progress_callback_updates_db(self, mock_settings, mock_translate, tmp_path):
         """Test that the progress callback updates translation_progress in DB."""
@@ -2183,7 +2183,7 @@ class TestRunTranslation:
         mono_path = translations_dir / "paper123" / "test-mono.pdf"
         self._write_valid_pdf(mono_path, "译文内容。")
 
-        def fake_translate(input_path, output_dir, config, progress_callback=None):
+        def fake_translate(input_path, output_dir, config, progress_callback=None, **_kwargs):
             if progress_callback:
                 progress_callback(0.5)
             return TranslationResult(mono_path=mono_path)
@@ -2219,12 +2219,12 @@ class TestRunTranslation:
 
         assert paper.translation_status == "completed"
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_progress_callback_runs_before_translation_returns(
         self, mock_settings, mock_translate, tmp_path
     ):
-        """Progress DB writes must run while the sync translator is still busy."""
+        """Progress from the worker must reach the DB before the job finishes."""
         from app.api.papers import _do_translate
         from app.services.translator import TranslationConfig, TranslationResult
 
@@ -2263,13 +2263,13 @@ class TestRunTranslation:
         db.execute = AsyncMock(side_effect=execute_side_effect)
         db.commit = AsyncMock()
 
-        def fake_translate(input_path, output_dir, config, progress_callback=None):
+        async def fake_translate(input_path, output_dir, config, progress_callback=None, **_kwargs):
             self._write_valid_pdf(mono_path, "译文内容。")
             progress_requested.set()
             if progress_callback:
                 progress_callback(0.5)
-            if not progress_written.wait(timeout=2.0):
-                raise AssertionError("progress update did not run before translation returned")
+                # Yield so the scheduled DB write coroutine can actually run.
+                await asyncio.sleep(0.5)
             return TranslationResult(mono_path=mono_path)
 
         mock_translate.side_effect = fake_translate
@@ -2319,7 +2319,7 @@ class TestRunTranslation:
         # 0.012, 0.024, 1.0 progress update, plus 1.0 log milestone
         assert fire_count[0] == 4
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_paper_not_found(self, mock_settings, mock_translate):
         from app.api.papers import _run_translation
@@ -2334,7 +2334,7 @@ class TestRunTranslation:
 
         mock_translate.assert_not_called()
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_missing_input_file_sets_failed(self, mock_settings, mock_translate, tmp_path):
         from app.api.papers import _run_translation
@@ -2362,7 +2362,7 @@ class TestRunTranslation:
         assert paper.translation_error == "Original PDF file not found"
         mock_translate.assert_not_called()
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_path_traversal_blocked(self, mock_settings, mock_translate, tmp_path):
         from app.api.papers import _run_translation
@@ -2388,7 +2388,7 @@ class TestRunTranslation:
         assert paper.translation_error == "Invalid file path"
         mock_translate.assert_not_called()
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_translation_exception_sets_failed(self, mock_settings, mock_translate, tmp_path):
         from app.api.papers import _run_translation
@@ -2418,7 +2418,7 @@ class TestRunTranslation:
         assert paper.translation_status == "failed"
         assert paper.translation_error is not None
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_translation_crash_cleans_up_output_dir(self, mock_settings, mock_translate, tmp_path):
         """Test that crash handler cleans up partial output directory."""
@@ -2453,7 +2453,7 @@ class TestRunTranslation:
         assert paper.translation_status == "failed"
         assert not output_dir.exists()
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_translation_failure_cleans_up(self, mock_settings, mock_translate, tmp_path):
         from app.api.papers import _run_translation
@@ -2488,7 +2488,7 @@ class TestRunTranslation:
         assert paper.translation_status == "failed"
         assert not partial_dir.exists()
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_cancellation_resets_to_pending(self, mock_settings, mock_translate, tmp_path):
         """Test that cancelling a translation resets paper to pending status."""
@@ -2516,7 +2516,7 @@ class TestRunTranslation:
 
         (papers_dir / "test.pdf").write_bytes(b"PDF content")
 
-        def fake_translate(input_path, output_dir, config, progress_callback=None):
+        def fake_translate(input_path, output_dir, config, progress_callback=None, **_kwargs):
             # Simulate a user cancellation arriving while translation is running.
             _mark_cancel_requested("paper123")
             if progress_callback:
@@ -2536,7 +2536,7 @@ class TestRunTranslation:
         with _cancel_lock:
             _cancelled_papers.discard("paper123")
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_cancellation_during_qa_resets_to_pending(
         self, mock_settings, mock_translate, tmp_path
@@ -2569,7 +2569,7 @@ class TestRunTranslation:
         mono_path = translations_dir / "paper123" / "test-mono.pdf"
         self._write_valid_pdf(mono_path, "译文内容。")
 
-        def fake_translate(input_path, output_dir, config, progress_callback=None):
+        def fake_translate(input_path, output_dir, config, progress_callback=None, **_kwargs):
             # Translation finishes; cancel arrives before post-translation QA runs.
             _mark_cancel_requested("paper123")
             return TranslationResult(mono_path=mono_path)
@@ -2644,7 +2644,7 @@ class TestRunTranslation:
             "paper123", "Translation queue is busy, please try again later"
         )
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_dual_path_stored(self, mock_settings, mock_translate, tmp_path):
         from app.api.papers import _run_translation
@@ -2688,7 +2688,7 @@ class TestRunTranslation:
         assert paper.translated_filename is not None
         assert paper.dual_filename is not None
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_unhandled_exception_resets_paper_status(self, mock_settings, mock_translate):
         """Test that an unhandled exception outside _do_translate resets paper status."""
@@ -2863,7 +2863,7 @@ class TestRunTranslation:
         response = client.post("/api/papers/upload")
         assert response.status_code == 422
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_paper_disappeared_during_translation(self, mock_settings, mock_translate, tmp_path):
         """Phase 3: paper deleted mid-translation should clean up and return."""
@@ -3767,7 +3767,7 @@ class TestSelfHealingRetry:
         assert _has_self_healable_error([issue("preserved_text_changed")]) is False
         assert _has_self_healable_error([issue("high_risk_layout", "warning")]) is False
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_untranslated_only_failure_retries_once(self, mock_settings, mock_translate, tmp_path):
         from types import SimpleNamespace as NS
@@ -3801,7 +3801,7 @@ class TestSelfHealingRetry:
         assert mock_translate.call_count == 2
         assert paper.translation_status == "completed"
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_layout_error_does_not_retry(self, mock_settings, mock_translate, tmp_path):
         from types import SimpleNamespace as NS
@@ -3832,7 +3832,7 @@ class TestSelfHealingRetry:
         assert mock_translate.call_count == 1
         assert paper.translation_status == "failed"
 
-    @patch("app.api.papers.translate_pdf_sync")
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_persistent_untranslated_fails_after_one_retry(
         self, mock_settings, mock_translate, tmp_path
@@ -3944,3 +3944,63 @@ class TestPagePreviewEndpoint:
             res = client.get("/api/papers/paper123/preview/original/1")
             assert res.status_code == 200
             assert res.headers["content-type"] == "image/webp"
+
+
+class TestWorkerRunner:
+    """The subprocess translation runner: result collection and crash paths."""
+
+    def _fake_proc(self, returncode):
+        proc = MagicMock()
+        proc.returncode = returncode
+        proc.wait = AsyncMock(return_value=returncode)
+        proc.terminate = MagicMock()
+        proc.kill = MagicMock()
+        return proc
+
+    def test_collects_worker_result(self, tmp_path):
+        from app.api.papers import _run_translate_in_worker
+        from app.services.translator import TranslationConfig
+
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        result = {"mono_path": str(tmp_path / "m.pdf"), "dual_path": None, "error": None}
+
+        async def fake_exec(*args, **kwargs):
+            (output_dir / ".worker_result.json").write_text(json.dumps(result))
+            return self._fake_proc(0)
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            res = asyncio.run(
+                _run_translate_in_worker(
+                    tmp_path / "in.pdf",
+                    output_dir,
+                    TranslationConfig(backend="deepseek"),
+                    lambda pct: None,
+                    paper_id="paper123",
+                )
+            )
+        assert res.success is True
+        assert res.mono_path == tmp_path / "m.pdf"
+
+    def test_worker_crash_returns_error_not_exception(self, tmp_path):
+        from app.api.papers import _run_translate_in_worker
+        from app.services.translator import TranslationConfig
+
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+
+        async def fake_exec(*args, **kwargs):
+            return self._fake_proc(-11)  # SIGSEGV, no result file written
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            res = asyncio.run(
+                _run_translate_in_worker(
+                    tmp_path / "in.pdf",
+                    output_dir,
+                    TranslationConfig(backend="deepseek"),
+                    lambda pct: None,
+                    paper_id="paper123",
+                )
+            )
+        assert res.success is False
+        assert "worker exited unexpectedly" in (res.error or "")
