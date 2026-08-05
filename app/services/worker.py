@@ -20,6 +20,41 @@ def main() -> int:
     faulthandler.enable()
     spec_path = Path(sys.argv[1])
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
+
+    if spec.get("mode") == "verify":
+        return _main_verify(spec)
+    return _main_translate(spec)
+
+
+def _main_verify(spec: dict) -> int:
+    """Run post-translation QA verification (fitz-heavy) in isolation."""
+    out_file = Path(spec["result_path"])
+    try:
+        from pdf_zh_translator.pdf_layout import verify_translation_issues
+
+        issues = verify_translation_issues(
+            Path(spec["original_path"]),
+            Path(spec["translated_path"]),
+        )
+        payload = {
+            "issues": [
+                {
+                    "page": issue.page,
+                    "code": issue.code,
+                    "message": issue.message,
+                    "severity": issue.severity,
+                }
+                for issue in issues
+            ],
+            "crashed": False,
+        }
+    except Exception as exc:  # noqa: BLE001 - report as soft QA failure
+        payload = {"issues": [], "crashed": True, "error": str(exc)}
+    out_file.write_text(json.dumps(payload), encoding="utf-8")
+    return 0
+
+
+def _main_translate(spec: dict) -> int:
     output_dir = Path(spec["output_dir"])
     progress_file = output_dir / ".worker_progress.jsonl"
     result_file = output_dir / ".worker_result.json"

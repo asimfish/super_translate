@@ -821,7 +821,7 @@ class TestTranslationEndpoint:
             # This test is about layout-fix rechecks, not cancellation.
             patch("app.api.papers._is_cancel_requested", return_value=False),
             patch(
-                "pdf_zh_translator.pdf_layout.verify_translation_issues",
+                "app.api.papers._verify_translation_isolated",
                 side_effect=[[issue], []],
             ) as mock_verify,
             patch("pdf_zh_translator.pdf_layout.create_dual_pdf") as mock_create_dual,
@@ -890,7 +890,7 @@ class TestTranslationEndpoint:
             patch("app.api.papers._record_terminology_candidates"),
             patch("app.api.papers._is_cancel_requested", return_value=False),
             patch(
-                "pdf_zh_translator.pdf_layout.verify_translation_issues",
+                "app.api.papers._verify_translation_isolated",
                 return_value=[issue],
             ),
             patch(
@@ -961,7 +961,7 @@ class TestTranslationEndpoint:
             patch("app.api.papers._record_terminology_candidates"),
             patch("app.api.papers._is_cancel_requested", return_value=False),
             patch(
-                "pdf_zh_translator.pdf_layout.verify_translation_issues",
+                "app.api.papers._verify_translation_isolated",
                 side_effect=[[before], [after_1, after_2]],
             ),
             patch(

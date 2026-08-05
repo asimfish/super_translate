@@ -1252,6 +1252,82 @@ async def _finalize_cancelled_translation(
     _clear_cancel_requested(paper_id)
 
 
+def _verify_translation_isolated(
+    original_path: Path,
+    translated_path: Path,
+) -> list:
+    """Run verify_translation_issues in a subprocess.
+
+    PyMuPDF can segfault on specific produced documents (PhiZero, 2026-08-05:
+    crash in page_get_textpage during QA), and the check runs in the web
+    process — so it runs isolated instead. A crash degrades to a qa_failed
+    WARNING (the translation itself is unaffected).
+    """
+    import subprocess
+    import sys
+
+    from pdf_zh_translator.pdf_layout import TranslationIssue
+
+    work_dir = translated_path.parent
+    token = uuid.uuid4().hex
+    spec_path = work_dir / f".verify-{token}.spec.json"
+    result_path = work_dir / f".verify-{token}.json"
+    spec = {
+        "mode": "verify",
+        "original_path": str(original_path),
+        "translated_path": str(translated_path),
+        "result_path": str(result_path),
+    }
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    env = dict(os.environ, PYTHONFAULTHANDLER="1")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "app.services.worker", str(spec_path)],
+            cwd=str(settings.base_dir),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            timeout=600,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        spec_path.unlink(missing_ok=True)
+
+    issues: list = []
+    crashed = not result_path.exists()
+    if not crashed:
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            crashed = bool(payload.get("crashed"))
+            for item in payload.get("issues", []):
+                issues.append(
+                    TranslationIssue(
+                        page=int(item.get("page", 0)),
+                        code=str(item.get("code", "unknown")),
+                        message=str(item.get("message", "")),
+                        severity=str(item.get("severity", "warning")),
+                    )
+                )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            crashed = True
+    result_path.unlink(missing_ok=True)
+    if crashed:
+        logger.warning(
+            "QA verification crashed in native code for %s; degrading to warning",
+            translated_path,
+        )
+        issues.append(
+            TranslationIssue(
+                page=0,
+                code="qa_failed",
+                message="QA verification crashed in native code; skipped",
+                severity="warning",
+            )
+        )
+    return issues
+
+
 async def _run_translate_in_worker(
     input_path: Path,
     output_dir: Path,
@@ -1654,7 +1730,7 @@ def _run_post_translation_qa(
             if _is_cancel_requested(paper_id):
                 raise TranslationCancelledError("Translation cancelled by user")
             _set_translation_stage(paper_id, loop, f"译后检查 {pass_index}/{passes}", job_id=job_id)
-            issues = verify_translation_issues(input_path, mono_path)
+            issues = _verify_translation_isolated(input_path, mono_path)
             passes_run += 1
             if not issues:
                 pass_history.append(_qa_pass_summary(pass_index, issues))
@@ -1697,7 +1773,7 @@ def _run_post_translation_qa(
                 break
             _append_log(paper_id, loop, "检测到可修复版面问题，已自动执行一次版面修复")
             _set_translation_stage(paper_id, loop, "复查版面", job_id=job_id)
-            issues = verify_translation_issues(input_path, mono_path)
+            issues = _verify_translation_isolated(input_path, mono_path)
             passes_run += 1
             if _qa_issue_score(issues) > _qa_issue_score(before_repair_issues):
                 _restore_translated_outputs(snapshot)
