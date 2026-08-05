@@ -2464,6 +2464,7 @@ def _candidate_bboxes_colliding_with_preserved(
             probe_bboxes = [block.bbox]
         else:
             probe_bboxes = lines or [block.bbox]
+        hull_probe = probe_bboxes == [block.bbox]
         hit = False
         for bx0, by0, bx1, by1 in probe_bboxes:
             for region in preserved_regions:
@@ -2474,8 +2475,13 @@ def _candidate_bboxes_colliding_with_preserved(
                     continue
                 probe_area = max(0.1, (bx1 - bx0) * (by1 - by0))
                 region_area = max(0.1, (rx1 - rx0) * (ry1 - ry0))
-                smaller_area = min(probe_area, region_area)
-                if (x_overlap * y_overlap) / smaller_area >= min_area_ratio:
+                # Hull probes stay conservative (smaller area as denominator):
+                # reflow re-wraps from the hull origin. Line probes measure
+                # coverage of the LINE itself — a clean prose line brushing a
+                # tall formula bbox's empty tail is not a collision
+                # (PhiZero p4).
+                denominator = min(probe_area, region_area) if hull_probe else probe_area
+                if (x_overlap * y_overlap) / denominator >= min_area_ratio:
                     hit = True
                     break
             if hit:
