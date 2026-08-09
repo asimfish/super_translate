@@ -803,6 +803,76 @@ def test_otf_appendix_heading_keeps_source_heading_role():
     assert appendix.bbox[0] <= d1.bbox[0] + 0.5
 
 
+def test_otf_fragmented_lettered_appendix_heading_keeps_source_role(tmp_path):
+    blocks = _unit_blocks("otf_p17_appendix_table.pdf")
+    heading = next(
+        block for block in blocks if "CONVERGENCE OF OFT-SINKHRON" in block.text
+    )
+
+    assert heading.block_type == "heading"
+    assert heading.bold
+    assert heading.font_size >= 11.5
+
+    class AppendixHeadingTranslator(_OTFStructureTranslator):
+        def translate_batch(self, texts):
+            fallback = super().translate_batch(texts)
+            return [
+                "E OFT-Sinkhorn 算法的收敛性"
+                if "CONVERGENCE OF OFT-SINKHRON" in source
+                else target
+                for source, target in zip(texts, fallback)
+            ]
+
+    output_pdf = tmp_path / "otf-p17-appendix-heading.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p17_appendix_table.pdf",
+        output_pdf=output_pdf,
+        translator=AppendixHeadingTranslator(),
+        preserve_graphics_text=True,
+    )
+    output = fitz.open(output_pdf)
+    spans = [
+        span
+        for block in output[0].get_text("dict")["blocks"]
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+        if "算法的收敛性" in span.get("text", "")
+    ]
+    output.close()
+
+    assert spans
+    assert min(span["size"] for span in spans) >= 10.5
+    assert all(_span_is_bold(span) for span in spans)
+
+
+def test_otf_qa_flags_fragmented_appendix_heading_rendered_as_body(tmp_path):
+    fixture = FIXTURES / "otf_p17_appendix_table.pdf"
+    degraded = tmp_path / "otf-p17-heading-as-body.pdf"
+    document = fitz.open(fixture)
+    page = document[0]
+    page.add_redact_annot(fitz.Rect(107.0, 694.0, 382.0, 710.0), fill=(1, 1, 1))
+    page.apply_redactions()
+    font_file = FIXTURES.parent.parent / "data/fonts/SongtiSC-Regular.ttf"
+    page.insert_font(fontname="qa-body", fontfile=str(font_file))
+    page.insert_text(
+        (109.0, 705.0),
+        "E OFT-Sinkhorn 算法的收敛性",
+        fontname="qa-body",
+        fontsize=7.0,
+    )
+    document.save(degraded)
+    document.close()
+
+    issues = verify_translation_issues(fixture, degraded)
+    heading_issues = [
+        issue for issue in issues if issue.code == "font_role_heading_mismatch"
+    ]
+
+    assert heading_issues
+    assert all(issue.severity == "error" for issue in heading_issues)
+    assert any("x=" in issue.message and "y=" in issue.message for issue in heading_issues)
+
+
 def test_memorywam_float_wrapped_figure_reference_stays_body():
     from pdf_zh_translator.pdf_layout import strip_sentinels
 

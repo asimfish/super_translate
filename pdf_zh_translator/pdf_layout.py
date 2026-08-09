@@ -6344,6 +6344,20 @@ def classify_blocks(
             block.preserve_position = True
             continue
 
+        if block.font_size >= 8.8 and _looks_like_appendix_heading(
+            plain,
+            block.source_lines,
+        ):
+            # Small-caps appendix titles are often split into mixed-size,
+            # non-bold spans. Their semantic role must win over the aggregate
+            # span weight so the translated title keeps the source hierarchy.
+            block.block_type = "heading"
+            block.should_translate = True
+            block.bold = True
+            block.no_merge = True
+            block.preserve_position = True
+            continue
+
         # Already classified as equation by native engine
         if getattr(block, "_equation_zone", False):
             block.block_type = "equation"
