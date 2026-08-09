@@ -83,6 +83,7 @@ GOLDEN_PAGES = [
     "otf_p4_runin_formula.pdf",
     "otf_p6_theorem.pdf",
     "otf_p8_typography.pdf",
+    "otf_p16_derivation_cue.pdf",
     "gears_p2_paragraphs.pdf",
     "gears_p5_structure.pdf",
     "gears_p6_inline_formulas.pdf",
@@ -413,6 +414,17 @@ class _OTFStructureTranslator(_GoldenStubTranslator):
         fallback = super().translate_batch(texts)
         outputs = []
         for source, default in zip(texts, fallback):
+            if source.startswith("Thus:") and "Thus we can get" in source:
+                placeholders = " ".join(re.findall(r"⟦\d+⟧", source))
+                outputs.append(f"因此：{placeholders}，由此可得：")
+                continue
+            if source.startswith("Formulation of OFT"):
+                outputs.append(
+                    "最优流传输的公式化 我们首先定义最优流传输如下。考虑⟦0⟧和⟦1⟧"
+                    "是图⟦2⟧上的两个测度，其中⟦3⟧和(⟦4⟧)是两个平衡向量，"
+                    "满足⟦5⟧。最优流传输的公式可具体表示为："
+                )
+                continue
             if source.startswith("Theorem 1."):
                 placeholders = " ".join(re.findall(r"⟦\d+⟧", source))
                 outputs.append(
@@ -437,6 +449,57 @@ class _OTFStructureTranslator(_GoldenStubTranslator):
             else:
                 outputs.append(default)
         return outputs
+
+
+def test_otf_runin_heading_starts_at_source_column_before_inline_math(tmp_path):
+    output_pdf = tmp_path / "otf-p4.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p4_runin_formula.pdf",
+        output_pdf=output_pdf,
+        translator=_OTFStructureTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    heading_spans = [
+        span
+        for block in output[0].get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+        if "最优流传输的公式化" in span.get("text", "")
+    ]
+    output.close()
+
+    assert heading_spans
+    assert min(span["bbox"][0] for span in heading_spans) <= 110.0
+    assert min(span["size"] for span in heading_spans) >= 8.5
+
+
+def test_otf_derivation_translates_both_cues_around_preserved_math(tmp_path):
+    input_pdf = FIXTURES / "otf_p16_derivation_cue.pdf"
+    texts = _plain_unit_texts(input_pdf.name)
+    combined = [text for text in texts if text.startswith("Thus:")]
+
+    assert len(combined) == 1
+    assert "Thus we can get" in combined[0]
+
+    output_pdf = tmp_path / "otf-p16.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_OTFStructureTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    output_text = output[0].get_text("text")
+    output.close()
+
+    assert "Thus" not in output_text
+    assert "因此：" in output_text
+    assert "由此可得：" in output_text
+    assert "Diag" in output_text
 
 
 def test_otf_theorem_keeps_body_size_and_starts_before_the_formula(tmp_path):

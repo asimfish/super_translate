@@ -6966,6 +6966,34 @@ def _line_is_short_derivation_explanation(line: _LineRec) -> bool:
     )
 
 
+def _lines_form_dual_sided_derivation(
+    formula_line: _LineRec,
+    trailing_cue: _LineRec,
+) -> bool:
+    """Match ``Thus: <math> Thus we can get ...`` split on one baseline."""
+    if not formula_line.math_run_bboxes or trailing_cue.math_run_bboxes:
+        return False
+    formula_text = " ".join(strip_sentinels(formula_line.text).split())
+    cue_text = " ".join(strip_sentinels(trailing_cue.text).split())
+    if not re.match(r"^Thus\s*:", formula_text, re.IGNORECASE):
+        return False
+    if not re.match(
+        r"^Thus\s+we\s+(?:can\s+get|have)\b",
+        cue_text,
+        re.IGNORECASE,
+    ):
+        return False
+    overlap = min(formula_line.bbox[3], trailing_cue.bbox[3]) - max(
+        formula_line.bbox[1], trailing_cue.bbox[1]
+    )
+    min_height = min(
+        formula_line.bbox[3] - formula_line.bbox[1],
+        trailing_cue.bbox[3] - trailing_cue.bbox[1],
+    )
+    horizontal_gap = trailing_cue.bbox[0] - formula_line.bbox[2]
+    return overlap >= 0.75 * max(1.0, min_height) and -1.0 <= horizontal_gap <= 16.0
+
+
 def _prose_wrapped_numbered_equation_prefix_count(record: _RawBlockRec) -> int:
     """Count leading explanation lines before a numbered display equation."""
     has_equation_number = any(
@@ -8288,6 +8316,30 @@ def segments_from_record(
         if _line_continues_hyphenated_formula_prose(line, current):
             _accumulate_line(current, line)
             current_has_inline_tail = True
+            continue
+        if (
+            equation_record
+            and next_physical_line is not None
+            and _lines_form_dual_sided_derivation(line, next_physical_line)
+        ):
+            flush_current()
+            combined = _LineRec(
+                text=f"{line.text} {next_physical_line.text}",
+                bbox=union_bbox([line.bbox, next_physical_line.bbox]),
+                spans=[*line.spans, *next_physical_line.spans],
+                prose_bboxes=[*line.prose_bboxes, *next_physical_line.prose_bboxes],
+                math_bboxes=[*line.math_bboxes, *next_physical_line.math_bboxes],
+                math_run_bboxes=[
+                    *line.math_run_bboxes,
+                    *next_physical_line.math_run_bboxes,
+                ],
+            )
+            explanation = body_block_from_line(page_index, combined, no_merge=True)
+            if explanation is not None:
+                explanation.block_type = "formula_prose"
+                explanation.nowrap = False
+                segments.append(explanation)
+                skip_line_indexes.add(line_index + 1)
             continue
         if (
             equation_record
@@ -10274,7 +10326,7 @@ _KEEPOUT_MIN_SEGMENT = 40.0
 
 
 def _uses_fixed_source_math(block: TextBlock) -> bool:
-    """Keep formulas fixed when source line slots encode meaningful structure."""
+    """Keep formulas fixed for academic statements with structural math rows."""
     marker_count = len(SENTINEL_RUN_RE.findall(block.text))
     if (
         marker_count <= 0
@@ -10290,12 +10342,7 @@ def _uses_fixed_source_math(block: TextBlock) -> bool:
             re.I,
         )
     )
-    formula_rich_runin = bool(
-        block.bold_prefix
-        and marker_count >= 2
-        and len(block.source_line_bboxes) >= 2
-    )
-    return academic_statement or formula_rich_runin
+    return academic_statement
 
 
 def _block_is_short_derivation_explanation(block: TextBlock) -> bool:
@@ -10553,14 +10600,10 @@ def _formula_segment_slots(
 def _coalesce_source_line_bboxes(bboxes: Sequence[BBox]) -> List[BBox]:
     lines: List[BBox] = []
     for bbox in sorted(bboxes, key=lambda item: ((item[1] + item[3]) / 2.0, item[0])):
-        if lines and (
-            bbox_share_y_band(lines[-1], bbox)
-            or abs(
-                (lines[-1][1] + lines[-1][3]) / 2.0
-                - (bbox[1] + bbox[3]) / 2.0
-            )
-            <= 2.0
-        ):
+        if lines and abs(
+            (lines[-1][1] + lines[-1][3]) / 2.0
+            - (bbox[1] + bbox[3]) / 2.0
+        ) <= 2.0:
             lines[-1] = union_bbox([lines[-1], bbox])
         else:
             lines.append(bbox)
