@@ -666,6 +666,19 @@ def translate_pdf(
         redact_original_text(page, [block for block, _ in page_items], margin, page_gutter)
         page = document.reload_page(page)
         _restore_removed_page_links(page, source_links)
+        restored_regions = _restore_redaction_damaged_preserved_regions(
+            page,
+            source_document,
+            page_index,
+            preserved_regions.get(page_index, ()),
+            [block for block, _ in page_items],
+            margin,
+        )
+        if restored_regions:
+            warnings.append(
+                "Page %d: restored %d protected region(s) affected by PDF redaction"
+                % (page_index + 1, restored_regions)
+            )
         # Register after redactions: apply_redactions rebuilds page resources
         # and would drop a font registered beforehand.
         register_font_pack(page, font_pack)
@@ -1039,7 +1052,6 @@ def save_pdf_for_fast_web_view(
             import pikepdf
 
             with pikepdf.open(temp_pdf) as pdf:
-                dedupe_pdf_images(pdf)
                 pdf.save(linearized_pdf, linearize=True, compress_streams=True)
             linearized_pdf.replace(output_pdf)
         except Exception as exc:
@@ -1944,9 +1956,28 @@ def _preserved_text_qa_regions(regions: Sequence[BBox]) -> List[BBox]:
 
     PDF extractors often collapse several neighboring source glyph boxes into
     one translated-page text line. Comparing each atom independently then
-    reports a missing cell even when the original formula is unchanged.
+    reports a missing cell even when the original formula is unchanged. Float
+    envelopes are useful for reflow avoidance, but comparing all text inside
+    them can absorb unrelated prose beside a table or figure. When an envelope
+    contains several concrete protected atoms, compare those atoms instead.
     """
-    return merge_nearby_bboxes(regions, PRESERVED_TEXT_QA_MERGE_GAP)
+    unique_regions = list(dict.fromkeys(regions))
+    atomic_regions: List[BBox] = []
+    for region in unique_regions:
+        contained_atoms = 0
+        for candidate in unique_regions:
+            if candidate == region:
+                continue
+            candidate_area = bbox_area(candidate)
+            if candidate_area <= 0.0 or candidate_area >= bbox_area(region):
+                continue
+            if bbox_intersection_area(candidate, region) / candidate_area >= 0.98:
+                contained_atoms += 1
+                if contained_atoms >= 3:
+                    break
+        if contained_atoms < 3:
+            atomic_regions.append(region)
+    return merge_nearby_bboxes(atomic_regions, PRESERVED_TEXT_QA_MERGE_GAP)
 
 
 def _overlap_text_entries_from_block(block: dict) -> List[Tuple[BBox, str]]:
@@ -2019,11 +2050,46 @@ def _looks_like_split_parenthetical_gloss(text: str) -> bool:
     return bool(_CJK_DETECT_RE.search(suffix)) and not re.search(r"[.!?]", suffix)
 
 
+def _looks_like_detached_prompt_code_fragment(text: str) -> bool:
+    """Ignore a prompt code list split away from its translated field label."""
+    call_re = re.compile(
+        r"\b(?:pick|place|pull|push|on|inhand|under)\s*\([^()]{1,180}\)",
+        re.IGNORECASE,
+    )
+    calls = call_re.findall(text)
+    if len(calls) < 2:
+        return False
+    remainder = call_re.sub(" ", text)
+    words = {word.casefold() for word in _ASCII_WORD_DETECT_RE.findall(remainder)}
+    # A PDF line may begin or end halfway through a quoted object relation.
+    object_vocabulary = {
+        "box",
+        "cube",
+        "rack",
+        "hook",
+        "table",
+        "cyan",
+        "red",
+        "blue",
+        "yellow",
+        "pick",
+        "place",
+        "pull",
+        "push",
+        "on",
+        "under",
+        "inhand",
+    }
+    return words <= object_vocabulary
+
+
 def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 35 or _is_reference_or_formula_text(compact):
         return False
     if _looks_like_split_parenthetical_gloss(compact):
+        return False
+    if _looks_like_detached_prompt_code_fragment(compact):
         return False
     prompt_remainder = _without_structured_prompt_lists(compact)
     if (
@@ -3319,7 +3385,13 @@ def _translation_retains_source_prose_run(
         return False
 
     def prose_word_segments(text: str) -> List[List[str]]:
-        plain = strip_sentinels(text)
+        plain = _without_structured_prompt_lists(strip_sentinels(text))
+        plain = re.sub(
+            r"\b(?:pick|place|pull|push|on|inhand|under)\s*\([^()]{1,180}\)",
+            "\n",
+            plain,
+            flags=re.IGNORECASE,
+        )
         if _CJK_DETECT_RE.search(plain):
             # Academic Chinese commonly keeps the English term in parentheses
             # on first mention. It is an intentional glossary, not an
@@ -6208,6 +6280,9 @@ def classify_blocks(
         text = block.text.strip()
         plain = " ".join(strip_sentinels(text).split())
         x0, y0, x1, y1 = block.bbox
+        caption_match = bool(_CAPTION_RE.match(text)) and not (
+            _looks_like_split_caption_reference(block, plain, blocks)
+        )
 
         # A references heading is a cross-page structure anchor. It must win
         # over run-in-heading and nearby figure-zone classification so the
@@ -6251,7 +6326,7 @@ def classify_blocks(
             # Caption-pattern text ("Table 4: ...", "Figure 2: ...") is never
             # a table cell even when its record looked tabular — captions must
             # always be translated, and QA flags any left in English.
-            if _CAPTION_RE.match(plain):
+            if caption_match:
                 block.block_type = "caption"
                 block.preserve_position = True
                 block.should_translate = True
@@ -6261,7 +6336,9 @@ def classify_blocks(
             block.preserve_position = True
             continue
 
-        if looks_like_author_metadata(block, plain):
+        if looks_like_author_metadata(
+            block, plain
+        ) or _looks_like_fragmented_byline_metadata(block, plain, blocks):
             block.block_type = "metadata"
             block.should_translate = False
             block.preserve_position = True
@@ -6277,6 +6354,11 @@ def classify_blocks(
         # limited to the normal-font suffix. Preserve that decision even when
         # the fragment happens to sit in the page footer band.
         if block.block_type == "formula_prose":
+            if _looks_like_piecewise_formula_condition(block, plain):
+                block.block_type = "equation"
+                block.should_translate = False
+                block.preserve_position = True
+                continue
             block.should_translate = True
             block.preserve_position = True
             continue
@@ -6303,20 +6385,20 @@ def classify_blocks(
                 block.should_translate = False
                 block.preserve_position = True
                 continue
-            if len(text) <= _FIGURE_LABEL_MAX_LEN and not _CAPTION_RE.match(text):
+            if len(text) <= _FIGURE_LABEL_MAX_LEN and not caption_match:
                 block.block_type = "figure_label"
                 block.should_translate = False
                 block.preserve_position = True
                 continue
             # Caption inside image zone — still translate but preserve position
-            if _CAPTION_RE.match(text):
+            if caption_match:
                 block.block_type = "caption"
                 block.preserve_position = True
                 block.bold_prefix = block.bold_prefix or bool(block.bold_terms)
                 continue
 
         # Caption pattern (Figure N, Table N, etc.)
-        if _CAPTION_RE.match(text):
+        if caption_match:
             block.block_type = "caption"
             block.preserve_position = True
             block.bold_prefix = block.bold_prefix or bool(block.bold_terms)
@@ -6351,6 +6433,100 @@ def classify_blocks(
         block.should_translate = True
 
     _promote_table_component_blocks(blocks)
+
+
+def _looks_like_split_caption_reference(
+    block: TextBlock,
+    plain: str,
+    blocks: Sequence[TextBlock],
+) -> bool:
+    """Detect a prose reference split immediately after phrases like `shown in`."""
+    if not re.match(
+        r"^(?:Figure|Fig\.|Table)\s*(?:\d+|[IVXLCDM]+)[.:]\s+",
+        plain,
+        re.IGNORECASE,
+    ):
+        return False
+    for previous in blocks:
+        if previous is block or previous.page_index != block.page_index:
+            continue
+        vertical_gap = block.bbox[1] - previous.bbox[3]
+        if not (0.0 <= vertical_gap <= max(6.0, block.font_size * 0.7)):
+            continue
+        horizontal_overlap = min(block.bbox[2], previous.bbox[2]) - max(
+            block.bbox[0], previous.bbox[0]
+        )
+        if horizontal_overlap <= 0.0:
+            continue
+        previous_plain = " ".join(strip_sentinels(previous.text).split()).rstrip()
+        if re.search(
+            r"\b(?:shown|reported|presented|illustrated|summari[sz]ed|listed|given)\s+in$",
+            previous_plain,
+            re.IGNORECASE,
+        ):
+            return True
+    return False
+
+
+def _looks_like_piecewise_formula_condition(block: TextBlock, plain: str) -> bool:
+    """Keep short branch labels inside a display equation unchanged."""
+    if plain.casefold().rstrip(".:") not in {"if", "otherwise", "else", "when"}:
+        return False
+    if block.source_lines != 1 or not block.nowrap or not block.no_merge:
+        return False
+    if block.bbox[2] - block.bbox[0] > 80.0:
+        return False
+    if not block.keepout_bboxes:
+        return True
+    return any(
+        bbox_share_y_band(block.bbox, keepout)
+        and max(keepout[0] - block.bbox[2], block.bbox[0] - keepout[2], 0.0)
+        <= max(6.0, block.font_size * 0.75)
+        for keepout in block.keepout_bboxes
+    )
+
+
+def _looks_like_fragmented_byline_metadata(
+    block: TextBlock,
+    plain: str,
+    blocks: Sequence[TextBlock],
+) -> bool:
+    """Recognize author or affiliation fragments split into narrow PDF records."""
+    if block.page_index != 0 or block.bbox[1] > 260.0:
+        return False
+    compact = " ".join(strip_sentinels(plain).split()).strip()
+    if not compact:
+        return False
+
+    if re.match(r"^\d+\s*", compact) and re.search(
+        r"\b(?:university|institute|department|school|college|laboratory|lab)\b",
+        compact,
+        re.IGNORECASE,
+    ):
+        return True
+
+    candidate = compact.lstrip(", ")
+    if not re.fullmatch(
+        r"[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+){1,3}",
+        candidate,
+    ):
+        return False
+    if block.bbox[1] < 105.0 or block.bbox[1] > 190.0:
+        return False
+
+    peers = 0
+    for other in blocks:
+        if other is block or other.page_index != block.page_index:
+            continue
+        if abs(other.bbox[1] - block.bbox[1]) > 2.5:
+            continue
+        other_plain = " ".join(strip_sentinels(other.text).split()).strip().lstrip(", ")
+        if re.fullmatch(
+            r"[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+){1,3}",
+            other_plain,
+        ):
+            peers += 1
+    return peers >= 2
 
 
 def looks_like_academic_structure_heading(block: TextBlock, plain: str) -> bool:
@@ -9897,6 +10073,20 @@ def can_merge_blocks(
 ) -> bool:
     if "run_in_heading" in {prev.block_type, nxt.block_type}:
         return False
+    next_plain = " ".join(strip_sentinels(nxt.text).split())
+    if re.match(r"^[\u2022*-]?\s*Action\s+Skeleton\s*:", next_plain, re.IGNORECASE):
+        # A natural-language Goal record immediately above the pseudocode is
+        # independently translatable. Joining both would protect and skip the
+        # goal together with the immutable action calls.
+        return False
+    if _looks_like_piecewise_formula_condition(
+        prev,
+        " ".join(strip_sentinels(prev.text).split()),
+    ) or _looks_like_piecewise_formula_condition(
+        nxt,
+        next_plain,
+    ):
+        return False
     if _looks_like_formula_row_suffix_pair(prev, nxt):
         return True
     if nxt.bold_prefix:
@@ -9928,6 +10118,13 @@ def can_merge_blocks(
                 union_bbox([prev.bbox, nxt.bbox]),
                 graphic_regions,
             )
+        ):
+            return False
+        return True
+    if _looks_like_formula_gap_bridge_pair(prev, nxt):
+        if graphic_regions and bbox_crosses_graphic_region(
+            union_bbox([prev.bbox, nxt.bbox]),
+            graphic_regions,
         ):
             return False
         return True
@@ -10152,6 +10349,67 @@ def _looks_like_same_line_formula_split(prev: TextBlock, nxt: TextBlock) -> bool
                 16.0, reference * 2.0
             ):
                 return True
+    return False
+
+
+def _looks_like_formula_gap_bridge_pair(prev: TextBlock, nxt: TextBlock) -> bool:
+    """Join prose fragments separated horizontally by preserved inline math."""
+    if prev.page_index != nxt.page_index or sentence_final_text(prev.text):
+        return False
+    prose_types = {"body", "formula_prose"}
+    if prev.block_type not in prose_types or nxt.block_type not in prose_types:
+        return False
+    if abs(prev.font_size - nxt.font_size) > 2.0:
+        return False
+
+    following = strip_sentinels(nxt.text).lstrip()
+    if not re.match(r"^[a-z]", following) or len(_PROSE_WORD_RE.findall(following)) < 3:
+        return False
+
+    previous_lines = prev.source_line_bboxes[-2:] or (prev.bbox,)
+    next_lines = nxt.source_line_bboxes[:2] or (nxt.bbox,)
+    formula_bboxes = tuple(
+        dict.fromkeys(
+            [
+                *(prev.keepout_bboxes or []),
+                *(nxt.keepout_bboxes or []),
+                *prev.source_math_bboxes,
+                *nxt.source_math_bboxes,
+            ]
+        )
+    )
+    if not formula_bboxes:
+        return False
+
+    reference = max(prev.font_size, nxt.font_size, 1.0)
+    for previous_line in previous_lines:
+        for next_line in next_lines:
+            vertical_overlap = min(previous_line[3], next_line[3]) - max(
+                previous_line[1], next_line[1]
+            )
+            min_height = max(
+                1.0,
+                min(
+                    previous_line[3] - previous_line[1],
+                    next_line[3] - next_line[1],
+                ),
+            )
+            if vertical_overlap / min_height < 0.55:
+                continue
+            horizontal_gap = next_line[0] - previous_line[2]
+            if not (1.0 <= horizontal_gap <= max(144.0, reference * 14.0)):
+                continue
+            for formula_bbox in formula_bboxes:
+                formula_y_overlap = min(
+                    max(previous_line[3], next_line[3]), formula_bbox[3]
+                ) - max(min(previous_line[1], next_line[1]), formula_bbox[1])
+                if formula_y_overlap <= 0.0:
+                    continue
+                gap_overlap = min(next_line[0], formula_bbox[2]) - max(
+                    previous_line[2], formula_bbox[0]
+                )
+                if gap_overlap >= min(horizontal_gap * 0.5, reference * 2.0):
+                    return True
     return False
 
 
@@ -10438,6 +10696,64 @@ def redact_original_text(
         page.apply_redactions(**kwargs)
     except TypeError:
         page.apply_redactions()
+
+
+def _restore_redaction_damaged_preserved_regions(
+    page: object,
+    source_document: object,
+    page_index: int,
+    preserved_regions: Sequence[BBox],
+    translated_blocks: Sequence[TextBlock],
+    margin: float,
+) -> int:
+    """Restore protected source clips deleted as a side effect of redaction.
+
+    MuPDF can rewrite a nested Form XObject when a nearby caption is redacted.
+    On some conference figures that removes unrelated vector labels elsewhere
+    in the same Form. Replaying only the affected protected atoms preserves the
+    exact source glyphs without restoring any translated redaction rectangle.
+    """
+    if not preserved_regions:
+        return 0
+    import fitz
+
+    source_page = source_document[page_index]
+    source_entries = _text_entries_from_blocks(
+        source_page.get_text("dict").get("blocks", [])
+    )
+    translated_entries = _text_entries_from_blocks(
+        page.get_text("dict").get("blocks", [])
+    )
+    redaction_regions = [
+        expand_bbox(bbox, margin)
+        for block in translated_blocks
+        for bbox in (block.redact_bboxes or [block.bbox])
+    ]
+    restored = 0
+    for region in _preserved_text_qa_regions(preserved_regions):
+        region_area = max(1.0, bbox_area(region))
+        if any(
+            bbox_intersection_area(region, redaction) / region_area >= 0.02
+            for redaction in redaction_regions
+        ):
+            continue
+        source_text = _text_overlapping_region(source_entries, region)
+        if not source_text:
+            continue
+        current_text = _text_overlapping_region(translated_entries, region)
+        if not preserved_region_text_changed(source_text, current_text):
+            continue
+        clip = fitz.Rect(region)
+        page.show_pdf_page(
+            clip,
+            source_document,
+            page_index,
+            clip=clip,
+            keep_proportion=False,
+            overlay=True,
+        )
+        restored += 1
+    return restored
 
 
 # --- Centered-block detection -------------------------------------------------

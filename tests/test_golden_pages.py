@@ -88,6 +88,24 @@ GOLDEN_PAGES = [
     "gears_p5_structure.pdf",
     "gears_p6_inline_formulas.pdf",
     "gears_p8_untranslated.pdf",
+    # MemoryWAM p8: a prose continuation beginning with "Fig. 5. In ..."
+    # wraps around the real caption and must not be treated as a second caption.
+    "memorywam_p8_float_wrap.pdf",
+    # GuidedVLA p15: piecewise `if` / `otherwise` labels are part of the
+    # display equation and must not merge into the following prose.
+    "guidedvla_p15_piecewise.pdf",
+    "guidedvla_p21_formula.pdf",
+    # GuidedVLA p1: fragmented author and affiliation records must stay source
+    # metadata while the paper title, abstract, and figure caption translate.
+    "guidedvla_p1_metadata.pdf",
+    # GuidedVLA p28: the table envelope and adjacent figure labels must not
+    # absorb translated body prose into preserved-text comparison.
+    "guidedvla_p28_preserved.pdf",
+    # CDGS appendix records combine translatable labels with immutable action
+    # calls and object identifiers; QA must not flag the preserved tokens as
+    # untranslated prose or absorb adjacent prose into a float envelope.
+    "cdgs_p25_preserved.pdf",
+    "cdgs_p31_34_action_records.pdf",
 ]
 
 
@@ -752,6 +770,26 @@ def test_otf_repeated_header_is_translated_on_every_page():
     assert pages == set(range(19))
 
 
+def test_otf_page18_formula_gap_keeps_prose_in_one_reading_order_unit():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "otf_full_structure.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    matches = [
+        block
+        for block, _, _ in units
+        if block.page_index == 17
+        and "stopping criteria" in strip_sentinels(block.text)
+    ]
+
+    assert len(matches) == 1
+    text = " ".join(strip_sentinels(matches[0].text).split())
+    assert "with a small error criteria" in text
+    assert "Before analyzing the global convergence" in text
+    assert matches[0].keepout_bboxes
+
+
 def test_otf_appendix_heading_keeps_source_heading_role():
     blocks = _unit_blocks("otf_p16_appendix_tables.pdf")
     appendix = next(
@@ -763,6 +801,106 @@ def test_otf_appendix_heading_keeps_source_heading_role():
     assert appendix.bold
     assert appendix.font_size >= d1.font_size + 0.5
     assert appendix.bbox[0] <= d1.bbox[0] + 0.5
+
+
+def test_memorywam_float_wrapped_figure_reference_stays_body():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("memorywam_p8_float_wrap.pdf")
+    reference = next(
+        block
+        for block in blocks
+        if "Fig. 5. In Shell Game" in strip_sentinels(block.text)
+    )
+    actual_caption = next(
+        block
+        for block in blocks
+        if "Figure 5: Illustration" in strip_sentinels(block.text)
+    )
+
+    assert reference.block_type == "body"
+    assert actual_caption.block_type == "caption"
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    ["guidedvla_p15_piecewise.pdf", "guidedvla_p21_formula.pdf"],
+)
+def test_guidedvla_piecewise_condition_labels_stay_out_of_translation_units(fixture):
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    units = _unit_blocks(fixture)
+    plain = {
+        " ".join(strip_sentinels(block.text).split()).casefold()
+        for block in units
+    }
+
+    assert "if" not in plain
+    assert not any(text.startswith("otherwise") for text in plain)
+    assert any(
+        "smoothing parameter" in text or "final objective" in text
+        for text in plain
+    )
+
+
+def test_guidedvla_fragmented_byline_and_affiliation_stay_metadata():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    units = _unit_blocks("guidedvla_p1_metadata.pdf")
+    translated = [
+        " ".join(strip_sentinels(block.text).split())
+        for block in units
+        if block.should_translate
+    ]
+
+    assert not any("Xiaosong Jia" in text for text in translated)
+    assert not any("Shanghai Jiao Tong University" in text for text in translated)
+    assert any(text.startswith("GuidedVLA:") for text in translated)
+    assert any(text.startswith("Abstract") for text in translated)
+    assert any(text.startswith("Fig. 1:") for text in translated)
+
+
+def test_guidedvla_figure_labels_survive_caption_redaction(tmp_path):
+    input_pdf = FIXTURES / "guidedvla_p1_metadata.pdf"
+    output_pdf = tmp_path / "guidedvla-p1.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_GoldenStubTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    source = fitz.open(input_pdf)
+    output = fitz.open(output_pdf)
+    source_spans = _page_spans(source[0])
+    output_spans = _page_spans(output[0])
+    for label in ("Move", "Sweep", "Dump", "baseline", "ours"):
+        assert sum(span["text"] == label for span in output_spans) == sum(
+            span["text"] == label for span in source_spans
+        )
+
+    for bbox in (
+        (80.7, 494.3, 95.6, 500.9),
+        (80.9, 482.4, 98.1, 489.0),
+        (80.1, 470.5, 96.0, 477.1),
+        (421.0, 496.5, 448.2, 504.7),
+        (497.7, 496.3, 512.1, 504.5),
+        (254.5, 496.7, 281.6, 504.9),
+        (334.4, 496.2, 348.8, 504.4),
+    ):
+        source_pixmap = source[0].get_pixmap(clip=fitz.Rect(bbox), dpi=180, alpha=False)
+        output_pixmap = output[0].get_pixmap(clip=fitz.Rect(bbox), dpi=180, alpha=False)
+        assert output_pixmap.samples == source_pixmap.samples
+    source.close()
+    output.close()
+
+
+def test_cdgs_goal_prose_does_not_merge_into_preserved_action_skeleton():
+    texts = _plain_unit_texts("cdgs_p25_preserved.pdf")
+
+    assert sum("Put the red cube where the blue cube is" in text for text in texts) == 2
+    assert not any("Action Skeleton" in text for text in texts)
+    assert not any("pick(blue cube)" in text for text in texts)
 
 
 @pytest.mark.parametrize(

@@ -4951,6 +4951,22 @@ class TestTranslationVerification(unittest.TestCase):
             )
         )
 
+    def test_untranslated_detector_ignores_detached_prompt_code_list_in_chinese(self):
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "pick(blue box)’,’place(blue box, rack)’,’pick(hook)’,"
+                "’push(cyan box, hook, rack)’,’place(hook, table)’]"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "box, rack)’,’under(cyan box, rack)’,’under(red box, rack)’]] "
+                "这是一段用于验证版面稳定性[’pick(bluebox)’,’place(blue box, table)’,"
+                "’pick(hook)’,’push(cyan box, hook, rack)’,’place(hook, table)’,"
+                "’pick(blue"
+            )
+        )
+
     def test_untranslated_detector_still_flags_english_prompt_prose(self):
         self.assertTrue(
             _looks_like_untranslated_english(

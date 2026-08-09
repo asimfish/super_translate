@@ -282,6 +282,26 @@ def test_saved_pdf_dedupes_repeated_images(tmp_path):
     assert len(large) <= 1, f"expected one canonical image copy, got sizes {image_sizes}"
 
 
+def test_saved_pdf_avoids_unsafe_cross_object_image_rewrite(tmp_path):
+    from pdf_zh_translator.pdf_layout import save_pdf_for_fast_web_view
+
+    document = fitz.open()
+    page = document.new_page(width=200, height=200)
+    page.insert_text((24, 40), "browser-compatible PDF", fontsize=12)
+    output_pdf = tmp_path / "browser-compatible.pdf"
+    warnings: list[str] = []
+
+    with patch(
+        "pdf_zh_translator.pdf_layout.dedupe_pdf_images",
+        side_effect=AssertionError("unsafe image XObject rewrite was invoked"),
+    ):
+        save_pdf_for_fast_web_view(document, output_pdf, warnings)
+    document.close()
+
+    assert warnings == []
+    assert b"/Linearized" in output_pdf.read_bytes()[:2048]
+
+
 def test_saved_pdf_keeps_images_with_distinct_soft_masks(tmp_path):
     """Equal RGB streams with different soft masks are different icons."""
     from pdf_zh_translator.pdf_layout import save_pdf_for_fast_web_view
@@ -320,6 +340,77 @@ def test_saved_pdf_keeps_images_with_distinct_soft_masks(tmp_path):
         pixmap = page.get_pixmap(dpi=36)
         assert pixmap.width > 0
     reopened.close()
+
+
+def test_saved_gears_float_renders_in_poppler(tmp_path):
+    """The web-ready save must retain a vector/image float outside MuPDF."""
+    import re
+    import shutil
+    import subprocess
+
+    if shutil.which("pdftoppm") is None:
+        pytest.skip("pdftoppm is required for cross-renderer PDF validation")
+
+    class PlaceholderPreservingTranslator:
+        block_types: list[str] = []
+
+        def translate_batch(self, texts):
+            outputs = []
+            for text in texts:
+                placeholders = re.findall(r"⟦\d+⟧", text)
+                outputs.append("这是一段用于验证跨渲染器图形保留的中文译文" + "".join(placeholders))
+            return outputs
+
+    source_pdf = Path(__file__).parent / "fixtures" / "gears_p5_structure.pdf"
+    output_pdf = tmp_path / "gears-p5.zh.pdf"
+    translate_pdf(
+        input_pdf=source_pdf,
+        output_pdf=output_pdf,
+        translator=PlaceholderPreservingTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    def poppler_float_ink(pdf_path: Path, stem: str) -> float:
+        prefix = tmp_path / stem
+        subprocess.run(
+            [
+                "pdftoppm",
+                "-png",
+                "-singlefile",
+                "-r",
+                "72",
+                "-f",
+                "1",
+                "-l",
+                "1",
+                "-x",
+                "30",
+                "-y",
+                "25",
+                "-W",
+                "355",
+                "-H",
+                "190",
+                str(pdf_path),
+                str(prefix),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        pixmap = fitz.Pixmap(str(prefix.with_suffix(".png")))
+        components = pixmap.n
+        pixels = len(pixmap.samples) // components
+        dark_pixels = sum(
+            min(pixmap.samples[offset : offset + min(3, components)]) < 235
+            for offset in range(0, len(pixmap.samples), components)
+        )
+        return dark_pixels / max(pixels, 1)
+
+    source_ink = poppler_float_ink(source_pdf, "source-float")
+    translated_ink = poppler_float_ink(output_pdf, "translated-float")
+
+    assert source_ink >= 0.20
+    assert translated_ink >= source_ink * 0.85
 
 
 def test_math_symbols_fall_back_to_math_font(tmp_path):
