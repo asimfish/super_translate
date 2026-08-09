@@ -489,6 +489,48 @@ class _GoldenStubTranslator:
         return outputs
 
 
+class _CDGSRecordTranslator(_GoldenStubTranslator):
+    _TRANSLATIONS = {
+        "• Scene:": "• 场景：",
+        "• Start:": "• 起始状态：",
+        "• Goal:": "• 目标状态：",
+        "Table with a hook, red cube, and blue cube": "带有钩子、红色立方体和蓝色立方体的桌子",
+        "Table with a hook,red cube, and blue cube": "带有钩子、红色立方体和蓝色立方体的桌子",
+        "All objects (hook, red cube, blue cube) are in workspace": (
+            "所有物体（钩子、红色立方体、蓝色立方体）均在工作区内"
+        ),
+        "Hook and blue cube are in workspace, red cube is beyond workspace": (
+            "钩子和蓝色立方体在工作空间内，红色立方体在工作空间外"
+        ),
+        "Put the red cube where the blue cube is": (
+            "将红色立方体放到蓝色立方体所在的位置"
+        ),
+    }
+
+    def translate_batch(self, texts):
+        fallback = super().translate_batch(texts)
+        outputs = []
+        for source, default in zip(texts, fallback):
+            compact = " ".join(source.split())
+            direct = self._TRANSLATIONS.get(compact)
+            if direct is not None:
+                outputs.append(direct)
+                continue
+            matched = next(
+                (
+                    f"{translated_label}{self._TRANSLATIONS[remainder]}"
+                    for label, translated_label in self._TRANSLATIONS.items()
+                    if label.startswith("• ")
+                    and compact.startswith(f"{label} ")
+                    and (remainder := compact[len(label) + 1 :])
+                    in self._TRANSLATIONS
+                ),
+                None,
+            )
+            outputs.append(matched or default)
+        return outputs
+
+
 class _OTFStructureTranslator(_GoldenStubTranslator):
     """Stable translations for the OTF theorem, table caption, and list fixture."""
 
@@ -973,6 +1015,55 @@ def test_cdgs_goal_prose_does_not_merge_into_preserved_action_skeleton():
     assert not any("pick(blue cube)" in text for text in texts)
 
 
+def test_cdgs_runin_task_records_reflow_without_shrinking_or_bold_spill(tmp_path):
+    input_pdf = FIXTURES / "cdgs_p25_preserved.pdf"
+    output_pdf = tmp_path / "cdgs-p25.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_CDGSRecordTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    issues = verify_translation_issues(input_pdf, output_pdf)
+    assert not [
+        issue
+        for issue in issues
+        if issue.code in {"font_role_bold_spill", "font_role_size_mismatch"}
+    ]
+
+    source = fitz.open(input_pdf)
+    translated = fitz.open(output_pdf)
+    source_text = source[0].get_text("text")
+    output_spans = _page_spans(translated[0])
+    output_text = translated[0].get_text("text")
+    source.close()
+    translated.close()
+
+    for label in ("场景：", "起始状态：", "目标状态："):
+        label_spans = [span for span in output_spans if label in span.get("text", "")]
+        assert label_spans
+        assert all(
+            (span.get("flags", 0) & 16)
+            or "Bold" in span.get("font", "")
+            or "W6" in span.get("font", "")
+            for span in label_spans
+        )
+    body_spans = [
+        span
+        for span in output_spans
+        if any(
+            term in span.get("text", "")
+            for term in ("带有钩子", "所有物体", "钩子和蓝色", "将红色")
+        )
+    ]
+    assert body_spans
+    assert min(span["size"] for span in body_spans) >= 8.4
+    assert all(not (span.get("flags", 0) & 16) for span in body_spans)
+    assert output_text.count("Action Skeleton:") == source_text.count("Action Skeleton:")
+    assert output_text.count("pick(blue cube)") == source_text.count("pick(blue cube)")
+
+
 @pytest.mark.parametrize(
     ("fixture", "table_numbers"),
     [
@@ -1144,7 +1235,7 @@ def test_otf_appendix_list_has_uniform_size_and_table_caption_clearance(tmp_path
     assert min(sizes) >= 8.8
     assert max(sizes) - min(sizes) <= 0.25
     assert rules_below
-    assert min(rules_below) - caption["bbox"][3] >= 2.0
+    assert min(rules_below) - caption["bbox"][3] >= 3.0
 
 
 def _insert_qa_cjk_text(

@@ -10086,6 +10086,25 @@ def can_merge_blocks(
     graphic_regions: Sequence[BBox] = (),
 ) -> bool:
     if "run_in_heading" in {prev.block_type, nxt.block_type}:
+        previous_plain = " ".join(strip_sentinels(prev.text).split())
+        task_record_label = bool(
+            re.fullmatch(
+                r"[•◦▪●]\s*(?:Scene|Start|Goal)\s*:",
+                previous_plain,
+                re.IGNORECASE,
+            )
+        )
+        if (
+            prev.block_type == "run_in_heading"
+            and task_record_label
+            and _looks_like_inline_heading_pair(prev, nxt)
+        ):
+            if graphic_regions and bbox_crosses_graphic_region(
+                union_bbox([prev.bbox, nxt.bbox]),
+                graphic_regions,
+            ):
+                return False
+            return True
         return False
     next_plain = " ".join(strip_sentinels(nxt.text).split())
     if re.match(r"^[\u2022*-]?\s*Action\s+Skeleton\s*:", next_plain, re.IGNORECASE):
@@ -10646,7 +10665,11 @@ def merge_two_blocks(prev: TextBlock, nxt: TextBlock) -> TextBlock:
         color=prev.color,
         bold=prev.bold and nxt.bold,
         starts_bold=prev.starts_bold,
-        source_lines=prev.source_lines + nxt.source_lines,
+        source_lines=(
+            max(prev.source_lines, nxt.source_lines)
+            if inline_heading and prev.block_type == "run_in_heading"
+            else prev.source_lines + nxt.source_lines
+        ),
         redact_bboxes=redact_bboxes,
         keepout_bboxes=keepout_bboxes or None,
         bold_terms=bold_terms,

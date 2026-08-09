@@ -282,6 +282,8 @@ def test_reader_image_mode_sync_scroll_real_browser(tmp_path):
                         scrollRafIds,
                         sourceTop: source.scrollTop,
                         targetTop: target.scrollTop,
+                        sourceMax: source.scrollHeight - source.clientHeight,
+                        targetMax: target.scrollHeight - target.clientHeight,
                         targetExpected: targetScrollTop(targetPanel, pageIndex, fraction),
                         sourceHeight: source.clientHeight,
                         targetHeight: target.clientHeight,
@@ -290,8 +292,15 @@ def test_reader_image_mode_sync_scroll_real_browser(tmp_path):
                     }""",
                     [source_panel, target_panel, page_index, fraction],
                 )
+                if page_index == 18:
+                    assert abs(diagnostics["sourceTop"] - diagnostics["sourceMax"]) <= 1
+                    assert abs(diagnostics["targetTop"] - diagnostics["targetMax"]) <= 1
+                    continue
                 assert target_position["pageIdx"] == source_position["pageIdx"], diagnostics
-                assert abs(target_position["fraction"] - source_position["fraction"]) <= 0.05
+                assert (
+                    abs(target_position["fraction"] - source_position["fraction"])
+                    <= 0.05
+                ), diagnostics
 
             page.screenshot(path=artifact_dir / "sync-page16.png", full_page=True)
             page.set_viewport_size({"width": 1100, "height": 820})

@@ -384,7 +384,7 @@ async def add_security_headers(request: Request, call_next: RequestResponseEndpo
         "worker-src 'self' blob:; "
         "style-src 'self' 'unsafe-inline'; "
         "font-src 'self'; "
-        "img-src 'self' data:; "
+        "img-src 'self' data: blob:; "
         "connect-src 'self'; "
         "object-src 'none'; "
         "base-uri 'self'; "
