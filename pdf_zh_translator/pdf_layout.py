@@ -536,6 +536,8 @@ def translate_pdf(
             continue
         page = document[page_index]
         page_width = page.rect.width
+        _clear_table_caption_rules(page, candidate_items)
+        page_columns = detect_columns([block for block, _ in candidate_items])
         centered_flags = detect_centered_blocks(
             [block for block, _ in candidate_items], page_width
         )
@@ -553,6 +555,38 @@ def translate_pdf(
         page_items: List[Tuple[TextBlock, str]] = []
         item_centered_flags: List[bool] = []
         for (block, translated_text), centered in zip(candidate_items, centered_flags):
+            plain_block_text = " ".join(strip_sentinels(block.text).split()).strip()
+            bullet_count = len(re.findall(r"(?:^|\s)[•◦▪●]\s+", plain_block_text))
+            if (
+                re.match(
+                    r"^(?:[•◦▪●]|\(?[a-zA-Z0-9]{1,3}\)|[-–])\s+",
+                    plain_block_text,
+                )
+                and bullet_count <= 1
+                and "action skeleton" not in plain_block_text.lower()
+                and not looks_like_action_skeleton_sequence(plain_block_text)
+            ):
+                containing_columns = [
+                    column
+                    for column in page_columns
+                    if column[0] - 4.0 <= block.bbox[0] <= column[0] + column[1] + 4.0
+                ]
+                if containing_columns:
+                    column_left, column_width = min(
+                        containing_columns,
+                        key=lambda column: abs(block.bbox[0] - column[0]),
+                    )
+                    column_right = min(float(page_width), column_left + column_width)
+                    if column_right > block.bbox[2] + 1.0:
+                        block = replace(
+                            block,
+                            bbox=(
+                                block.bbox[0],
+                                block.bbox[1],
+                                column_right,
+                                block.bbox[3],
+                            ),
+                        )
             adjacent_preserved = _side_adjacent_preserved_regions(
                 block,
                 preserved_regions.get(page_index, []),
@@ -9718,6 +9752,42 @@ def relax_caption_boxes(
             block.bbox = (x0, y0, x1, relaxed_y1)
 
 
+def _clear_table_caption_rules(
+    page: object,
+    items: Sequence[Tuple[TextBlock, str]],
+) -> None:
+    """Keep translated table captions clear of the table's first rule."""
+    horizontal_rules: List[Tuple[float, float, float]] = []
+    for drawing in _page_drawings(page):
+        rect = drawing.get("rect")
+        if rect is None or float(rect.width) < 80.0 or float(rect.height) > 2.5:
+            continue
+        horizontal_rules.append((float(rect.y0), float(rect.x0), float(rect.x1)))
+    if not horizontal_rules:
+        return
+
+    for block, _ in items:
+        plain = " ".join(strip_sentinels(block.text).split()).strip()
+        if block.block_type != "caption" or not re.match(r"^Table\s+\w+\s*[:.]", plain, re.I):
+            continue
+        x0, y0, x1, y1 = block.bbox
+        candidates = [
+            rule_y
+            for rule_y, rule_x0, rule_x1 in horizontal_rules
+            if y0 < rule_y <= y1 + 8.0
+            and min(x1, rule_x1) - max(x0, rule_x0) >= min(x1 - x0, rule_x1 - rule_x0) * 0.45
+        ]
+        if not candidates:
+            continue
+        first_rule_y = min(candidates)
+        required_gap = 3.0
+        current_gap = first_rule_y - y1
+        if current_gap >= required_gap:
+            continue
+        shift = required_gap - current_gap
+        block.bbox = (x0, max(0.0, y0 - shift), x1, max(0.0, y1 - shift))
+
+
 # --- CJK typesetting engine ---------------------------------------------------
 
 
@@ -10204,8 +10274,28 @@ _KEEPOUT_MIN_SEGMENT = 40.0
 
 
 def _uses_fixed_source_math(block: TextBlock) -> bool:
-    """Captured inline formulas reflow; unresolved formula regions are keepouts."""
-    return False
+    """Keep formulas fixed when source line slots encode meaningful structure."""
+    marker_count = len(SENTINEL_RUN_RE.findall(block.text))
+    if (
+        marker_count <= 0
+        or marker_count != len(block.formula_anchors)
+        or not block.source_line_bboxes
+    ):
+        return False
+    plain = " ".join(strip_sentinels(block.text).split()).strip()
+    academic_statement = bool(
+        re.match(
+            r"^(?:Theorem|Lemma|Proposition|Corollary|Definition|Assumption)\s+[A-Z0-9]",
+            plain,
+            re.I,
+        )
+    )
+    formula_rich_runin = bool(
+        block.bold_prefix
+        and marker_count >= 2
+        and len(block.source_line_bboxes) >= 2
+    )
+    return academic_statement or formula_rich_runin
 
 
 def _block_is_short_derivation_explanation(block: TextBlock) -> bool:
@@ -10779,9 +10869,8 @@ def insert_translated_text(
         )
         return fitted
 
-    baseline = rect.y0 + size * min(ascent, 0.92)
-    advance = size * leading
-    for index, line in enumerate(lines):
+    baselines = _line_baselines(lines, size, leading, rect.y0)
+    for index, (line, baseline) in enumerate(zip(lines, baselines)):
         is_last = index == len(lines) - 1
         justify = not centered and not is_last
         render_line(
@@ -10797,14 +10886,55 @@ def insert_translated_text(
             bold_fonts,
             source_document,
         )
-        baseline += advance
     return fitted
 
 
 def line_block_height(lines: Sequence[Sequence[_Token]], size: float, leading: float) -> float:
     if not lines:
         return 0.0
-    return size * leading * (len(lines) - 1) + size * 1.06
+    baselines = _line_baselines(lines, size, leading, 0.0)
+    _, final_descent = _line_vertical_metrics(lines[-1], size)
+    return baselines[-1] + final_descent
+
+
+def _line_vertical_metrics(line: Sequence[_Token], size: float) -> Tuple[float, float]:
+    """Return visual ascent/descent, including stamped source formulas."""
+    ascent = size * 0.82
+    descent = size * 0.24
+    for token in line:
+        if token.kind != "formula" or token.source_bbox is None:
+            continue
+        source_height = max(0.1, token.source_bbox[3] - token.source_bbox[1])
+        target_height = source_height * _formula_clip_scale(
+            token.source_bbox,
+            size,
+            token.source_size,
+        )
+        ascent = max(ascent, target_height * 0.82)
+        descent = max(descent, target_height * 0.18)
+    return ascent, descent
+
+
+def _line_baselines(
+    lines: Sequence[Sequence[_Token]],
+    size: float,
+    leading: float,
+    top: float,
+) -> List[float]:
+    if not lines:
+        return []
+    metrics = [_line_vertical_metrics(line, size) for line in lines]
+    baselines = [top + metrics[0][0]]
+    for index in range(1, len(lines)):
+        _previous_ascent, previous_descent = metrics[index - 1]
+        current_ascent, _ = metrics[index]
+        baselines.append(
+            max(
+                baselines[-1] + size * leading,
+                baselines[-1] + previous_descent + current_ascent + size * 0.06,
+            )
+        )
+    return baselines
 
 
 def render_single_line(
@@ -10829,13 +10959,14 @@ def render_single_line(
         for token in line:
             token.width = token_width(token, fonts, size, bold_fonts)
         width = sum(token.width for token in line)
-    ascent = fonts[0][0].ascender if fonts[0][0].ascender > 0 else 0.8
-    descent = abs(fonts[0][0].descender) if fonts[0][0].descender else 0.2
+    visual_ascent, visual_descent = _line_vertical_metrics(line, size)
     if top_aligned:
-        baseline = rect.y0 + size * 0.75
+        baseline = rect.y0 + visual_ascent
     else:
-        baseline = rect.y0 + (rect.height + size * (ascent - descent)) / 2.0
-        baseline = min(baseline, rect.y1 - size * descent * 0.5)
+        baseline = rect.y0 + (rect.height + visual_ascent - visual_descent) / 2.0
+        if visual_ascent + visual_descent <= rect.height:
+            baseline = max(rect.y0 + visual_ascent, baseline)
+            baseline = min(rect.y1 - visual_descent, baseline)
     x_start = rect.x0 + max(0.0, (rect.width - width) / 2.0) if centered else rect.x0
     emit_tokens(
         page,

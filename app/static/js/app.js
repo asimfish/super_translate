@@ -765,6 +765,25 @@ async function loadPanelDocument(panel, loadId) {
   return loadPdfDocument(panel, `/api/papers/${currentPaper.id}/view/${panel}`, loadId);
 }
 
+function refreshImagePageMetrics(panel) {
+  const wrappers = pageWrappers[panel];
+  if (!wrappers?.length) return;
+  const metrics = [];
+  let top = 0;
+  for (let i = 0; i < wrappers.length; i++) {
+    const wrapper = wrappers[i];
+    const height = Math.max(1, wrapper.offsetHeight || 800);
+    metrics.push({
+      top,
+      height,
+      width: Math.max(1, wrapper.offsetWidth || 1),
+      pageNum: i + 1,
+    });
+    top += height + PAGE_GAP_PX;
+  }
+  pageMetrics[panel] = metrics;
+}
+
 async function loadImageDocument(panel, loadId = currentLoadId) {
   const container = document.getElementById(`pdf-container-${panel}`);
   container.textContent = '';
@@ -779,6 +798,8 @@ async function loadImageDocument(panel, loadId = currentLoadId) {
     container.appendChild(wrapper);
     wrappers.push(wrapper);
   }
+  pageWrappers[panel] = wrappers;
+  refreshImagePageMetrics(panel);
   const observer = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
@@ -789,6 +810,8 @@ async function loadImageDocument(panel, loadId = currentLoadId) {
   wrappers.forEach((w) => observer.observe(w));
   if (renderObservers[panel]) renderObservers[panel].disconnect();
   renderObservers[panel] = observer;
+  updatePageInfo(panel, container.scrollTop);
+  setupSmoothScrollSync(panel);
 }
 
 async function loadPreviewImage(panel, wrapper, loadId) {
@@ -804,7 +827,10 @@ async function loadPreviewImage(panel, wrapper, loadId) {
     img.alt = `第 ${page} 页`;
     img.style.width = '100%';
     img.style.display = 'block';
-    img.onload = () => { wrapper.style.minHeight = ''; };
+    img.onload = () => {
+      wrapper.style.minHeight = '';
+      requestAnimationFrame(() => refreshImagePageMetrics(panel));
+    };
     wrapper.textContent = '';
     wrapper.appendChild(img);
   } catch {
@@ -1238,7 +1264,7 @@ function releaseScrollSyncAfterPaint(token, targetPanel) {
 
 function syncScrollFromPanel(panel) {
   const otherPanel = panel === 'original' ? 'translated' : 'original';
-  if (!pdfDocs[otherPanel]) return;
+  if (!pdfDocs[otherPanel] && !pageWrappers[otherPanel]?.length) return;
 
   const container = document.getElementById(`pdf-container-${panel}`);
   const otherContainer = document.getElementById(`pdf-container-${otherPanel}`);

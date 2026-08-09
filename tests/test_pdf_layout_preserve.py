@@ -34,6 +34,7 @@ from pdf_zh_translator.pdf_layout import (
     _RawBlockRec,
     _review_line_number_bboxes,
     _table_region_bboxes,
+    _Token,
     _tokenize_translation_with_formula_clips,
     _translated_block_still_english,
     _unresolved_formula_keepouts,
@@ -54,6 +55,7 @@ from pdf_zh_translator.pdf_layout import (
     insert_translated_text,
     is_math_span,
     join_lines,
+    line_block_height,
     line_is_prose,
     looks_like_action_skeleton_sequence,
     mark_bibliography_blocks,
@@ -1984,6 +1986,24 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertFalse(_uses_fixed_source_math(resolved_block))
         self.assertFalse(_uses_fixed_source_math(unresolved_block))
 
+    def test_academic_statement_keeps_source_math_in_its_original_line_slots(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(108.0, 100.0, 504.0, 124.0),
+            text=f"Theorem 1. The iteration converges {SENTINEL_OPEN}x_t{SENTINEL_CLOSE} and",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            bold_prefix=True,
+            source_line_bboxes=(
+                (108.0, 100.0, 504.0, 111.0),
+                (108.0, 113.0, 370.0, 124.0),
+            ),
+            source_math_bboxes=((180.0, 113.0, 350.0, 124.0),),
+            formula_anchors=((180.0, 113.0, 350.0, 124.0),),
+        )
+
+        self.assertTrue(_uses_fixed_source_math(block))
+
     def test_fixed_source_math_survives_redaction_and_is_not_duplicated(self):
         document = fitz.open()
         page = document.new_page(width=300, height=160)
@@ -2889,6 +2909,16 @@ class TranslationUnitSourceTextsTests(unittest.TestCase):
 
 
 class FormulaStampClipTests(unittest.TestCase):
+    def test_formula_clip_height_contributes_to_line_height(self):
+        formula = _Token(
+            "formula",
+            "x/y",
+            source_bbox=(0.0, 0.0, 20.0, 20.0),
+            source_size=10.0,
+        )
+
+        self.assertGreaterEqual(line_block_height([[formula]], 10.0, 1.2), 16.0)
+
     def _page_with_neighbor_line(self):
         document = fitz.open()
         page = document.new_page(width=612, height=792)

@@ -81,6 +81,7 @@ GOLDEN_PAGES = [
     # Real structural regressions from OTF and GEARS.
     "otf_p3_structure.pdf",
     "otf_p4_runin_formula.pdf",
+    "otf_p6_theorem.pdf",
     "otf_p8_typography.pdf",
     "gears_p2_paragraphs.pdf",
     "gears_p5_structure.pdf",
@@ -390,6 +391,113 @@ class _GoldenStubTranslator:
                     rendered.append((self._PHRASE * repeats)[:target])
             outputs.append("".join(rendered))
         return outputs
+
+
+class _OTFStructureTranslator(_GoldenStubTranslator):
+    """Stable translations for the OTF theorem, table caption, and list fixture."""
+
+    _LIST_TRANSLATIONS = {
+        "• nodes": "• 节点数（nodes）– 节点数量（默认10）",
+        "• sources": "• 源节点数（sources）– 源节点数量（默认3）",
+        "• sinks": "• 汇点数量（sinks）– 汇节点数量（默认值为3）",
+        "• density": "• 密度（density）– 弧的数量（如表4所示）",
+        "• mincost": "• 最小成本（mincost）– 最小弧成本（本文设为10）",
+        "• maxcost": "• 最大成本（maxcost）– 最大弧成本（本文设为100）",
+        "• supply": "• 供给量（supply）– 总供给量（本文设为10000）",
+        "• capacitated": "• 容量限制（capacitated）– 受容量限制的骨架弧比例（0–100，本文设为100）",
+        "• mincap": "• 最小容量（mincap）– 最小弧容量（见表4）",
+        "• maxcap": "• 最大容量（maxcap）– 最大弧容量（见表4）",
+    }
+
+    def translate_batch(self, texts):
+        fallback = super().translate_batch(texts)
+        outputs = []
+        for source, default in zip(texts, fallback):
+            if source.startswith("Theorem 1."):
+                placeholders = " ".join(re.findall(r"⟦\d+⟧", source))
+                outputs.append(
+                    "定理 1. OFT-Sinkhorn 算法的迭代格式线性收敛。"
+                    f"更精确地，有 {placeholders} 且"
+                )
+                continue
+            matched = next(
+                (
+                    translated
+                    for prefix, translated in self._LIST_TRANSLATIONS.items()
+                    if source.startswith(prefix)
+                ),
+                None,
+            )
+            if matched is not None:
+                outputs.append(matched)
+            elif source.startswith("Table 7:"):
+                outputs.append("表7：解的稀疏度")
+            elif source.startswith("Table 6:"):
+                outputs.append("表6：超大规模稀疏图的参数说明")
+            else:
+                outputs.append(default)
+        return outputs
+
+
+def test_otf_theorem_keeps_body_size_and_starts_before_the_formula(tmp_path):
+    output_pdf = tmp_path / "otf-p6.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p6_theorem.pdf",
+        output_pdf=output_pdf,
+        translator=_OTFStructureTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    theorem_spans = [
+        span
+        for block in output[0].get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+        if "定理" in span.get("text", "")
+    ]
+    output.close()
+
+    assert theorem_spans
+    assert min(span["size"] for span in theorem_spans) >= 8.5
+    assert min(span["bbox"][0] for span in theorem_spans) <= 110.0
+
+
+def test_otf_appendix_list_has_uniform_size_and_table_caption_clearance(tmp_path):
+    output_pdf = tmp_path / "otf-p17.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p17_appendix_table.pdf",
+        output_pdf=output_pdf,
+        translator=_OTFStructureTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    page = output[0]
+    spans = [
+        span
+        for block in page.get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+    ]
+    list_spans = [span for span in spans if span.get("text", "").startswith("•")]
+    caption = next(span for span in spans if "表7：" in span.get("text", ""))
+    rules_below = [
+        float(drawing["rect"].y0)
+        for drawing in page.get_drawings()
+        if drawing["rect"].width >= 100.0
+        and 0.0 <= drawing["rect"].y0 - caption["bbox"][3] <= 12.0
+    ]
+    output.close()
+
+    assert len(list_spans) == 10
+    sizes = [span["size"] for span in list_spans]
+    assert min(sizes) >= 8.8
+    assert max(sizes) - min(sizes) <= 0.25
+    assert rules_below
+    assert min(rules_below) - caption["bbox"][3] >= 2.0
 
 
 @pytest.mark.parametrize("fixture", GOLDEN_PAGES)

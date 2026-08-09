@@ -60,6 +60,19 @@ def test_reader_sync_scroll_defers_mirror_render_to_avoid_jank():
     assert "scroll-behavior: smooth" not in css
 
 
+def test_reader_image_mode_builds_scroll_metrics_and_can_drive_sync():
+    """Whalent's page-image mode must participate in the same sync protocol."""
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "function refreshImagePageMetrics(panel)" in js
+    assert "pageWrappers[panel] = wrappers;" in js
+    assert "refreshImagePageMetrics(panel);" in js
+    assert "setupSmoothScrollSync(panel);" in js
+    assert "!pdfDocs[otherPanel] && !pageWrappers[otherPanel]?.length" in js
+    assert "img.onload = () => {" in js
+    assert "requestAnimationFrame(() => refreshImagePageMetrics(panel));" in js
+
+
 def test_reader_pdf_open_renders_first_page_before_background_work():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
     css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
