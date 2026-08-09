@@ -158,6 +158,21 @@ def _get_image_bboxes(page: object) -> list[tuple[float, float, float, float]]:
     return bboxes
 
 
+def _get_visual_bboxes(
+    page: object,
+    page_dict: dict | None = None,
+) -> list[tuple[float, float, float, float]]:
+    """Return raster and vector regions that post-processing must not repaint."""
+    try:
+        from pdf_zh_translator.pdf_layout import _visual_regions_for_page
+
+        blocks = None if page_dict is None else page_dict.get("blocks", [])
+        return list(_visual_regions_for_page(page, blocks=blocks))
+    except Exception as exc:
+        logger.warning("Could not detect vector regions during layout repair: %s", exc)
+        return _get_image_bboxes(page)
+
+
 def _block_overlaps_image(
     block: TextBlockInfo,
     image_bboxes: list[tuple[float, float, float, float]],
@@ -188,25 +203,32 @@ def _fix_page_layout(page: object) -> int:
     if not blocks:
         return 0
 
+    # Detect graphics before any redaction. Figure-internal text can contain
+    # font artifacts, but repainting its containing block would erase vector
+    # artwork underneath it.
+    visual_bboxes = _get_visual_bboxes(page, page_dict)
+
     # First pass: clean control character artifacts from all blocks
     # (null bytes, SOH, etc. from pdf2zh font embedding)
-    _clean_page_artifacts(page, blocks, page_dict)
+    _clean_page_artifacts(
+        page,
+        blocks,
+        page_dict,
+        protected_bboxes=visual_bboxes,
+    )
 
     # Analyze page layout (detects single or two-column)
     columns = _analyze_page_layout(blocks)
     if not columns or columns[0].col_width < _MIN_COL_WIDTH:
         return 0  # Can't determine layout, skip
 
-    # Get image regions to avoid corrupting text near figures
-    image_bboxes = _get_image_bboxes(page)
-
-    # Find blocks that need fixing (skip those overlapping with images)
+    # Find blocks that need fixing (skip those overlapping with graphics)
     page_height = page.rect.height
     to_fix = [
         b
         for b in blocks
         if _needs_fix(b, columns, page_height, page.rect.width)
-        and not _block_overlaps_image(b, image_bboxes)
+        and not _block_overlaps_image(b, visual_bboxes)
     ]
 
     # Also flag full-width blocks that overlap with caption blocks
@@ -219,7 +241,7 @@ def _fix_page_layout(page: object) -> int:
         for b in blocks:
             if b in to_fix:
                 continue
-            if _block_overlaps_image(b, image_bboxes):
+            if _block_overlaps_image(b, visual_bboxes):
                 continue
             block_width = b.bbox[2] - b.bbox[0]
             # Check if block spans multiple columns (width > single column width)
@@ -284,6 +306,8 @@ def _clean_page_artifacts(
     page: object,
     blocks: list[TextBlockInfo],
     page_dict: dict | None = None,
+    *,
+    protected_bboxes: list[tuple[float, float, float, float]] | None = None,
 ) -> None:
     """Clean control character artifacts from all text blocks on a page.
 
@@ -295,6 +319,7 @@ def _clean_page_artifacts(
         page: PyMuPDF page object.
         blocks: Extracted text blocks.
         page_dict: Optional pre-extracted dict from page.get_text("dict").
+        protected_bboxes: Figure/table/diagram regions that must not be repainted.
     """
     # Check raw page text for control characters
     raw_page_text = page.get_text("text")
@@ -309,9 +334,10 @@ def _clean_page_artifacts(
         return
 
     dirty_blocks = []
+    protected_bboxes = protected_bboxes or []
 
     for block in blocks:
-        if block.style_sensitive:
+        if block.style_sensitive or _block_overlaps_image(block, protected_bboxes):
             continue
         # Check block text for control chars
         if _CONTROL_CHAR_RE.search(block.text):

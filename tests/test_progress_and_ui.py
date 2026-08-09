@@ -76,6 +76,28 @@ def test_reader_pdf_open_renders_first_page_before_background_work():
     assert "await loadPanelDocument('translated'" not in js
 
 
+def test_reader_render_work_is_bounded_and_cancelled_when_paper_changes():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "const MAX_CANVAS_DPR = 1.5;" in js
+    assert "Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR)" in js
+    assert "let activeRenderTasks = { original: new Map(), translated: new Map() };" in js
+    assert "renderTask.cancel();" in js
+    assert "loadId !== currentLoadId" in js
+    assert "const OVERSCAN_PX = 320;" in js
+
+
+def test_mobile_reader_panels_keep_pdf_pages_inside_scroll_containers():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
+
+    assert "window.scrollTo({ top: 0, left: 0, behavior: 'auto' });" in js
+    assert "min-width: 0; min-height: 0;" in css
+    assert ".pdf-container {" in css
+    assert "min-height: 0;" in css
+    assert ".pdf-panel { flex: 0 0 50vh; height: 50vh; min-height: 0; }" in css
+
+
 def test_translation_progress_ui_has_client_eta_smoothing():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
@@ -98,6 +120,17 @@ def test_translation_progress_ui_has_client_eta_smoothing():
     assert "progress-fill-pending" in js
     assert ".progress-fill-active" in css
     assert "@keyframes progress-stripes" in css
+
+
+def test_translation_progress_is_scoped_to_the_active_paper():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "let translationPollPaperId = null;" in js
+    assert "let translationPollGeneration = 0;" in js
+    assert "translationPollPaperId !== paperId" in js
+    assert "const pollGeneration = ++translationPollGeneration;" in js
+    assert "pollGeneration !== translationPollGeneration" in js
+    assert "currentPaper = papers.find(p => p.id === paperId) || null;" not in js
 
 
 def test_translation_start_shows_progress_before_request_finishes():

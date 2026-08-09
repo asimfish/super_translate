@@ -6,6 +6,7 @@ import time
 import webbrowser
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -34,6 +35,7 @@ _stats_cache: dict[str, dict[str, int]] = {}
 _stats_cache_time: dict[str, float] = {}
 _stats_lock = asyncio.Lock()
 _startup_translation_tasks: set[asyncio.Task] = set()
+_RECOVERY_STALE_SECONDS = 90
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -91,6 +93,32 @@ def _schedule_recovered_translation(
     task.add_done_callback(_startup_translation_tasks.discard)
 
 
+def _job_is_stale_for_recovery(
+    job: object,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether a durable job has stopped receiving live-worker updates."""
+    reference = next(
+        (
+            value
+            for value in (
+                getattr(job, "heartbeat_at", None),
+                getattr(job, "updated_at", None),
+                getattr(job, "created_at", None),
+            )
+            if isinstance(value, datetime)
+        ),
+        None,
+    )
+    if reference is None:
+        return True
+    current = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        current = current.replace(tzinfo=None)
+    return current - reference >= timedelta(seconds=_RECOVERY_STALE_SECONDS)
+
+
 async def _recover_stuck_translations(
     *,
     resume_queued: bool = True,
@@ -129,18 +157,32 @@ async def _recover_stuck_translations(
             .order_by(TranslationJob.started_at.asc(), TranslationJob.created_at.asc())
         )
         running_jobs = list(running_result.scalars().all())
-        resumable_jobs = [*queued_jobs, *running_jobs] if resume_queued else []
+        discovered_jobs = [*queued_jobs, *running_jobs]
+        if resume_queued:
+            recovery_now = datetime.now(timezone.utc)
+            resumable_jobs = [
+                job
+                for job in discovered_jobs
+                if _job_is_stale_for_recovery(job, now=recovery_now)
+            ]
+            live_jobs = [job for job in discovered_jobs if job not in resumable_jobs]
+        else:
+            resumable_jobs = []
+            live_jobs = []
         resume_payloads = [_translation_job_resume_payload(job) for job in resumable_jobs]
         resumable_paper_ids = list(
             dict.fromkeys(str(payload["paper_id"]) for payload in resume_payloads)
         )
         resumable_job_ids = [str(job.id) for job in resumable_jobs]
+        live_paper_ids = list(dict.fromkeys(str(job.paper_id) for job in live_jobs))
+        live_job_ids = [str(job.id) for job in live_jobs]
 
         paper_update = sa_update(Paper).where(
             Paper.translation_status == TranslationStatus.TRANSLATING.value
         )
-        if resumable_paper_ids:
-            paper_update = paper_update.where(Paper.id.not_in(resumable_paper_ids))
+        protected_paper_ids = [*resumable_paper_ids, *live_paper_ids]
+        if protected_paper_ids:
+            paper_update = paper_update.where(Paper.id.not_in(protected_paper_ids))
         paper_result = await db.execute(
             paper_update.values(
                 translation_status=TranslationStatus.FAILED.value,
@@ -182,9 +224,10 @@ async def _recover_stuck_translations(
                     ]
                 )
             )
-            if resumable_job_ids:
+            protected_job_ids = [*resumable_job_ids, *live_job_ids]
+            if protected_job_ids:
                 stale_job_update = stale_job_update.where(
-                    TranslationJob.id.not_in(resumable_job_ids)
+                    TranslationJob.id.not_in(protected_job_ids)
                 )
             stale_job_result = await db.execute(
                 stale_job_update.values(

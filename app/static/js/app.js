@@ -6,6 +6,8 @@ let selectedFiles = [];
 let selectedFileKeys = new Set();
 let searchTimer = null;
 let translationPollId = null;
+let translationPollPaperId = null;
+let translationPollGeneration = 0;
 let pagination = { offset: 0, limit: 50, total: 0 };
 let currentLoadId = 0; // Track which paper is being loaded to prevent race conditions
 
@@ -220,9 +222,12 @@ const api = {
 // === Views ===
 function showView(name) {
   // Clean up polling when leaving reader
-  if (name !== 'reader' && translationPollId) {
-    clearInterval(translationPollId);
+  if (name !== 'reader' && translationPollPaperId) {
+    if (translationPollId) clearInterval(translationPollId);
     translationPollId = null;
+    translationPollPaperId = null;
+    translationPollGeneration++;
+    document.getElementById('translation-progress')?.classList.add('hidden');
   }
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`${name}-view`).classList.add('active');
@@ -548,10 +553,12 @@ let renderedPages = { original: new Set(), translated: new Set() };
 let pageWrappers = { original: [], translated: [] };
 let renderObservers = { original: null, translated: null };
 let scrollListeners = { original: null, translated: null };
+let activeRenderTasks = { original: new Map(), translated: new Map() };
 const RENDER_SCALE = 1.5;
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 3.0;
-const OVERSCAN_PX = 600; // render pages within this distance of viewport
+const MAX_CANVAS_DPR = 1.5;
+const OVERSCAN_PX = 320;
 const PAGE_GAP_PX = 4;
 let scrollSyncToken = 0;
 
@@ -808,9 +815,26 @@ async function loadPreviewImage(panel, wrapper, loadId) {
 async function openReader(paperId) {
   // Cancel any ongoing load
   const loadId = ++currentLoadId;
+  if (translationPollPaperId && translationPollPaperId !== paperId) {
+    if (translationPollId) clearInterval(translationPollId);
+    translationPollId = null;
+    translationPollPaperId = null;
+    translationPollGeneration++;
+    document.getElementById('translation-progress')?.classList.add('hidden');
+  }
+  for (const panel of ['original', 'translated']) {
+    for (const state of activeRenderTasks[panel].values()) {
+      const renderTask = state.renderTask;
+      if (renderTask) {
+        try { renderTask.cancel(); } catch { /* already complete */ }
+      }
+    }
+  }
+  activeRenderTasks = { original: new Map(), translated: new Map() };
 
   // Show loading state immediately
   showView('reader');
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   document.getElementById('reader-title').textContent = '加载中...';
   for (const panel of ['original', 'translated']) {
     const container = document.getElementById(`pdf-container-${panel}`);
@@ -1022,44 +1046,63 @@ async function renderVisiblePages(panel, container, options = {}) {
 
 async function renderPage(panel, idx) {
   if (renderedPages[panel].has(idx)) return;
-  renderedPages[panel].add(idx);
+  const existing = activeRenderTasks[panel].get(idx);
+  if (existing) return existing.promise;
 
   const pdf = pdfDocs[panel];
   if (!pdf) return;
 
   const wrapper = pageWrappers[panel][idx];
   if (!wrapper) return;
+  const loadId = currentLoadId;
+  const state = { renderTask: null, promise: null };
+  state.promise = (async () => {
+    try {
+      const pageNum = pageMetrics[panel][idx].pageNum;
+      const page = await pdf.getPage(pageNum);
+      if (loadId !== currentLoadId || pdfDocs[panel] !== pdf || !wrapper.isConnected) return;
 
-  const pageNum = pageMetrics[panel][idx].pageNum;
-  const page = await pdf.getPage(pageNum);
-  const scale = pageMetrics[panel]._adaptiveScale || RENDER_SCALE;
-  const viewport = page.getViewport({ scale });
+      const scale = pageMetrics[panel]._adaptiveScale || RENDER_SCALE;
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      const dpr = Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR);
+      canvas.width = Math.ceil(viewport.width * dpr);
+      canvas.height = Math.ceil(viewport.height * dpr);
+      canvas.style.width = viewport.width + 'px';
+      canvas.style.height = viewport.height + 'px';
 
-  const canvas = document.createElement('canvas');
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = viewport.width * dpr;
-  canvas.height = viewport.height * dpr;
-  canvas.style.width = viewport.width + 'px';
-  canvas.style.height = viewport.height + 'px';
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      state.renderTask = page.render({ canvasContext: ctx, viewport });
+      await state.renderTask.promise;
+      if (loadId !== currentLoadId || pdfDocs[panel] !== pdf || !wrapper.isConnected) return;
 
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  await page.render({ canvasContext: ctx, viewport }).promise;
-
-  // Replace wrapper content
-  wrapper.innerHTML = '';
-  wrapper.appendChild(canvas);
-  const renderToken = `${Date.now()}-${Math.random()}`;
-  wrapper.dataset.renderToken = renderToken;
-  scheduleIdleWork(() => {
-    if (
-      wrapper.isConnected
-      && renderedPages[panel].has(idx)
-      && wrapper.dataset.renderToken === renderToken
-    ) {
-      void renderTextLayer(page, wrapper, viewport);
+      renderedPages[panel].add(idx);
+      wrapper.innerHTML = '';
+      wrapper.appendChild(canvas);
+      const renderToken = `${Date.now()}-${Math.random()}`;
+      wrapper.dataset.renderToken = renderToken;
+      scheduleIdleWork(() => {
+        if (
+          loadId === currentLoadId
+          && pdfDocs[panel] === pdf
+          && wrapper.isConnected
+          && renderedPages[panel].has(idx)
+          && wrapper.dataset.renderToken === renderToken
+        ) {
+          void renderTextLayer(page, wrapper, viewport);
+        }
+      }, 300);
+    } catch (error) {
+      if (error?.name !== 'RenderingCancelledException') throw error;
+    } finally {
+      if (activeRenderTasks[panel].get(idx) === state) {
+        activeRenderTasks[panel].delete(idx);
+      }
     }
-  }, 300);
+  })();
+  activeRenderTasks[panel].set(idx, state);
+  return state.promise;
 }
 
 async function renderTextLayer(page, wrapper, viewport) {
@@ -1265,10 +1308,6 @@ async function startTranslate() {
 }
 
 async function quickTranslate(paperId) {
-  // Set currentPaper for title display in progress panel
-  if (!currentPaper || currentPaper.id !== paperId) {
-    currentPaper = papers.find(p => p.id === paperId) || null;
-  }
   doTranslateDirect(paperId, '', 'balanced');
 }
 
@@ -1277,6 +1316,8 @@ function showTranslationSubmitting(paperId) {
     clearInterval(translationPollId);
     translationPollId = null;
   }
+  translationPollPaperId = paperId;
+  translationPollGeneration++;
   const prog = document.getElementById('translation-progress');
   const fill = document.getElementById('trans-progress-fill');
   const statusEl = document.getElementById('trans-status');
@@ -1335,6 +1376,8 @@ function pollTranslationStatus(paperId) {
     clearInterval(translationPollId);
     translationPollId = null;
   }
+  translationPollPaperId = paperId;
+  const pollGeneration = ++translationPollGeneration;
 
   const prog = document.getElementById('translation-progress');
   const fill = document.getElementById('trans-progress-fill');
@@ -1355,8 +1398,11 @@ function pollTranslationStatus(paperId) {
   if (statusEl) statusEl.textContent = '准备翻译... 0s · 等待首批进度';
 
   // Show paper title in progress panel
-  if (titleEl && currentPaper) {
-    titleEl.textContent = currentPaper.title;
+  if (titleEl) {
+    const paper = papers.find(p => p.id === paperId);
+    titleEl.textContent = paper?.title || (
+      currentPaper?.id === paperId ? currentPaper.title : ''
+    );
   }
   if (logEl) logEl.innerHTML = '';
   addTransLog('已提交翻译任务，正在等待首批进度...');
@@ -1372,12 +1418,17 @@ function pollTranslationStatus(paperId) {
   let smoothedRate = 0;
 
   async function refreshTranslationStatus() {
+    if (
+      translationPollPaperId !== paperId
+      || pollGeneration !== translationPollGeneration
+    ) return;
     if (statusRequestInFlight) return;
     statusRequestInFlight = true;
     pollCount++;
     if (pollCount > MAX_POLLS) {
       clearInterval(translationPollId);
       translationPollId = null;
+      translationPollPaperId = null;
       statusEl.textContent = '翻译超时';
       addTransLog('翻译超时，请稍后重试', 'error');
       fill.classList.remove('progress-fill-active', 'progress-fill-pending');
@@ -1389,7 +1440,12 @@ function pollTranslationStatus(paperId) {
 
     try {
       const paper = await api.getPaper(paperId);
+      if (
+        translationPollPaperId !== paperId
+        || pollGeneration !== translationPollGeneration
+      ) return;
       consecutiveErrors = 0;
+      if (titleEl) titleEl.textContent = paper.title || titleEl.textContent;
       const progress = Math.max(0, Math.min(1, Number(paper.translation_progress) || 0));
       const pct = Math.round(progress * 100);
       const isTranslating = paper.translation_status === 'translating';
@@ -1431,10 +1487,12 @@ function pollTranslationStatus(paperId) {
       if (paper.translation_status === 'completed') {
         clearInterval(translationPollId);
         translationPollId = null;
+        translationPollPaperId = null;
         fill.classList.remove('progress-fill-active', 'progress-fill-pending');
         fill.style.width = '100%';
         statusEl.textContent = `翻译完成 (${elapsedStr})`;
         setTimeout(() => {
+          if (pollGeneration !== translationPollGeneration) return;
           prog.classList.add('hidden');
           if (currentPaper && currentPaper.id === paperId) {
             openReader(paperId);
@@ -1444,6 +1502,7 @@ function pollTranslationStatus(paperId) {
       } else if (paper.translation_status === 'failed') {
         clearInterval(translationPollId);
         translationPollId = null;
+        translationPollPaperId = null;
         fill.classList.remove('progress-fill-active', 'progress-fill-pending');
         statusEl.textContent = `翻译失败 (${elapsedStr})`;
         fill.style.background = 'var(--error)';
@@ -1458,6 +1517,7 @@ function pollTranslationStatus(paperId) {
       if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
         clearInterval(translationPollId);
         translationPollId = null;
+        translationPollPaperId = null;
         statusEl.textContent = '连接中断';
         addTransLog('无法连接服务器，请检查网络后重试', 'error');
         fill.classList.remove('progress-fill-active', 'progress-fill-pending');

@@ -63,7 +63,266 @@ GOLDEN_PAGES = [
     # DynaGuide p26: the final row of an unnumbered multi-line derivation must
     # remain native instead of being translated with the following paragraph.
     "dynaguide_p26_unnumbered_display_formula.pdf",
+    # OTF algorithms are ruled floats whose title record also contains input
+    # and initialization rows; the full float must remain verbatim.
+    "otf_p5_algorithm.pdf",
+    "otf_p14_algorithm.pdf",
+    # Mixed prose/formula rows must translate without false preserved-region
+    # failures, including compact multi-letter subscripts.
+    "otf_p9_table_formula.pdf",
+    "flashsac_p6_formula_prose.pdf",
+    # Adjacent panels form one right-side float that body reflow must avoid.
+    "otf_p10_float_wrap.pdf",
+    # Captions above dense appendix tables must not grow into their headers.
+    "otf_p17_appendix_table.pdf",
+    "otf_p15_formula_statement.pdf",
+    "otf_p16_appendix_tables.pdf",
+    "otf_p19_formula42.pdf",
+    # Real structural regressions from OTF and GEARS.
+    "otf_p3_structure.pdf",
+    "otf_p8_typography.pdf",
+    "gears_p2_paragraphs.pdf",
+    "gears_p6_inline_formulas.pdf",
+    "gears_p8_untranslated.pdf",
 ]
+
+
+def _unit_blocks(fixture):
+    from pdf_zh_translator.pdf_layout import prepare_translation_units
+
+    source = fitz.open(FIXTURES / fixture)
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    return [block for block, _, _ in units]
+
+
+def _plain_unit_texts(fixture):
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    return [
+        " ".join(strip_sentinels(block.text).split())
+        for block in _unit_blocks(fixture)
+    ]
+
+
+@pytest.mark.parametrize("fixture", ["otf_p5_algorithm.pdf", "otf_p14_algorithm.pdf"])
+def test_otf_algorithm_float_body_is_not_translated(fixture):
+    texts = _plain_unit_texts(fixture)
+
+    assert not any("Initialize" in text for text in texts)
+    assert not any("UpdateK" in text or "Updateq" in text for text in texts)
+
+
+def test_otf_academic_labels_and_split_section_headings_keep_structure():
+    blocks = _unit_blocks("otf_p3_structure.pdf")
+    texts = [
+        " ".join(block.text.replace("\ue000", "").replace("\ue001", "").split())
+        for block in blocks
+    ]
+
+    proposition = next(
+        block for block, text in zip(blocks, texts) if text.startswith("Proposition 1")
+    )
+    assert proposition.bold_prefix
+    assert any(
+        block.block_type == "heading" and "3 METHDOLOGY" in text
+        for block, text in zip(blocks, texts)
+    )
+    assert any(
+        block.block_type == "heading" and "3.1 OPTIMAL FLOW TRANSPORT" in text
+        for block, text in zip(blocks, texts)
+    )
+
+
+def test_otf_runin_labels_keep_body_size_and_method_bold_terms():
+    blocks = _unit_blocks("otf_p8_typography.pdf")
+    texts = [
+        " ".join(block.text.replace("\ue000", "").replace("\ue001", "").split())
+        for block in blocks
+    ]
+
+    for prefix in (
+        "• NETGEN (Integer-precision):",
+        "• Vision (Real Scene):",
+        "Baselines.",
+    ):
+        block = next(block for block, text in zip(blocks, texts) if text.startswith(prefix))
+        assert block.block_type == "body"
+        assert block.bold_prefix
+        assert block.font_size < 10.1
+
+    baseline = next(
+        block for block, text in zip(blocks, texts) if text.startswith("Baselines.")
+    )
+    assert {"Real", "ZKW", "Gurobi", "pns", "lemon"}.issubset(
+        baseline.bold_terms
+    )
+
+
+def test_gears_indented_paragraphs_remain_separate_translation_units():
+    texts = _plain_unit_texts("gears_p2_paragraphs.pdf")
+    body = [text for text in texts if len(text) > 80]
+
+    assert len(body) >= 4
+    assert any(text.startswith("This gap can be decomposed") for text in body)
+    assert any(text.startswith("The second challenge") for text in body)
+
+
+def test_gears_section_33_body_is_translated():
+    texts = _plain_unit_texts("gears_p8_untranslated.pdf")
+
+    assert any("The privileged expert cannot be deployed directly" in text for text in texts)
+    assert any("Data Collection" in text for text in texts)
+
+
+def test_gears_stage_caption_and_architecture_keep_structure():
+    blocks = _unit_blocks("gears_p5_structure.pdf")
+    texts = [
+        " ".join(block.text.replace("\ue000", "").replace("\ue001", "").split())
+        for block in blocks
+    ]
+
+    assert any(
+        block.block_type == "caption" and text.startswith("Fig. 1")
+        for block, text in zip(blocks, texts)
+    )
+    assert any(
+        block.block_type == "heading" and text == "Stage 1:"
+        for block, text in zip(blocks, texts)
+    )
+    architecture = next(
+        block for block, text in zip(blocks, texts) if text.startswith("Architecture.")
+    )
+    assert architecture.block_type == "body"
+    assert architecture.bold_prefix
+    assert architecture.keepout_bboxes
+    bottom_redact = max(architecture.redact_bboxes or [], key=lambda bbox: bbox[3])
+    first_formula_top = min(bbox[1] for bbox in architecture.keepout_bboxes)
+    assert bottom_redact[3] <= first_formula_top - 1.19
+    formula_suffix = next(
+        block for block, text in zip(blocks, texts) if text == "from four"
+    )
+    assert formula_suffix.block_type == "formula_prose"
+    assert formula_suffix.keepout_bboxes
+    assert all(bbox[0] >= 339.0 for bbox in formula_suffix.redact_bboxes or [])
+
+
+def test_gears_inline_formula_prefix_reflows_with_its_sentence():
+    blocks = _unit_blocks("gears_p6_inline_formulas.pdf")
+    formula_prefix = next(
+        block
+        for block in blocks
+        if "convolution, and the [CLS] token" in block.text
+    )
+
+    assert formula_prefix.block_type == "body"
+    assert len(formula_prefix.formula_anchors) == 4
+    assert not formula_prefix.keepout_bboxes
+    assert "1" in formula_prefix.text
+
+
+def test_gears_data_collection_formula_fragments_keep_anchor_alignment():
+    from pdf_zh_translator.pdf_layout import SENTINEL_RUN_RE
+
+    blocks = _unit_blocks("gears_p8_untranslated.pdf")
+    data_collection = next(
+        block
+        for block in blocks
+        if "collect a dataset" in block.text
+    )
+
+    assert data_collection.text.startswith("Data Collection")
+    assert data_collection.bold_prefix
+    assert len(data_collection.formula_anchors) == len(
+        SENTINEL_RUN_RE.findall(data_collection.text)
+    )
+    assert data_collection.formula_anchors
+    assert any("D={(I" in text for text in _plain_unit_texts("gears_p8_untranslated.pdf"))
+
+
+def test_gears_runin_architecture_heading_is_split_and_bold():
+    blocks = _unit_blocks("gears_p8_untranslated.pdf")
+    architecture = next(
+        block
+        for block in blocks
+        if "Architecture" in block.text
+    )
+
+    assert architecture.block_type == "body"
+    assert architecture.bold_prefix
+
+
+def test_otf_multi_letter_formula_subscript_is_protected():
+    from pdf_zh_translator.pdf_layout import protect_text
+
+    block = next(
+        block
+        for block in _unit_blocks("otf_p9_table_formula.pdf")
+        if "denoted as" in block.text
+    )
+    _protected, mapping = protect_text(block.text)
+
+    assert "s_{soft}" in mapping.values()
+
+
+def test_otf_inline_kernel_formula_stays_native_as_one_spatial_cluster():
+    texts = _plain_unit_texts("otf_p9_table_formula.pdf")
+
+    explanation = next(text for text in texts if "Convergence of EOFT" in text)
+    assert "K(u)" not in explanation
+    assert not any("K(u)" in text for text in texts)
+
+
+def test_flashsac_formula_split_prose_is_one_translation_unit():
+    texts = _plain_unit_texts("flashsac_p6_formula_prose.pdf")
+
+    matches = [text for text in texts if "Weight Normalization" in text]
+    assert len(matches) == 1
+    assert "This constrains the network" in matches[0]
+
+
+def test_flashsac_inline_variance_script_moves_with_formula():
+    from pdf_zh_translator.pdf_layout import SENTINEL_RUN_RE, protect_text
+
+    block = next(
+        block
+        for block in _unit_blocks("flashsac_p6_formula_prose.pdf")
+        if "discounted return variance" in block.text
+    )
+    _protected, mapping = protect_text(block.text)
+
+    assert "σ^{2}_{t,G}" in mapping.values()
+    assert len(block.formula_anchors) == len(SENTINEL_RUN_RE.findall(block.text))
+
+
+def test_otf_formula42_discourse_cue_is_translated_separately():
+    texts = _plain_unit_texts("otf_p19_formula42.pdf")
+
+    assert any("Furthermore," in text for text in texts)
+
+
+def test_otf_short_variable_prefix_stays_with_inline_formula():
+    texts = _plain_unit_texts("otf_p15_formula_statement.pdf")
+
+    assert not any("Kv⊙q−s+d" in text for text in texts)
+    assert any(text.startswith("Then we can get the solution") for text in texts)
+
+
+def test_otf_math_mixed_explanations_are_complete_translation_units():
+    texts = _plain_unit_texts("otf_p15_formula_statement.pdf")
+
+    explanations = [text for text in texts if text.startswith("Thus we can get")]
+    assert len(explanations) == 2
+    assert all("f=−g" in text for text in explanations)
+    knowing = next(text for text in texts if text.startswith("KnowingP1"))
+    assert "we can get" in knowing
+    assert "and" not in texts
+
+
+def test_otf_small_caps_appendix_subheading_is_a_translation_unit():
+    texts = _plain_unit_texts("otf_p15_formula_statement.pdf")
+
+    assert "C.2 WITH CONSTRAINS" in texts
 
 
 class _GoldenStubTranslator:

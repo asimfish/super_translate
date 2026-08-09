@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-1019%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-1085%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.10+-blue)]()

@@ -198,6 +198,16 @@ def test_packaged_corpus_includes_top_conference_categories():
     assert stats["ai_agents_tool_use"] >= 30
 
 
+def test_packaged_corpus_keeps_kantorovich_name_bilingual():
+    from pdf_zh_translator.corpus import get_relevant_terms
+
+    terms = get_relevant_terms(
+        ["The entropic OT degenerates to the vanilla Kantorovich case."]
+    )
+
+    assert terms["kantorovich"] == "康托罗维奇（Kantorovich）"
+
+
 def test_candidate_review_promote_and_release_workflow(tmp_path):
     candidates_path = tmp_path / "candidates.jsonl"
     candidates_path.write_text(

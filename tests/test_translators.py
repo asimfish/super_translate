@@ -12,7 +12,6 @@ from pdf_zh_translator.translators import (
     Translator,
     VendorTranslator,
     cache_key,
-    placeholders_preserved,
     chunked_by_size,
     coerce_plain_translation,
     coerce_translation_list,
@@ -22,6 +21,7 @@ from pdf_zh_translator.translators import (
     parse_json_string_list,
     parse_json_translations,
     parse_translation_list,
+    placeholders_preserved,
 )
 
 

@@ -62,7 +62,11 @@ async def create_user(username: str, password: str, access_scope: str | None = N
     username = validate_username(username)
     if not password:
         raise ValueError("Password must not be empty")
-    scope = normalize_access_scope(access_scope) if access_scope else normalize_access_scope(username)
+    scope = (
+        normalize_access_scope(access_scope)
+        if access_scope
+        else normalize_access_scope(username)
+    )
     user = User(
         username=username,
         password_hash=hash_password(password),

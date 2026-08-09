@@ -816,7 +816,7 @@ class TestTranslationEndpoint:
 
         with (
             patch("app.api.papers._append_log"),
-            patch("app.api.papers._set_translation_stage"),
+            patch("app.api.papers._set_translation_stage") as mock_stage,
             patch("app.api.papers._record_terminology_candidates"),
             # This test is about layout-fix rechecks, not cancellation.
             patch("app.api.papers._is_cancel_requested", return_value=False),
@@ -837,6 +837,14 @@ class TestTranslationEndpoint:
             )
 
         assert unresolved == []
+        stage_progress = [
+            call.kwargs["progress"]
+            for call in mock_stage.call_args_list
+            if call.kwargs.get("progress") is not None
+        ]
+        assert stage_progress == sorted(stage_progress)
+        assert stage_progress[0] == pytest.approx(0.89)
+        assert stage_progress[-1] == pytest.approx(0.99)
         assert mock_verify.call_count == 2
         mock_fix.assert_called_once_with(mono_path)
         mock_create_dual.assert_called_once_with(input_path, mono_path, dual_path)
@@ -3076,6 +3084,60 @@ class TestSecurityHeaders:
 class TestRecoverStuckTranslations:
     """Test startup recovery of stuck translations."""
 
+    def test_recovery_staleness_uses_heartbeat_then_update_time(self):
+        from datetime import datetime, timedelta, timezone
+
+        from app.main import _job_is_stale_for_recovery
+
+        now = datetime.now(timezone.utc)
+        fresh = MagicMock(
+            heartbeat_at=now - timedelta(seconds=10),
+            updated_at=now - timedelta(minutes=5),
+            created_at=now - timedelta(minutes=10),
+        )
+        stale = MagicMock(
+            heartbeat_at=now - timedelta(minutes=2),
+            updated_at=now - timedelta(seconds=5),
+            created_at=now - timedelta(minutes=10),
+        )
+
+        assert _job_is_stale_for_recovery(fresh, now=now) is False
+        assert _job_is_stale_for_recovery(stale, now=now) is True
+
+    @pytest.mark.asyncio
+    async def test_does_not_take_over_fresh_running_job(self):
+        from datetime import datetime, timezone
+
+        from app.main import _recover_stuck_translations
+
+        job = MagicMock()
+        job.id = "live-job"
+        job.paper_id = "live-paper"
+        job.heartbeat_at = datetime.now(timezone.utc)
+        running_result = MagicMock()
+        running_result.scalars.return_value.all.return_value = [job]
+        queued_result = MagicMock()
+        queued_result.scalars.return_value.all.return_value = []
+        paper_result = MagicMock(rowcount=0)
+        stale_job_result = MagicMock(rowcount=0)
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(
+            side_effect=[queued_result, running_result, paper_result, stale_job_result]
+        )
+        mock_session.commit = AsyncMock()
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_ctx_manager.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.core.database.async_session",
+            MagicMock(return_value=mock_ctx_manager),
+        ):
+            resume_payloads = await _recover_stuck_translations(resume_queued=True)
+
+        assert resume_payloads == []
+        mock_session.commit.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_recovers_stuck_papers(self):
         from app.main import _recover_stuck_translations
@@ -3682,9 +3744,10 @@ class TestAuthLogin:
         assert res.status_code == 401
 
     def test_login_reachable_without_token_when_api_token_set(self, client):
-        from pydantic import SecretStr
-        from unittest.mock import AsyncMock, patch
         from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+
+        from pydantic import SecretStr
 
         from app.core.config import settings
 
@@ -3700,8 +3763,9 @@ class TestAuthLogin:
             assert papers_res.status_code == 401
 
     def test_user_token_grants_its_scope(self, client):
-        from pydantic import SecretStr
         from unittest.mock import AsyncMock, patch
+
+        from pydantic import SecretStr
 
         from app.core.config import settings
 
@@ -3748,7 +3812,8 @@ class TestSelfHealingRetry:
 
         from app.api.papers import _has_self_healable_error, _only_self_healable_errors
 
-        issue = lambda code, severity="error": SimpleNamespace(code=code, severity=severity)
+        def issue(code, severity="error"):
+            return SimpleNamespace(code=code, severity=severity)
         assert _only_self_healable_errors([issue("untranslated_english")]) is True
         assert _only_self_healable_errors(
             [issue("untranslated_english"), issue("untranslated_caption")]
@@ -3770,7 +3835,8 @@ class TestSelfHealingRetry:
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_untranslated_only_failure_retries_once(self, mock_settings, mock_translate, tmp_path):
-        from types import SimpleNamespace as NS
+        from types import SimpleNamespace
+
         from app.api.papers import _run_translation
         from app.services.translator import TranslationResult
 
@@ -3788,7 +3854,14 @@ class TestSelfHealingRetry:
         mock_translate.return_value = TranslationResult(mono_path=mono_path)
 
         qa_results = [
-            [NS(page=6, code="untranslated_english", message="漏翻", severity="error")],
+            [
+                SimpleNamespace(
+                    page=6,
+                    code="untranslated_english",
+                    message="漏翻",
+                    severity="error",
+                )
+            ],
             [],
         ]
         with (
@@ -3804,40 +3877,8 @@ class TestSelfHealingRetry:
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_layout_error_does_not_retry(self, mock_settings, mock_translate, tmp_path):
-        from types import SimpleNamespace as NS
-        from app.api.papers import _run_translation
-        from app.services.translator import TranslationResult
+        from types import SimpleNamespace
 
-        paper = self._paper()
-        db = TestRunTranslation._setup_db_mock(self, paper)
-        papers_dir = tmp_path / "papers"
-        papers_dir.mkdir()
-        translations_dir = tmp_path / "translations"
-        translations_dir.mkdir()
-        mock_settings.papers_path = papers_dir
-        mock_settings.translations_path = translations_dir
-        TestRunTranslation._write_valid_pdf(self, papers_dir / "test.pdf", "Original.")
-        mono_path = translations_dir / "paper123" / "test-mono.pdf"
-        TestRunTranslation._write_valid_pdf(self, mono_path, "译文内容。")
-        mock_translate.return_value = TranslationResult(mono_path=mono_path)
-
-        qa_results = [[NS(page=2, code="text_overlap", message="重叠", severity="error")]]
-        with (
-            patch("app.core.database.async_session",
-                  TestRunTranslation._make_async_session_mock(self, db)),
-            patch("app.api.papers._run_post_translation_qa", side_effect=qa_results),
-        ):
-            _run_translation("paper123", "google", "fast")
-
-        assert mock_translate.call_count == 1
-        assert paper.translation_status == "failed"
-
-    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
-    @patch("app.api.papers.settings")
-    def test_persistent_untranslated_fails_after_one_retry(
-        self, mock_settings, mock_translate, tmp_path
-    ):
-        from types import SimpleNamespace as NS
         from app.api.papers import _run_translation
         from app.services.translator import TranslationResult
 
@@ -3855,8 +3896,65 @@ class TestSelfHealingRetry:
         mock_translate.return_value = TranslationResult(mono_path=mono_path)
 
         qa_results = [
-            [NS(page=6, code="untranslated_english", message="漏翻", severity="error")],
-            [NS(page=6, code="untranslated_english", message="漏翻", severity="error")],
+            [
+                SimpleNamespace(
+                    page=2,
+                    code="text_overlap",
+                    message="重叠",
+                    severity="error",
+                )
+            ]
+        ]
+        with (
+            patch("app.core.database.async_session",
+                  TestRunTranslation._make_async_session_mock(self, db)),
+            patch("app.api.papers._run_post_translation_qa", side_effect=qa_results),
+        ):
+            _run_translation("paper123", "google", "fast")
+
+        assert mock_translate.call_count == 1
+        assert paper.translation_status == "failed"
+
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
+    @patch("app.api.papers.settings")
+    def test_persistent_untranslated_fails_after_one_retry(
+        self, mock_settings, mock_translate, tmp_path
+    ):
+        from types import SimpleNamespace
+
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = self._paper()
+        db = TestRunTranslation._setup_db_mock(self, paper)
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+        TestRunTranslation._write_valid_pdf(self, papers_dir / "test.pdf", "Original.")
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        TestRunTranslation._write_valid_pdf(self, mono_path, "译文内容。")
+        mock_translate.return_value = TranslationResult(mono_path=mono_path)
+
+        qa_results = [
+            [
+                SimpleNamespace(
+                    page=6,
+                    code="untranslated_english",
+                    message="漏翻",
+                    severity="error",
+                )
+            ],
+            [
+                SimpleNamespace(
+                    page=6,
+                    code="untranslated_english",
+                    message="漏翻",
+                    severity="error",
+                )
+            ],
         ]
         with (
             patch("app.core.database.async_session",
@@ -3895,7 +3993,6 @@ class TestPagePreviewEndpoint:
 
     def test_preview_renders_jpeg_and_caches(self, client, tmp_path):
         from unittest.mock import patch
-        from app.api.papers import _render_page_preview
 
         paper, papers_dir, translations_dir = self._paper(tmp_path)
         with (
@@ -3911,7 +4008,10 @@ class TestPagePreviewEndpoint:
                 assert res.headers["content-type"] == "image/webp"
                 assert res.content[:4] == b"RIFF"
                 # Second call serves the cached file (no re-render).
-                with patch("app.api.papers._render_page_preview", side_effect=AssertionError("re-render")):
+                with patch(
+                    "app.api.papers._render_page_preview",
+                    side_effect=AssertionError("re-render"),
+                ):
                     res2 = client.get("/api/papers/paper123/preview/translated/1")
                     assert res2.status_code == 200
 

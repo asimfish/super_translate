@@ -55,6 +55,7 @@ from pdf_zh_translator.pdf_layout import (
     is_math_span,
     join_lines,
     line_is_prose,
+    looks_like_action_skeleton_sequence,
     mark_bibliography_blocks,
     math_heavy_block,
     merge_paragraph_blocks,
@@ -134,6 +135,17 @@ class PreserveOriginalBlockTests(unittest.TestCase):
 
         self.assertTrue(should_preserve_original_block(block, []))
 
+    def test_long_prose_with_calls_and_arrow_is_not_action_skeleton(self):
+        paragraph = (
+            "The policy maps observations with encoder(image) and then uses "
+            "decoder(features) to predict actions. The training objective follows "
+            "the expert -> student direction, while the remaining sentences explain "
+            "the architecture, supervision, optimization, and deployment procedure "
+            "in ordinary academic prose rather than pseudocode."
+        )
+
+        self.assertFalse(looks_like_action_skeleton_sequence(paragraph))
+
     def test_overlap_entries_use_line_bboxes_not_outer_table_block(self):
         block = {
             "bbox": (100.0, 100.0, 500.0, 160.0),
@@ -155,6 +167,37 @@ class PreserveOriginalBlockTests(unittest.TestCase):
             [bbox for bbox, _ in entries],
             [(100.0, 100.0, 180.0, 112.0), (220.0, 124.0, 500.0, 136.0)],
         )
+
+    def test_overlap_entries_ignore_tall_math_span_in_mixed_prose_line(self):
+        block = {
+            "bbox": (50.0, 100.0, 300.0, 130.0),
+            "lines": [
+                {
+                    "bbox": (50.0, 100.0, 300.0, 124.0),
+                    "spans": [
+                        {
+                            "text": "析因实验",
+                            "font": "NotoSerifCJKsc-Regular",
+                            "bbox": (50.0, 100.0, 110.0, 113.0),
+                        },
+                        {
+                            "text": "2×2",
+                            "font": "CMSY10",
+                            "bbox": (112.0, 99.0, 132.0, 124.0),
+                        },
+                        {
+                            "text": "交叉两个编码器",
+                            "font": "NotoSerifCJKsc-Regular",
+                            "bbox": (134.0, 100.0, 230.0, 113.0),
+                        },
+                    ],
+                }
+            ],
+        }
+
+        entries = _overlap_text_entries_from_block(block)
+
+        self.assertEqual(entries[0][0], (50.0, 100.0, 230.0, 113.0))
 
     def test_translates_nowrap_prose_outside_graphic_regions(self):
         block = TextBlock(
@@ -466,6 +509,25 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         self.assertGreater(caption.bbox[3], 69.2)
         self.assertLess(caption.bbox[3], table_row.bbox[1])
         self.assertEqual(caption.redact_bboxes, [(143.4, 59.1, 468.3, 69.2)])
+
+    def test_relaxed_caption_stops_before_preserved_table_obstacle(self):
+        caption = TextBlock(
+            page_index=0,
+            bbox=(100.0, 50.0, 500.0, 62.0),
+            text="Table 2: Evaluation on the benchmark.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+        page = SimpleNamespace(rect=SimpleNamespace(height=792.0))
+
+        relax_caption_boxes(
+            page,
+            [(caption, "表2：基准评估。")],
+            obstacles=[(90.0, 68.0, 510.0, 180.0)],
+        )
+
+        self.assertLessEqual(caption.bbox[3], 65.0)
 
     def test_inline_bold_marks_caption_prefix_and_verbatim_term(self):
         block = TextBlock(
@@ -2122,6 +2184,44 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(sum(token.kind == "formula" for token in tokens), 2)
         self.assertIn("with", "".join(token.text for token in tokens))
 
+    def test_formula_tokenizer_redraws_unambiguous_dimension_formula(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 300.0, 130.0),
+            text="formula",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            formula_anchors=((100.0, 100.0, 180.0, 120.0),),
+        )
+
+        tokens = _tokenize_translation_with_formula_clips(
+            f"特征 {SENTINEL_OPEN}G→R^{{C}}^{{→}}^{{H}}^{{→}}^{{W}}{SENTINEL_CLOSE}",
+            block,
+        )
+
+        formula = next(token for token in tokens if token.kind == "formula")
+        self.assertEqual(formula.text, "G∈R^{C×H×W}")
+        self.assertIsNone(formula.source_bbox)
+
+    def test_formula_tokenizer_redraws_kernel_size_without_neighbor_clip(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 300.0, 130.0),
+            text="formula",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            formula_anchors=((100.0, 100.0, 118.0, 118.0),),
+        )
+
+        tokens = _tokenize_translation_with_formula_clips(
+            f"使用 {SENTINEL_OPEN}1↑1{SENTINEL_CLOSE} 卷积",
+            block,
+        )
+
+        formula = next(token for token in tokens if token.kind == "formula")
+        self.assertEqual(formula.text, "1×1")
+        self.assertIsNone(formula.source_bbox)
+
     def test_clean_translation_collapses_mixed_formula_parentheses(self):
         self.assertEqual(clean_translation("（U e ij≈0).）"), "（U e ij≈0）")
 
@@ -2828,6 +2928,51 @@ class FormulaStampClipTests(unittest.TestCase):
         self.assertEqual(trimmed, clip)
         document.close()
 
+    def test_clip_trimmed_against_same_line_neighbor(self):
+        from pdf_zh_translator.pdf_layout import _trim_formula_clip_against_foreign_ink
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text((50, 100), "neighbor", fontsize=10)
+        span = page.get_text("dict")["blocks"][0]["lines"][0]["spans"][0]
+        sx0, sy0, sx1, sy1 = span["bbox"]
+        clip = (sx1 - 0.25, sy0, sx1 + 12.0, sy1)
+
+        trimmed = _trim_formula_clip_against_foreign_ink(document, 0, clip)
+
+        self.assertGreaterEqual(trimmed[0], sx1)
+        self.assertEqual(trimmed[1], clip[1])
+        self.assertEqual(trimmed[2], clip[2])
+        self.assertEqual(trimmed[3], clip[3])
+        document.close()
+
+    def test_clip_trimmed_above_wide_following_line(self):
+        from pdf_zh_translator.pdf_layout import _trim_formula_clip_against_foreign_ink
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        page.insert_text((50, 100), "1x1", fontsize=10)
+        page.insert_text((50, 112), "learning continues on the next line", fontsize=10)
+        spans = [
+            span
+            for block in page.get_text("dict")["blocks"]
+            for line in block.get("lines", [])
+            for span in line.get("spans", [])
+        ]
+        formula_bbox = spans[0]["bbox"]
+        following_top = spans[1]["bbox"][1]
+        clip = (
+            formula_bbox[0] - 0.25,
+            formula_bbox[1] - 0.25,
+            formula_bbox[2] + 0.25,
+            following_top + (formula_bbox[3] - formula_bbox[1]) * 0.4,
+        )
+
+        trimmed = _trim_formula_clip_against_foreign_ink(document, 0, clip)
+
+        self.assertLess(trimmed[3], following_top)
+        document.close()
+
     def test_clip_untouched_without_intruders(self):
         from pdf_zh_translator.pdf_layout import _trim_formula_clip_against_foreign_ink
 
@@ -2857,6 +3002,14 @@ class FormulaStampClipTests(unittest.TestCase):
 
         self.assertGreaterEqual(trimmed_first[1], span_bottom)
         self.assertEqual(trimmed_second, clip)
+
+    def test_formula_scale_caps_tall_clip_to_line_height(self):
+        from pdf_zh_translator.pdf_layout import _formula_clip_scale
+
+        scale = _formula_clip_scale((0.0, 0.0, 20.0, 20.0), 10.0, 10.0)
+
+        self.assertAlmostEqual(scale, 0.8)
+        self.assertLessEqual(20.0 * scale, 16.0)
 
 
 class OverlappingUnitPreservationTests(unittest.TestCase):
@@ -4584,6 +4737,7 @@ class TestTranslationVerification(unittest.TestCase):
             )
         )
         self.assertTrue(_looks_like_overlap_exempt_text("1,50010−5"))
+        self.assertTrue(_looks_like_overlap_exempt_text('! "# $'))
         self.assertTrue(
             _looks_like_overlap_exempt_text(
                 "PnP OnceSuccess RateDrop CubeSuccess RateStage CupSuccess Rate"
@@ -5617,6 +5771,36 @@ class TestTranslationVerification(unittest.TestCase):
 
         self.assertEqual(clipped, (107.6, 324.4, 251.6, 477.9))
 
+    def test_clip_block_bbox_merges_adjacent_right_side_figure_panels(self):
+        clipped = _clip_block_bbox_against_floats(
+            (107.6, 375.1, 504.2, 582.5),
+            [
+                (256.4, 383.6, 374.3, 482.8),
+                (376.8, 383.6, 491.7, 482.8),
+            ],
+            612.0,
+        )
+
+        self.assertEqual(clipped[:2], (107.6, 375.1))
+        self.assertAlmostEqual(clipped[2], 253.4)
+        self.assertEqual(clipped[3], 582.5)
+
+    def test_clip_block_bbox_does_not_merge_panels_with_stacked_obstacles(self):
+        clipped = _clip_block_bbox_against_floats(
+            (107.6, 375.1, 504.2, 582.5),
+            [
+                (256.4, 383.6, 374.3, 482.8),
+                (376.8, 383.6, 491.7, 482.8),
+                (246.6, 485.8, 504.3, 530.8),
+                (107.6, 505.0, 250.0, 535.0),
+            ],
+            612.0,
+        )
+
+        self.assertEqual(clipped[:2], (107.6, 375.1))
+        self.assertAlmostEqual(clipped[2], 253.4)
+        self.assertEqual(clipped[3], 582.5)
+
     def test_clip_block_bbox_ignores_non_right_side_float(self):
         bbox = (40.0, 100.0, 560.0, 180.0)
 
@@ -6410,7 +6594,9 @@ class MixedProseEquationBlockTests(unittest.TestCase):
                 "There is an infinite number of vector fields that generate a",
                 "particular probability path, e.g. by adding a divergence free",
                 "component to the continuity equation before training starts.",
-                "\ue000ψ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000) =\ue001\ue000σ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000_{1}\ue001\ue000)\ue001",
+                "\ue000ψ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000) =\ue001"
+                "\ue000σ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000_{1}\ue001"
+                "\ue000)\ue001",
                 "(11)",
                 "When x is distributed as a standard Gaussian, the transformation",
                 "maps to a normally distributed random variable with known mean.",
@@ -6424,7 +6610,9 @@ class MixedProseEquationBlockTests(unittest.TestCase):
 
         record = self._record(
             [
-                "\ue000ψ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000) =\ue001\ue000σ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000_{1}\ue001\ue000)\ue001\ue000x\ue001\ue000+\ue001\ue000µ\ue001\ue000_{t}\ue001",
+                "\ue000ψ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000) =\ue001"
+                "\ue000σ\ue001\ue000_{t}\ue001\ue000(\ue001\ue000x\ue001\ue000_{1}\ue001"
+                "\ue000)\ue001\ue000x\ue001\ue000+\ue001\ue000µ\ue001\ue000_{t}\ue001",
                 "(11)",
             ]
         )
@@ -6963,7 +7151,10 @@ class TranslationEchoDetectionTests(unittest.TestCase):
         block = TextBlock(
             page_index=2,
             bbox=(108.0, 415.0, 504.0, 440.0),
-            text="where Π_{N}(p_{0}, p_{1}) is the subset of discrete stochastic processes with given marginals.",
+            text=(
+                "where Π_{N}(p_{0}, p_{1}) is the subset of discrete stochastic "
+                "processes with given marginals."
+            ),
             font_size=9.0,
             color=(0.0, 0.0, 0.0),
             should_translate=True,
@@ -7006,7 +7197,15 @@ class EquationTableProseSentenceTests(unittest.TestCase):
             return _LineRec(
                 text=text,
                 bbox=(x0, y0, x1, y0 + 10.0),
-                spans=[{"text": text, "bbox": (x0, y0, x1, y0 + 10.0), "size": 9.0, "flags": 4, "color": 0}],
+                spans=[
+                    {
+                        "text": text,
+                        "bbox": (x0, y0, x1, y0 + 10.0),
+                        "size": 9.0,
+                        "flags": 4,
+                        "color": 0,
+                    }
+                ],
             )
 
         lines = [
@@ -7096,7 +7295,15 @@ class DisplayEquationRowTests(unittest.TestCase):
             return _LineRec(
                 text=text,
                 bbox=(x0, y0, x1, y1),
-                spans=[{"text": text, "bbox": (x0, y0, x1, y1), "size": 10.0, "flags": 4, "color": 0}],
+                spans=[
+                    {
+                        "text": text,
+                        "bbox": (x0, y0, x1, y1),
+                        "size": 10.0,
+                        "flags": 4,
+                        "color": 0,
+                    }
+                ],
             )
 
         record = _RawBlockRec(

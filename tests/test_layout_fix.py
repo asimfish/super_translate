@@ -602,7 +602,7 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
                 return_value=[ColumnInfo(91.0, 413.0)],
             ),
             unittest.mock.patch(
-                "app.services.layout_fix._get_image_bboxes",
+                "app.services.layout_fix._get_visual_bboxes",
                 return_value=[],
             ),
             unittest.mock.patch(
@@ -641,7 +641,7 @@ class TestFixPageLayoutEdgeCases(unittest.TestCase):
                 return_value=[ColumnInfo(91.0, 413.0)],
             ),
             unittest.mock.patch(
-                "app.services.layout_fix._get_image_bboxes",
+                "app.services.layout_fix._get_visual_bboxes",
                 return_value=[],
             ),
             unittest.mock.patch(
@@ -956,6 +956,38 @@ class TestCleanPageArtifacts(unittest.TestCase):
         after = page.get_text()
         self.assertEqual(before, after)
         doc.close()
+
+    def test_does_not_repaint_dirty_text_inside_vector_figure(self):
+        """Figure-internal artifacts must not trigger destructive white redaction."""
+        from app.services.layout_fix import TextBlockInfo, _clean_page_artifacts
+
+        page = unittest.mock.MagicMock()
+        page.get_text.return_value = "figure\x01label"
+        block = TextBlockInfo(
+            bbox=(35.0, 34.0, 378.0, 210.0),
+            text="figure\x01label",
+            avg_font_size=8.0,
+            block_index=0,
+        )
+        page_dict = {
+            "blocks": [
+                {
+                    "type": 0,
+                    "bbox": block.bbox,
+                    "lines": [{"spans": [{"text": "figure\x01label"}]}],
+                }
+            ]
+        }
+
+        _clean_page_artifacts(
+            page,
+            [block],
+            page_dict,
+            protected_bboxes=[(30.0, 30.0, 380.0, 215.0)],
+        )
+
+        page.add_redact_annot.assert_not_called()
+        page.apply_redactions.assert_not_called()
 
     def test_fallback_redaction_when_kwargs_unsupported(self):
         """Falls back to apply_redactions() when kwargs are not supported."""
@@ -1454,6 +1486,30 @@ class TestGetImageBboxes(unittest.TestCase):
         page.get_image_bbox.side_effect = ValueError("no image")
         result = _get_image_bboxes(page)
         self.assertEqual(result, [])
+
+
+class TestGetVisualBboxes(unittest.TestCase):
+    """Regression coverage for vector-heavy academic figures."""
+
+    def test_detects_gears_page_five_vector_figure(self):
+        from pathlib import Path
+
+        import fitz
+
+        from app.services.layout_fix import _get_visual_bboxes
+
+        fixture = Path(__file__).parent / "fixtures" / "gears_p5_structure.pdf"
+        with fitz.open(fixture) as doc:
+            page = doc[0]
+            regions = _get_visual_bboxes(page, page.get_text("dict"))
+
+        self.assertTrue(
+            any(
+                x0 <= 40 and y0 <= 40 and x1 >= 370 and y1 >= 200
+                for x0, y0, x1, y1 in regions
+            ),
+            regions,
+        )
 
 
 class TestBlockOverlapsImage(unittest.TestCase):

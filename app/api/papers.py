@@ -45,7 +45,6 @@ from app.services.translator import (
     TranslationConfig,
     TranslationResult,
     sanitize_error,
-    translate_pdf_sync,
 )
 
 # Limit concurrent translations to prevent resource exhaustion
@@ -78,6 +77,9 @@ _MAX_NOTES_LEN = 10_000
 _MAX_SEARCH_LEN = 200
 _PROGRESS_THROTTLE = 0.01
 _PROGRESS_LOG_STEP = 10
+_TRANSLATION_PROGRESS_END = 0.88
+_QA_PROGRESS_START = 0.89
+_QA_PROGRESS_END = 0.99
 _VALID_QA_MODES = {"single", "iterative"}
 _VALID_OCR_MODES = {"off", "auto", "force"}
 _ETA_RE = re.compile(
@@ -1515,10 +1517,18 @@ async def _do_translate(
     _set_translation_stage(paper_id, loop, "解析 PDF")
 
     # Phase 2: Run translation (no DB session held)
-    on_progress = _create_progress_handler(paper_id, loop, job_id=job_id)
-
-    # Phase 2: Run translation (no DB session held)
-    on_progress = _create_progress_handler(paper_id, loop, job_id=job_id)
+    qa_eta_seconds = _estimate_post_translation_seconds(
+        paper.page_count,
+        qa_mode=qa_mode,
+        qa_max_passes=qa_max_passes,
+    )
+    on_progress = _create_progress_handler(
+        paper_id,
+        loop,
+        job_id=job_id,
+        progress_end=_TRANSLATION_PROGRESS_END,
+        postprocess_eta_seconds=qa_eta_seconds,
+    )
 
     # Self-healing: when QA only flags untranslated blocks (supplier echoed the
     # source or fell back to it), run one more full pass. Cached blocks resolve
@@ -1574,6 +1584,7 @@ async def _do_translate(
                     qa_mode=qa_mode,
                     max_passes=qa_max_passes,
                     job_id=job_id,
+                    estimated_seconds=qa_eta_seconds,
                 )
             except TranslationCancelledError:
                 await _finalize_cancelled_translation(
@@ -1703,6 +1714,7 @@ def _run_post_translation_qa(
     qa_mode: str = "single",
     max_passes: int = 4,
     job_id: str | None = None,
+    estimated_seconds: int | None = None,
 ) -> list:
     """Run layout/translation QA.
 
@@ -1713,12 +1725,18 @@ def _run_post_translation_qa(
     if mono_path is None:
         return []
     try:
-        from pdf_zh_translator.pdf_layout import verify_translation_issues
 
         if _is_cancel_requested(paper_id):
             raise TranslationCancelledError("Translation cancelled by user")
         _append_log(paper_id, loop, "正在检查译文和版面")
-        _set_translation_stage(paper_id, loop, "译后检查", job_id=job_id)
+        _set_translation_stage(
+            paper_id,
+            loop,
+            "译后检查",
+            progress=_QA_PROGRESS_START,
+            eta_seconds=estimated_seconds,
+            job_id=job_id,
+        )
         _record_terminology_candidates(paper_id, loop, input_path)
         _audit_terminology_usage(paper_id, loop, input_path, mono_path)
         passes = max(1, max_passes if qa_mode == "iterative" else 1)
@@ -1729,10 +1747,46 @@ def _run_post_translation_qa(
         for pass_index in range(1, passes + 1):
             if _is_cancel_requested(paper_id):
                 raise TranslationCancelledError("Translation cancelled by user")
-            _set_translation_stage(paper_id, loop, f"译后检查 {pass_index}/{passes}", job_id=job_id)
+            pass_start = _QA_PROGRESS_START + (
+                (_QA_PROGRESS_END - _QA_PROGRESS_START) * (pass_index - 1) / passes
+            )
+            pass_end = _QA_PROGRESS_START + (
+                (_QA_PROGRESS_END - _QA_PROGRESS_START) * pass_index / passes
+            )
+            pass_span = pass_end - pass_start
+
+            def update_qa_stage(stage: str, fraction: float) -> None:
+                progress = pass_start + pass_span * max(0.0, min(1.0, fraction))
+                eta = None
+                if estimated_seconds is not None:
+                    remaining_ratio = max(
+                        0.0,
+                        (_QA_PROGRESS_END - progress)
+                        / (_QA_PROGRESS_END - _QA_PROGRESS_START),
+                    )
+                    eta = max(1, round(estimated_seconds * remaining_ratio))
+                _set_translation_stage(
+                    paper_id,
+                    loop,
+                    stage,
+                    progress=progress,
+                    eta_seconds=eta,
+                    job_id=job_id,
+                )
+
+            update_qa_stage(f"译后检查 {pass_index}/{passes}", 0.05)
             issues = _verify_translation_isolated(input_path, mono_path)
             passes_run += 1
+            update_qa_stage(f"译后检查 {pass_index}/{passes}", 0.4)
             if not issues:
+                _set_translation_stage(
+                    paper_id,
+                    loop,
+                    "质检通过",
+                    progress=_QA_PROGRESS_END,
+                    eta_seconds=0,
+                    job_id=job_id,
+                )
                 pass_history.append(_qa_pass_summary(pass_index, issues))
                 _append_log(paper_id, loop, f"译文检查通过 (第 {pass_index} 轮)")
                 _write_qa_report(
@@ -1757,7 +1811,7 @@ def _run_post_translation_qa(
             if not _has_fixable_layout_issue(issues):
                 pass_history.append(_qa_pass_summary(pass_index, issues))
                 break
-            _set_translation_stage(paper_id, loop, "版面修复", job_id=job_id)
+            update_qa_stage("版面修复", 0.58)
             before_repair_issues = list(issues)
             snapshot = _snapshot_translated_outputs(trans_result)
             try:
@@ -1772,9 +1826,10 @@ def _run_post_translation_qa(
             if not fixed:
                 break
             _append_log(paper_id, loop, "检测到可修复版面问题，已自动执行一次版面修复")
-            _set_translation_stage(paper_id, loop, "复查版面", job_id=job_id)
+            update_qa_stage("复查版面", 0.78)
             issues = _verify_translation_isolated(input_path, mono_path)
             passes_run += 1
+            update_qa_stage("复查版面", 0.95)
             if _qa_issue_score(issues) > _qa_issue_score(before_repair_issues):
                 _restore_translated_outputs(snapshot)
                 issues = before_repair_issues
@@ -1783,6 +1838,14 @@ def _run_post_translation_qa(
                 break
             pass_history.append(_qa_pass_summary(passes_run, issues))
             if not issues:
+                _set_translation_stage(
+                    paper_id,
+                    loop,
+                    "质检通过",
+                    progress=_QA_PROGRESS_END,
+                    eta_seconds=0,
+                    job_id=job_id,
+                )
                 _append_log(paper_id, loop, f"译文检查通过 (第 {passes_run} 轮)")
                 _write_qa_report(
                     trans_result,
@@ -2094,6 +2157,7 @@ def _set_translation_stage(
     loop: asyncio.AbstractEventLoop,
     stage: str,
     *,
+    progress: float | None = None,
     eta_seconds: int | None = None,
     job_id: str | None = None,
 ) -> None:
@@ -2108,15 +2172,26 @@ def _set_translation_stage(
         from app.core.database import async_session
 
         async with async_session() as p_db:
+            values: dict[str, object] = {
+                "translation_stage": stage,
+                "translation_eta_seconds": eta_seconds,
+            }
+            if progress is not None:
+                values["translation_progress"] = max(0.0, min(1.0, progress))
             await p_db.execute(
                 update(Paper)
                 .where(
                     Paper.id == paper_id,
                     Paper.translation_status == TranslationStatus.TRANSLATING.value,
                 )
-                .values(translation_stage=stage, translation_eta_seconds=eta_seconds),
+                .values(**values),
             )
-            await _update_translation_job(p_db, job_id, heartbeat=True)
+            await _update_translation_job(
+                p_db,
+                job_id,
+                progress=progress,
+                heartbeat=True,
+            )
             await p_db.commit()
 
     with contextlib.suppress(Exception):
@@ -2206,11 +2281,29 @@ def _append_log(paper_id: str, loop: asyncio.AbstractEventLoop, message: str) ->
         asyncio.run_coroutine_threadsafe(_update(), loop)
 
 
+def _estimate_post_translation_seconds(
+    page_count: int,
+    *,
+    qa_mode: str,
+    qa_max_passes: int,
+) -> int:
+    """Estimate QA time from page count and the selected verification policy."""
+    pages = max(1, page_count) if isinstance(page_count, int) else 1
+    expected_passes = 1.0
+    if qa_mode == "iterative" and qa_max_passes > 1:
+        expected_passes = 1.35
+    estimate = round((10.0 + pages * 1.4) * expected_passes)
+    return max(15, min(180, estimate))
+
+
 def _create_progress_handler(
     paper_id: str,
     loop: asyncio.AbstractEventLoop,
     *,
     job_id: str | None = None,
+    progress_start: float = 0.0,
+    progress_end: float = 1.0,
+    postprocess_eta_seconds: int = 0,
 ) -> Callable:
     """Create a progress callback that updates the database."""
     _last_pct: list[float] = [0.0]
@@ -2225,10 +2318,12 @@ def _create_progress_handler(
             _clear_cancel_requested(paper_id)
             raise TranslationCancelledError("Translation cancelled by user")
 
+        pct = max(0.0, min(1.0, pct))
         if pct - _last_pct[0] < _PROGRESS_THROTTLE and pct < 1.0:
             return
         _last_pct[0] = pct
         pct_display = int(pct * 100)
+        overall_pct = progress_start + (progress_end - progress_start) * pct
         now = time.monotonic()
         eta_seconds: int | None = None
         eta_text = ""
@@ -2240,7 +2335,10 @@ def _create_progress_handler(
                 last_sample=_last_eta_sample,
                 smoothed_rate=_smoothed_rate,
             )
+            eta_seconds += max(0, postprocess_eta_seconds)
             eta_text = f"，预计剩余 {_format_duration(eta_seconds)}"
+        elif pct >= 1.0 and postprocess_eta_seconds > 0:
+            eta_seconds = postprocess_eta_seconds
 
         async def _update():
             from app.core.database import async_session
@@ -2253,7 +2351,7 @@ def _create_progress_handler(
                         Paper.translation_status == TranslationStatus.TRANSLATING.value,
                     )
                     .values(
-                        translation_progress=pct,
+                        translation_progress=overall_pct,
                         translation_stage="翻译中",
                         translation_eta_seconds=eta_seconds,
                     ),
@@ -2261,7 +2359,7 @@ def _create_progress_handler(
                 await _update_translation_job(
                     p_db,
                     job_id,
-                    progress=pct,
+                    progress=overall_pct,
                     heartbeat=True,
                 )
                 await p_db.commit()

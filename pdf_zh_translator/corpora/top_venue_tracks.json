@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026.06-track-seed",
+    "version": "2026.08-track-seed",
     "source": "curated top AI conference track terminology seed",
     "description": "Track-level terminology for NeurIPS, ICML, ICLR, CVPR, ACL, ML systems, and AI agents."
   },
@@ -135,6 +135,11 @@
     "Condition Number": "条件数",
     "Coordinate Descent": "坐标下降",
     "Mirror Descent": "镜像下降",
+    "Kantorovich": "康托罗维奇（Kantorovich）",
+    "Kantorovich Formulation": "康托罗维奇形式（Kantorovich Formulation）",
+    "Optimal Transport": "最优传输",
+    "Entropic Optimal Transport": "熵正则化最优传输",
+    "Minimum-Cost Flow": "最小费用流",
     "Primal-Dual Method": "原始-对偶方法",
     "Alternating Direction Method of Multipliers": "交替方向乘子法",
     "Bilevel Optimization": "双层优化",
