@@ -80,8 +80,10 @@ GOLDEN_PAGES = [
     "otf_p19_formula42.pdf",
     # Real structural regressions from OTF and GEARS.
     "otf_p3_structure.pdf",
+    "otf_p4_runin_formula.pdf",
     "otf_p8_typography.pdf",
     "gears_p2_paragraphs.pdf",
+    "gears_p5_structure.pdf",
     "gears_p6_inline_formulas.pdf",
     "gears_p8_untranslated.pdf",
 ]
@@ -134,6 +136,38 @@ def test_otf_academic_labels_and_split_section_headings_keep_structure():
     )
 
 
+def test_otf_formula_paragraph_translates_all_prose():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("otf_p4_runin_formula.pdf")
+    texts = [" ".join(strip_sentinels(block.text).split()) for block in blocks]
+
+    formulation = next(
+        block for block, text in zip(blocks, texts) if text.startswith("Formulation of OFT")
+    )
+    formulation_text = " ".join(strip_sentinels(formulation.text).split())
+    assert "are two measures on the graph" in formulation_text
+    assert "β" in formulation_text
+    assert formulation.bold_prefix
+
+
+def test_otf_runin_heading_starts_a_new_translation_unit():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("otf_p4_runin_formula.pdf")
+    texts = [" ".join(strip_sentinels(block.text).split()) for block in blocks]
+
+    exact = next(
+        block for block, text in zip(blocks, texts) if text.startswith("Exact Solving for OFT")
+    )
+    assert exact.bold_prefix
+    assert all(
+        "Exact Solving for OFT" not in text
+        for text in texts
+        if not text.startswith("Exact Solving for OFT")
+    )
+
+
 def test_otf_runin_labels_keep_body_size_and_method_bold_terms():
     blocks = _unit_blocks("otf_p8_typography.pdf")
     texts = [
@@ -182,14 +216,16 @@ def test_gears_stage_caption_and_architecture_keep_structure():
         for block in blocks
     ]
 
-    assert any(
-        block.block_type == "caption" and text.startswith("Fig. 1")
-        for block, text in zip(blocks, texts)
+    caption = next(
+        block for block, text in zip(blocks, texts) if text.startswith("Fig. 1")
     )
-    assert any(
-        block.block_type == "heading" and text == "Stage 1:"
-        for block, text in zip(blocks, texts)
+    caption_text = next(
+        text for block, text in zip(blocks, texts) if block is caption
     )
+    assert caption.block_type == "caption"
+    assert all(label in caption_text for label in ("Stage 1", "Stage 2", "Stage 3"))
+    assert {"Stage 1", "Stage 2", "Stage 3"}.issubset(caption.bold_terms)
+    assert not any(text == "Stage 1:" for text in texts)
     architecture = next(
         block for block, text in zip(blocks, texts) if text.startswith("Architecture.")
     )

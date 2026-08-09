@@ -7800,6 +7800,7 @@ def _math_line_formula_prose_suffix(line: _LineRec) -> Optional[_LineRec]:
         )
         cue_suffix = (
             prefix_has_math
+            and not prefix_has_prose_words
             and cue_match is not None
             and len(prose_words) >= 2
             and tail_has_math
@@ -8014,6 +8015,9 @@ def segments_from_record(
 
     segments: List[TextBlock] = []
     table_record = record_is_table(record)
+    caption_record = bool(
+        _CAPTION_RE.match(" ".join(strip_sentinels(record.bare_text()).split()).lstrip())
+    )
     if table_record:
         prose_equation_segments = _prose_wrapped_numbered_equation_segments(
             page_index,
@@ -8215,7 +8219,7 @@ def segments_from_record(
             compact_line = " ".join(strip_sentinels(line.text).split()).strip()
             if _CAPTION_RE.match(compact_line):
                 flush_current()
-        if not equation_record:
+        if not equation_record and not caption_record:
             split = split_bold_leadin_line(line)
             if split is not None:
                 flush_current()
@@ -9085,6 +9089,10 @@ def can_merge_blocks(
     nxt: TextBlock,
     graphic_regions: Sequence[BBox] = (),
 ) -> bool:
+    if nxt.bold_prefix:
+        # A run-in heading starts a new structural unit. Formula-continuation
+        # heuristics must not pull it backward into the preceding paragraph.
+        return False
     if _looks_like_academic_formula_statement_pair(prev, nxt):
         return True
     if _looks_like_caption_continuation_pair(prev, nxt):
