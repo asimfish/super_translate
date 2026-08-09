@@ -1,6 +1,16 @@
 """Regression tests for progress ETA and reader UI wiring."""
 
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
+from urllib.request import urlopen
+
+import pytest
+from playwright.sync_api import sync_playwright
 
 from app.api.papers import _format_duration
 
@@ -32,6 +42,8 @@ def test_reader_sync_scroll_does_not_lock_source_panel_during_mirror_update():
     assert "scrollSyncTargetPanel === panel" in js
     assert "scrollSyncTargetPanel = otherPanel;" in js
     assert "scrollSyncTargetPanel = null;" in js
+    assert "let scrollRafIds = { original: null, translated: null };" in js
+    assert "if (scrollRafIds[panel]) return;" in js
     assert "let scrollSyncing = false;" not in js
     assert "scrollSyncing = true;" not in js
     assert "|| scrollSyncing" not in js
@@ -71,6 +83,282 @@ def test_reader_image_mode_builds_scroll_metrics_and_can_drive_sync():
     assert "!pdfDocs[otherPanel] && !pageWrappers[otherPanel]?.length" in js
     assert "img.onload = () => {" in js
     assert "requestAnimationFrame(() => refreshImagePageMetrics(panel));" in js
+    assert "window.addEventListener('resize'" in js
+    assert "refreshImagePageMetrics('original')" not in js
+
+
+def _available_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _paper_payload(paper_id: str) -> dict:
+    translating = paper_id == "paper-a"
+    return {
+        "id": paper_id,
+        "title": f"Browser E2E {paper_id}",
+        "page_count": 19 if translating else 7,
+        "file_size": 1024,
+        "tags": [],
+        "translation_status": "translating" if translating else "completed",
+        "translation_progress": 0.42 if translating else 1.0,
+        "translation_stage": "翻译正文" if translating else "已完成",
+        "translation_eta": 80 if translating else None,
+        "translation_log": [],
+        "has_translated": True,
+        "has_dual": False,
+        "has_qa_report": False,
+        "created_at": "2026-08-10T00:00:00",
+    }
+
+
+def _scroll_panel_to(page, panel: str, page_index: int, fraction: float) -> None:
+    page.evaluate(
+        """([panel, pageIndex, fraction]) => {
+          const container = document.getElementById(`pdf-container-${panel}`);
+          const metric = pageMetrics[panel][pageIndex];
+          container.scrollTop = metric.top + metric.height * fraction;
+          container.dispatchEvent(new Event('scroll'));
+        }""",
+        [panel, page_index, fraction],
+    )
+
+
+def _panel_position(page, panel: str) -> dict:
+    return page.evaluate(
+        """panel => {
+          const container = document.getElementById(`pdf-container-${panel}`);
+          return pageScrollPosition(panel, container.scrollTop);
+        }""",
+        panel,
+    )
+
+
+@pytest.mark.e2e
+def test_reader_image_mode_sync_scroll_real_browser(tmp_path):
+    """Exercise bidirectional sync and listener/progress isolation in Chromium."""
+    port = _available_port()
+    base_url = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PAPER_CHINA_BASE_DIR": str(tmp_path / "server-data"),
+            "PAPER_CHINA_DB_PATH": "paper-china.db",
+            "PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE": "true",
+        }
+    )
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(f"{base_url}/health", timeout=1) as response:
+                if response.status == 200:
+                    break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        server.terminate()
+        raise AssertionError("E2E server did not become ready")
+
+    artifact_dir = Path(
+        os.environ.get("PAPER_CHINA_E2E_ARTIFACT_DIR", str(tmp_path / "artifacts"))
+    )
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with sync_playwright() as playwright:
+            chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            launch_options = {"headless": True}
+            if Path(chrome).is_file():
+                launch_options["executable_path"] = chrome
+            browser = playwright.chromium.launch(**launch_options)
+            context = browser.new_context(
+                viewport={"width": 1440, "height": 1000},
+                record_video_dir=str(artifact_dir),
+            )
+            page = context.new_page()
+            page.add_init_script(
+                "localStorage.setItem('paperChinaReaderMode', 'image');"
+            )
+
+            def route_api(route):
+                url = route.request.url
+                if "/preview/" in url:
+                    translated = "/translated/" in url
+                    height = 920 if translated else 800
+                    svg = (
+                        f'<svg xmlns="http://www.w3.org/2000/svg" width="600" '
+                        f'height="{height}"><rect width="100%" height="100%" fill="white"/>'
+                        '<text x="30" y="60" font-size="28">E2E PDF page</text></svg>'
+                    )
+                    route.fulfill(status=200, content_type="image/svg+xml", body=svg)
+                    return
+                if url.endswith("/api/stats"):
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps({"total_papers": 2, "completed_translations": 1}),
+                    )
+                    return
+                if "/api/papers/paper-" in url:
+                    paper_id = "paper-b" if "paper-b" in url else "paper-a"
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(_paper_payload(paper_id), ensure_ascii=False),
+                    )
+                    return
+                if "/api/papers" in url:
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "papers": [_paper_payload("paper-a"), _paper_payload("paper-b")],
+                                "total": 2,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                    return
+                route.continue_()
+
+            page.route("**/api/**", route_api)
+            page.goto(base_url, wait_until="domcontentloaded")
+            page.evaluate("openReader('paper-a')")
+            page.wait_for_function(
+                "pageWrappers.original.length === 19 && pageWrappers.translated.length === 19"
+            )
+            page.evaluate(
+                """async () => {
+                  await Promise.all(['original', 'translated'].flatMap(panel =>
+                    pageWrappers[panel].map(wrapper =>
+                      loadPreviewImage(panel, wrapper, currentLoadId))));
+                  await new Promise(resolve => requestAnimationFrame(() =>
+                    requestAnimationFrame(resolve)));
+                  refreshImagePageMetrics('original');
+                  refreshImagePageMetrics('translated');
+                }"""
+            )
+            page.wait_for_function(
+                "pageMetrics.original.length === 19 && pageMetrics.translated.length === 19"
+            )
+            page.wait_for_function(
+                "!document.getElementById('translation-progress').classList.contains('hidden')"
+            )
+
+            for source_panel, target_panel, page_index, fraction in (
+                ("original", "translated", 3, 0.40),
+                ("translated", "original", 15, 0.35),
+                ("original", "translated", 0, 0.0),
+                ("translated", "original", 18, 0.95),
+            ):
+                _scroll_panel_to(page, source_panel, page_index, fraction)
+                page.wait_for_timeout(180)
+                source_position = _panel_position(page, source_panel)
+                target_position = _panel_position(page, target_panel)
+                diagnostics = page.evaluate(
+                    """([sourcePanel, targetPanel, pageIndex, fraction]) => {
+                      const source = document.getElementById(`pdf-container-${sourcePanel}`);
+                      const target = document.getElementById(`pdf-container-${targetPanel}`);
+                      return {
+                        syncScrollEnabled,
+                        scrollSyncTargetPanel,
+                        scrollRafIds,
+                        sourceTop: source.scrollTop,
+                        targetTop: target.scrollTop,
+                        targetExpected: targetScrollTop(targetPanel, pageIndex, fraction),
+                        sourceHeight: source.clientHeight,
+                        targetHeight: target.clientHeight,
+                        targetHidden: target.classList.contains('hidden'),
+                      };
+                    }""",
+                    [source_panel, target_panel, page_index, fraction],
+                )
+                assert target_position["pageIdx"] == source_position["pageIdx"], diagnostics
+                assert abs(target_position["fraction"] - source_position["fraction"]) <= 0.05
+
+            page.screenshot(path=artifact_dir / "sync-page16.png", full_page=True)
+            page.set_viewport_size({"width": 1100, "height": 820})
+            page.wait_for_timeout(350)
+            dimensions = page.evaluate(
+                """() => ['original', 'translated'].map(panel => ({
+                  metric: pageMetrics[panel][0].height,
+                  actual: pageWrappers[panel][0].offsetHeight,
+                }))"""
+            )
+            assert all(abs(item["metric"] - item["actual"]) <= 1 for item in dimensions)
+
+            page.click("#btn-sync-scroll")
+            frozen = page.evaluate(
+                "document.getElementById('pdf-container-translated').scrollTop"
+            )
+            _scroll_panel_to(page, "original", 2, 0.25)
+            page.wait_for_timeout(180)
+            assert abs(
+                page.evaluate(
+                    "document.getElementById('pdf-container-translated').scrollTop"
+                )
+                - frozen
+            ) <= 1
+            page.click("#btn-sync-scroll")
+            _scroll_panel_to(page, "original", 4, 0.5)
+            page.wait_for_timeout(180)
+            assert _panel_position(page, "translated")["pageIdx"] == 4
+
+            cdp = context.new_cdp_session(page)
+
+            def scroll_listener_count() -> int:
+                result = cdp.send(
+                    "Runtime.evaluate",
+                    {
+                        "expression": (
+                            "getEventListeners(document.getElementById("
+                            "'pdf-container-original')).scroll.length"
+                        ),
+                        "includeCommandLineAPI": True,
+                        "returnByValue": True,
+                    },
+                )
+                return int(result["result"]["value"])
+
+            assert scroll_listener_count() == 1
+            old_generation = page.evaluate("translationPollGeneration")
+            page.evaluate("openReader('paper-b')")
+            page.wait_for_function(
+                "currentPaper?.id === 'paper-b' && pageWrappers.original.length === 7"
+            )
+            page.wait_for_function("pageWrappers.translated.length === 7")
+            assert scroll_listener_count() == 1
+            assert page.evaluate("translationPollGeneration") > old_generation
+            assert page.evaluate("translationPollPaperId") is None
+            assert page.locator("#translation-progress").evaluate(
+                "element => element.classList.contains('hidden')"
+            )
+            page.screenshot(path=artifact_dir / "sync-paper-switch.png", full_page=True)
+            context.close()
+            browser.close()
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
 
 
 def test_reader_pdf_open_renders_first_page_before_background_work():

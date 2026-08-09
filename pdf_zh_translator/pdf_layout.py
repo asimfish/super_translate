@@ -476,16 +476,16 @@ def translate_pdf(
     # Set block types for context-aware translation prompts
     if hasattr(translator, "block_types"):
         translator.block_types = block_types
-    translations = list(translator.translate_batch(protected_sources))
-    if len(translations) != len(units):
+    translations, request_count, response_count = _translate_unique_sources(
+        translator,
+        protected_sources,
+        block_types,
+    )
+    if response_count != request_count:
         warnings.append(
             "Translator returned %d block(s) for %d source block(s)"
-            % (len(translations), len(units))
+            % (response_count, request_count)
         )
-        if len(translations) < len(units):
-            translations.extend(protected_sources[len(translations) :])
-        else:
-            translations = translations[: len(units)]
 
     cleaned_results = [
         _restore_unit_translation(translated_text, mapping, block)
@@ -503,7 +503,11 @@ def translate_pdf(
         invalidate = getattr(translator, "invalidate", None)
         if callable(invalidate):
             invalidate(retry_sources)
-        retry_outputs = list(translator.translate_batch(retry_sources))
+        retry_outputs, _, _ = _translate_unique_sources(
+            translator,
+            retry_sources,
+            [units[index][0].block_type for index in retry_indexes],
+        )
         for index, retry_text in zip(retry_indexes, retry_outputs):
             retry_cleaned, retry_missing = _restore_unit_translation(
                 retry_text,
@@ -536,7 +540,6 @@ def translate_pdf(
             continue
         page = document[page_index]
         page_width = page.rect.width
-        _clear_table_caption_rules(page, candidate_items)
         page_columns = detect_columns([block for block, _ in candidate_items])
         centered_flags = detect_centered_blocks(
             [block for block, _ in candidate_items], page_width
@@ -608,6 +611,14 @@ def translate_pdf(
                 centered = False
             block = expand_heading_bbox(block)
             requested_size = requested_translation_font_size(block, min_font_size, font_scale)
+            block = _expand_single_line_list_bbox(
+                block,
+                translated_text,
+                [candidate for candidate, _ in candidate_items],
+                font_pack,
+                requested_size,
+                margin,
+            )
             # Float-aware clip: keep reflowed CJK body text out of a right-column
             # figure/table instead of painting over it. Only applied when the
             # clipped box still fits the text, so it never makes layout worse.
@@ -642,7 +653,19 @@ def translate_pdf(
             page_items.append((block, translated_text))
             item_centered_flags.append(centered)
 
+        _clear_table_caption_rules(
+            page,
+            page_items,
+            font_pack=font_pack,
+            min_font_size=min_font_size,
+            font_scale=font_scale,
+            margin=margin,
+            centered_flags=item_centered_flags,
+        )
+        source_links = _page_links_for_restore(page)
         redact_original_text(page, [block for block, _ in page_items], margin, page_gutter)
+        page = document.reload_page(page)
+        _restore_removed_page_links(page, source_links)
         # Register after redactions: apply_redactions rebuilds page resources
         # and would drop a font registered beforehand.
         register_font_pack(page, font_pack)
@@ -676,6 +699,102 @@ def translate_pdf(
     document.close()
     source_document.close()
     return TranslationReport(input_pdf, output_pdf, page_count, len(units), skipped, warnings)
+
+
+def _translate_unique_sources(
+    translator: object,
+    sources: Sequence[str],
+    block_types: Sequence[str],
+) -> Tuple[List[str], int, int]:
+    """Translate identical source/role pairs once and reuse the result."""
+    unique_sources: List[str] = []
+    unique_types: List[str] = []
+    indexes: Dict[Tuple[str, str], int] = {}
+    source_indexes: List[int] = []
+    for source, block_type in zip(sources, block_types):
+        key = (source, block_type)
+        if key not in indexes:
+            indexes[key] = len(unique_sources)
+            unique_sources.append(source)
+            unique_types.append(block_type)
+        source_indexes.append(indexes[key])
+
+    if hasattr(translator, "block_types"):
+        translator.block_types = unique_types
+    raw_outputs = list(translator.translate_batch(unique_sources))
+    response_count = len(raw_outputs)
+    if len(raw_outputs) < len(unique_sources):
+        raw_outputs.extend(unique_sources[len(raw_outputs) :])
+    elif len(raw_outputs) > len(unique_sources):
+        raw_outputs = raw_outputs[: len(unique_sources)]
+    return (
+        [raw_outputs[index] for index in source_indexes],
+        len(unique_sources),
+        response_count,
+    )
+
+
+def _page_links_for_restore(page: object) -> List[dict]:
+    """Snapshot interactive links before redaction removes overlapping annotations."""
+    try:
+        return [dict(link) for link in page.get_links()]
+    except Exception:
+        return []
+
+
+def _link_identity(link: dict) -> Tuple[object, ...]:
+    source_rect = link.get("from")
+    source = (
+        tuple(round(float(value), 2) for value in source_rect)
+        if source_rect is not None
+        else ()
+    )
+    target_point = link.get("to")
+    target = (
+        tuple(round(float(value), 2) for value in target_point)
+        if target_point is not None
+        else ()
+    )
+    return (
+        int(link.get("kind", 0)),
+        source,
+        int(link.get("page", -1)),
+        target,
+        link.get("uri", ""),
+        link.get("file", ""),
+        link.get("nameddest", link.get("name", "")),
+    )
+
+
+def _restore_removed_page_links(page: object, source_links: Sequence[dict]) -> None:
+    """Reinsert only link annotations deleted by text redaction."""
+    try:
+        current = {_link_identity(link) for link in page.get_links()}
+    except Exception:
+        current = set()
+    for source_link in source_links:
+        identity = _link_identity(source_link)
+        if identity in current:
+            continue
+        link = {
+            key: value
+            for key, value in source_link.items()
+            if key not in {"xref", "id"}
+        }
+        if link.get("kind") == 4:
+            named_destination = link.pop("nameddest", "")
+            if int(link.get("page", -1)) >= 0:
+                link["kind"] = 1
+            else:
+                link["name"] = named_destination
+                link.pop("page", None)
+                link.pop("to", None)
+                link.pop("zoom", None)
+        try:
+            page.insert_link(link)
+            current.add(identity)
+        except Exception:
+            continue
 
 
 _FONT_SUBSET_MIN_BYTES = 2_000_000
@@ -1095,7 +1214,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             )
         unit_plain = " ".join(strip_sentinels(unit_block.text).split()).strip()
         if (
-            unit_block.block_type == "heading"
+            unit_block.block_type in {"heading", "run_in_heading"}
             and len(unit_plain) <= 90
             and unit_plain.endswith((":", "："))
             and any(
@@ -1160,6 +1279,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
 
         # Count English-only text blocks in translated PDF
         untranslated_examples: List[str] = []
+        untranslated_coordinates: List[BBox] = []
         untranslated_caption_examples: List[str] = []
         untranslated_formula_examples: List[str] = []
         preserved_changed_examples: List[str] = []
@@ -1230,6 +1350,10 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 ):
                     continue
                 untranslated_examples.append(" ".join(text.split())[:80])
+                if block.get("bbox"):
+                    untranslated_coordinates.append(
+                        tuple(float(value) for value in block["bbox"])
+                    )
 
         for source_block in translation_units_by_page.get(page_idx, []):
             translated_unit_text = _text_overlapping_region(
@@ -1253,8 +1377,15 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             example = " ".join(translated_unit_text.split())[:80]
             if example and example not in untranslated_examples:
                 untranslated_examples.append(example)
+                untranslated_coordinates.append(source_block.bbox)
 
         if untranslated_examples:
+            location = untranslated_coordinates[0] if untranslated_coordinates else None
+            location_text = (
+                f" at x={location[0]:.1f}, y={location[1]:.1f}"
+                if location is not None
+                else ""
+            )
             issues.append(
                 TranslationIssue(
                     page=page_idx + 1,
@@ -1262,6 +1393,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     message=(
                         f"Page {page_idx + 1}: {len(untranslated_examples)} block(s) "
                         "look like untranslated English outside references/formulas"
+                        f"{location_text}; example: {untranslated_examples[0]}"
                     ),
                     severity="error",
                 )
@@ -1352,6 +1484,27 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 original_blocks=orig_blocks,
                 translated_blocks=trans_blocks,
                 visual_regions=visual_regions,
+            )
+        )
+        issues.extend(
+            _font_role_consistency_issues(
+                translation_units_by_page.get(page_idx, []),
+                trans_page,
+                page_idx + 1,
+            )
+        )
+        issues.extend(
+            _raster_ink_overlap_issues(
+                orig_page,
+                trans_page,
+                page_idx + 1,
+            )
+        )
+        issues.extend(
+            _table_caption_clearance_issues(
+                orig_page,
+                trans_page,
+                page_idx + 1,
             )
         )
 
@@ -2414,6 +2567,465 @@ def _block_overlaps_preserved_regions(
     area = max(1.0, bbox_area(block_bbox))
     total_overlap = sum(bbox_intersection_area(block_bbox, region) for region in regions)
     return total_overlap / area >= min_total_overlap
+
+
+def _span_uses_bold_weight(span: dict) -> bool:
+    font = str(span.get("font", ""))
+    return bool(
+        int(span.get("flags", 0)) & FLAG_BOLD
+        or _BOLD_FONT_RE.search(font)
+        or re.search(r"(?:^|[-_])W[6-9](?:$|[-_])", font, re.IGNORECASE)
+    )
+
+
+def _page_cjk_spans(page: object) -> List[dict]:
+    return [
+        span
+        for block in page.get_text("dict").get("blocks", [])
+        if block.get("type") == 0
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+        if re.search(r"[\u3400-\u9fff]", span.get("text", ""))
+        and len(span.get("bbox", ())) == 4
+    ]
+
+
+def _spans_for_source_role(spans: Sequence[dict], block: TextBlock) -> List[dict]:
+    region = expand_bbox(block.bbox, 2.0)
+    output: List[dict] = []
+    for span in spans:
+        bbox = tuple(float(value) for value in span["bbox"])
+        center_x = (bbox[0] + bbox[2]) / 2.0
+        center_y = (bbox[1] + bbox[3]) / 2.0
+        if bbox_contains_point(region, center_x, center_y):
+            output.append(span)
+    return output
+
+
+def _font_role_consistency_issues(
+    source_blocks: Sequence[TextBlock],
+    translated_page: object,
+    page_number: int,
+) -> List[TranslationIssue]:
+    """Audit translated CJK size, heading role, and run-in bold scope."""
+    cjk_spans = _page_cjk_spans(translated_page)
+    if not cjk_spans:
+        return []
+
+    assignments: List[List[dict]] = [[] for _ in source_blocks]
+    for span in cjk_spans:
+        span_bbox = tuple(float(value) for value in span["bbox"])
+        center_x = (span_bbox[0] + span_bbox[2]) / 2.0
+        center_y = (span_bbox[1] + span_bbox[3]) / 2.0
+        candidates: List[Tuple[int, float, int]] = []
+        for index, block in enumerate(source_blocks):
+            in_line = any(
+                bbox_contains_point(expand_bbox(line_bbox, 2.0), center_x, center_y)
+                for line_bbox in block.source_line_bboxes
+            )
+            in_block = bbox_contains_point(
+                expand_bbox(block.bbox, 2.0),
+                center_x,
+                center_y,
+            )
+            if in_line or in_block:
+                candidates.append((0 if in_line else 1, bbox_area(block.bbox), index))
+        if candidates:
+            assignments[min(candidates)[2]].append(span)
+
+    issues: List[TranslationIssue] = []
+    ordinary_body_sizes: List[float] = []
+    source_body_sizes = [
+        block.font_size
+        for block in source_blocks
+        if block.block_type == "body" and not block.bold
+    ]
+    run_in_blocks = [
+        block for block in source_blocks if block.block_type == "run_in_heading"
+    ]
+    for block, role_spans in zip(source_blocks, assignments):
+        if not role_spans:
+            continue
+        if block.block_type in {"heading", "run_in_heading"}:
+            if not any(_span_uses_bold_weight(span) for span in role_spans):
+                bbox = role_spans[0]["bbox"]
+                issues.append(
+                    TranslationIssue(
+                        page=page_number,
+                        code="font_role_heading_mismatch",
+                        message=(
+                            f"Page {page_number}: heading role lost bold weight at "
+                            f"x={bbox[0]:.1f}, y={bbox[1]:.1f}"
+                        ),
+                        severity="error",
+                    )
+                )
+            continue
+        if block.block_type != "body":
+            continue
+        has_run_in_predecessor = any(
+            -1.0 <= block.bbox[1] - heading.bbox[3] <= 4.0
+            and min(block.bbox[2], heading.bbox[2])
+            - max(block.bbox[0], heading.bbox[0])
+            > 0.0
+            for heading in run_in_blocks
+        )
+        unexpected_bold = [
+            span for span in role_spans if _span_uses_bold_weight(span)
+        ]
+        if unexpected_bold and not block.bold and has_run_in_predecessor:
+            bbox = unexpected_bold[0]["bbox"]
+            issues.append(
+                TranslationIssue(
+                    page=page_number,
+                    code="font_role_bold_spill",
+                    message=(
+                        f"Page {page_number}: run-in heading bold weight spills into body at "
+                        f"x={bbox[0]:.1f}, y={bbox[1]:.1f}"
+                    ),
+                    severity="error",
+                )
+            )
+        if (
+            block.source_lines != 1
+            or block.formula_anchors
+            or block.keepout_bboxes
+            or block.source_math_bboxes
+        ):
+            continue
+        size_counts: Dict[float, int] = {}
+        for span in role_spans:
+            rounded = round(float(span["size"]), 2)
+            size_counts[rounded] = size_counts.get(rounded, 0) + 1
+        dominant_size = max(size_counts, key=lambda size: (size_counts[size], size))
+        ordinary_body_sizes.extend(
+            float(span["size"])
+            for span in role_spans
+            if abs(float(span["size"]) - dominant_size) <= 0.5
+        )
+        for span in role_spans:
+            size = float(span["size"])
+            if abs(size - dominant_size) <= 0.5:
+                continue
+            bbox = span["bbox"]
+            issues.append(
+                TranslationIssue(
+                    page=page_number,
+                    code="font_role_size_mismatch",
+                    message=(
+                        f"Page {page_number}: body CJK size {size:.2f}pt differs from role "
+                        f"median {dominant_size:.2f}pt at x={bbox[0]:.1f}, y={bbox[1]:.1f}"
+                    ),
+                    severity="error",
+                )
+            )
+            break
+
+    if ordinary_body_sizes and source_body_sizes:
+        body_size = statistics.median(ordinary_body_sizes)
+        source_body_size = statistics.median(source_body_sizes)
+        for block, role_spans in zip(source_blocks, assignments):
+            if block.block_type != "heading" or not role_spans:
+                continue
+            if block.font_size <= source_body_size + 0.5:
+                continue
+            heading_size = statistics.median(float(span["size"]) for span in role_spans)
+            if heading_size >= body_size + 0.3:
+                continue
+            bbox = role_spans[0]["bbox"]
+            issues.append(
+                TranslationIssue(
+                    page=page_number,
+                    code="font_role_heading_mismatch",
+                    message=(
+                        f"Page {page_number}: heading hierarchy collapsed to "
+                        f"{heading_size:.2f}pt body size at x={bbox[0]:.1f}, "
+                        f"y={bbox[1]:.1f}"
+                    ),
+                    severity="error",
+                )
+            )
+    return issues
+
+
+def _output_span_looks_formula(span: dict) -> bool:
+    if "char_flags" in span and int(span.get("char_flags", 0)) == 0:
+        # Selectable formula accessibility copies use render_mode=3. Their
+        # extraction bbox can overlap following text although they have no ink.
+        return False
+    text = " ".join(span.get("text", "").split())
+    if not text or re.search(r"[\u3400-\u9fff]", text):
+        return False
+    if MATH_FONT_RE.search(str(span.get("font", ""))):
+        return True
+    return bool(
+        looks_like_math(text)
+        or re.search(r"[=≤≥∑∏⊤⊙]", text)
+        and len(text.split()) <= 6
+    )
+
+
+def _raster_rect_has_ink(page: object, bbox: BBox, *, dpi: int = 180) -> bool:
+    import fitz
+
+    rect = fitz.Rect(bbox) & page.rect
+    if rect.width <= 0.2 or rect.height <= 0.2:
+        return False
+    pixmap = page.get_pixmap(clip=rect, dpi=dpi, colorspace=fitz.csGRAY, alpha=False)
+    samples = pixmap.samples
+    if not samples:
+        return False
+    dark = sum(sample < 220 for sample in samples)
+    return dark >= max(2, int(len(samples) * 0.015))
+
+
+def _bbox_intersection_rect(first: BBox, second: BBox) -> Optional[BBox]:
+    intersection = (
+        max(first[0], second[0]),
+        max(first[1], second[1]),
+        min(first[2], second[2]),
+        min(first[3], second[3]),
+    )
+    if intersection[2] <= intersection[0] or intersection[3] <= intersection[1]:
+        return None
+    return intersection
+
+
+def _raster_spans_share_ink_component(
+    page: object,
+    first: BBox,
+    second: BBox,
+    intersection: BBox,
+    *,
+    dpi: int = 240,
+) -> bool:
+    """Prove that two span regions meet in one visible ink component."""
+    import fitz
+
+    min_height = min(first[3] - first[1], second[3] - second[1])
+    min_width = min(first[2] - first[0], second[2] - second[0])
+    pad_x = max(2.0, min(8.0, min_width * 0.45))
+    pad_y = max(2.0, min(6.0, min_height * 0.45))
+    rect = fitz.Rect(
+        intersection[0] - pad_x,
+        intersection[1] - pad_y,
+        intersection[2] + pad_x,
+        intersection[3] + pad_y,
+    ) & page.rect
+    if rect.width <= 0.2 or rect.height <= 0.2:
+        return False
+    pixmap = page.get_pixmap(clip=rect, dpi=dpi, colorspace=fitz.csGRAY, alpha=False)
+    width = int(pixmap.width)
+    height = int(pixmap.height)
+    samples = pixmap.samples
+    if width <= 0 or height <= 0 or not samples:
+        return False
+
+    dark = bytearray(sample < 185 for sample in samples)
+    visited = bytearray(width * height)
+    scale_x = rect.width / width
+    scale_y = rect.height / height
+    for start in range(width * height):
+        if not dark[start] or visited[start]:
+            continue
+        stack = [start]
+        visited[start] = 1
+        first_only = False
+        second_only = False
+        shared = False
+        while stack:
+            pixel = stack.pop()
+            row, column = divmod(pixel, width)
+            x = rect.x0 + (column + 0.5) * scale_x
+            y = rect.y0 + (row + 0.5) * scale_y
+            in_first = first[0] <= x <= first[2] and first[1] <= y <= first[3]
+            in_second = second[0] <= x <= second[2] and second[1] <= y <= second[3]
+            first_only = first_only or (in_first and not in_second)
+            second_only = second_only or (in_second and not in_first)
+            shared = shared or (in_first and in_second)
+            for row_offset in (-1, 0, 1):
+                next_row = row + row_offset
+                if not 0 <= next_row < height:
+                    continue
+                for column_offset in (-1, 0, 1):
+                    if row_offset == 0 and column_offset == 0:
+                        continue
+                    next_column = column + column_offset
+                    if not 0 <= next_column < width:
+                        continue
+                    neighbor = next_row * width + next_column
+                    if dark[neighbor] and not visited[neighbor]:
+                        visited[neighbor] = 1
+                        stack.append(neighbor)
+        if first_only and second_only and shared:
+            return True
+
+    smaller = min(bbox_area(first), bbox_area(second))
+    overlap_ratio = bbox_area(intersection) / max(smaller, 1.0)
+    return overlap_ratio >= 0.55 and _raster_rect_has_ink(page, intersection, dpi=dpi)
+
+
+def _raster_ink_overlap_issues(
+    original_page: object,
+    translated_page: object,
+    page_number: int,
+) -> List[TranslationIssue]:
+    """Confirm formula/body and heading/body collisions against 180-dpi ink."""
+    del original_page
+    spans = [
+        span
+        for block in translated_page.get_text("dict").get("blocks", [])
+        if block.get("type") == 0
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+        if span.get("text", "").strip() and len(span.get("bbox", ())) == 4
+    ]
+    cjk_spans = [
+        span for span in spans if re.search(r"[\u3400-\u9fff]", span.get("text", ""))
+    ]
+    formula_spans = [span for span in spans if _output_span_looks_formula(span)]
+    for cjk_span in cjk_spans:
+        cjk_bbox = tuple(float(value) for value in cjk_span["bbox"])
+        for formula_span in formula_spans:
+            formula_bbox = tuple(float(value) for value in formula_span["bbox"])
+            intersection = _bbox_intersection_rect(cjk_bbox, formula_bbox)
+            if intersection is None:
+                continue
+            if intersection[3] - intersection[1] < 2.0:
+                # Sub-2pt intersections are font-bbox antialias fringes. At
+                # 240dpi they are not a reliable two-layer ink collision.
+                continue
+            smaller = min(bbox_area(cjk_bbox), bbox_area(formula_bbox))
+            if smaller <= 0.0 or bbox_area(intersection) / smaller < 0.20:
+                continue
+            if not _raster_spans_share_ink_component(
+                translated_page,
+                cjk_bbox,
+                formula_bbox,
+                intersection,
+            ):
+                continue
+            return [
+                TranslationIssue(
+                    page=page_number,
+                    code="raster_ink_overlap",
+                    message=(
+                        f"Page {page_number}: 180dpi formula-text ink overlap at "
+                        f"x={intersection[0]:.1f}, y={intersection[1]:.1f}"
+                    ),
+                    severity="error",
+                )
+            ]
+    return []
+
+
+def _raster_ink_bottom(
+    page: object,
+    bbox: BBox,
+    *,
+    dpi: int = 180,
+) -> Optional[float]:
+    import fitz
+
+    rect = fitz.Rect(bbox) & page.rect
+    if rect.width <= 0.2 or rect.height <= 0.2:
+        return None
+    pixmap = page.get_pixmap(clip=rect, dpi=dpi, colorspace=fitz.csGRAY, alpha=False)
+    width = int(pixmap.width)
+    height = int(pixmap.height)
+    samples = pixmap.samples
+    if width <= 0 or height <= 0 or not samples:
+        return None
+    last_row = -1
+    for row in range(height):
+        row_samples = samples[row * width : (row + 1) * width]
+        if sum(sample < 220 for sample in row_samples) >= 2:
+            last_row = row
+    if last_row < 0:
+        return None
+    return float(rect.y0 + (last_row + 1) * 72.0 / dpi)
+
+
+def _table_caption_clearance_issues(
+    original_page: object,
+    translated_page: object,
+    page_number: int,
+) -> List[TranslationIssue]:
+    """Measure translated table-caption glyph/ink clearance from the first rule."""
+    source_captions = [
+        (key, bbox)
+        for key, bbox in _source_caption_regions(original_page)
+        if key[0] == "table"
+    ]
+    if not source_captions:
+        return []
+    source_rules = [
+        (
+            float(drawing["rect"].y0),
+            float(drawing["rect"].x0),
+            float(drawing["rect"].x1),
+        )
+        for drawing in _page_drawings(original_page)
+        if drawing.get("rect") is not None
+        and float(drawing["rect"].width) >= 80.0
+        and float(drawing["rect"].height) <= 0.25
+    ]
+    translated_blocks = translated_page.get_text("dict").get("blocks", [])
+    issues: List[TranslationIssue] = []
+    for key, source_bbox in source_captions:
+        matching_blocks = [
+            block
+            for block in translated_blocks
+            if block.get("type") == 0
+            and block.get("bbox")
+            and _caption_key(_extract_text_from_block(block)) == key
+        ]
+        if not matching_blocks:
+            continue
+        rule_candidates = [
+            rule_y
+            for rule_y, rule_x0, rule_x1 in source_rules
+            if source_bbox[1] < rule_y <= source_bbox[3] + 14.0
+            and min(source_bbox[2], rule_x1) - max(source_bbox[0], rule_x0)
+            >= min(source_bbox[2] - source_bbox[0], rule_x1 - rule_x0) * 0.45
+        ]
+        if not rule_candidates:
+            continue
+        rule_y = min(rule_candidates)
+        translated_bbox = union_bbox(
+            [
+                tuple(float(value) for value in block["bbox"])
+                for block in matching_blocks
+            ]
+        )
+        raster_bottom = _raster_ink_bottom(
+            translated_page,
+            (
+                translated_bbox[0],
+                max(0.0, translated_bbox[1] - 1.0),
+                translated_bbox[2],
+                min(rule_y - 0.5, translated_bbox[3] + 1.0),
+            ),
+        )
+        glyph_bottom = translated_bbox[3]
+        if raster_bottom is not None:
+            glyph_bottom = max(glyph_bottom, raster_bottom)
+        gap = rule_y - glyph_bottom
+        if gap >= 3.0:
+            continue
+        issues.append(
+            TranslationIssue(
+                page=page_number,
+                code="raster_caption_clearance",
+                message=(
+                    f"Page {page_number}: Table {key[1]} caption ink is only "
+                    f"{gap:.2f}pt above the first rule at x={translated_bbox[0]:.1f}, "
+                    f"y={glyph_bottom:.1f}"
+                ),
+                severity="error",
+            )
+        )
+    return issues
 
 
 def _block_translates_to_words(block: TextBlock) -> bool:
@@ -3847,6 +4459,7 @@ def prepare_translation_units(
         raw_blocks,
         graphic_regions_by_page=graphic_regions if preserve_graphics_text else None,
     )
+    repeated_headers = _repeated_top_header_texts(blocks, document.page_count)
 
     # --- Phase 1: Structure-aware classification ---
     _bibliography_seen.clear()
@@ -3861,6 +4474,15 @@ def prepare_translation_units(
         )
         page_blocks = [b for b in blocks if b.page_index == page_index]
         classify_blocks(page_blocks, page_index, page_height, image_zones)
+        for block in page_blocks:
+            plain = " ".join(strip_sentinels(block.text).split()).casefold()
+            if plain not in repeated_headers or block.bbox[3] > 72.0:
+                continue
+            block.block_type = "header"
+            block.should_translate = True
+            block.preserve_position = True
+            block.nowrap = True
+            block.no_merge = True
         _promote_equation_table_neighbor_blocks(
             page_blocks,
             equation_table_regions.get(page_index, ()),
@@ -3967,7 +4589,14 @@ def prepare_translation_units(
         block.formula_anchors = _align_formula_anchors(
             block.source_math_bboxes,
             len(block.preserved_math_placeholders),
+            block.keepout_bboxes or (),
         )
+        if block.formula_anchors and not _uses_fixed_source_math(block):
+            block.redact_bboxes = list(
+                dict.fromkeys(
+                    [*(block.redact_bboxes or []), *block.formula_anchors]
+                )
+            )
         bare = PLACEHOLDER_RE.sub("", protected)
         if not re.search(r"[A-Za-z]{2,}", bare):
             skipped += 1
@@ -3976,14 +4605,46 @@ def prepare_translation_units(
     return units, gutter_rects, skipped
 
 
+def _repeated_top_header_texts(
+    blocks: Sequence[TextBlock],
+    page_count: int,
+) -> set[str]:
+    """Return normalized top-band labels repeated across most document pages."""
+    pages_by_text: Dict[str, set[int]] = {}
+    for block in blocks:
+        if block.bbox[3] > 72.0:
+            continue
+        plain = " ".join(strip_sentinels(block.text).split()).strip()
+        if len(_PROSE_WORD_RE.findall(plain)) < 3 or len(plain) > 180:
+            continue
+        pages_by_text.setdefault(plain.casefold(), set()).add(block.page_index)
+    threshold = max(2, (page_count + 1) // 2)
+    return {
+        text for text, pages in pages_by_text.items() if len(pages) >= threshold
+    }
+
+
 def _align_formula_anchors(
     source_math_bboxes: Sequence[BBox],
     placeholder_count: int,
+    related_bboxes: Sequence[BBox] = (),
 ) -> Tuple[BBox, ...]:
     """Align source math runs with sentinel placeholders in reading order."""
     if placeholder_count <= 0 or len(source_math_bboxes) != placeholder_count:
         return ()
-    return tuple(source_math_bboxes)
+    anchors: List[BBox] = []
+    for source_bbox in source_math_bboxes:
+        anchor = source_bbox
+        source_area = max(1.0, bbox_area(source_bbox))
+        for related in related_bboxes:
+            related_area = max(1.0, bbox_area(related))
+            if related_area > source_area * 0.7:
+                continue
+            if bbox_intersection_area(anchor, related) / related_area < 0.35:
+                continue
+            anchor = union_bbox([anchor, related])
+        anchors.append(anchor)
+    return tuple(anchors)
 
 
 def _formula_anchor_merge_cost(first: BBox, second: BBox) -> float:
@@ -5549,11 +6210,37 @@ def classify_blocks(
         x0, y0, x1, y1 = block.bbox
 
         # A references heading is a cross-page structure anchor. It must win
-        # over nearby figure-zone classification so the following entries are
-        # not mistaken for diagram labels or body prose.
+        # over run-in-heading and nearby figure-zone classification so the
+        # following entries stay outside translation and terminology audits.
         if _REFERENCES_HEADING_RE.match(plain):
             _is_bibliography_context(block, blocks)
             block.block_type = "heading"
+            block.should_translate = True
+            block.bold = True
+            block.no_merge = True
+            block.preserve_position = True
+            continue
+
+        # Pre-segmented appendix headings still delimit the bibliography.
+        # Update that cross-page state before the heading fast paths below.
+        if _bibliography_seen and _looks_like_appendix_heading(
+            plain,
+            block.source_lines,
+        ):
+            _is_bibliography_context(block, blocks)
+
+        if block.block_type == "run_in_heading" and re.fullmatch(
+            r"(?:[A-Z](?:\.\d+)?|\d+(?:\.\d+)*)\s+[A-Z][A-Z\s-]{3,80}",
+            plain,
+        ):
+            block.block_type = "heading"
+            block.should_translate = True
+            block.bold = True
+            block.no_merge = True
+            block.preserve_position = True
+            continue
+
+        if block.block_type == "run_in_heading":
             block.should_translate = True
             block.bold = True
             block.no_merge = True
@@ -5953,6 +6640,13 @@ def _formula_like_plain_span_text(text: str) -> bool:
         return False
     if re.fullmatch(r"[\s.,:;(){}\[\]]+", stripped):
         return True
+    if re.fullmatch(
+        r"(?i)(?:in|at|by|from|see)?\s*"
+        r"(?:eqs?|equations?|figs?|figures?|tables?|appendix)\.?\s*"
+        r"[A-Za-z0-9.(),\-\s]+",
+        stripped,
+    ):
+        return False
     if re.search(r"[=<>+−±×÷≈≤≥^_\\|/*]", stripped):
         return True
     return bool(
@@ -6570,7 +7264,7 @@ def mark_equation_blocks(records: Sequence[_RawBlockRec]) -> List[bool]:
     return flags
 
 
-_PSEUDOCODE_STEP_RE = re.compile(r"\b\d{1,2}:\s*\S")
+_PSEUDOCODE_STEP_RE = re.compile(r"^\s*\d{1,2}:\s*\S", re.MULTILINE)
 _ALGORITHM_TITLE_RE = re.compile(r"^\s*Algorithm\s+\d+\b", re.IGNORECASE)
 _ALGORITHM_IO_RE = re.compile(r"\b(?:Require|Ensure|Input|Output)\s*:", re.IGNORECASE)
 _ALGORITHM_STAGE_RE = re.compile(r"^\s*(?:Stage|Phase)\s+\d+\s*:", re.IGNORECASE)
@@ -7178,19 +7872,25 @@ def line_looks_like_section_heading(line: _LineRec) -> bool:
 
     numbered_match = _NUMBERED_HEADING_LINE_RE.match(compact)
     appendix_match = _APPENDIX_STYLE_HEADING_LINE_RE.match(compact)
+    bare_appendix_match = re.fullmatch(
+        r"[A-Z]\s+[A-Z][A-Z\s-]{3,80}",
+        compact,
+    )
     reference_like = _looks_like_reference_entry_text(compact)
     if reference_like and (
         _REFERENCE_YEAR_RE.search(compact) or _REFERENCE_FRAGMENT_CUE_RE.search(compact)
     ):
         return False
-    if reference_like and not (numbered_match or appendix_match):
+    if reference_like and not (
+        numbered_match or appendix_match or bare_appendix_match
+    ):
         return False
 
     lower = compact.lower().rstrip(":")
     if lower in _STRUCTURE_HEADING_WORDS:
         return True
 
-    if not (numbered_match or appendix_match):
+    if not (numbered_match or appendix_match or bare_appendix_match):
         return False
     words = _PROSE_WORD_RE.findall(compact)
     if not 1 <= len(words) <= 14:
@@ -7200,6 +7900,9 @@ def line_looks_like_section_heading(line: _LineRec) -> bool:
         tail = compact[prefix.end() :].strip() if prefix else compact
     elif appendix_match:
         prefix = re.match(r"^[A-Z]\.(?:\d+\.?)*\s*", compact)
+        tail = compact[prefix.end() :].strip() if prefix else compact
+    elif bare_appendix_match:
+        prefix = re.match(r"^[A-Z]\s+", compact)
         tail = compact[prefix.end() :].strip() if prefix else compact
     else:
         tail = compact
@@ -7397,8 +8100,20 @@ def looks_like_bold_leadin_text(prefix_text: str, tail_text: str) -> bool:
     academic_label = bool(
         _ACADEMIC_FORMULA_STATEMENT_RE.fullmatch(prefix.rstrip(".：:"))
     )
+    significant = [
+        word
+        for word in words
+        if word.lower()
+        not in {"a", "an", "and", "for", "in", "of", "on", "the", "to", "with"}
+    ]
+    title_style = bool(
+        len(words) >= 2
+        and significant
+        and all(word[:1].isupper() or word.isupper() for word in significant)
+    )
     return (
         academic_label
+        or title_style
         or prefix.endswith((".", ":", "："))
         or tail.startswith((": ", ":", "： ", "："))
     )
@@ -8039,7 +8754,7 @@ def _equation_flagged_small_caps_heading_block(
     if not equation_record or not 1 <= len(record.lines) <= 3:
         return None
     compact = " ".join(strip_sentinels(record.bare_text()).split()).strip()
-    if not re.fullmatch(r"[A-Z]\.\d+\s+[A-Z][A-Z\s-]{3,60}", compact):
+    if not re.fullmatch(r"[A-Z](?:\.\d+)?\s+[A-Z][A-Z\s-]{3,60}", compact):
         return None
     if any(sentinel_char_count(line.text) for line in record.lines):
         return None
@@ -8294,6 +9009,8 @@ def segments_from_record(
                     continue
                 heading = heading_block_from_line(page_index, leadin)
                 if heading is not None:
+                    heading.block_type = "run_in_heading"
+                    heading.preserve_position = True
                     segments.append(heading)
                     current_min_y0 = max(
                         current_min_y0 or float("-inf"),
@@ -8611,6 +9328,9 @@ def _accumulate_line(accumulator: "_SegmentAccumulator", line: _LineRec) -> None
         if "color" in span:
             accumulator.colors.append(int_to_rgb(span["color"]))
         span_chars = len(normalize_span_text(span.get("text", "")).strip())
+        span_is_prose = span_bbox is None or span_bbox in prose_bboxes
+        if not span_is_prose:
+            continue
         span_bold = span_is_bold(span)
         if span_chars and not accumulator.seen_text:
             accumulator.starts_bold = span_bold
@@ -9175,6 +9895,10 @@ def can_merge_blocks(
     nxt: TextBlock,
     graphic_regions: Sequence[BBox] = (),
 ) -> bool:
+    if "run_in_heading" in {prev.block_type, nxt.block_type}:
+        return False
+    if _looks_like_formula_row_suffix_pair(prev, nxt):
+        return True
     if nxt.bold_prefix:
         # A run-in heading starts a new structural unit. Formula-continuation
         # heuristics must not pull it backward into the preceding paragraph.
@@ -9489,6 +10213,48 @@ def _looks_like_formula_rich_continuation_pair(prev: TextBlock, nxt: TextBlock) 
     return overlap_ratio >= 0.25 or wraps_to_left or aligned_left
 
 
+def _looks_like_formula_row_suffix_pair(prev: TextBlock, nxt: TextBlock) -> bool:
+    """Join prose suffixes split from a paragraph by a long inline formula."""
+    if prev.page_index != nxt.page_index:
+        return False
+    if prev.block_type not in {"body", "formula_prose"}:
+        return False
+    if nxt.block_type not in {"body", "formula_prose"}:
+        return False
+    if not prev.source_math_bboxes or nxt.source_math_bboxes:
+        return False
+    if not prev.text.rstrip().endswith(SENTINEL_CLOSE):
+        return False
+    suffix = strip_sentinels(nxt.text).lstrip()
+    if not re.match(r"^[.,;:)]\s*[A-Z]", suffix):
+        return False
+    if len(_PROSE_WORD_RE.findall(suffix)) < 4:
+        return False
+
+    reference = max(prev.font_size, nxt.font_size, 1.0)
+    previous_lines = prev.source_line_bboxes[-2:] or (prev.bbox,)
+    next_lines = nxt.source_line_bboxes[:2] or (nxt.bbox,)
+    for previous_line in previous_lines:
+        for next_line in next_lines:
+            vertical_overlap = min(previous_line[3], next_line[3]) - max(
+                previous_line[1], next_line[1]
+            )
+            min_height = max(
+                1.0,
+                min(
+                    previous_line[3] - previous_line[1],
+                    next_line[3] - next_line[1],
+                ),
+            )
+            horizontal_gap = next_line[0] - previous_line[2]
+            if (
+                vertical_overlap / min_height >= 0.55
+                and -reference * 1.5 <= horizontal_gap <= max(120.0, reference * 12.0)
+            ):
+                return True
+    return False
+
+
 def _looks_like_overlapping_formula_tail_continuation(
     prev: TextBlock, nxt: TextBlock, gap: float, reference: float
 ) -> bool:
@@ -9746,10 +10512,14 @@ def requested_translation_font_size(
 
 
 def expand_heading_bbox(block: TextBlock) -> TextBlock:
-    if block.block_type != "heading":
+    if block.block_type not in {"heading", "run_in_heading"}:
         return block
     x0, y0, x1, y1 = block.bbox
-    pad_y = max(1.0, block.font_size * 0.18)
+    pad_y = (
+        max(0.5, block.font_size * 0.06)
+        if block.block_type == "run_in_heading"
+        else max(1.0, block.font_size * 0.18)
+    )
     pad_x = max(2.0, block.font_size * 0.35)
     redacts = block.redact_bboxes or [block.bbox]
     return replace(
@@ -9757,6 +10527,63 @@ def expand_heading_bbox(block: TextBlock) -> TextBlock:
         bbox=(x0, y0 - pad_y, x1 + pad_x, y1 + pad_y),
         redact_bboxes=redacts,
     )
+
+
+def _expand_single_line_list_bbox(
+    block: TextBlock,
+    translated_text: str,
+    page_blocks: Sequence[TextBlock],
+    font_pack: FontPack,
+    font_size: float,
+    margin: float,
+) -> TextBlock:
+    """Use the source row's whitespace as the translated list line box."""
+    plain = " ".join(strip_sentinels(block.text).split()).strip()
+    if (
+        block.source_lines != 1
+        or block.nowrap
+        or not re.match(r"^(?:[•◦▪●]|\(?[a-zA-Z0-9]{1,3}\)|[-–])\s+", plain)
+    ):
+        return block
+
+    fonts = font_pack.fonts_for(block.bold)
+    bold_fonts = font_pack.fonts_for(True)
+    render_text = _translation_text_for_render(translated_text)
+    tokens = _tokenize_translation_with_formula_clips(translated_text, block)
+    apply_inline_bold(tokens, block, render_text)
+    if not tokens:
+        return block
+    ascent, descent = _line_vertical_metrics(tokens, font_size, fonts, bold_fonts)
+    desired_height = ascent + descent + margin * 2.0
+    x0, y0, x1, y1 = block.bbox
+    if desired_height <= y1 - y0 + 0.1:
+        return block
+
+    center_y = (y0 + y1) / 2.0
+    top_limit = 0.0
+    bottom_limit = float("inf")
+    for other in page_blocks:
+        if other is block or other.page_index != block.page_index:
+            continue
+        horizontal_overlap = min(x1, other.bbox[2]) - max(x0, other.bbox[0])
+        if horizontal_overlap <= 0.0:
+            continue
+        if other.bbox[3] <= center_y:
+            top_limit = max(top_limit, other.bbox[3] + 0.4)
+        elif other.bbox[1] >= center_y:
+            bottom_limit = min(bottom_limit, other.bbox[1] - 0.4)
+
+    new_y0 = center_y - desired_height / 2.0
+    new_y1 = center_y + desired_height / 2.0
+    if new_y0 < top_limit:
+        new_y1 += top_limit - new_y0
+        new_y0 = top_limit
+    if new_y1 > bottom_limit:
+        new_y0 -= new_y1 - bottom_limit
+        new_y1 = bottom_limit
+    if new_y0 < top_limit or new_y1 - new_y0 < desired_height - 0.1:
+        return block
+    return replace(block, bbox=(x0, new_y0, x1, new_y1))
 
 
 def relax_caption_boxes(
@@ -9807,8 +10634,14 @@ def relax_caption_boxes(
 def _clear_table_caption_rules(
     page: object,
     items: Sequence[Tuple[TextBlock, str]],
+    *,
+    font_pack: FontPack,
+    min_font_size: float,
+    font_scale: float,
+    margin: float,
+    centered_flags: Sequence[bool],
 ) -> None:
-    """Keep translated table captions clear of the table's first rule."""
+    """Keep the final translated caption ink clear of the table's first rule."""
     horizontal_rules: List[Tuple[float, float, float]] = []
     for drawing in _page_drawings(page):
         rect = drawing.get("rect")
@@ -9818,26 +10651,166 @@ def _clear_table_caption_rules(
     if not horizontal_rules:
         return
 
-    for block, _ in items:
+    for (block, translated_text), centered in zip(items, centered_flags):
         plain = " ".join(strip_sentinels(block.text).split()).strip()
         if block.block_type != "caption" or not re.match(r"^Table\s+\w+\s*[:.]", plain, re.I):
             continue
         x0, y0, x1, y1 = block.bbox
+        rendered_bottom = _caption_rendered_bottom(
+            block,
+            translated_text,
+            font_pack=font_pack,
+            font_size=requested_translation_font_size(
+                block,
+                min_font_size,
+                font_scale,
+            ),
+            min_font_size=min_font_size,
+            margin=margin,
+            centered=centered,
+        )
         candidates = [
             rule_y
             for rule_y, rule_x0, rule_x1 in horizontal_rules
-            if y0 < rule_y <= y1 + 8.0
+            if y0 < rule_y <= max(y1, rendered_bottom) + 8.0
             and min(x1, rule_x1) - max(x0, rule_x0) >= min(x1 - x0, rule_x1 - rule_x0) * 0.45
         ]
         if not candidates:
             continue
         first_rule_y = min(candidates)
-        required_gap = 3.0
-        current_gap = first_rule_y - y1
+        required_gap = 3.1
+        current_gap = first_rule_y - rendered_bottom
         if current_gap >= required_gap:
             continue
         shift = required_gap - current_gap
         block.bbox = (x0, max(0.0, y0 - shift), x1, max(0.0, y1 - shift))
+
+
+def _caption_rendered_bottom(
+    block: TextBlock,
+    text: str,
+    *,
+    font_pack: FontPack,
+    font_size: float,
+    min_font_size: float,
+    margin: float,
+    centered: bool,
+) -> float:
+    """Predict caption ink bottom using the same tokens and fitting as rendering."""
+    import fitz
+
+    rect = shrink_rect(fitz.Rect(block.bbox), margin)
+    fonts = font_pack.fonts_for(block.bold)
+    bold_fonts = font_pack.fonts_for(True)
+    min_size = effective_min_font_size(block, min_font_size)
+    render_text = _translation_text_for_render(text)
+    tokens = _tokenize_translation_with_formula_clips(text, block)
+    apply_inline_bold(tokens, block, render_text)
+    if not tokens:
+        return float(rect.y0)
+
+    if block.nowrap:
+        size = font_size
+        for token in tokens:
+            token.width = token_width(token, fonts, size, bold_fonts)
+        width = sum(token.width for token in tokens)
+        if width > rect.width and width > 0:
+            size = max(min_size * 0.8, size * rect.width / width)
+        ascent, layout_descent = _line_vertical_metrics(
+            tokens,
+            size,
+            fonts,
+            bold_fonts,
+        )
+        ink_descent = _line_font_descent(tokens, size, fonts, bold_fonts)
+        baseline = rect.y0 + (rect.height + ascent - layout_descent) / 2.0
+        if ascent + layout_descent <= rect.height:
+            baseline = max(rect.y0 + ascent, baseline)
+            baseline = min(rect.y1 - layout_descent, baseline)
+        return float(baseline + ink_descent)
+
+    chosen: Optional[Tuple[float, float, List[List[_Token]]]] = None
+    size = font_size
+    while size >= min_size - 1e-6:
+        lines = break_lines(
+            tokens,
+            fonts,
+            size,
+            rect.width,
+            prefer_space_break=centered,
+            bold_fonts=bold_fonts,
+        )
+        for leading in leading_options(block):
+            if line_block_height(
+                lines,
+                size,
+                leading,
+                fonts,
+                bold_fonts,
+            ) <= rect.height:
+                chosen = (size, leading, lines)
+                break
+        if chosen is not None:
+            break
+        size -= 0.25
+    if chosen is None:
+        chosen = choose_compressed_layout(
+            tokens,
+            fonts,
+            rect.width,
+            rect.height,
+            min_size,
+            centered,
+            bold_fonts,
+        )
+
+    size, leading, lines = chosen
+    if len(lines) == 1:
+        ascent, _ = _line_vertical_metrics(
+            lines[0],
+            size,
+            fonts,
+            bold_fonts,
+        )
+        descent = _line_font_descent(lines[0], size, fonts, bold_fonts)
+        return float(rect.y0 + ascent + descent)
+    baselines = _line_baselines(
+        lines,
+        size,
+        leading,
+        float(rect.y0),
+        fonts,
+        bold_fonts,
+    )
+    return float(
+        baselines[-1]
+        + _line_font_descent(lines[-1], size, fonts, bold_fonts)
+    )
+
+
+def _line_font_descent(
+    line: Sequence[_Token],
+    size: float,
+    fonts: Sequence[Tuple[object, str]],
+    bold_fonts: Sequence[Tuple[object, str]],
+) -> float:
+    """Return the largest PDF font descent used by a rendered token line."""
+    descent = _line_vertical_metrics(line, size, fonts, bold_fonts)[1]
+    for token in line:
+        if token.kind in {"space", "formula"}:
+            continue
+        active_fonts = token_fonts(token, fonts, bold_fonts)
+        for char in token.text:
+            selected = next(
+                (
+                    font
+                    for font, _ in _fonts_for_char(char, active_fonts)
+                    if font.has_glyph(ord(char))
+                ),
+                active_fonts[0][0],
+            )
+            descent = max(descent, abs(float(selected.descender)) * size)
+    return descent
 
 
 # --- CJK typesetting engine ---------------------------------------------------
@@ -10085,21 +11058,27 @@ def token_width(
     size: float,
     bold_fonts: Optional[Sequence[Tuple[object, str]]] = None,
 ) -> float:
+    formula_guard = size * _INLINE_FORMULA_GUARD_EM if token.kind == "formula" else 0.0
     if token.kind == "formula" and token.source_bbox is not None:
         source_width = max(0.1, token.source_bbox[2] - token.source_bbox[0])
-        return source_width * _formula_clip_scale(
-            token.source_bbox,
-            size,
-            token.source_size,
+        return (
+            source_width
+            * _formula_clip_scale(
+                token.source_bbox,
+                size,
+                token.source_size,
+            )
+            + formula_guard * 2.0
         )
     active_fonts = token_fonts(token, fonts, bold_fonts)
     width = 0.0
     for role, text in iter_scripted_text(token.text):
         segment_size, _ = script_segment_metrics(role, size, 0.0)
         width += sum(char_width(char, active_fonts, segment_size) for char in text)
-    return width
+    return width + formula_guard * 2.0
 
 
+_INLINE_FORMULA_GUARD_EM = 0.32
 _FORMULA_CLIP_MAX_HEIGHT_EM = 1.6
 _FORMULA_CLIP_FOREIGN_GAP = 0.2
 
@@ -10314,7 +11293,13 @@ def choose_compressed_layout(
         )
         for leading in (1.08, 1.0, 0.94):
             best = (size, leading, lines)
-            if line_block_height(lines, size, leading) <= height + size * 0.25:
+            if line_block_height(
+                lines,
+                size,
+                leading,
+                fonts,
+                bold_fonts,
+            ) <= height:
                 return best
         size -= 0.2
     assert best is not None
@@ -10405,6 +11390,8 @@ def keepout_line_slots(
     leading: float,
     ascent: float,
     keepouts: Sequence[BBox],
+    *,
+    descent: float = 0.24,
 ) -> List[Tuple[float, float, float]]:
     """Baseline slots ``(baseline, x0, x1)`` that flow around keepout bboxes.
 
@@ -10413,16 +11400,20 @@ def keepout_line_slots(
     mirrors how the source typesetting wraps prose around tall inline math.
     """
     slots: List[Tuple[float, float, float]] = []
-    ascent_ratio = min(ascent, 0.92)
+    ascent_ratio = max(ascent, 0.82)
+    descent_ratio = max(descent, 0.24)
     baseline = rect.y0 + size * ascent_ratio
-    advance = size * leading
-    bottom_limit = rect.y1 + size * 0.4
+    advance = max(
+        size * leading,
+        size * (ascent_ratio + descent_ratio + 0.06),
+    )
+    bottom_limit = rect.y1 - size * descent_ratio
     min_free = max(_KEEPOUT_MIN_SEGMENT, 0.25 * rect.width)
     guard = 0
     while baseline <= bottom_limit and guard < 400:
         guard += 1
         band_top = baseline - size * ascent_ratio
-        band_bottom = baseline + size * 0.28
+        band_bottom = baseline + size * descent_ratio
         blockers = [
             k
             for k in keepouts
@@ -10696,12 +11687,27 @@ def translated_text_fits(
         return scaled_size >= min_size * 0.8
 
     keepouts = _block_keepouts(block, rect)
-    ascent = fonts[0][0].ascender if fonts[0][0].ascender > 0 else 0.8
+    layout_fonts = [font for font, _ in [*fonts, *bold_fonts]]
+    ascent = max(
+        (max(0.0, float(font.ascender)) for font in layout_fonts),
+        default=0.82,
+    )
+    descent = max(
+        (abs(min(0.0, float(font.descender))) for font in layout_fonts),
+        default=0.24,
+    )
     size = font_size
     while size >= min_size - 1e-6:
         if keepouts:
             for leading in leading_options(block):
-                slots = keepout_line_slots(rect, size, leading, ascent, keepouts)
+                slots = keepout_line_slots(
+                    rect,
+                    size,
+                    leading,
+                    ascent,
+                    keepouts,
+                    descent=descent,
+                )
                 if not slots:
                     continue
                 widths = [x1 - x0 for (_, x0, x1) in slots]
@@ -10727,7 +11733,13 @@ def translated_text_fits(
             bold_fonts=bold_fonts,
         )
         for leading in leading_options(block):
-            if line_block_height(lines, size, leading) <= rect.height + size * 0.4:
+            if line_block_height(
+                lines,
+                size,
+                leading,
+                fonts,
+                bold_fonts,
+            ) <= rect.height:
                 return True
         size -= 0.25
     return False
@@ -10816,14 +11828,29 @@ def insert_translated_text(
         )
         return True
 
-    ascent = fonts[0][0].ascender if fonts[0][0].ascender > 0 else 0.8
+    layout_fonts = [font for font, _ in [*fonts, *bold_fonts]]
+    ascent = max(
+        (max(0.0, float(font.ascender)) for font in layout_fonts),
+        default=0.82,
+    )
+    descent = max(
+        (abs(min(0.0, float(font.descender))) for font in layout_fonts),
+        default=0.24,
+    )
     keepouts = _block_keepouts(block, rect)
     slot_layout: Optional[Tuple[float, List[List[_Token]], List[Tuple[float, float, float]]]] = None
     if keepouts:
         size = font_size
         while size >= min_size - 1e-6 and slot_layout is None:
             for leading in leading_options(block):
-                slots = keepout_line_slots(rect, size, leading, ascent, keepouts)
+                slots = keepout_line_slots(
+                    rect,
+                    size,
+                    leading,
+                    ascent,
+                    keepouts,
+                    descent=descent,
+                )
                 if not slots:
                     continue
                 widths = [x1 - x0 for (_, x0, x1) in slots]
@@ -10874,8 +11901,14 @@ def insert_translated_text(
             bold_fonts=bold_fonts,
         )
         for leading in leading_options(block):
-            height = line_block_height(lines, size, leading)
-            if height <= rect.height + size * 0.4:
+            height = line_block_height(
+                lines,
+                size,
+                leading,
+                fonts,
+                bold_fonts,
+            )
+            if height <= rect.height:
                 chosen = (size, leading, lines)
                 break
         if chosen:
@@ -10912,7 +11945,14 @@ def insert_translated_text(
         )
         return fitted
 
-    baselines = _line_baselines(lines, size, leading, rect.y0)
+    baselines = _line_baselines(
+        lines,
+        size,
+        leading,
+        rect.y0,
+        fonts,
+        bold_fonts,
+    )
     for index, (line, baseline) in enumerate(zip(lines, baselines)):
         is_last = index == len(lines) - 1
         justify = not centered and not is_last
@@ -10932,29 +11972,66 @@ def insert_translated_text(
     return fitted
 
 
-def line_block_height(lines: Sequence[Sequence[_Token]], size: float, leading: float) -> float:
+def line_block_height(
+    lines: Sequence[Sequence[_Token]],
+    size: float,
+    leading: float,
+    fonts: Optional[Sequence[Tuple[object, str]]] = None,
+    bold_fonts: Optional[Sequence[Tuple[object, str]]] = None,
+) -> float:
     if not lines:
         return 0.0
-    baselines = _line_baselines(lines, size, leading, 0.0)
-    _, final_descent = _line_vertical_metrics(lines[-1], size)
+    baselines = _line_baselines(
+        lines,
+        size,
+        leading,
+        0.0,
+        fonts,
+        bold_fonts,
+    )
+    _, final_descent = _line_vertical_metrics(
+        lines[-1],
+        size,
+        fonts,
+        bold_fonts,
+    )
     return baselines[-1] + final_descent
 
 
-def _line_vertical_metrics(line: Sequence[_Token], size: float) -> Tuple[float, float]:
-    """Return visual ascent/descent, including stamped source formulas."""
+def _line_vertical_metrics(
+    line: Sequence[_Token],
+    size: float,
+    fonts: Optional[Sequence[Tuple[object, str]]] = None,
+    bold_fonts: Optional[Sequence[Tuple[object, str]]] = None,
+) -> Tuple[float, float]:
+    """Return font-backed ascent/descent, including stamped source formulas."""
     ascent = size * 0.82
     descent = size * 0.24
     for token in line:
-        if token.kind != "formula" or token.source_bbox is None:
+        if token.kind == "formula" and token.source_bbox is not None:
+            source_height = max(0.1, token.source_bbox[3] - token.source_bbox[1])
+            target_height = source_height * _formula_clip_scale(
+                token.source_bbox,
+                size,
+                token.source_size,
+            )
+            ascent = max(ascent, target_height * 0.82)
+            descent = max(descent, target_height * 0.18)
             continue
-        source_height = max(0.1, token.source_bbox[3] - token.source_bbox[1])
-        target_height = source_height * _formula_clip_scale(
-            token.source_bbox,
-            size,
-            token.source_size,
-        )
-        ascent = max(ascent, target_height * 0.82)
-        descent = max(descent, target_height * 0.18)
+        if token.kind == "space" or not fonts:
+            continue
+        active_fonts = token_fonts(token, fonts, bold_fonts)
+        for char in token.text:
+            selected = next(
+                (
+                    font
+                    for font, _ in _fonts_for_char(char, active_fonts)
+                    if font.has_glyph(ord(char))
+                ),
+                active_fonts[0][0],
+            )
+            ascent = max(ascent, max(0.0, float(selected.ascender)) * size)
+            descent = max(descent, abs(min(0.0, float(selected.descender))) * size)
     return ascent, descent
 
 
@@ -10963,10 +12040,15 @@ def _line_baselines(
     size: float,
     leading: float,
     top: float,
+    fonts: Optional[Sequence[Tuple[object, str]]] = None,
+    bold_fonts: Optional[Sequence[Tuple[object, str]]] = None,
 ) -> List[float]:
     if not lines:
         return []
-    metrics = [_line_vertical_metrics(line, size) for line in lines]
+    metrics = [
+        _line_vertical_metrics(line, size, fonts, bold_fonts)
+        for line in lines
+    ]
     baselines = [top + metrics[0][0]]
     for index in range(1, len(lines)):
         _previous_ascent, previous_descent = metrics[index - 1]
@@ -11002,7 +12084,12 @@ def render_single_line(
         for token in line:
             token.width = token_width(token, fonts, size, bold_fonts)
         width = sum(token.width for token in line)
-    visual_ascent, visual_descent = _line_vertical_metrics(line, size)
+    visual_ascent, visual_descent = _line_vertical_metrics(
+        line,
+        size,
+        fonts,
+        bold_fonts,
+    )
     if top_aligned:
         baseline = rect.y0 + visual_ascent
     else:
@@ -11184,6 +12271,11 @@ def emit_tokens(
             x += token.width + gap_after
             run_x = x
             continue
+        formula_guard = size * _INLINE_FORMULA_GUARD_EM if token.kind == "formula" else 0.0
+        if formula_guard:
+            flush_run()
+            x += formula_guard
+            run_x = x
         if token.kind == "formula" and token.source_bbox is not None and source_document:
             flush_run()
             try:
@@ -11210,7 +12302,7 @@ def emit_tokens(
                 target_rect = fitz.Rect(
                     x,
                     baseline - target_height * 0.82,
-                    x + token.width,
+                    x + max(0.1, token.width - formula_guard * 2.0),
                     baseline + target_height * 0.18,
                 )
                 page.show_pdf_page(
@@ -11221,7 +12313,7 @@ def emit_tokens(
                     keep_proportion=False,
                     overlay=True,
                 )
-                x += token.width
+                x += max(0.1, token.width - formula_guard * 2.0) + formula_guard
                 if gap_after:
                     x += gap_after
                 run_x = x
@@ -11254,6 +12346,10 @@ def emit_tokens(
                     run_x = x
                 run_chars.append(char)
                 x += char_width(char, active_fonts, segment_size)
+        if formula_guard:
+            flush_run()
+            x += formula_guard
+            run_x = x
         if gap_after:
             flush_run()
             x += gap_after

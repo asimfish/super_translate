@@ -3932,7 +3932,7 @@ class PreserveGraphicsTextTests(unittest.TestCase):
 
         self.assertEqual(len(blocks), 2)
         self.assertEqual(blocks[0].text, "Object Grounding:")
-        self.assertEqual(blocks[0].block_type, "heading")
+        self.assertEqual(blocks[0].block_type, "run_in_heading")
         self.assertTrue(blocks[0].bold)
         self.assertTrue(blocks[0].no_merge)
         self.assertEqual(
@@ -4063,7 +4063,7 @@ class PreserveGraphicsTextTests(unittest.TestCase):
 
         self.assertEqual(len(blocks), 2)
         self.assertEqual(blocks[0].text, "1) Object Grounding:")
-        self.assertEqual(blocks[0].block_type, "heading")
+        self.assertEqual(blocks[0].block_type, "run_in_heading")
         self.assertTrue(blocks[0].bold)
         self.assertTrue(blocks[1].no_merge)
         self.assertEqual(

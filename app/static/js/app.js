@@ -841,6 +841,18 @@ async function loadPreviewImage(panel, wrapper, loadId) {
 async function openReader(paperId) {
   // Cancel any ongoing load
   const loadId = ++currentLoadId;
+  resetScrollSyncScheduling();
+  for (const panel of ['original', 'translated']) {
+    const oldContainer = document.getElementById(`pdf-container-${panel}`);
+    if (oldContainer && scrollListeners[panel]) {
+      oldContainer.removeEventListener('scroll', scrollListeners[panel]);
+      scrollListeners[panel] = null;
+    }
+    if (renderObservers[panel]) {
+      renderObservers[panel].disconnect();
+      renderObservers[panel] = null;
+    }
+  }
   if (translationPollPaperId && translationPollPaperId !== paperId) {
     if (translationPollId) clearInterval(translationPollId);
     translationPollId = null;
@@ -1187,9 +1199,20 @@ async function copyPdfSelection() {
 }
 
 // Scroll sync with page-based alignment
-let scrollRafId = null;
+let scrollRafIds = { original: null, translated: null };
 let syncRenderTimer = null;
 let scrollSyncTargetPanel = null;
+
+function resetScrollSyncScheduling() {
+  for (const panel of ['original', 'translated']) {
+    if (scrollRafIds[panel]) cancelAnimationFrame(scrollRafIds[panel]);
+    scrollRafIds[panel] = null;
+  }
+  if (syncRenderTimer) clearTimeout(syncRenderTimer);
+  syncRenderTimer = null;
+  scrollSyncTargetPanel = null;
+  scrollSyncToken++;
+}
 
 // Render the mirrored panel only after scrolling settles. Rendering PDF pages
 // is CPU/GPU heavy; doing it on every scroll frame was the main cause of the
@@ -1210,9 +1233,9 @@ function setupSmoothScrollSync(panel) {
     updatePageInfo(panel, container.scrollTop);
     if (!syncScrollEnabled || scrollSyncTargetPanel === panel) return;
 
-    if (scrollRafId) return;
-    scrollRafId = requestAnimationFrame(() => {
-      scrollRafId = null;
+    if (scrollRafIds[panel]) return;
+    scrollRafIds[panel] = requestAnimationFrame(() => {
+      scrollRafIds[panel] = null;
       syncScrollFromPanel(panel);
     });
   };
@@ -1295,6 +1318,7 @@ function updatePageInfo(panel, scrollTop) {
 
 function toggleSyncScroll() {
   syncScrollEnabled = !syncScrollEnabled;
+  if (!syncScrollEnabled) resetScrollSyncScheduling();
   const btn = document.getElementById('btn-sync-scroll');
   if (btn) {
     btn.textContent = syncScrollEnabled ? '同步滚动: 开' : '同步滚动: 关';
@@ -1302,6 +1326,28 @@ function toggleSyncScroll() {
     btn.classList.toggle('btn-outline', !syncScrollEnabled);
   }
 }
+
+let viewportResizeTimer = null;
+window.addEventListener('resize', () => {
+  if (effectiveReaderMode() !== 'image') return;
+  clearTimeout(viewportResizeTimer);
+  viewportResizeTimer = setTimeout(() => {
+    const positions = {};
+    for (const panel of ['original', 'translated']) {
+      const container = document.getElementById(`pdf-container-${panel}`);
+      if (!container || !pageMetrics[panel]?.length) continue;
+      positions[panel] = pageScrollPosition(panel, container.scrollTop);
+      refreshImagePageMetrics(panel);
+    }
+    for (const panel of ['original', 'translated']) {
+      const position = positions[panel];
+      const container = document.getElementById(`pdf-container-${panel}`);
+      if (!position || !container) continue;
+      container.scrollTop = targetScrollTop(panel, position.pageIdx, position.fraction);
+    }
+    if (syncScrollEnabled) syncScrollFromPanel('original');
+  }, 120);
+});
 
 async function cancelTranslation() {
   if (!currentPaper) return;

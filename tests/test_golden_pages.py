@@ -127,7 +127,8 @@ def test_otf_academic_labels_and_split_section_headings_keep_structure():
     proposition = next(
         block for block, text in zip(blocks, texts) if text.startswith("Proposition 1")
     )
-    assert proposition.bold_prefix
+    assert proposition.block_type in {"heading", "run_in_heading"}
+    assert proposition.bold
     assert any(
         block.block_type == "heading" and "3 METHDOLOGY" in text
         for block, text in zip(blocks, texts)
@@ -145,12 +146,17 @@ def test_otf_formula_paragraph_translates_all_prose():
     texts = [" ".join(strip_sentinels(block.text).split()) for block in blocks]
 
     formulation = next(
-        block for block, text in zip(blocks, texts) if text.startswith("Formulation of OFT")
+        block for block, text in zip(blocks, texts) if text == "Formulation of OFT"
     )
-    formulation_text = " ".join(strip_sentinels(formulation.text).split())
-    assert "are two measures on the graph" in formulation_text
-    assert "β" in formulation_text
-    assert formulation.bold_prefix
+    prose = next(
+        block for block, text in zip(blocks, texts) if text.startswith("We begin by de")
+    )
+    prose_text = " ".join(strip_sentinels(prose.text).split())
+    assert formulation.block_type == "run_in_heading"
+    assert formulation.bold
+    assert "are two measures on the graph" in prose_text
+    assert "β" in prose_text
+    assert prose.formula_anchors
 
 
 def test_otf_runin_heading_starts_a_new_translation_unit():
@@ -162,7 +168,8 @@ def test_otf_runin_heading_starts_a_new_translation_unit():
     exact = next(
         block for block, text in zip(blocks, texts) if text.startswith("Exact Solving for OFT")
     )
-    assert exact.bold_prefix
+    assert exact.block_type == "run_in_heading"
+    assert exact.bold
     assert all(
         "Exact Solving for OFT" not in text
         for text in texts
@@ -183,15 +190,17 @@ def test_otf_runin_labels_keep_body_size_and_method_bold_terms():
         "Baselines.",
     ):
         block = next(block for block, text in zip(blocks, texts) if text.startswith(prefix))
-        assert block.block_type == "body"
-        assert block.bold_prefix
+        assert block.block_type == "run_in_heading"
+        assert block.bold
         assert block.font_size < 10.1
 
-    baseline = next(
-        block for block, text in zip(blocks, texts) if text.startswith("Baselines.")
+    baseline_body = next(
+        block
+        for block, text in zip(blocks, texts)
+        if text.startswith("To demonstrate the feasibility")
     )
     assert {"Real", "ZKW", "Gurobi", "pns", "lemon"}.issubset(
-        baseline.bold_terms
+        baseline_body.bold_terms
     )
 
 
@@ -209,6 +218,70 @@ def test_gears_section_33_body_is_translated():
 
     assert any("The privileged expert cannot be deployed directly" in text for text in texts)
     assert any("Data Collection" in text for text in texts)
+
+
+def test_math_bold_at_formula_led_continuation_does_not_create_run_in_heading():
+    from pdf_zh_translator.pdf_layout import (
+        can_merge_blocks,
+        collect_text_blocks,
+        strip_sentinels,
+    )
+
+    source = fitz.open(FIXTURES / "mcf_p3_equation_row.pdf")
+    blocks, _ = collect_text_blocks(source)
+    source.close()
+    continuation_index = next(
+        index
+        for index, block in enumerate(blocks)
+        if strip_sentinels(block.text).startswith("v=b/(K")
+    )
+    previous = blocks[continuation_index - 1]
+    continuation = blocks[continuation_index]
+
+    assert not continuation.starts_bold
+    assert not continuation.bold_prefix
+    assert continuation.bold_terms == ()
+    assert can_merge_blocks(previous, continuation)
+
+
+def test_formula_row_prose_suffix_is_not_a_second_overlapping_translation_unit():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("dynaguide_p26_unnumbered_display_formula.pdf")
+    matching = [
+        " ".join(strip_sentinels(block.text).split())
+        for block in blocks
+        if "probability" in strip_sentinels(block.text).lower()
+    ]
+
+    assert len(matching) == 1
+    assert "The log probability can be computed as follows" in matching[0]
+
+
+def test_inline_formula_anchor_absorbs_detached_subscript_glyph():
+    from pdf_zh_translator.pdf_layout import bbox_intersection_area, strip_sentinels
+
+    block = next(
+        block
+        for block in _unit_blocks("oc_p4_figure_caption.pdf")
+        if strip_sentinels(block.text).startswith("Assume that objects are static")
+    )
+    detached_subscript = (485.4790, 572.5324, 489.5866, 579.5063)
+    subscript_area = (
+        (detached_subscript[2] - detached_subscript[0])
+        * (detached_subscript[3] - detached_subscript[1])
+    )
+
+    assert len(block.formula_anchors) == 1
+    assert (
+        bbox_intersection_area(block.formula_anchors[0], detached_subscript)
+        / subscript_area
+        >= 0.95
+    )
+    assert any(
+        bbox_intersection_area(redact, detached_subscript) / subscript_area >= 0.95
+        for redact in block.redact_bboxes or []
+    )
 
 
 def test_gears_stage_caption_and_architecture_keep_structure():
@@ -231,11 +304,15 @@ def test_gears_stage_caption_and_architecture_keep_structure():
     architecture = next(
         block for block, text in zip(blocks, texts) if text.startswith("Architecture.")
     )
-    assert architecture.block_type == "body"
-    assert architecture.bold_prefix
-    assert architecture.keepout_bboxes
-    bottom_redact = max(architecture.redact_bboxes or [], key=lambda bbox: bbox[3])
-    first_formula_top = min(bbox[1] for bbox in architecture.keepout_bboxes)
+    assert architecture.block_type == "run_in_heading"
+    assert architecture.bold
+    architecture_body = next(
+        block for block in blocks if block.bbox[1] > architecture.bbox[3]
+        and block.block_type == "body"
+    )
+    assert architecture_body.keepout_bboxes
+    bottom_redact = max(architecture_body.redact_bboxes or [], key=lambda bbox: bbox[3])
+    first_formula_top = min(bbox[1] for bbox in architecture_body.keepout_bboxes)
     assert bottom_redact[3] <= first_formula_top - 1.19
     formula_suffix = next(
         block for block, text in zip(blocks, texts) if text == "from four"
@@ -269,8 +346,9 @@ def test_gears_data_collection_formula_fragments_keep_anchor_alignment():
         if "collect a dataset" in block.text
     )
 
-    assert data_collection.text.startswith("Data Collection")
-    assert data_collection.bold_prefix
+    heading = next(block for block in blocks if block.text.strip() == "Data Collection.")
+    assert heading.block_type == "run_in_heading"
+    assert heading.bold
     assert len(data_collection.formula_anchors) == len(
         SENTINEL_RUN_RE.findall(data_collection.text)
     )
@@ -286,8 +364,8 @@ def test_gears_runin_architecture_heading_is_split_and_bold():
         if "Architecture" in block.text
     )
 
-    assert architecture.block_type == "body"
-    assert architecture.bold_prefix
+    assert architecture.block_type == "run_in_heading"
+    assert architecture.bold
 
 
 def test_otf_multi_letter_formula_subscript_is_protected():
@@ -314,9 +392,8 @@ def test_otf_inline_kernel_formula_stays_native_as_one_spatial_cluster():
 def test_flashsac_formula_split_prose_is_one_translation_unit():
     texts = _plain_unit_texts("flashsac_p6_formula_prose.pdf")
 
-    matches = [text for text in texts if "Weight Normalization" in text]
-    assert len(matches) == 1
-    assert "This constrains the network" in matches[0]
+    assert texts.count("Weight Normalization.") == 1
+    assert any("This constrains the network" in text for text in texts)
 
 
 def test_flashsac_inline_variance_script_moves_with_formula():
@@ -418,9 +495,12 @@ class _OTFStructureTranslator(_GoldenStubTranslator):
                 placeholders = " ".join(re.findall(r"⟦\d+⟧", source))
                 outputs.append(f"因此：{placeholders}，由此可得：")
                 continue
-            if source.startswith("Formulation of OFT"):
+            if source.strip() == "Formulation of OFT":
+                outputs.append("最优流传输的公式化")
+                continue
+            if source.startswith("We begin by de"):
                 outputs.append(
-                    "最优流传输的公式化 我们首先定义最优流传输如下。考虑⟦0⟧和⟦1⟧"
+                    "我们首先定义最优流传输如下。考虑⟦0⟧和⟦1⟧"
                     "是图⟦2⟧上的两个测度，其中⟦3⟧和(⟦4⟧)是两个平衡向量，"
                     "满足⟦5⟧。最优流传输的公式可具体表示为："
                 )
@@ -449,6 +529,302 @@ class _OTFStructureTranslator(_GoldenStubTranslator):
             else:
                 outputs.append(default)
         return outputs
+
+
+class _OTFAcceptanceTranslator(_OTFStructureTranslator):
+    """Deterministic OTF translations used by full-structure acceptance tests."""
+
+    def translate_batch(self, texts):
+        fallback = super().translate_batch(texts)
+        outputs = []
+        for source, default in zip(texts, fallback):
+            placeholders = " ".join(re.findall(r"⟦\d+⟧", source))
+            if source.strip() == "Formulation of OFT":
+                outputs.append("最优流传输的公式化")
+            elif source.startswith("We begin by de"):
+                outputs.append(
+                    "我们首先定义最优流传输如下，考虑"
+                    f"{placeholders}是图上的两个测度。"
+                )
+            elif source.strip() == "Capacitated Constraints on Nodes":
+                outputs.append("节点容量约束")
+            elif source.startswith("Initially, we consider"):
+                outputs.append(
+                    "首先，我们考虑节点上的容量约束，即对式5中的优化"
+                    f"施加约束{placeholders}。为处理这些容量约束，我们执行截断操作，"
+                    "其中该迭代量在式9中定义。"
+                )
+            elif source.strip() == "Convergence of EOFT":
+                outputs.append("EOFT 的收敛性")
+            elif source.startswith("In Figure 5"):
+                outputs.append(
+                    "在图5中，我们展示边际分布如何随迭代次数演化。"
+                    f"{placeholders}结果表明算法稳定收敛。"
+                )
+            elif source.startswith("Published as a conference paper"):
+                outputs.append("发表于 ICLR 2025 的会议论文")
+            elif source.startswith("D DETAILS ABOUT EXPERIMENTS"):
+                outputs.append("实验细节")
+            elif source.startswith("D.1 DETAILS ABOUT PARAMETERS"):
+                outputs.append("D.1 参数细节")
+            elif source.startswith("D.2 DETAILS ABOUT DATASET"):
+                outputs.append("D.2 数据集细节")
+            elif re.match(r"Table [1-7]:", source):
+                number = re.match(r"Table ([1-7]):", source).group(1)
+                outputs.append(f"表{number}：译后表注需要与表格横线保持安全间距")
+            else:
+                outputs.append(default)
+        return outputs
+
+
+class _OTFNodeResidualTranslator(_OTFAcceptanceTranslator):
+    """Intentionally leaves the page-7 prose in English for QA testing."""
+
+    def translate_batch(self, texts):
+        translated = super().translate_batch(texts)
+        return [
+            source if source.startswith("Initially, we consider") else target
+            for source, target in zip(texts, translated)
+        ]
+
+
+def _page_spans(page):
+    return [
+        span
+        for block in page.get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+        if span.get("text", "").strip()
+    ]
+
+
+def _span_is_bold(span):
+    font = span.get("font", "").casefold()
+    return any(marker in font for marker in ("bold", "w6", "heiti", "cmbx"))
+
+
+def test_otf_page7_capacitated_node_prose_is_a_translation_unit():
+    blocks = _unit_blocks("otf_p7_capacitated_constraints.pdf")
+    texts = [
+        " ".join(block.text.replace("\ue000", "").replace("\ue001", "").split())
+        for block in blocks
+    ]
+
+    heading = next(
+        block
+        for block, text in zip(blocks, texts)
+        if text == "Capacitated Constraints on Nodes"
+    )
+    body = next(text for text in texts if text.startswith("Initially, we consider"))
+    assert heading.block_type == "run_in_heading"
+    assert heading.bold
+    assert "q" in body
+    assert "Eq. 5" in body
+    assert "Eq. 9" in body
+
+
+def test_otf_page7_node_prose_translates_while_math_and_eq_links_survive(tmp_path):
+    fixture_pdf = FIXTURES / "otf_p7_capacitated_constraints.pdf"
+    input_pdf = tmp_path / "otf-p7-linked.pdf"
+    source = fitz.open(fixture_pdf)
+    eq5_link = next(
+        link
+        for link in source[0].get_links()
+        if link.get("nameddest") == "equation.3.5"
+    )
+    source[0].insert_link(
+        {
+            "kind": fitz.LINK_URI,
+            "from": eq5_link["from"],
+            "uri": "https://example.invalid/equation.3.5",
+        }
+    )
+    source.save(input_pdf)
+    source.close()
+    output_pdf = tmp_path / "otf-p7.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_OTFAcceptanceTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    text = " ".join(output[0].get_text("text").split())
+    links = output[0].get_links()
+    output.close()
+
+    assert "Capacitated Constraints on Nodes" not in text
+    assert "Initially, we consider" not in text
+    assert "节点容量约束" in text
+    assert "q" in text and "r" in text
+    assert "式5" in text and "式9" in text
+    assert any(
+        link.get("uri") == "https://example.invalid/equation.3.5"
+        for link in links
+    )
+
+
+def test_otf_page7_untranslated_prose_is_a_qa_error(tmp_path):
+    input_pdf = FIXTURES / "otf_p7_capacitated_constraints.pdf"
+    output_pdf = tmp_path / "otf-p7-residual.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_OTFNodeResidualTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    issues = verify_translation_issues(input_pdf, output_pdf)
+    assert any(
+        issue.code == "untranslated_english" and issue.severity == "error"
+        for issue in issues
+    )
+
+
+def test_otf_page4_runin_bold_range_and_reading_order(tmp_path):
+    output_pdf = tmp_path / "otf-p4-structure.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p4_runin_formula.pdf",
+        output_pdf=output_pdf,
+        translator=_OTFAcceptanceTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    page = output[0]
+    spans = _page_spans(page)
+    text = " ".join(page.get_text("text").split())
+    output.close()
+
+    heading = [span for span in spans if "最优流传输的公式化" in span["text"]]
+    lines: dict[float, list[dict]] = {}
+    for span in spans:
+        lines.setdefault(round(float(span["origin"][1]), 1), []).append(span)
+    body = next(
+        sorted(line, key=lambda span: span["bbox"][0])
+        for line in lines.values()
+        if "我们首先" in "".join(
+            span["text"] for span in sorted(line, key=lambda span: span["bbox"][0])
+        )
+    )
+    body = [span for span in body if re.search(r"[\u4e00-\u9fff]", span["text"])]
+    assert heading and all(_span_is_bold(span) for span in heading)
+    assert "我们首先" in "".join(span["text"] for span in body)
+    assert all(not _span_is_bold(span) for span in body)
+    compact = text.replace(" ", "")
+    assert "P1" in compact and "U(a,b)" in compact
+    assert "in Eq. 1." not in text
+
+
+def test_otf_page9_runin_bold_does_not_spill_into_body(tmp_path):
+    output_pdf = tmp_path / "otf-p9-structure.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p9_table_formula.pdf",
+        output_pdf=output_pdf,
+        translator=_OTFAcceptanceTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    spans = _page_spans(output[0])
+    output.close()
+
+    heading = [span for span in spans if "EOFT 的收敛性" in span["text"]]
+    body = [span for span in spans if "在图5" in span["text"]]
+    assert heading and all(_span_is_bold(span) for span in heading)
+    assert body and all(not _span_is_bold(span) for span in body)
+
+
+def test_otf_repeated_header_is_translated_on_every_page():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "otf_full_structure.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    pages = {
+        block.page_index
+        for block, _, _ in units
+        if "Published as a conference paper" in strip_sentinels(block.text)
+    }
+    source.close()
+
+    assert pages == set(range(19))
+
+
+def test_otf_appendix_heading_keeps_source_heading_role():
+    blocks = _unit_blocks("otf_p16_appendix_tables.pdf")
+    appendix = next(
+        block for block in blocks if "DETAILS ABOUT EXPERIMENTS" in block.text
+    )
+    d1 = next(block for block in blocks if "D.1 DETAILS ABOUT PARAMETERS" in block.text)
+
+    assert appendix.block_type == "heading"
+    assert appendix.bold
+    assert appendix.font_size >= d1.font_size + 0.5
+    assert appendix.bbox[0] <= d1.bbox[0] + 0.5
+
+
+@pytest.mark.parametrize(
+    ("fixture", "table_numbers"),
+    [
+        ("otf_p8_typography.pdf", (1,)),
+        ("otf_p9_table_formula.pdf", (2, 3)),
+        ("otf_p16_appendix_tables.pdf", (4, 5)),
+        ("otf_p17_appendix_table.pdf", (6, 7)),
+    ],
+)
+def test_otf_caption_union_glyph_clearance_is_at_least_three_points(
+    tmp_path, fixture, table_numbers
+):
+    output_pdf = tmp_path / fixture
+    translate_pdf(
+        input_pdf=FIXTURES / fixture,
+        output_pdf=output_pdf,
+        translator=_OTFAcceptanceTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    page = output[0]
+    source = fitz.open(FIXTURES / fixture)
+    source_page = source[0]
+    spans = _page_spans(page)
+    source_rules = sorted(
+        float(drawing["rect"].y0)
+        for drawing in source_page.get_drawings()
+        if drawing["rect"].width >= 100.0
+        and drawing["rect"].height <= 0.25
+    )
+    for number in table_numbers:
+        seeds = [span for span in spans if f"表{number}：" in span["text"]]
+        assert seeds, f"missing translated caption for Table {number}"
+        seed_top = min(span["bbox"][1] for span in seeds)
+        seed_bottom = max(span["bbox"][3] for span in seeds)
+        caption_spans = [
+            span
+            for span in spans
+            if seed_top - 1.0 <= span["bbox"][1]
+            and span["bbox"][3] <= seed_bottom + 24.0
+            and re.search(r"[\u4e00-\u9fff]", span["text"])
+        ]
+        union_bottom = max(span["bbox"][3] for span in caption_spans)
+        source_caption = next(
+            block
+            for block in _unit_blocks(fixture)
+            if re.match(
+                rf"Table {number}\s*:",
+                " ".join(
+                    block.text.replace("\ue000", "").replace("\ue001", "").split()
+                ),
+            )
+        )
+        first_rule = min(
+            rule for rule in source_rules if rule >= source_caption.bbox[1]
+        )
+        assert first_rule - union_bottom >= 3.0
+    source.close()
+    output.close()
 
 
 def test_otf_runin_heading_starts_at_source_column_before_inline_math(tmp_path):
@@ -561,6 +937,115 @@ def test_otf_appendix_list_has_uniform_size_and_table_caption_clearance(tmp_path
     assert max(sizes) - min(sizes) <= 0.25
     assert rules_below
     assert min(rules_below) - caption["bbox"][3] >= 2.0
+
+
+def _insert_qa_cjk_text(
+    source_pdf: Path,
+    output_pdf: Path,
+    *,
+    point: tuple[float, float],
+    text: str,
+    size: float,
+    bold: bool = False,
+) -> None:
+    document = fitz.open(source_pdf)
+    page = document[0]
+    font_file = FIXTURES.parent.parent / "data/fonts" / (
+        "HiraginoSansGB-W6.ttf" if bold else "SongtiSC-Regular.ttf"
+    )
+    alias = "qa-bold" if bold else "qa-body"
+    page.insert_font(fontname=alias, fontfile=str(font_file))
+    page.insert_text(point, text, fontname=alias, fontsize=size)
+    document.save(output_pdf)
+    document.close()
+
+
+def test_otf_qa_detects_runin_bold_scope_spill_with_coordinates(tmp_path):
+    translated_pdf = tmp_path / "otf-p4-clean.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p4_runin_formula.pdf",
+        output_pdf=translated_pdf,
+        translator=_OTFAcceptanceTranslator(),
+        preserve_graphics_text=True,
+    )
+    corrupted_pdf = tmp_path / "otf-p4-bold-spill.pdf"
+    _insert_qa_cjk_text(
+        translated_pdf,
+        corrupted_pdf,
+        point=(235.0, 108.0),
+        text="错误粗体扩散",
+        size=9.0,
+        bold=True,
+    )
+
+    issues = verify_translation_issues(
+        FIXTURES / "otf_p4_runin_formula.pdf",
+        corrupted_pdf,
+    )
+    spill = next(issue for issue in issues if issue.code == "font_role_bold_spill")
+    assert spill.severity == "error"
+    assert "x=" in spill.message and "y=" in spill.message
+
+
+def test_otf_qa_detects_body_font_size_outlier_over_half_point(tmp_path):
+    translated_pdf = tmp_path / "otf-p17-clean.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p17_appendix_table.pdf",
+        output_pdf=translated_pdf,
+        translator=_OTFStructureTranslator(),
+        preserve_graphics_text=True,
+    )
+    corrupted_pdf = tmp_path / "otf-p17-size-outlier.pdf"
+    _insert_qa_cjk_text(
+        translated_pdf,
+        corrupted_pdf,
+        point=(200.0, 518.0),
+        text="异常字号",
+        size=6.0,
+    )
+
+    issues = verify_translation_issues(
+        FIXTURES / "otf_p17_appendix_table.pdf",
+        corrupted_pdf,
+    )
+    outlier = next(issue for issue in issues if issue.code == "font_role_size_mismatch")
+    assert outlier.severity == "error"
+    assert "6.00pt" in outlier.message
+
+
+def test_otf_qa_uses_raster_ink_to_detect_formula_text_collision(tmp_path):
+    translated_pdf = tmp_path / "otf-p4-clean.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p4_runin_formula.pdf",
+        output_pdf=translated_pdf,
+        translator=_OTFAcceptanceTranslator(),
+        preserve_graphics_text=True,
+    )
+    document = fitz.open(translated_pdf)
+    formula_span = next(
+        span
+        for block in document[0].get_text("dict")["blocks"]
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+        if "P1" in span.get("text", "")
+    )
+    document.close()
+    corrupted_pdf = tmp_path / "otf-p4-raster-overlap.pdf"
+    _insert_qa_cjk_text(
+        translated_pdf,
+        corrupted_pdf,
+        point=(formula_span["bbox"][0], formula_span["origin"][1]),
+        text="重叠",
+        size=float(formula_span["size"]),
+    )
+
+    issues = verify_translation_issues(
+        FIXTURES / "otf_p4_runin_formula.pdf",
+        corrupted_pdf,
+    )
+    overlap = next(issue for issue in issues if issue.code == "raster_ink_overlap")
+    assert overlap.severity == "error"
+    assert "formula-text" in overlap.message
 
 
 @pytest.mark.parametrize("fixture", GOLDEN_PAGES)
