@@ -95,6 +95,9 @@ GOLDEN_PAGES = [
     # display equation and must not merge into the following prose.
     "guidedvla_p15_piecewise.pdf",
     "guidedvla_p21_formula.pdf",
+    # GuidedVLA p6: a full-width chart caption must not make the left text
+    # column full-width or hide the analysis prose immediately below it.
+    "guidedvla_p6_analysis_overlap.pdf",
     # GuidedVLA p1: fragmented author and affiliation records must stay source
     # metadata while the paper title, abstract, and figure caption translate.
     "guidedvla_p1_metadata.pdf",
@@ -424,6 +427,63 @@ def test_guidedvla_single_line_numbered_equations_keep_source_text(tmp_path):
         issue.code == "untranslated_english"
         for issue in verify_translation_issues(input_pdf, output_pdf)
     )
+
+
+def test_guidedvla_page6_column_width_ignores_full_width_caption():
+    from pdf_zh_translator.pdf_layout import detect_columns
+
+    columns = detect_columns(_unit_blocks("guidedvla_p6_analysis_overlap.pdf"))
+
+    assert len(columns) == 2
+    assert columns[0][0] == pytest.approx(49.0, abs=2.0)
+    assert columns[0][1] <= 260.0
+    assert columns[1][0] == pytest.approx(312.0, abs=2.0)
+
+
+def test_guidedvla_page6_prose_below_chart_is_translated():
+    texts = _plain_unit_texts("guidedvla_p6_analysis_overlap.pdf")
+
+    expected_fragments = (
+        "Detailed success criteria are provided in Appendix L2.",
+        "4) Does our attention head specialization",
+        "5) How different architectural choices for guidance",
+        "A. Task-suite Analysis and Cross-benchmark Generalization",
+        "Object Head: Visual Generalization.",
+    )
+    for fragment in expected_fragments:
+        assert any(fragment in text for text in texts), fragment
+
+
+def test_guidedvla_page6_lettered_subsection_keeps_heading_role():
+    from pdf_zh_translator.pdf_layout import requested_translation_font_size
+
+    blocks = _unit_blocks("guidedvla_p6_analysis_overlap.pdf")
+    subsection = next(
+        block
+        for block in blocks
+        if "A. Task-suite Analysis and Cross-benchmark Generalization" in block.text
+    )
+
+    assert subsection.block_type == "heading"
+    assert subsection.no_merge
+    assert not subsection.bold
+    assert requested_translation_font_size(
+        subsection,
+        min_font_size=5.0,
+        font_scale=1.0,
+    ) == pytest.approx(subsection.font_size)
+
+
+def test_guidedvla_page6_bad_cross_column_overlap_is_qa_error():
+    issues = verify_translation_issues(
+        FIXTURES / "guidedvla_p6_analysis_overlap.pdf",
+        FIXTURES / "guidedvla_p6_analysis_overlap_bad_translated.pdf",
+    )
+
+    overlap_issues = [issue for issue in issues if issue.code == "text_overlap"]
+    assert overlap_issues
+    assert all(issue.page == 1 for issue in overlap_issues)
+    assert any(issue.severity == "error" for issue in overlap_issues)
 
 
 def test_otf_multi_letter_formula_subscript_is_protected():

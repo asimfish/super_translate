@@ -1471,8 +1471,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
 
         for i in range(len(text_bboxes)):
             for j in range(i + 1, len(text_bboxes)):
-                (x0a, y0a, x1a, y1a), _ = text_bboxes[i]
-                (x0b, y0b, x1b, y1b), _ = text_bboxes[j]
+                (x0a, y0a, x1a, y1a), text_a = text_bboxes[i]
+                (x0b, y0b, x1b, y1b), text_b = text_bboxes[j]
                 h_overlap = max(0, min(x1a, x1b) - max(x0a, x0b))
                 v_overlap = max(0, min(y1a, y1b) - max(y0a, y0b))
                 if h_overlap > 10 and v_overlap > 8:
@@ -1483,6 +1483,12 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                             message=(
                                 f"Page {page_idx + 1}: text blocks overlap near "
                                 f"y={max(y0a, y0b):.0f}"
+                            ),
+                            severity=(
+                                "error"
+                                if _CJK_DETECT_RE.search(text_a)
+                                and _CJK_DETECT_RE.search(text_b)
+                                else "warning"
                             ),
                         )
                     )
@@ -2762,7 +2768,9 @@ def _font_role_consistency_issues(
                 )
             continue
         if block.block_type in {"heading", "run_in_heading"}:
-            if not any(_span_uses_bold_weight(span) for span in role_spans):
+            if block.bold and not any(
+                _span_uses_bold_weight(span) for span in role_spans
+            ):
                 bbox = role_spans[0]["bbox"]
                 issues.append(
                     TranslationIssue(
@@ -4911,6 +4919,16 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
         if bbox_is_graphic_candidate(bbox, page_rect):
             drawing_candidates.append(bbox)
 
+    drawing_candidates = [
+        bbox
+        for bbox in drawing_candidates
+        if not _image_bbox_clipped_by_wide_drawing_band(
+            bbox,
+            drawing_candidates,
+            page_rect,
+        )
+    ]
+
     candidates = [
         bbox
         for bbox in image_candidates
@@ -5987,13 +6005,17 @@ def detect_columns(blocks: List[TextBlock]) -> List[Tuple[float, float]]:
     for x0 in sorted_x0s[1:]:
         if abs(x0 - primary_x0) > _COLUMN_CLUSTER_GAP:
             columns = []
-            for x in [primary_x0, x0]:
+            column_xs = sorted([primary_x0, x0])
+            for index, x in enumerate(column_xs):
                 widths = x0_to_widths[x]
+                bounded_widths = []
+                if index + 1 < len(column_xs):
+                    max_column_width = column_xs[index + 1] - x - 4.0
+                    bounded_widths = [w for w in widths if w <= max_column_width]
                 full_widths = [w for w in widths if w > 300]
-                widths_to_use = full_widths or widths
+                widths_to_use = bounded_widths or full_widths or widths
                 col_w = float(_stats.mode(widths_to_use))
                 columns.append((float(x), col_w))
-            columns.sort(key=lambda c: c[0])
             return columns
 
     # Single column
@@ -6552,7 +6574,8 @@ def classify_blocks(
 
         if block.block_type == "heading":
             block.should_translate = True
-            block.bold = True
+            if not _APPENDIX_STYLE_HEADING_LINE_RE.match(plain):
+                block.bold = True
             block.no_merge = True
             continue
 
@@ -8272,7 +8295,10 @@ def line_looks_like_section_heading(line: _LineRec) -> bool:
         tail = compact[prefix.end() :].strip() if prefix else compact
     else:
         tail = compact
-    tail_words = _PROSE_WORD_RE.findall(tail or compact)
+    tail_words = re.findall(
+        r"[A-Za-z]{3,}(?:-[A-Za-z]{2,})*",
+        tail or compact,
+    )
     if not tail_words:
         return False
     if re.search(r"[!?。！？]$", compact):
@@ -8293,9 +8319,19 @@ def heading_block_from_line(page_index: int, line: _LineRec) -> Optional[TextBlo
     block = accumulator.flush(page_index)
     if block is None:
         return None
+    plain = " ".join(strip_sentinels(line.text).split()).strip()
+    source_span_bold = any(
+        span_is_bold(span)
+        for span in line.spans
+        if normalize_span_text(span.get("text", "")).strip()
+    )
     block.block_type = "heading"
     block.should_translate = True
-    block.bold = True
+    block.bold = (
+        source_span_bold
+        if _APPENDIX_STYLE_HEADING_LINE_RE.match(plain)
+        else True
+    )
     block.no_merge = True
     block.preserve_position = False
     return block
@@ -11055,7 +11091,13 @@ def requested_translation_font_size(
     font_scale: float,
 ) -> float:
     base_size = max(min_font_size, block.font_size * font_scale)
-    if block.block_type == "heading":
+    plain = " ".join(strip_sentinels(block.text).split()).strip()
+    source_weight_lettered_heading = bool(
+        block.block_type == "heading"
+        and not block.bold
+        and _APPENDIX_STYLE_HEADING_LINE_RE.match(plain)
+    )
+    if block.block_type == "heading" and not source_weight_lettered_heading:
         return max(base_size, block.font_size * 1.12)
     return base_size
 
