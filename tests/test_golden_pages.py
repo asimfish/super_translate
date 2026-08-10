@@ -386,6 +386,46 @@ def test_gears_runin_architecture_heading_is_split_and_bold():
     assert architecture.bold
 
 
+def test_guidedvla_single_line_numbered_equations_are_not_translation_units():
+    texts = _plain_unit_texts("guidedvla_p23_display_equation.pdf")
+
+    for equation_number in ("(17)", "(18)", "(19)"):
+        assert not any(equation_number in text for text in texts)
+
+
+def test_guidedvla_single_line_numbered_equations_keep_source_text(tmp_path):
+    input_pdf = FIXTURES / "guidedvla_p23_display_equation.pdf"
+    output_pdf = tmp_path / "guidedvla-p23-out.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_GoldenStubTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    def numbered_equations(path):
+        equations = {}
+        with fitz.open(path) as document:
+            for block in document[0].get_text("dict")["blocks"]:
+                if block.get("type") != 0:
+                    continue
+                text = "".join(
+                    span["text"]
+                    for line in block["lines"]
+                    for span in line["spans"]
+                )
+                for equation_number in ("(17)", "(18)", "(19)"):
+                    if equation_number in text:
+                        equations[equation_number] = " ".join(text.split())
+        return equations
+
+    assert numbered_equations(output_pdf) == numbered_equations(input_pdf)
+    assert not any(
+        issue.code == "untranslated_english"
+        for issue in verify_translation_issues(input_pdf, output_pdf)
+    )
+
+
 def test_otf_multi_letter_formula_subscript_is_protected():
     from pdf_zh_translator.pdf_layout import protect_text
 

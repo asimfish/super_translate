@@ -7473,8 +7473,58 @@ def _record_has_fragile_line_overlap(record: _RawBlockRec) -> bool:
     return False
 
 
+def _record_is_single_line_numbered_display_equation(record: _RawBlockRec) -> bool:
+    """Recognize a display formula whose number shares its visual baseline.
+
+    Some publishers emit the equation number as a second PyMuPDF line while
+    others append it to the formula line.  Math-font function names can make
+    that formula look like prose, so geometry and math density are stronger
+    signals than the prose-word count here.
+    """
+    if not 1 <= len(record.lines) <= 2:
+        return False
+
+    def compact_text(line: _LineRec) -> str:
+        return "".join(strip_sentinels(line.text).split())
+
+    def formula_candidate(line: _LineRec) -> bool:
+        compact = compact_text(line)
+        if not compact or not line.math_run_bboxes:
+            return False
+        math_ratio = sentinel_char_count(line.text) / len(compact)
+        return math_ratio >= 0.35 and bool(
+            re.search(r"[=<>≤≥≈≃≠+−*/]", strip_sentinels(line.text))
+        )
+
+    if len(record.lines) == 1:
+        line = record.lines[0]
+        compact = compact_text(line)
+        number = EQUATION_NUMBER_RE.search(compact)
+        return bool(
+            number
+            and number.end() == len(compact)
+            and formula_candidate(line)
+        )
+
+    number_lines = [
+        line
+        for line in record.lines
+        if EQUATION_NUMBER_RE.fullmatch(compact_text(line))
+    ]
+    if len(number_lines) != 1:
+        return False
+    formula_lines = [line for line in record.lines if line is not number_lines[0]]
+    return bool(
+        len(formula_lines) == 1
+        and lines_share_y_band(formula_lines[0], number_lines[0])
+        and formula_candidate(formula_lines[0])
+    )
+
+
 def block_is_strong_math(record: _RawBlockRec) -> bool:
     """Blocks that are unambiguously display-equation material."""
+    if _record_is_single_line_numbered_display_equation(record):
+        return True
     # PyMuPDF can merge prose paragraphs and their display equations into one
     # raw block; several full prose lines mean this is a paragraph carrying
     # equations (handled line-wise by formula keepouts), not an equation.
@@ -9094,6 +9144,9 @@ def segments_from_record(
     For equation zones only full prose lines are extracted (the formula
     typesetting is preserved); for normal blocks a residual display-equation
     line still splits the segment and keeps its original rendering."""
+    if equation_record and _record_is_single_line_numbered_display_equation(record):
+        return []
+
     formula_tail_segments = segments_from_formula_tail_prose(page_index, record)
     if formula_tail_segments is not None:
         return formula_tail_segments
