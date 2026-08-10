@@ -484,16 +484,14 @@ def translate_pdf(
 
     source_document = fitz.open(str(input_pdf))
 
-    protected_sources = [protected for _, protected, _ in units]
     block_types = [block.block_type for block, _, _ in units]
 
     # Set block types for context-aware translation prompts
     if hasattr(translator, "block_types"):
         translator.block_types = block_types
-    translations, request_count, response_count = _translate_unique_sources(
+    translations, request_count, response_count = _translate_units_with_source_style_runs(
         translator,
-        protected_sources,
-        block_types,
+        units,
     )
     if response_count != request_count:
         warnings.append(
@@ -513,14 +511,17 @@ def translate_pdf(
     if retry_indexes:
         if hasattr(translator, "block_types"):
             translator.block_types = [units[index][0].block_type for index in retry_indexes]
-        retry_sources = [protected_sources[index] for index in retry_indexes]
+        retry_units = [units[index] for index in retry_indexes]
         invalidate = getattr(translator, "invalidate", None)
         if callable(invalidate):
+            retry_sources, _, _ = _source_style_translation_plan(
+                translator,
+                retry_units,
+            )
             invalidate(retry_sources)
-        retry_outputs, _, _ = _translate_unique_sources(
+        retry_outputs, _, _ = _translate_units_with_source_style_runs(
             translator,
-            retry_sources,
-            [units[index][0].block_type for index in retry_indexes],
+            retry_units,
         )
         for index, retry_text in zip(retry_indexes, retry_outputs):
             retry_cleaned, retry_missing = _restore_unit_translation(
@@ -976,6 +977,98 @@ def _translate_unique_sources(
         len(unique_sources),
         response_count,
     )
+
+
+def _source_bold_prefix_end(block: TextBlock, protected_source: str) -> Optional[int]:
+    """Return the source span boundary for a body-leading bold label."""
+    if block.bold or not block.bold_prefix or block.block_type != "body":
+        return None
+    stripped = protected_source.lstrip()
+    leading = len(protected_source) - len(stripped)
+    for term in block.bold_terms:
+        candidate = term.strip()
+        if not candidate or sentinel_char_count(candidate):
+            continue
+        match = re.search(re.escape(candidate), stripped, re.IGNORECASE)
+        if match is None or match.start() > 4:
+            continue
+        prefix_lead = stripped[: match.start()]
+        if re.search(r"[A-Za-z]", prefix_lead):
+            continue
+        end = match.end()
+        while end < len(stripped) and stripped[end] in ".:：":
+            end += 1
+        suffix = stripped[end:].strip()
+        if substantial_prose_word_count(strip_sentinels(suffix)) < 2:
+            continue
+        return leading + end
+    return None
+
+
+def _translate_units_with_source_style_runs(
+    translator: object,
+    units: Sequence[Tuple[TextBlock, str, Dict[str, str]]],
+) -> Tuple[List[str], int, int]:
+    """Translate source-derived run-in prefix/body ranges independently."""
+    if not getattr(translator, "supports_source_style_segments", True):
+        return _translate_unique_sources(
+            translator,
+            [protected_source for _block, protected_source, _mapping in units],
+            [block.block_type for block, _protected_source, _mapping in units],
+        )
+    sources, block_types, plans = _source_style_translation_plan(translator, units)
+    outputs, request_count, response_count = _translate_unique_sources(
+        translator,
+        sources,
+        block_types,
+    )
+    translated_units: List[str] = []
+    for (block, _protected_source, _mapping), (start, count) in zip(units, plans):
+        if count == 1:
+            translated_units.append(outputs[start])
+            continue
+        translated_prefix = outputs[start].strip()
+        translated_body = outputs[start + 1].strip()
+        block.translated_bold_prefix_chars = len(translated_prefix)
+        translated_units.append(
+            f"{translated_prefix} {translated_body}"
+            if translated_body
+            else translated_prefix
+        )
+    return translated_units, request_count, response_count
+
+
+def _source_style_translation_plan(
+    translator: object,
+    units: Sequence[Tuple[TextBlock, str, Dict[str, str]]],
+) -> Tuple[List[str], List[str], List[Tuple[int, int]]]:
+    """Build the exact source requests used for translation and invalidation."""
+    sources: List[str] = []
+    block_types: List[str] = []
+    plans: List[Tuple[int, int]] = []
+    segment_source_styles = getattr(translator, "supports_source_style_segments", True)
+    for block, protected_source, _mapping in units:
+        prefix_end = (
+            _source_bold_prefix_end(block, protected_source)
+            if segment_source_styles
+            else None
+        )
+        if prefix_end is None:
+            plans.append((len(sources), 1))
+            sources.append(protected_source)
+            block_types.append(block.block_type)
+            continue
+        prefix_source = protected_source[:prefix_end].strip()
+        body_source = protected_source[prefix_end:].strip()
+        if not prefix_source or not body_source:
+            plans.append((len(sources), 1))
+            sources.append(protected_source)
+            block_types.append(block.block_type)
+            continue
+        plans.append((len(sources), 2))
+        sources.extend((prefix_source, body_source))
+        block_types.extend(("run_in_heading", block.block_type))
+    return sources, block_types, plans
 
 
 def _page_links_for_restore(page: object) -> List[dict]:

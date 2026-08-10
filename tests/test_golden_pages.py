@@ -198,6 +198,51 @@ def test_otf_runin_heading_reflows_as_a_bold_prefix():
     assert "solutions are typically obtained indirectly" in strip_sentinels(exact.text)
 
 
+def test_otf_runin_translation_uses_source_bold_span_boundary(tmp_path):
+    output_pdf = tmp_path / "otf-runin-source-style.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p4_runin_formula.pdf",
+        output_pdf=output_pdf,
+        translator=_ProductionRunInTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    with fitz.open(output_pdf) as output:
+        spans = _page_spans(output[0])
+    prefix_text = "最优流传输的精确求解"
+    prefix = next(span for span in spans if span["text"].startswith(prefix_text))
+    body = next(span for span in spans if "为求解式2" in span["text"])
+
+    assert prefix["text"] == prefix_text
+    assert _span_is_bold(prefix)
+    assert not _span_is_bold(body)
+    assert abs(prefix["origin"][1] - body["origin"][1]) <= 1.0
+
+
+def test_otf_runin_retry_invalidates_segment_cache_keys(tmp_path):
+    output_pdf = tmp_path / "otf-runin-retry.pdf"
+    translator = _RunInInvalidationRequiredTranslator()
+
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p4_runin_formula.pdf",
+        output_pdf=output_pdf,
+        translator=translator,
+        preserve_graphics_text=True,
+    )
+
+    with fitz.open(output_pdf) as output:
+        translated_text = output[0].get_text("text")
+    assert any(
+        any(source.startswith("For solving the optimization in Eq. 2") for source in batch)
+        for batch in translator.invalidated
+    )
+    assert any(
+        source.startswith("For solving the optimization in Eq. 2")
+        for source in translator.retried_segments
+    )
+    assert "For solving the optimization in Eq. 2" not in translated_text
+
+
 def test_otf_runin_labels_keep_body_size_and_method_bold_terms():
     blocks = _unit_blocks("otf_p8_typography.pdf")
     texts = [
@@ -1127,6 +1172,57 @@ class _GoldenStubTranslator:
         return outputs
 
 
+class _ProductionRunInTranslator(_GoldenStubTranslator):
+    """Return the production wording that exposed run-in bold spill."""
+
+    def translate_batch(self, texts):
+        fallback = super().translate_batch(texts)
+        outputs = []
+        for source, default in zip(texts, fallback):
+            compact = " ".join(source.split())
+            if compact == "Exact Solving for OFT":
+                outputs.append("最优流传输的精确求解")
+            elif compact.startswith("For solving the optimization in Eq. 2"):
+                outputs.append(
+                    "为求解式2中的优化问题，在最优传输领域，通常间接获得解。"
+                    "具体而言，可首先利用测地距离（或最短路径度量）定义代价矩阵："
+                )
+            elif compact.startswith("Exact Solving for OFT For solving"):
+                outputs.append(
+                    "最优流传输的精确求解为求解式2中的优化问题，"
+                    "在最优传输领域，通常间接获得解。具体而言，可首先利用测地距离"
+                    "（或最短路径度量）定义代价矩阵："
+                )
+            elif compact == "Formulation for Entropic OFT":
+                outputs.append("熵正则化最优流传输的形式化定义")
+            elif compact.startswith("Differing from previous CPU-based algorithms"):
+                outputs.append(default)
+            else:
+                outputs.append(default)
+        return outputs
+
+
+class _RunInInvalidationRequiredTranslator(_ProductionRunInTranslator):
+    def __init__(self):
+        self.invalidated = []
+        self.retried_segments = []
+
+    def invalidate(self, texts):
+        self.invalidated.append(list(texts))
+
+    def translate_batch(self, texts):
+        invalidated = {text for batch in self.invalidated for text in batch}
+        outputs = super().translate_batch(texts)
+        for index, source in enumerate(texts):
+            if source.startswith("For solving the optimization in Eq. 2"):
+                if source in invalidated:
+                    self.retried_segments.append(source)
+                    outputs[index] = "为求解式2中的优化问题，在最优传输领域，通常间接获得解。"
+                else:
+                    outputs[index] = source
+        return outputs
+
+
 class _CDGSRecordTranslator(_GoldenStubTranslator):
     _TRANSLATIONS = {
         "• Scene:": "• 场景：",
@@ -1203,10 +1299,22 @@ class _OTFStructureTranslator(_GoldenStubTranslator):
                     "满足⟦5⟧。最优流传输的公式可具体表示为："
                 )
                 continue
-            if source.startswith("Theorem 1."):
+            if source.strip() == "Global Convergence":
+                outputs.append("全局收敛性")
+                continue
+            if source.startswith("Then we give the convergence discussion"):
+                outputs.append(
+                    "接下来我们讨论收敛性。遵循 Franklin 与 Lorenz（1989），"
+                    "我们采用希尔伯特投影度量证明全局收敛性，其定义为："
+                )
+                continue
+            if source.strip() == "Theorem 1.":
+                outputs.append("定理 1.")
+                continue
+            if source.startswith("The iterative scheme for OFT-Sinkhron"):
                 placeholders = " ".join(re.findall(r"⟦\d+⟧", source))
                 outputs.append(
-                    "定理 1. OFT-Sinkhorn 算法的迭代格式线性收敛。"
+                    "OFT-Sinkhorn 算法的迭代格式线性收敛。"
                     f"更精确地，有 {placeholders} 且"
                 )
                 continue
@@ -1308,9 +1416,11 @@ class _GearsPage5LayoutTranslator(_GoldenStubTranslator):
         fallback = super().translate_batch(texts)
         outputs = []
         for source, default in zip(texts, fallback):
-            if source.startswith("Architecture."):
+            if source.strip() == "Architecture.":
+                outputs.append("架构。")
+            elif source.startswith("We build upon Depth Anything"):
                 outputs.append(
-                    "架构。我们采用Depth Anything V2 Small ⟦3⟧作为骨干，并使用DPT"
+                    "我们采用Depth Anything V2 Small ⟦3⟧作为骨干，并使用DPT"
                     "融合颈部⟦4⟧。给定RGB图像⟦0⟧，ViT骨干网络提取多尺度特征"
                     "⟦1⟧⟦2⟧，共来自四个层级。"
                 )
@@ -1334,9 +1444,11 @@ class _GearsPage8LayoutTranslator(_GoldenStubTranslator):
                     "以收集数据集⟦0⟧，其中⟦1⟧和⟦2⟧分别为头部与胸部相机的RGB图像，"
                     "⟦3⟧为机器人关节位置向量，⟦4⟧为从时刻⟦6⟧开始的⟦5⟧个连续专家动作片段。"
                 )
-            elif source.startswith("Architecture. The di"):
+            elif source.strip() == "Architecture.":
+                outputs.append("架构。")
+            elif source.startswith(('The di"usion policy', "The diffusion policy")):
                 outputs.append(
-                    "架构。扩散策略以冻结的几何编码器（§3.1）作为观测主干，并以一维"
+                    "扩散策略以冻结的几何编码器（§3.1）作为观测主干，并以一维"
                     "扩散变换器（DiT）⟦1⟧作为去噪主干。我们利用条件去噪扩散框架⟦2⟧"
                     "对动作片段⟦0⟧上的条件分布进行建模。每幅相机图像由该编码器独立处理，"
                     "所得特征在通过两条条件路径进入DiT之前进行拼接。编码器输出的密集空间"

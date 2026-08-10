@@ -293,6 +293,8 @@ class CacheOnlyTranslator(Translator):
     and re-run.
     """
 
+    supports_source_style_segments = False
+
     def __init__(self, cache_file: Path) -> None:
         self.cache_file = Path(cache_file)
         self.cache: Dict[str, str] = {}
