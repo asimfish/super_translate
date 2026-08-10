@@ -648,6 +648,19 @@ class _OTFNodeResidualTranslator(_OTFAcceptanceTranslator):
         ]
 
 
+class _GearsTitleTranslator(_GoldenStubTranslator):
+    """Reproduce the production GEARS title wrapping deterministically."""
+
+    _TITLE = "GEARS：通过几何感知与动作扩散实现零样本仿真到真实灵巧操作"
+
+    def translate_batch(self, texts):
+        fallback = super().translate_batch(texts)
+        return [
+            self._TITLE if source.startswith("GEARS: Seeing Geometry") else target
+            for source, target in zip(texts, fallback)
+        ]
+
+
 def _page_spans(page):
     return [
         span
@@ -662,6 +675,67 @@ def _page_spans(page):
 def _span_is_bold(span):
     font = span.get("font", "").casefold()
     return any(marker in font for marker in ("bold", "w6", "heiti", "cmbx"))
+
+
+def test_gears_first_page_title_is_a_title_role():
+    blocks = _unit_blocks("gears_p1_title.pdf")
+    title = next(
+        block
+        for block in blocks
+        if "GEARS: Seeing Geometry" in block.text
+    )
+
+    assert title.block_type == "title"
+
+
+def test_gears_centered_title_has_no_orphan_cjk_line(tmp_path):
+    output_pdf = tmp_path / "gears-title.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "gears_p1_title.pdf",
+        output_pdf=output_pdf,
+        translator=_GearsTitleTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    page = output[0]
+    page_center = float(page.rect.width) / 2.0
+    lines: dict[float, list[dict]] = {}
+    for span in _page_spans(page):
+        if span["bbox"][1] >= 75.0 or not re.search(r"[\u3400-\u9fff]", span["text"]):
+            continue
+        lines.setdefault(round(float(span["origin"][1]), 1), []).append(span)
+    output.close()
+
+    title_lines = [lines[key] for key in sorted(lines)]
+    assert len(title_lines) >= 2
+    line_boxes = [
+        (
+            min(float(span["bbox"][0]) for span in line),
+            max(float(span["bbox"][2]) for span in line),
+        )
+        for line in title_lines
+    ]
+    cjk_counts = [
+        len(re.findall(r"[\u3400-\u9fff]", "".join(span["text"] for span in line)))
+        for line in title_lines
+    ]
+    assert cjk_counts[-1] >= 2
+    assert all(abs((x0 + x1) / 2.0 - page_center) <= 2.0 for x0, x1 in line_boxes)
+    assert (line_boxes[-1][1] - line_boxes[-1][0]) >= 0.3 * max(
+        x1 - x0 for x0, x1 in line_boxes[:-1]
+    )
+
+
+def test_gears_title_orphan_is_a_qa_error():
+    issues = verify_translation_issues(
+        FIXTURES / "gears_p1_title.pdf",
+        FIXTURES / "gears_p1_title_orphan_translated.pdf",
+    )
+
+    orphan = next(issue for issue in issues if issue.code == "font_role_title_orphan")
+    assert orphan.severity == "error"
+    assert "x=" in orphan.message and "y=" in orphan.message
 
 
 def test_otf_page7_capacitated_node_prose_is_a_translation_unit():

@@ -2712,6 +2712,55 @@ def _font_role_consistency_issues(
     for block, role_spans in zip(source_blocks, assignments):
         if not role_spans:
             continue
+        if block.block_type == "title":
+            line_groups: Dict[float, List[dict]] = {}
+            for span in role_spans:
+                origin = span.get("origin")
+                baseline = float(origin[1]) if origin else float(span["bbox"][3])
+                line_groups.setdefault(round(baseline, 1), []).append(span)
+            title_lines = [line_groups[key] for key in sorted(line_groups)]
+            if len(title_lines) >= 2:
+                line_boxes = [
+                    union_bbox(
+                        [tuple(float(value) for value in span["bbox"]) for span in line]
+                    )
+                    for line in title_lines
+                ]
+                final_text = "".join(span.get("text", "") for span in title_lines[-1])
+                final_cjk = len(re.findall(r"[\u3400-\u9fff]", final_text))
+                final_width = line_boxes[-1][2] - line_boxes[-1][0]
+                previous_width = max(box[2] - box[0] for box in line_boxes[:-1])
+                if final_cjk <= 1 or final_width < previous_width * 0.22:
+                    bbox = line_boxes[-1]
+                    issues.append(
+                        TranslationIssue(
+                            page=page_number,
+                            code="font_role_title_orphan",
+                            message=(
+                                f"Page {page_number}: title ends with an orphan line "
+                                f"({final_cjk} CJK glyphs, width ratio "
+                                f"{final_width / max(previous_width, 0.1):.2f}) at "
+                                f"x={bbox[0]:.1f}, y={bbox[1]:.1f}"
+                            ),
+                            severity="error",
+                        )
+                    )
+            if block.bold and not any(
+                _span_uses_bold_weight(span) for span in role_spans
+            ):
+                bbox = role_spans[0]["bbox"]
+                issues.append(
+                    TranslationIssue(
+                        page=page_number,
+                        code="font_role_heading_mismatch",
+                        message=(
+                            f"Page {page_number}: title role lost bold weight at "
+                            f"x={bbox[0]:.1f}, y={bbox[1]:.1f}"
+                        ),
+                        severity="error",
+                    )
+                )
+            continue
         if block.block_type in {"heading", "run_in_heading"}:
             if not any(_span_uses_bold_weight(span) for span in role_spans):
                 bbox = role_spans[0]["bbox"]
@@ -6284,6 +6333,48 @@ def _promote_table_component_blocks(blocks: Sequence[TextBlock]) -> None:
             break
 
 
+def _looks_like_document_title(
+    block: TextBlock,
+    plain: str,
+    blocks: Sequence[TextBlock],
+    page_index: int,
+    page_height: float,
+) -> bool:
+    """Identify the primary first-page title from source typography."""
+    if (
+        page_index != 0
+        or not 12 <= len(plain) <= 240
+        or not 1 <= block.source_lines <= 4
+        or block.bbox[1] > page_height * 0.20
+        or _CAPTION_RE.match(plain)
+        or _REFERENCES_HEADING_RE.match(plain)
+    ):
+        return False
+    top_blocks = [
+        candidate
+        for candidate in blocks
+        if candidate.bbox[1] <= page_height * 0.28
+        and candidate.block_type not in {"footer", "figure_label"}
+    ]
+    if not top_blocks:
+        return False
+    top_size = max(candidate.font_size for candidate in top_blocks)
+    body_sizes = [
+        candidate.font_size
+        for candidate in blocks
+        if candidate.bbox[1] > block.bbox[3]
+        and candidate.source_lines >= 2
+        and len(strip_sentinels(candidate.text)) >= 80
+    ]
+    if not body_sizes:
+        return False
+    body_size = statistics.median(body_sizes)
+    return (
+        block.font_size >= top_size - 0.25
+        and block.font_size >= max(11.0, body_size + 1.5)
+    )
+
+
 def classify_blocks(
     blocks: List[TextBlock],
     page_index: int,
@@ -6296,12 +6387,13 @@ def classify_blocks(
     1. Equation zone → equation (should_translate=False)
     2. Algorithm → algorithm (should_translate=False)
     3. Academic structure label → heading
-    4. Inside image zone + short label → figure_label (should_translate=False)
-    5. Caption pattern → caption (preserve_position=True)
-    6. Bold + numbered + short → heading
-    7. Bibliography → bibliography (should_translate=False)
-    8. Footer → footer (should_translate=False)
-    9. Otherwise → body
+    4. First-page primary title → title
+    5. Inside image zone + short label → figure_label (should_translate=False)
+    6. Caption pattern → caption (preserve_position=True)
+    7. Bold + numbered + short → heading
+    8. Bibliography → bibliography (should_translate=False)
+    9. Footer → footer (should_translate=False)
+    10. Otherwise → body
     """
     for block in blocks:
         text = block.text.strip()
@@ -6410,6 +6502,13 @@ def classify_blocks(
             block.bold = True
             block.no_merge = True
             block.preserve_position = True
+            continue
+
+        if _looks_like_document_title(block, plain, blocks, page_index, page_height):
+            block.block_type = "title"
+            block.should_translate = True
+            block.no_merge = True
+            block.preserve_position = False
             continue
 
         if looks_like_preserved_diagram_label(text):
@@ -10848,6 +10947,16 @@ def detect_centered_blocks(blocks: Sequence[TextBlock], page_width: float) -> Li
         if block.nowrap:
             flags.append(False)
             continue
+        if block.block_type == "title":
+            line_boxes = block.source_line_bboxes or (block.bbox,)
+            flags.append(
+                all(
+                    abs((bbox[0] + bbox[2]) / 2.0 - page_width / 2.0)
+                    <= max(tolerance, page_width * 0.025)
+                    for bbox in line_boxes
+                )
+            )
+            continue
         center = (block.bbox[0] + block.bbox[2]) / 2.0
         delta = abs(center - page_width / 2.0)
         narrow = width <= reference * 0.86
@@ -11631,6 +11740,57 @@ def break_lines(
     return [line for line in lines if line]
 
 
+def balance_centered_title_lines(
+    lines: Sequence[Sequence[_Token]],
+    max_width: float,
+) -> List[List[_Token]]:
+    """Balance a centered title without changing its line count or tokens."""
+    balanced = [list(line) for line in lines]
+    if len(balanced) < 2:
+        return balanced
+
+    def trimmed(tokens: Sequence[_Token]) -> List[_Token]:
+        start = 0
+        end = len(tokens)
+        while start < end and tokens[start].kind == "space":
+            start += 1
+        while end > start and tokens[end - 1].kind == "space":
+            end -= 1
+        return list(tokens[start:end])
+
+    def natural_width(tokens: Sequence[_Token]) -> float:
+        return sum(token.width for token in tokens)
+
+    for index in range(len(balanced) - 1, 0, -1):
+        previous = trimmed(balanced[index - 1])
+        current = trimmed(balanced[index])
+        combined = [*previous, *current]
+        if len(combined) < 2:
+            continue
+        original_delta = abs(natural_width(previous) - natural_width(current))
+        best: Optional[Tuple[float, List[_Token], List[_Token]]] = None
+        for split_at in range(1, len(combined)):
+            left = trimmed(combined[:split_at])
+            right = trimmed(combined[split_at:])
+            if not left or not right:
+                continue
+            if left[-1].kind == "cjk" and left[-1].text in NO_LINE_END:
+                continue
+            if right[0].kind == "cjk" and right[0].text in NO_LINE_START:
+                continue
+            left_width = natural_width(left)
+            right_width = natural_width(right)
+            if left_width > max_width + 0.5 or right_width > max_width + 0.5:
+                continue
+            candidate = (abs(left_width - right_width), left, right)
+            if best is None or candidate[0] < best[0]:
+                best = candidate
+        if best is not None and best[0] + 0.5 < original_delta:
+            balanced[index - 1] = best[1]
+            balanced[index] = best[2]
+    return balanced
+
+
 def stretchable_gaps(line: Sequence[_Token]) -> List[int]:
     """Indices i such that the gap AFTER token i can stretch for justification."""
     gaps: List[int] = []
@@ -12100,6 +12260,8 @@ def translated_text_fits(
                     bold_fonts=bold_fonts,
                     line_widths=widths,
                 )
+                if centered and block.block_type == "title":
+                    lines = balance_centered_title_lines(lines, rect.width)
                 if len(lines) <= len(slots):
                     return True
             size -= 0.25
@@ -12112,6 +12274,8 @@ def translated_text_fits(
             prefer_space_break=centered,
             bold_fonts=bold_fonts,
         )
+        if centered and block.block_type == "title":
+            lines = balance_centered_title_lines(lines, rect.width)
         for leading in leading_options(block):
             if line_block_height(
                 lines,
@@ -12308,6 +12472,8 @@ def insert_translated_text(
         )
 
     size, leading, lines = chosen
+    if centered and block.block_type == "title":
+        lines = balance_centered_title_lines(lines, rect.width)
 
     if len(lines) == 1:
         render_single_line(
