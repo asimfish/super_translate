@@ -16,8 +16,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Noto CJK fonts (translation rendering)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - name: Install PDF rendering dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk poppler-utils
 
       - name: Install dependencies
         run: |

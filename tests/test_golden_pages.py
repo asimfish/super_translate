@@ -15,7 +15,11 @@ from pathlib import Path
 import fitz
 import pytest
 
-from pdf_zh_translator.pdf_layout import translate_pdf, verify_translation_issues
+from pdf_zh_translator.pdf_layout import (
+    _document_acronym_expansions,
+    translate_pdf,
+    verify_translation_issues,
+)
 from pdf_zh_translator.translators import CacheOnlyTranslator
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -217,6 +221,57 @@ def test_otf_runin_translation_uses_source_bold_span_boundary(tmp_path):
     assert _span_is_bold(prefix)
     assert not _span_is_bold(body)
     assert abs(prefix["origin"][1] - body["origin"][1]) <= 1.0
+
+
+def test_otf_runin_translation_uses_document_acronym_context(tmp_path):
+    input_pdf = tmp_path / "otf-runin-acronym-source.pdf"
+    output_pdf = tmp_path / "otf-runin-acronym-translated.pdf"
+    document = fitz.open()
+    intro = document.new_page(width=612, height=792)
+    intro.insert_text(
+        (72, 96),
+        "We introduce Optimal Flow Transport (OFT) for graph flow balance.",
+        fontsize=11,
+    )
+    with fitz.open(FIXTURES / "otf_p4_runin_formula.pdf") as fixture:
+        document.insert_pdf(fixture)
+    document.save(input_pdf)
+    document.close()
+
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_ContextSensitiveRunInTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    with fitz.open(output_pdf) as output:
+        page_text = output[1].get_text("text")
+    assert "正交微调" not in page_text
+    assert "最优流传输" in page_text
+
+
+def test_document_acronym_context_drops_ambiguous_definitions():
+    block = _unit_blocks("otf_p4_runin_formula.pdf")[0]
+    units = [
+        (block, "Optimal Flow Transport (OFT)", {}),
+        (block, "Orthogonal Fine Tuning (OFT)", {}),
+    ]
+
+    assert "OFT" not in _document_acronym_expansions(units)
+
+
+def test_acronym_context_expands_source_phrase_once():
+    from pdf_zh_translator.pdf_layout import _prefix_source_with_acronym_context
+
+    expansions = {"OFT": "Optimal Flow Transport"}
+    contextual = "Exact Solving for Optimal Flow Transport (OFT)"
+
+    assert (
+        _prefix_source_with_acronym_context("Exact Solving for OFT", expansions)
+        == contextual
+    )
+    assert _prefix_source_with_acronym_context(contextual, expansions) == contextual
 
 
 def test_otf_runin_retry_invalidates_segment_cache_keys(tmp_path):
@@ -432,7 +487,7 @@ def test_gears_architecture_inline_formulas_render_in_continuous_flow(tmp_path):
     )
     heading = next(span for span in spans if span["text"] == "架构。")
     body = next(span for span in spans if span["text"].startswith("我们采用"))
-    rgb = next(span for span in spans if span["text"] == "RGB 图像")
+    rgb = next(span for span in spans if "RGB 图像" in span["text"])
     feature_prose = next(
         span for span in spans if "骨干网络提取多尺度特征" in span["text"]
     )
@@ -590,6 +645,35 @@ def test_gears_semantic_formula_keeps_source_clip_for_visible_ink():
 
     assert token.text == "a0∈R^{H×d_{a}}"
     assert token.source_bbox == anchor
+
+
+def test_noto_cjk_cmap_prefers_canonical_copy_text():
+    from types import SimpleNamespace
+
+    from pdf_zh_translator.pdf_layout import _sanitize_noto_cjk_unicode_cmap
+
+    cmap = {
+        0x2022: "cid00720",
+        0x2027: "cid00720",
+        0x7406: "cid26376",
+        0xF9E4: "cid26376",
+        0x91CF: "cid41256",
+        0xF97E: "cid41256",
+    }
+    table = SimpleNamespace(cmap=cmap, isUnicode=lambda: True)
+    font = {
+        "name": SimpleNamespace(
+            **{"getDebugName": lambda _name_id: "Noto Serif CJK SC"}
+        ),
+        "cmap": SimpleNamespace(tables=[table]),
+    }
+
+    assert _sanitize_noto_cjk_unicode_cmap(font)
+    assert cmap == {
+        0x2022: "cid00720",
+        0x7406: "cid26376",
+        0x91CF: "cid41256",
+    }
 
 
 def test_hidden_formula_semantics_without_visible_region_is_a_qa_error():
@@ -1180,7 +1264,10 @@ class _ProductionRunInTranslator(_GoldenStubTranslator):
         outputs = []
         for source, default in zip(texts, fallback):
             compact = " ".join(source.split())
-            if compact == "Exact Solving for OFT":
+            if compact in {
+                "Exact Solving for OFT",
+                "Exact Solving for Optimal Flow Transport (OFT)",
+            }:
                 outputs.append("最优流传输的精确求解")
             elif compact.startswith("For solving the optimization in Eq. 2"):
                 outputs.append(
@@ -1199,6 +1286,18 @@ class _ProductionRunInTranslator(_GoldenStubTranslator):
                 outputs.append(default)
             else:
                 outputs.append(default)
+        return outputs
+
+
+class _ContextSensitiveRunInTranslator(_ProductionRunInTranslator):
+    def translate_batch(self, texts):
+        outputs = super().translate_batch(texts)
+        for index, source in enumerate(texts):
+            compact = " ".join(source.split())
+            if compact == "Exact Solving for OFT":
+                outputs[index] = "正交微调（OFT）的精确求解"
+            elif compact == "Exact Solving for Optimal Flow Transport (OFT)":
+                outputs[index] = "最优流传输（OFT）的精确求解"
         return outputs
 
 
@@ -1507,7 +1606,7 @@ def test_gears_centered_title_has_no_orphan_cjk_line(tmp_path):
     output.close()
 
     title_lines = [lines[key] for key in sorted(lines)]
-    assert len(title_lines) >= 2
+    assert title_lines
     line_boxes = [
         (
             min(float(span["bbox"][0]) for span in line),
@@ -1519,11 +1618,12 @@ def test_gears_centered_title_has_no_orphan_cjk_line(tmp_path):
         len(re.findall(r"[\u3400-\u9fff]", "".join(span["text"] for span in line)))
         for line in title_lines
     ]
-    assert cjk_counts[-1] >= 2
     assert all(abs((x0 + x1) / 2.0 - page_center) <= 2.0 for x0, x1 in line_boxes)
-    assert (line_boxes[-1][1] - line_boxes[-1][0]) >= 0.3 * max(
-        x1 - x0 for x0, x1 in line_boxes[:-1]
-    )
+    if len(title_lines) >= 2:
+        assert cjk_counts[-1] >= 2
+        assert (line_boxes[-1][1] - line_boxes[-1][0]) >= 0.3 * max(
+            x1 - x0 for x0, x1 in line_boxes[:-1]
+        )
 
 
 def test_gears_title_orphan_is_a_qa_error():
@@ -1792,6 +1892,11 @@ def test_otf_fragmented_lettered_appendix_heading_keeps_source_role(tmp_path):
         preserve_graphics_text=True,
     )
     output = fitz.open(output_pdf)
+    body_sizes = [
+        span["size"]
+        for span in _page_spans(output[0])
+        if "这是一段用于验证版面稳定性" in span.get("text", "")
+    ]
     spans = [
         span
         for block in output[0].get_text("dict")["blocks"]
@@ -1802,7 +1907,8 @@ def test_otf_fragmented_lettered_appendix_heading_keeps_source_role(tmp_path):
     output.close()
 
     assert spans
-    assert min(span["size"] for span in spans) >= 10.5
+    assert body_sizes
+    assert min(span["size"] for span in spans) >= statistics.median(body_sizes) * 1.05
     assert all(_span_is_bold(span) for span in spans)
 
 

@@ -320,6 +320,7 @@ TTC_FACE_SOURCES = (
         ),
     ),
 )
+_SANITIZED_NOTO_CJK_FONT_FILES: set[tuple[str, int, int]] = set()
 
 
 @dataclass(frozen=True)
@@ -485,6 +486,7 @@ def translate_pdf(
     source_document = fitz.open(str(input_pdf))
 
     block_types = [block.block_type for block, _, _ in units]
+    acronym_expansions = _document_acronym_expansions(units)
 
     # Set block types for context-aware translation prompts
     if hasattr(translator, "block_types"):
@@ -492,6 +494,7 @@ def translate_pdf(
     translations, request_count, response_count = _translate_units_with_source_style_runs(
         translator,
         units,
+        acronym_expansions,
     )
     if response_count != request_count:
         warnings.append(
@@ -517,11 +520,13 @@ def translate_pdf(
             retry_sources, _, _ = _source_style_translation_plan(
                 translator,
                 retry_units,
+                acronym_expansions,
             )
             invalidate(retry_sources)
         retry_outputs, _, _ = _translate_units_with_source_style_runs(
             translator,
             retry_units,
+            acronym_expansions,
         )
         for index, retry_text in zip(retry_indexes, retry_outputs):
             retry_cleaned, retry_missing = _restore_unit_translation(
@@ -1005,9 +1010,68 @@ def _source_bold_prefix_end(block: TextBlock, protected_source: str) -> Optional
     return None
 
 
+_ACRONYM_DEFINITION_RE = re.compile(
+    r"\b((?:[A-Z][A-Za-z0-9]*(?:[-\s]+)){1,7}[A-Z][A-Za-z0-9]*)"
+    r"\s*\(([A-Z][A-Z0-9-]{1,11})\)"
+)
+
+
+def _document_acronym_expansions(
+    units: Sequence[Tuple[TextBlock, str, Dict[str, str]]],
+) -> Dict[str, str]:
+    """Return unambiguous acronym definitions found in this source document."""
+    candidates: Dict[str, set[str]] = {}
+    for _block, protected_source, _mapping in units:
+        plain = strip_sentinels(protected_source)
+        for match in _ACRONYM_DEFINITION_RE.finditer(plain):
+            phrase = " ".join(match.group(1).split())
+            acronym = match.group(2)
+            acronym_letters = acronym.replace("-", "")
+            words = re.findall(r"[A-Z][A-Za-z0-9]*", phrase)
+            expansion = None
+            for start in range(len(words)):
+                suffix = words[start:]
+                if len(suffix) < 2:
+                    continue
+                if "".join(word[0] for word in suffix).upper() == acronym_letters:
+                    expansion = " ".join(suffix)
+                    break
+            if expansion is not None:
+                candidates.setdefault(acronym, set()).add(expansion)
+    return {
+        acronym: next(iter(expansions))
+        for acronym, expansions in candidates.items()
+        if len(expansions) == 1
+    }
+
+
+def _prefix_source_with_acronym_context(
+    prefix_source: str,
+    acronym_expansions: Dict[str, str],
+) -> str:
+    """Add source-document acronym context to an isolated run-in label."""
+    contextual = prefix_source
+    for acronym in sorted(acronym_expansions, key=len, reverse=True):
+        expansion = acronym_expansions[acronym]
+        already_expanded = re.compile(
+            rf"\b{re.escape(expansion)}\s*\(\s*{re.escape(acronym)}\s*\)"
+        )
+        if already_expanded.search(contextual):
+            continue
+        pattern = re.compile(rf"\b{re.escape(acronym)}\b(?!\s*\()")
+        if pattern.search(contextual):
+            contextual = pattern.sub(
+                f"{expansion} ({acronym})",
+                contextual,
+                count=1,
+            )
+    return contextual
+
+
 def _translate_units_with_source_style_runs(
     translator: object,
     units: Sequence[Tuple[TextBlock, str, Dict[str, str]]],
+    acronym_expansions: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], int, int]:
     """Translate source-derived run-in prefix/body ranges independently."""
     if not getattr(translator, "supports_source_style_segments", True):
@@ -1016,7 +1080,11 @@ def _translate_units_with_source_style_runs(
             [protected_source for _block, protected_source, _mapping in units],
             [block.block_type for block, _protected_source, _mapping in units],
         )
-    sources, block_types, plans = _source_style_translation_plan(translator, units)
+    sources, block_types, plans = _source_style_translation_plan(
+        translator,
+        units,
+        acronym_expansions,
+    )
     outputs, request_count, response_count = _translate_unique_sources(
         translator,
         sources,
@@ -1041,6 +1109,7 @@ def _translate_units_with_source_style_runs(
 def _source_style_translation_plan(
     translator: object,
     units: Sequence[Tuple[TextBlock, str, Dict[str, str]]],
+    acronym_expansions: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], List[str], List[Tuple[int, int]]]:
     """Build the exact source requests used for translation and invalidation."""
     sources: List[str] = []
@@ -1058,7 +1127,10 @@ def _source_style_translation_plan(
             sources.append(protected_source)
             block_types.append(block.block_type)
             continue
-        prefix_source = protected_source[:prefix_end].strip()
+        prefix_source = _prefix_source_with_acronym_context(
+            protected_source[:prefix_end].strip(),
+            acronym_expansions or {},
+        )
         body_source = protected_source[prefix_end:].strip()
         if not prefix_source or not body_source:
             plans.append((len(sources), 1))
@@ -5108,6 +5180,7 @@ def ensure_font_pack_files(warnings: List[str]) -> Tuple[Optional[Path], Optiona
     results: List[Optional[Path]] = []
     for destination, candidates in TTC_FACE_SOURCES:
         if destination.is_file():
+            _sanitize_noto_cjk_font_file(destination, warnings)
             results.append(destination)
             continue
         extracted = None
@@ -5117,8 +5190,78 @@ def ensure_font_pack_files(warnings: List[str]) -> Tuple[Optional[Path], Optiona
                 break
         if extracted is None:
             warnings.append("Could not extract a face for %s" % destination.name)
+        else:
+            _sanitize_noto_cjk_font_file(extracted, warnings)
         results.append(extracted)
     return results[0], results[1]
+
+
+def _sanitize_noto_cjk_unicode_cmap(font: object) -> bool:
+    """Remove ambiguous reverse mappings that corrupt copied PDF text."""
+    try:
+        font_name = font["name"].getDebugName(4) or ""
+        cmap_tables = font["cmap"].tables
+    except (KeyError, AttributeError, TypeError):
+        return False
+    if "Noto" not in font_name or "CJK" not in font_name:
+        return False
+
+    changed = False
+    for table in cmap_tables:
+        if not table.isUnicode():
+            continue
+        cmap = table.cmap
+        canonical_glyphs = {
+            glyph
+            for codepoint, glyph in cmap.items()
+            if not (
+                codepoint == 0x2027
+                or 0xF900 <= codepoint <= 0xFAFF
+                or 0x2F800 <= codepoint <= 0x2FA1F
+            )
+        }
+        for codepoint, glyph in list(cmap.items()):
+            ambiguous_copy_codepoint = (
+                codepoint == 0x2027
+                or 0xF900 <= codepoint <= 0xFAFF
+                or 0x2F800 <= codepoint <= 0x2FA1F
+            )
+            if ambiguous_copy_codepoint and glyph in canonical_glyphs:
+                del cmap[codepoint]
+                changed = True
+    return changed
+
+
+def _sanitize_noto_cjk_font_file(path: Path, warnings: List[str]) -> None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return
+    signature = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    if signature in _SANITIZED_NOTO_CJK_FONT_FILES:
+        return
+
+    try:
+        from fontTools.ttLib import TTFont
+
+        font = TTFont(str(path), lazy=False)
+        changed = _sanitize_noto_cjk_unicode_cmap(font)
+        if changed:
+            temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                font.save(str(temporary))
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        font.close()
+    except Exception as exc:
+        warnings.append(f"Could not sanitize CJK font copy mappings: {exc}")
+        return
+
+    current = path.stat()
+    _SANITIZED_NOTO_CJK_FONT_FILES.add(
+        (str(path.resolve()), current.st_size, current.st_mtime_ns)
+    )
 
 
 def extract_ttc_face(ttc_path: Path, face_name: str, destination: Path) -> Optional[Path]:
