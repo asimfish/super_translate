@@ -14,6 +14,7 @@ import fitz
 import pytest
 
 from pdf_zh_translator.pdf_layout import translate_pdf, verify_translation_issues
+from pdf_zh_translator.translators import CacheOnlyTranslator
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -441,6 +442,90 @@ def test_gears_action_dimension_formula_uses_selectable_semantic_math():
     )
 
 
+def test_otf_empirical_measure_formula_uses_complete_selectable_sum():
+    from pdf_zh_translator.pdf_layout import _semantic_inline_formula_text
+
+    assert (
+        _semantic_inline_formula_text("α=P^{n}_{i}_{=1}a_{i}δ_{v}_{i}")
+        == "α=∑^{n}_{i=1}a_{i}δ_{v}_{i}"
+    )
+    assert (
+        _semantic_inline_formula_text("α=P^{n}_{i}_{=1}aiδv_{i}")
+        == "α=∑^{n}_{i=1}a_{i}δ_{v}_{i}"
+    )
+    assert (
+        _semantic_inline_formula_text("β=P^{m}_{j}_{=1}b_{j}δ_{v}_{j}")
+        == "β=∑^{m}_{j=1}b_{j}δ_{v}_{j}"
+    )
+
+
+def test_invisible_formula_copy_span_is_not_raster_ink():
+    from pdf_zh_translator.pdf_layout import _output_span_looks_formula
+
+    hidden = {"text": "β=∑^{n}_{i=1}b_{i}", "char_flags": 1}
+    visible = {"text": "β=∑", "char_flags": 17}
+
+    assert not _output_span_looks_formula(hidden)
+    assert _output_span_looks_formula(visible)
+
+
+def test_formula_preflight_reserves_conservative_descender_clearance(monkeypatch):
+    from types import SimpleNamespace
+
+    import pdf_zh_translator.pdf_layout as layout
+
+    previous = layout.TextBlock(
+        page_index=0,
+        bbox=(20.0, 20.0, 300.0, 100.0),
+        text="Formula-bearing paragraph",
+        font_size=10.0,
+        color=(0.0, 0.0, 0.0),
+        formula_anchors=((100.0, 88.0, 130.0, 100.0),),
+    )
+    current = layout.TextBlock(
+        page_index=0,
+        bbox=(20.0, 96.0, 300.0, 200.0),
+        text="Following flowing paragraph",
+        font_size=10.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    monkeypatch.setattr(
+        layout,
+        "_translated_block_ink_bbox",
+        lambda block, _text, **_kwargs: (
+            (20.0, 24.0, 300.0, 98.0)
+            if block is previous
+            else (20.0, 99.0, 300.0, 190.0)
+        ),
+    )
+    monkeypatch.setattr(layout, "translated_text_fits", lambda *_args, **_kwargs: True)
+
+    adjusted = layout._clear_adjacent_formula_ink_overlaps(
+        [(previous, "previous"), (current, "current")],
+        [False, False],
+        page_rect=SimpleNamespace(width=320.0, height=220.0),
+        font_pack=object(),
+        min_font_size=7.0,
+        font_scale=1.0,
+        margin=0.5,
+        source_document=object(),
+    )
+
+    shifted = adjusted[1][0]
+    assert shifted.bbox[1] >= 103.5
+    assert shifted.bbox[3] - shifted.bbox[1] == pytest.approx(104.0)
+
+
+def test_otf_fragmented_author_names_are_not_translation_units():
+    blocks = _unit_blocks("otf_production_acceptance_full.pdf")
+
+    assert not any(
+        block.page_index == 0 and "Liangliang Shi" in block.text
+        for block in blocks
+    )
+
+
 def test_gears_runin_architecture_heading_is_inline_bold():
     from pdf_zh_translator.pdf_layout import strip_sentinels
 
@@ -495,6 +580,35 @@ def test_gears_page8_runin_heading_clears_previous_formula_ink(tmp_path):
         }
         for issue in issues
     )
+
+
+def test_otf_production_replay_has_no_title_or_inline_formula_errors(tmp_path):
+    source_pdf = FIXTURES / "otf_production_acceptance_full.pdf"
+    output_pdf = tmp_path / "otf-production-replay.pdf"
+    translate_pdf(
+        input_pdf=source_pdf,
+        output_pdf=output_pdf,
+        translator=CacheOnlyTranslator(
+            FIXTURES / "otf_production_acceptance_cache.jsonl"
+        ),
+        preserve_graphics_text=True,
+    )
+
+    errors = [
+        issue
+        for issue in verify_translation_issues(source_pdf, output_pdf)
+        if issue.severity == "error"
+    ]
+    assert not errors, errors
+
+
+def test_otf_caption_qa_ignores_inline_table_mentions():
+    issues = verify_translation_issues(
+        FIXTURES / "otf_p8_typography.pdf",
+        FIXTURES / "otf_p8_caption_inline_mention_translated.pdf",
+    )
+
+    assert not any(issue.code == "raster_caption_clearance" for issue in issues)
 
 
 def test_guidedvla_single_line_numbered_equations_are_not_translation_units():

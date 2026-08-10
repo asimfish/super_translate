@@ -872,18 +872,30 @@ def _clear_adjacent_formula_ink_overlaps(
         current_ink = ink_bbox(index)
         if previous_ink is None or current_ink is None:
             continue
+        previous = adjusted[previous_index][0]
+        formula_descender_guard = max(2.0, previous.font_size * 0.55)
+        anchor_bottom = max(anchor[3] for anchor in previous.formula_anchors)
+        conservative_previous_bottom = max(
+            previous_ink[3],
+            min(
+                previous.bbox[3] + formula_descender_guard,
+                anchor_bottom + formula_descender_guard,
+            ),
+        )
         clearance = max(1.0, min(2.0, block.font_size * 0.14))
-        shift = previous_ink[3] + clearance - current_ink[1]
+        shift = conservative_previous_bottom + clearance - current_ink[1]
         if shift <= 0.0:
             continue
 
         x0, y0, x1, y1 = block.bbox
         shifted_y0 = y0 + shift
-        if shifted_y0 >= y1 - max(4.0, min_font_size):
+        page_bottom = float(page_rect.height) - max(0.5, margin)
+        shifted_y1 = min(page_bottom, y1 + shift)
+        if shifted_y0 >= shifted_y1 - max(4.0, min_font_size):
             continue
         shifted = replace(
             block,
-            bbox=(x0, shifted_y0, x1, y1),
+            bbox=(x0, shifted_y0, x1, shifted_y1),
             redact_bboxes=list(block.redact_bboxes or [block.bbox]),
         )
         requested_size = requested_translation_font_size(
@@ -3104,9 +3116,10 @@ def _font_role_consistency_issues(
 
 
 def _output_span_looks_formula(span: dict) -> bool:
-    if "char_flags" in span and int(span.get("char_flags", 0)) == 0:
+    if "char_flags" in span and not int(span.get("char_flags", 0)) & 0x18:
         # Selectable formula accessibility copies use render_mode=3. Their
-        # extraction bbox can overlap following text although they have no ink.
+        # extraction bbox can overlap following text although they have no
+        # fill or stroke ink. The lower bits still carry font-style flags.
         return False
     text = " ".join(span.get("text", "").split())
     if not text or re.search(r"[\u3400-\u9fff]", text):
@@ -3426,15 +3439,6 @@ def _table_caption_clearance_issues(
     translated_blocks = translated_page.get_text("dict").get("blocks", [])
     issues: List[TranslationIssue] = []
     for key, source_bbox in source_captions:
-        matching_blocks = [
-            block
-            for block in translated_blocks
-            if block.get("type") == 0
-            and block.get("bbox")
-            and _caption_key(_extract_text_from_block(block)) == key
-        ]
-        if not matching_blocks:
-            continue
         rule_candidates = [
             rule_y
             for rule_y, rule_x0, rule_x1 in source_rules
@@ -3445,6 +3449,16 @@ def _table_caption_clearance_issues(
         if not rule_candidates:
             continue
         rule_y = min(rule_candidates)
+        matching_blocks = [
+            block
+            for block in translated_blocks
+            if block.get("type") == 0
+            and block.get("bbox")
+            and float(block["bbox"][1]) < rule_y
+            and _caption_key(_extract_text_from_block(block)) == key
+        ]
+        if not matching_blocks:
+            continue
         translated_bbox = union_bbox(
             [
                 tuple(float(value) for value in block["bbox"])
@@ -4237,7 +4251,7 @@ _INLINE_FORMULA_MATH_CUE_RE = re.compile(r"[=+−\-*/→↗↘∈≤≥<>()\[\],
 
 def _normalize_inline_formula_signature(text: str) -> str:
     """Flatten source script wrappers while preserving formula reading order."""
-    normalized = _normalize_formula_fragment_for_compare(text)
+    normalized = _normalize_formula_fragment_for_compare(text).replace("∑", "P")
     return _INLINE_FORMULA_SIGNATURE_STRIP_RE.sub("", normalized)
 
 
@@ -6793,6 +6807,16 @@ def classify_blocks(
         ):
             _is_bibliography_context(block, blocks)
 
+        if block.block_type == "run_in_heading" and _looks_like_fragmented_byline_metadata(
+            block,
+            plain,
+            blocks,
+        ):
+            block.block_type = "metadata"
+            block.should_translate = False
+            block.preserve_position = True
+            continue
+
         if block.block_type == "run_in_heading" and re.fullmatch(
             r"(?:[A-Z](?:\.\d+)?|\d+(?:\.\d+)*)\s+[A-Z][A-Z\s-]{3,80}",
             plain,
@@ -8874,12 +8898,29 @@ def text_from_spans(spans: Sequence[dict]) -> str:
 
 
 def line_from_spans(spans: Sequence[dict], fallback_bbox: BBox) -> Optional[_LineRec]:
-    text = text_from_spans(spans)
-    if not text:
+    raw_line = {
+        "bbox": fallback_bbox,
+        "spans": list(spans),
+    }
+    parsed, _dropped = parse_block_lines(
+        {"lines": [raw_line]},
+        page_width=max(1000.0, float(fallback_bbox[2]) + 72.0),
+    )
+    if parsed is None or not parsed.lines:
         return None
-    boxes = [tuple(float(x) for x in span["bbox"]) for span in spans if "bbox" in span]
-    bbox = union_bbox(boxes) if boxes else fallback_bbox
-    return _LineRec(text=text, bbox=bbox, spans=list(spans))
+    if len(parsed.lines) == 1:
+        return parsed.lines[0]
+    return _LineRec(
+        text="".join(line.text for line in parsed.lines),
+        bbox=union_bbox(line.bbox for line in parsed.lines),
+        spans=list(spans),
+        is_cell=any(line.is_cell for line in parsed.lines),
+        math_bboxes=[bbox for line in parsed.lines for bbox in line.math_bboxes],
+        prose_bboxes=[bbox for line in parsed.lines for bbox in line.prose_bboxes],
+        math_run_bboxes=[
+            bbox for line in parsed.lines for bbox in line.math_run_bboxes
+        ],
+    )
 
 
 def line_continues_inline_formula_tail(line: _LineRec, current: "_SegmentAccumulator") -> bool:
@@ -11882,6 +11923,28 @@ def _semantic_inline_formula_text(text: str) -> Optional[str]:
     if re.fullmatch(r"\d{1,3}↑\d{1,3}", compact):
         return compact.replace("↑", "×")
 
+    empirical_measure = re.fullmatch(
+        r"(?P<measure>[αβ])=P\^\{(?P<count>[A-Za-z])\}"
+        r"_\{(?P<index>[A-Za-z])\}_\{=1\}"
+        r"(?P<tail>.+)",
+        compact,
+    )
+    if empirical_measure:
+        index = empirical_measure.group("index")
+        tail = empirical_measure.group("tail")
+        tail_match = re.fullmatch(
+            rf"(?P<weight>[A-Za-z])(?:_\{{{index}\}}|{index})"
+            rf"δ(?:_\{{v\}}|v)_\{{{index}\}}",
+            tail,
+        )
+        if not tail_match:
+            return None
+        return (
+            f"{empirical_measure.group('measure')}=∑"
+            f"^{{{empirical_measure.group('count')}}}_{{{index}=1}}"
+            f"{tail_match.group('weight')}_{{{index}}}δ_{{v}}_{{{index}}}"
+        )
+
     match = re.fullmatch(
         r"(?P<prefix>[^{}→]{0,12})→R(?P<dimensions>(?:\^\{[^{}]+\}){3,11})",
         compact,
@@ -12723,7 +12786,7 @@ def translated_text_fits(
                     bold_fonts=bold_fonts,
                     line_widths=widths,
                 )
-                if centered and block.block_type == "title":
+                if block.block_type == "title":
                     lines = balance_centered_title_lines(lines, rect.width)
                 if len(lines) <= len(slots):
                     return True
@@ -12737,7 +12800,7 @@ def translated_text_fits(
             prefer_space_break=centered,
             bold_fonts=bold_fonts,
         )
-        if centered and block.block_type == "title":
+        if block.block_type == "title":
             lines = balance_centered_title_lines(lines, rect.width)
         for leading in leading_options(block):
             if line_block_height(
@@ -12935,7 +12998,7 @@ def insert_translated_text(
         )
 
     size, leading, lines = chosen
-    if centered and block.block_type == "title":
+    if block.block_type == "title":
         lines = balance_centered_title_lines(lines, rect.width)
 
     if len(lines) == 1:
