@@ -852,6 +852,53 @@ def test_otf_page4_runin_bold_range_and_reading_order(tmp_path):
     assert "in Eq. 1." not in text
 
 
+def test_otf_page4_interleaved_formula_row_stays_in_prose_unit():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    block = next(
+        block
+        for block in _unit_blocks("otf_p4_runin_formula.pdf")
+        if strip_sentinels(block.text).startswith("where")
+    )
+    compact = "".join(strip_sentinels(block.text).split())
+
+    assert "P1_{N}−P^{⊤}1_{N}=s" in compact
+    assert "U(a,b)" in compact
+    assert len(block.formula_anchors) >= 15
+
+
+def test_otf_page4_inline_formula_tokens_share_cjk_reading_lines(tmp_path):
+    output_pdf = tmp_path / "otf-p4-inline-flow.pdf"
+    translate_pdf(
+        input_pdf=FIXTURES / "otf_p4_runin_formula.pdf",
+        output_pdf=output_pdf,
+        translator=_OTFAcceptanceTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    lines = [
+        line.get("spans", [])
+        for block in output[0].get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block.get("lines", [])
+        if float(line["bbox"][1]) > 150.0
+    ]
+    output.close()
+    formula_lines = [
+        line
+        for line in lines
+        if "P1" in "".join(span["text"] for span in line)
+        or "U(a" in "".join(span["text"] for span in line)
+    ]
+
+    assert len(formula_lines) == 2
+    assert all(
+        re.search(r"[\u3400-\u9fff]", "".join(span["text"] for span in line))
+        for line in formula_lines
+    )
+
+
 def test_otf_page9_runin_bold_does_not_spill_into_body(tmp_path):
     output_pdf = tmp_path / "otf-p9-structure.pdf"
     translate_pdf(

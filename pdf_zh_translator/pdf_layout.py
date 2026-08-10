@@ -9449,6 +9449,13 @@ def segments_from_record(
                 for fragment in prose_fragments
             )
         )
+        interleaved_formula_prose_row = bool(
+            prose_fragments
+            and line.text.lstrip().startswith(SENTINEL_OPEN)
+            and len(line.math_run_bboxes) >= 2
+            and substantial_prose_word_count(strip_sentinels(line.text)) >= 4
+            and sentence_final_text(line.text)
+        )
         record_content_left = min(
             (
                 candidate.bbox[0]
@@ -9458,7 +9465,7 @@ def segments_from_record(
             default=line.bbox[0],
         )
         reflowable_formula_prefix = bool(
-            formula_prefix_with_prose_suffix
+            (formula_prefix_with_prose_suffix or interleaved_formula_prose_row)
             and min(math_bbox[0] for math_bbox in line.math_run_bboxes)
             <= record_content_left + 4.0
         )
