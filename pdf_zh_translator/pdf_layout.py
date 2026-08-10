@@ -662,6 +662,16 @@ def translate_pdf(
             margin=margin,
             centered_flags=item_centered_flags,
         )
+        page_items = _clear_adjacent_formula_ink_overlaps(
+            page_items,
+            item_centered_flags,
+            page_rect=page.rect,
+            font_pack=font_pack,
+            min_font_size=min_font_size,
+            font_scale=font_scale,
+            margin=margin,
+            source_document=source_document,
+        )
         source_links = _page_links_for_restore(page)
         redact_original_text(page, [block for block, _ in page_items], margin, page_gutter)
         page = document.reload_page(page)
@@ -712,6 +722,189 @@ def translate_pdf(
     document.close()
     source_document.close()
     return TranslationReport(input_pdf, output_pdf, page_count, len(units), skipped, warnings)
+
+
+def _translated_block_ink_bbox(
+    block: TextBlock,
+    text: str,
+    *,
+    page_rect: object,
+    font_pack: FontPack,
+    font_size: float,
+    min_font_size: float,
+    margin: float,
+    centered: bool,
+    source_document: object,
+) -> Optional[BBox]:
+    """Render one block off-page and return its actual painted ink envelope."""
+    import fitz
+
+    scratch = fitz.open()
+    try:
+        page = scratch.new_page(
+            width=float(page_rect.width),
+            height=float(page_rect.height),
+        )
+        register_font_pack(page, font_pack)
+        insert_translated_text(
+            page=page,
+            block=block,
+            text=text,
+            font_pack=font_pack,
+            font_size=font_size,
+            min_font_size=min_font_size,
+            margin=margin,
+            centered=centered,
+            source_document=source_document,
+        )
+        pad = max(12.0, font_size * 1.5)
+        roi = fitz.Rect(
+            max(0.0, block.bbox[0] - pad),
+            max(0.0, block.bbox[1] - pad),
+            min(float(page_rect.width), block.bbox[2] + pad),
+            min(float(page_rect.height), block.bbox[3] + pad),
+        )
+        scale = 2.5  # 180 dpi
+        pixmap = page.get_pixmap(
+            matrix=fitz.Matrix(scale, scale),
+            clip=roi,
+            colorspace=fitz.csGRAY,
+            alpha=False,
+        )
+        samples = pixmap.samples
+        dark = [index for index, value in enumerate(samples) if value < 245]
+        if not dark:
+            return None
+        min_x = min(index % pixmap.width for index in dark)
+        max_x = max(index % pixmap.width for index in dark) + 1
+        min_y = min(index // pixmap.width for index in dark)
+        max_y = max(index // pixmap.width for index in dark) + 1
+        return (
+            roi.x0 + min_x / scale,
+            roi.y0 + min_y / scale,
+            roi.x0 + max_x / scale,
+            roi.y0 + max_y / scale,
+        )
+    finally:
+        scratch.close()
+
+
+def _clear_adjacent_formula_ink_overlaps(
+    page_items: Sequence[Tuple[TextBlock, str]],
+    centered_flags: Sequence[bool],
+    *,
+    page_rect: object,
+    font_pack: FontPack,
+    min_font_size: float,
+    font_scale: float,
+    margin: float,
+    source_document: object,
+) -> List[Tuple[TextBlock, str]]:
+    """Clear formula descenders before a tightly adjacent flowing prose block.
+
+    Source bboxes describe extraction hulls, not final painted ink. A formula-heavy
+    paragraph can therefore paint below its hull while the following run-in paragraph
+    starts above its own hull. Preflight only those tight same-column boundaries and
+    move the following flow origin within its existing bottom edge. Redaction remains
+    anchored to the source glyphs.
+    """
+    adjusted = list(page_items)
+    ink_cache: Dict[int, Optional[BBox]] = {}
+
+    def ink_bbox(index: int) -> Optional[BBox]:
+        if index not in ink_cache:
+            candidate, candidate_text = adjusted[index]
+            ink_cache[index] = _translated_block_ink_bbox(
+                candidate,
+                candidate_text,
+                page_rect=page_rect,
+                font_pack=font_pack,
+                font_size=requested_translation_font_size(
+                    candidate,
+                    min_font_size,
+                    font_scale,
+                ),
+                min_font_size=min_font_size,
+                margin=margin,
+                centered=centered_flags[index],
+                source_document=source_document,
+            )
+        return ink_cache[index]
+
+    for index, ((block, text), centered) in enumerate(
+        zip(list(adjusted), centered_flags)
+    ):
+        if (
+            index == 0
+            or centered
+            or block.nowrap
+            or block.preserve_position
+            or block.block_type not in {"body", "formula_prose"}
+            or _uses_fixed_source_math(block)
+        ):
+            continue
+
+        predecessors: List[Tuple[float, int]] = []
+        block_width = max(1.0, block.bbox[2] - block.bbox[0])
+        for previous_index in range(index):
+            previous, _ = adjusted[previous_index]
+            if not previous.formula_anchors:
+                continue
+            gap = block.bbox[1] - previous.bbox[3]
+            if not -max(8.0, block.font_size * 0.75) <= gap <= max(
+                3.0,
+                block.font_size * 0.35,
+            ):
+                continue
+            overlap = min(block.bbox[2], previous.bbox[2]) - max(
+                block.bbox[0],
+                previous.bbox[0],
+            )
+            previous_width = max(1.0, previous.bbox[2] - previous.bbox[0])
+            if overlap / min(block_width, previous_width) < 0.65:
+                continue
+            predecessors.append((gap, previous_index))
+        if not predecessors:
+            continue
+
+        _, previous_index = min(predecessors, key=lambda item: abs(item[0]))
+        previous_ink = ink_bbox(previous_index)
+        current_ink = ink_bbox(index)
+        if previous_ink is None or current_ink is None:
+            continue
+        clearance = max(1.0, min(2.0, block.font_size * 0.14))
+        shift = previous_ink[3] + clearance - current_ink[1]
+        if shift <= 0.0:
+            continue
+
+        x0, y0, x1, y1 = block.bbox
+        shifted_y0 = y0 + shift
+        if shifted_y0 >= y1 - max(4.0, min_font_size):
+            continue
+        shifted = replace(
+            block,
+            bbox=(x0, shifted_y0, x1, y1),
+            redact_bboxes=list(block.redact_bboxes or [block.bbox]),
+        )
+        requested_size = requested_translation_font_size(
+            shifted,
+            min_font_size,
+            font_scale,
+        )
+        if not translated_text_fits(
+            shifted,
+            text,
+            font_pack,
+            requested_size,
+            min_font_size,
+            margin,
+            centered,
+        ):
+            continue
+        adjusted[index] = (shifted, text)
+        ink_cache.pop(index, None)
+
+    return adjusted
 
 
 def _translate_unique_sources(
@@ -1516,6 +1709,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 orig_page,
                 trans_page,
                 page_idx + 1,
+                source_blocks=translation_units_by_page.get(page_idx, []),
             )
         )
         issues.extend(
@@ -1607,6 +1801,44 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                         message=(
                             f"Page {page_idx + 1}: {len(missing_formulas)} formula "
                             "fragment(s) appear missing or altered"
+                        ),
+                        severity="error",
+                    )
+                )
+
+        inline_formula_fragments = _inline_formula_anchor_fragments(
+            translation_units_by_page.get(page_idx, [])
+        )
+        if inline_formula_fragments:
+            translated_formula_views = [
+                _normalize_inline_formula_signature(trans_text),
+                _normalize_inline_formula_signature(trans_page.get_text("text")),
+            ]
+            missing_inline_formulas = _missing_inline_formula_anchors(
+                inline_formula_fragments,
+                translated_formula_views,
+            )
+            if missing_inline_formulas:
+                neighbour_formula_views = [
+                    _normalize_inline_formula_signature(
+                        trans_doc[neighbour_idx].get_text("text")
+                    )
+                    for neighbour_idx in (page_idx - 1, page_idx + 1)
+                    if 0 <= neighbour_idx < trans_doc.page_count
+                ]
+                missing_inline_formulas = _missing_inline_formula_anchors(
+                    missing_inline_formulas,
+                    neighbour_formula_views,
+                )
+            if missing_inline_formulas:
+                preview = missing_inline_formulas[0][:36]
+                issues.append(
+                    TranslationIssue(
+                        page=page_idx + 1,
+                        code="inline_formula_missing",
+                        message=(
+                            f"Page {page_idx + 1}: {len(missing_inline_formulas)} inline "
+                            f"formula anchor(s) appear incomplete near {preview!r}"
                         ),
                         severity="error",
                     )
@@ -2992,6 +3224,8 @@ def _raster_ink_overlap_issues(
     original_page: object,
     translated_page: object,
     page_number: int,
+    *,
+    source_blocks: Sequence[TextBlock] = (),
 ) -> List[TranslationIssue]:
     """Confirm formula/body and heading/body collisions against 180-dpi ink."""
     del original_page
@@ -3061,6 +3295,75 @@ def _raster_ink_overlap_issues(
                     code="raster_ink_overlap",
                     message=(
                         f"Page {page_number}: 180dpi formula-text ink overlap at "
+                        f"x={intersection[0]:.1f}, y={intersection[1]:.1f}"
+                    ),
+                    severity="error",
+                )
+            ]
+
+    run_in_regions: List[BBox] = []
+    for block in source_blocks:
+        plain = " ".join(strip_sentinels(block.text).split())
+        if _ACADEMIC_FORMULA_STATEMENT_RE.match(plain):
+            continue
+        if block.block_type != "run_in_heading" and not block.bold_prefix:
+            continue
+        first_line = (
+            block.source_line_bboxes[0]
+            if block.source_line_bboxes
+            else (
+                block.bbox[0],
+                block.bbox[1],
+                block.bbox[2],
+                min(block.bbox[3], block.bbox[1] + block.font_size * 1.4),
+            )
+        )
+        run_in_regions.append(expand_bbox(first_line, 2.0))
+    bold_cjk_spans = [
+        span
+        for span in cjk_spans
+        if _span_uses_bold_weight(span)
+        and any(
+            bbox_contains_point(
+                region,
+                (float(span["bbox"][0]) + float(span["bbox"][2])) / 2.0,
+                (float(span["bbox"][1]) + float(span["bbox"][3])) / 2.0,
+            )
+            for region in run_in_regions
+        )
+    ]
+    body_cjk_spans = [span for span in cjk_spans if not _span_uses_bold_weight(span)]
+    for heading_span in bold_cjk_spans:
+        heading_bbox = tuple(float(value) for value in heading_span["bbox"])
+        heading_origin = heading_span.get("origin")
+        heading_baseline = (
+            float(heading_origin[1]) if heading_origin else heading_bbox[3]
+        )
+        for body_span in body_cjk_spans:
+            body_bbox = tuple(float(value) for value in body_span["bbox"])
+            body_origin = body_span.get("origin")
+            body_baseline = float(body_origin[1]) if body_origin else body_bbox[3]
+            if abs(heading_baseline - body_baseline) < 2.0:
+                continue
+            intersection = _bbox_intersection_rect(heading_bbox, body_bbox)
+            if intersection is None:
+                continue
+            if (
+                intersection[2] - intersection[0] < 4.0
+                or intersection[3] - intersection[1] < 1.5
+                or not _raster_rect_has_ink(
+                    translated_page,
+                    intersection,
+                    dpi=240,
+                )
+            ):
+                continue
+            return [
+                TranslationIssue(
+                    page=page_number,
+                    code="raster_heading_body_overlap",
+                    message=(
+                        f"Page {page_number}: 240dpi heading-body ink overlap at "
                         f"x={intersection[0]:.1f}, y={intersection[1]:.1f}"
                     ),
                     severity="error",
@@ -3925,6 +4228,51 @@ def _missing_formula_fragments(
             _formula_fragment_present(fragment, compact)
             for compact in translated_compacts
         )
+    ]
+
+
+_INLINE_FORMULA_SIGNATURE_STRIP_RE = re.compile(r"[\^_{}\x00∗⋆′†‡]")
+_INLINE_FORMULA_MATH_CUE_RE = re.compile(r"[=+−\-*/→↗↘∈≤≥<>()\[\],]|·")
+
+
+def _normalize_inline_formula_signature(text: str) -> str:
+    """Flatten source script wrappers while preserving formula reading order."""
+    normalized = _normalize_formula_fragment_for_compare(text)
+    return _INLINE_FORMULA_SIGNATURE_STRIP_RE.sub("", normalized)
+
+
+def _inline_formula_anchor_fragments(blocks: Sequence[TextBlock]) -> List[str]:
+    """Return high-confidence signatures for reflowed inline formula anchors."""
+    fragments: List[str] = []
+    seen: set[str] = set()
+    for block in blocks:
+        if not block.formula_anchors:
+            continue
+        markers = SENTINEL_RUN_RE.findall(block.text)
+        if len(markers) != len(block.formula_anchors):
+            continue
+        for marker in markers:
+            signature = _normalize_inline_formula_signature(strip_sentinels(marker))
+            if (
+                len(signature) < 4
+                or "=" not in signature
+                or not _INLINE_FORMULA_MATH_CUE_RE.search(signature)
+                or signature in seen
+            ):
+                continue
+            fragments.append(signature)
+            seen.add(signature)
+    return fragments
+
+
+def _missing_inline_formula_anchors(
+    fragments: Sequence[str],
+    translated_signatures: Sequence[str],
+) -> List[str]:
+    return [
+        fragment
+        for fragment in fragments
+        if not any(fragment in signature for signature in translated_signatures)
     ]
 
 
@@ -10309,16 +10657,17 @@ def can_merge_blocks(
 ) -> bool:
     if "run_in_heading" in {prev.block_type, nxt.block_type}:
         previous_plain = " ".join(strip_sentinels(prev.text).split())
-        task_record_label = bool(
-            re.fullmatch(
-                r"[•◦▪●]\s*(?:Scene|Start|Goal)\s*:",
+        structured_statement = bool(
+            re.match(
+                r"^(?:Definition|Proposition|Theorem|Lemma|Corollary|Remark)\s+\d",
                 previous_plain,
                 re.IGNORECASE,
             )
         )
         if (
             prev.block_type == "run_in_heading"
-            and task_record_label
+            and not structured_statement
+            and len(SENTINEL_RUN_RE.findall(nxt.text)) <= 1
             and _looks_like_inline_heading_pair(prev, nxt)
         ):
             if graphic_regions and bbox_crosses_graphic_region(
@@ -10905,6 +11254,7 @@ def merge_two_blocks(prev: TextBlock, nxt: TextBlock) -> TextBlock:
         source_math_bboxes=tuple(
             [*prev.source_math_bboxes, *nxt.source_math_bboxes]
         ),
+        formula_anchors=tuple([*prev.formula_anchors, *nxt.formula_anchors]),
     )
 
 
@@ -11539,14 +11889,25 @@ def _semantic_inline_formula_text(text: str) -> Optional[str]:
     if not match:
         return None
     dimensions = re.findall(r"\^\{([^{}]+)\}", match.group("dimensions"))
-    if len(dimensions) < 3 or len(dimensions) % 2 == 0:
+    if len(dimensions) < 3:
         return None
-    if any(part != "→" for part in dimensions[1::2]):
+    trailing_subscript: Optional[str] = None
+    dimension_parts = dimensions
+    if len(dimensions) % 2 == 0:
+        trailing_subscript = dimensions[-1]
+        dimension_parts = dimensions[:-1]
+    if any(part != "→" for part in dimension_parts[1::2]):
         return None
-    axes = dimensions[::2]
-    if not all(re.fullmatch(r"[A-Za-z0-9]{1,4}", axis) for axis in axes):
+    axes = dimension_parts[::2]
+    if not all(re.fullmatch(r"[A-Za-z0-9]{1,4}", axis) for axis in axes) or (
+        trailing_subscript is not None
+        and not re.fullmatch(r"[A-Za-z0-9]{1,4}", trailing_subscript)
+    ):
         return None
-    return f"{match.group('prefix')}∈R^{{{'×'.join(axes)}}}"
+    rendered_axes = "×".join(axes)
+    if trailing_subscript is not None:
+        rendered_axes = f"{rendered_axes}_{{{trailing_subscript}}}"
+    return f"{match.group('prefix')}∈R^{{{rendered_axes}}}"
 
 
 def _formula_markers_form_atom(first: BBox, second: BBox, separator: str) -> bool:
@@ -12839,7 +13200,7 @@ def _trim_formula_clip_against_foreign_ink(
             return clip
         max_trim_x = width * max_trim_ratio
         max_trim_y = height * max_trim_ratio
-        new_x0, new_y0, new_x1, new_y1 = x0, y0, x1, y1
+        foreign_spans: List[BBox] = []
         for sx0, sy0, sx1, sy1 in spans:
             if sx1 <= x0 or sx0 >= x1:
                 continue
@@ -12847,16 +13208,31 @@ def _trim_formula_clip_against_foreign_ink(
             inside = bbox_intersection_area((sx0, sy0, sx1, sy1), clip)
             if inside / span_area >= 0.7:
                 continue  # part of the formula itself
-            vertical_overlap = min(y1, sy1) - max(y0, sy0)
-            if vertical_overlap >= min(height, sy1 - sy0) * 0.35:
-                if sx0 < x0 < sx1 and sx1 - x0 <= max_trim_x:
-                    new_x0 = max(new_x0, sx1 + _FORMULA_CLIP_FOREIGN_GAP)
-                elif sx0 < x1 < sx1 and x1 - sx0 <= max_trim_x:
-                    new_x1 = min(new_x1, sx0 - _FORMULA_CLIP_FOREIGN_GAP)
+            foreign_spans.append((sx0, sy0, sx1, sy1))
+
+        # Resolve line-above / line-below intrusions first. A lower prose line
+        # can cross the raw clip's left edge while its ink disappears entirely
+        # once the vertical clip is tightened; using it for horizontal trim
+        # first would erase the formula prefix.
+        new_y0, new_y1 = y0, y1
+        for _sx0, sy0, _sx1, sy1 in foreign_spans:
             if sy0 < y0 < sy1 and sy1 - y0 <= max_trim_y:
                 new_y0 = max(new_y0, sy1 + _FORMULA_CLIP_FOREIGN_GAP)
             elif sy0 < y1 < sy1 and y1 - sy0 <= max_trim_y:
                 new_y1 = min(new_y1, sy0 - _FORMULA_CLIP_FOREIGN_GAP)
+
+        if new_y1 - new_y0 <= 0:
+            return clip
+
+        new_x0, new_x1 = x0, x1
+        trimmed_height = new_y1 - new_y0
+        for sx0, sy0, sx1, sy1 in foreign_spans:
+            vertical_overlap = min(new_y1, sy1) - max(new_y0, sy0)
+            if vertical_overlap >= min(trimmed_height, sy1 - sy0) * 0.35:
+                if sx0 < x0 < sx1 and sx1 - x0 <= max_trim_x:
+                    new_x0 = max(new_x0, sx1 + _FORMULA_CLIP_FOREIGN_GAP)
+                elif sx0 < x1 < sx1 and x1 - sx0 <= max_trim_x:
+                    new_x1 = min(new_x1, sx0 - _FORMULA_CLIP_FOREIGN_GAP)
         if new_x1 - new_x0 <= 0 or new_y1 - new_y0 <= 0:
             return clip
         return (new_x0, new_y0, new_x1, new_y1)

@@ -180,7 +180,7 @@ def test_otf_formula_paragraph_translates_all_prose():
     assert prose.formula_anchors
 
 
-def test_otf_runin_heading_starts_a_new_translation_unit():
+def test_otf_runin_heading_reflows_as_a_bold_prefix():
     from pdf_zh_translator.pdf_layout import strip_sentinels
 
     blocks = _unit_blocks("otf_p4_runin_formula.pdf")
@@ -189,13 +189,10 @@ def test_otf_runin_heading_starts_a_new_translation_unit():
     exact = next(
         block for block, text in zip(blocks, texts) if text.startswith("Exact Solving for OFT")
     )
-    assert exact.block_type == "run_in_heading"
-    assert exact.bold
-    assert all(
-        "Exact Solving for OFT" not in text
-        for text in texts
-        if not text.startswith("Exact Solving for OFT")
-    )
+    assert exact.block_type == "body"
+    assert exact.bold_prefix
+    assert not exact.bold
+    assert "solutions are typically obtained indirectly" in strip_sentinels(exact.text)
 
 
 def test_otf_runin_labels_keep_body_size_and_method_bold_terms():
@@ -211,14 +208,15 @@ def test_otf_runin_labels_keep_body_size_and_method_bold_terms():
         "Baselines.",
     ):
         block = next(block for block, text in zip(blocks, texts) if text.startswith(prefix))
-        assert block.block_type == "run_in_heading"
-        assert block.bold
+        assert block.block_type == "body"
+        assert block.bold_prefix
+        assert not block.bold
         assert block.font_size < 10.1
 
     baseline_body = next(
         block
         for block, text in zip(blocks, texts)
-        if text.startswith("To demonstrate the feasibility")
+        if text.startswith("Baselines. To demonstrate the feasibility")
     )
     assert {"Real", "ZKW", "Gurobi", "pns", "lemon"}.issubset(
         baseline_body.bold_terms
@@ -325,12 +323,10 @@ def test_gears_stage_caption_and_architecture_keep_structure():
     architecture = next(
         block for block, text in zip(blocks, texts) if text.startswith("Architecture.")
     )
-    assert architecture.block_type == "run_in_heading"
-    assert architecture.bold
-    architecture_body = next(
-        block for block in blocks if block.bbox[1] > architecture.bbox[3]
-        and block.block_type == "body"
-    )
+    assert architecture.block_type == "body"
+    assert architecture.bold_prefix
+    assert not architecture.bold
+    architecture_body = architecture
     assert architecture_body.keepout_bboxes
     bottom_redact = max(architecture_body.redact_bboxes or [], key=lambda bbox: bbox[3])
     first_formula_top = min(bbox[1] for bbox in architecture_body.keepout_bboxes)
@@ -377,7 +373,77 @@ def test_gears_data_collection_formula_fragments_keep_anchor_alignment():
     assert any("D={(I" in text for text in _plain_unit_texts("gears_p8_untranslated.pdf"))
 
 
-def test_gears_runin_architecture_heading_is_split_and_bold():
+def test_gears_inline_formula_clip_trims_vertical_intrusions_first():
+    from pdf_zh_translator.pdf_layout import _trim_formula_clip_against_foreign_ink
+
+    document = type("CachedSpanDocument", (), {})()
+    document._pdfzh_span_cache = {
+        7: [
+            (115.0009765625, 440.2610168457, 379.8028564453, 452.7939758301),
+            (34.0159988403, 452.2160034180, 169.8182067871, 464.7489929199),
+            (289.9267578125, 452.2160034180, 321.1066894531, 464.7489929199),
+            (34.0159988403, 464.1710205078, 211.8385162354, 476.7040100098),
+        ]
+    }
+    clip = (169.5682067871, 451.1156921387, 290.1767578125, 471.3650512695)
+
+    trimmed = _trim_formula_clip_against_foreign_ink(document, 7, clip)
+
+    assert trimmed[0] == pytest.approx(170.0182, abs=0.05)
+    assert trimmed[1] == pytest.approx(452.9940, abs=0.05)
+    assert trimmed[2] == pytest.approx(289.7268, abs=0.05)
+    assert trimmed[3] == pytest.approx(463.9710, abs=0.05)
+
+
+def test_gears_missing_inline_formula_prefix_is_a_qa_error():
+    issues = verify_translation_issues(
+        FIXTURES / "gears_p8_untranslated.pdf",
+        FIXTURES / "gears_p8_formula_prefix_bad_translated.pdf",
+    )
+
+    missing = [issue for issue in issues if issue.code == "inline_formula_missing"]
+    assert missing
+    assert all(issue.page == 1 and issue.severity == "error" for issue in missing)
+    heading_overlap = [
+        issue for issue in issues if issue.code == "raster_heading_body_overlap"
+    ]
+    assert heading_overlap
+    assert all(
+        issue.page == 1 and issue.severity == "error" for issue in heading_overlap
+    )
+
+
+def test_gears_runin_architecture_reflows_with_body_and_formula_anchors():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("gears_p8_untranslated.pdf")
+    architecture = [
+        block
+        for block in blocks
+        if "Architecture." in strip_sentinels(block.text)
+    ]
+
+    assert len(architecture) == 1
+    block = architecture[0]
+    assert "diffusion policy contains" in strip_sentinels(block.text).replace('"', "ff")
+    assert block.block_type == "body"
+    assert block.bold_prefix
+    assert not block.bold
+    assert block.formula_anchors
+
+
+def test_gears_action_dimension_formula_uses_selectable_semantic_math():
+    from pdf_zh_translator.pdf_layout import _semantic_inline_formula_text
+
+    assert (
+        _semantic_inline_formula_text("a0→R^{H}^{→}^{d}^{a}")
+        == "a0∈R^{H×d_{a}}"
+    )
+
+
+def test_gears_runin_architecture_heading_is_inline_bold():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
     blocks = _unit_blocks("gears_p8_untranslated.pdf")
     architecture = next(
         block
@@ -385,8 +451,50 @@ def test_gears_runin_architecture_heading_is_split_and_bold():
         if "Architecture" in block.text
     )
 
-    assert architecture.block_type == "run_in_heading"
-    assert architecture.bold
+    assert architecture.block_type == "body"
+    assert architecture.bold_prefix
+    assert not architecture.bold
+    assert "policy contains" in strip_sentinels(architecture.text)
+
+
+def test_gears_page8_runin_heading_clears_previous_formula_ink(tmp_path):
+    output_pdf = tmp_path / "gears-page8-layout.pdf"
+    source_pdf = FIXTURES / "gears_p8_full.pdf"
+    translate_pdf(
+        input_pdf=source_pdf,
+        output_pdf=output_pdf,
+        translator=_GearsPage8LayoutTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    output = fitz.open(output_pdf)
+    spans = _page_spans(output[0])
+    architecture = next(span for span in spans if span["text"].startswith("架构。"))
+    previous_line = next(
+        span for span in spans if "个连续专家动作片段" in span["text"]
+    )
+    same_line_body = next(
+        span
+        for span in spans
+        if span["bbox"][0] > architecture["bbox"][2]
+        and abs(span["origin"][1] - architecture["origin"][1]) <= 0.2
+    )
+    output.close()
+
+    assert previous_line["bbox"][3] <= architecture["bbox"][1]
+    assert _span_is_bold(architecture)
+    assert not _span_is_bold(same_line_body)
+    issues = verify_translation_issues(source_pdf, output_pdf)
+    assert not any(
+        issue.severity == "error"
+        and issue.code
+        in {
+            "font_role_bold_spill",
+            "raster_heading_body_overlap",
+            "raster_ink_overlap",
+        }
+        for issue in issues
+    )
 
 
 def test_guidedvla_single_line_numbered_equations_are_not_translation_units():
@@ -743,7 +851,9 @@ class _OTFNodeResidualTranslator(_OTFAcceptanceTranslator):
     def translate_batch(self, texts):
         translated = super().translate_batch(texts)
         return [
-            source if source.startswith("Initially, we consider") else target
+            source
+            if source.startswith("Initially, we consider")
+            else target
             for source, target in zip(texts, translated)
         ]
 
@@ -759,6 +869,35 @@ class _GearsTitleTranslator(_GoldenStubTranslator):
             self._TITLE if source.startswith("GEARS: Seeing Geometry") else target
             for source, target in zip(texts, fallback)
         ]
+
+
+class _GearsPage8LayoutTranslator(_GoldenStubTranslator):
+    """Production-shaped translations for the page-8 prose/formula boundary."""
+
+    def translate_batch(self, texts):
+        fallback = super().translate_batch(texts)
+        outputs = []
+        for source, default in zip(texts, fallback):
+            if source.strip() == "Data Collection.":
+                outputs.append("数据收集。")
+            elif source.startswith("We roll out the trained expert"):
+                outputs.append(
+                    "我们在完整的日常活动机器人（ADR）参数分布上部署训练好的专家模型，"
+                    "以收集数据集⟦0⟧，其中⟦1⟧和⟦2⟧分别为头部与胸部相机的RGB图像，"
+                    "⟦3⟧为机器人关节位置向量，⟦4⟧为从时刻⟦6⟧开始的⟦5⟧个连续专家动作片段。"
+                )
+            elif source.startswith("Architecture. The di"):
+                outputs.append(
+                    "架构。扩散策略以冻结的几何编码器（§3.1）作为观测主干，并以一维"
+                    "扩散变换器（DiT）⟦1⟧作为去噪主干。我们利用条件去噪扩散框架⟦2⟧"
+                    "对动作片段⟦0⟧上的条件分布进行建模。每幅相机图像由该编码器独立处理，"
+                    "所得特征在通过两条条件路径进入DiT之前进行拼接。编码器输出的密集空间"
+                    "特征图被展平为令牌序列，而机器人关节位置则通过轻量级多层感知机"
+                    "（MLP）进行编码。"
+                )
+            else:
+                outputs.append(default)
+        return outputs
 
 
 def _page_spans(page):
