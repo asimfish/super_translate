@@ -322,6 +322,15 @@ TTC_FACE_SOURCES = (
 )
 
 
+@dataclass(frozen=True)
+class SourceStyleRun:
+    role: str
+    bbox: BBox
+    baseline: float
+    font_size: float
+    bold: bool
+
+
 @dataclass
 class TextBlock:
     page_index: int
@@ -354,6 +363,9 @@ class TextBlock:
     # for translated labels/captions, bold the corresponding prefix.
     bold_terms: Tuple[str, ...] = ()
     bold_prefix: bool = False
+    source_style_runs: Tuple[SourceStyleRun, ...] = ()
+    translated_bold_prefix_chars: int = 0
+    flow_inline_math: bool = False
     # Placeholder indices backed by original math-font spans. Their source
     # glyphs stay on the page; the restored marker is omitted while typesetting
     # translated prose so formulas are neither redrawn nor duplicated.
@@ -454,10 +466,12 @@ def translate_pdf(
     except Exception:
         pass
     preserved_regions: Dict[int, List[BBox]] = {}
+    equation_rows: Dict[int, List[BBox]] = {}
     units, gutter_rects, skipped = prepare_translation_units(
         document,
         preserve_graphics_text=preserve_graphics_text,
         preserved_regions_out=(preserved_regions if preserve_graphics_text else None),
+        equation_rows_out=equation_rows,
     )
     warnings.extend(fragmented_prose_warnings_from_units(units))
 
@@ -534,7 +548,9 @@ def translate_pdf(
         by_page.setdefault(block.page_index, []).append((block, translated_text))
 
     for page_index in range(document.page_count):
-        candidate_items = by_page.get(page_index, [])
+        candidate_items = _combine_inline_style_translation_items(
+            by_page.get(page_index, [])
+        )
         page_gutter = gutter_rects.get(page_index, [])
         if not candidate_items and not page_gutter:
             continue
@@ -618,6 +634,16 @@ def translate_pdf(
                 font_pack,
                 requested_size,
                 margin,
+            )
+            block = _expand_single_line_body_bbox(
+                block,
+                translated_text,
+                [candidate for candidate, _ in candidate_items],
+                font_pack,
+                requested_size,
+                margin,
+                page_width,
+                obstacles=equation_rows.get(page_index, ()),
             )
             # Float-aware clip: keep reflowed CJK body text out of a right-column
             # figure/table instead of painting over it. Only applied when the
@@ -1539,6 +1565,22 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 region,
             )
             if preserved_region_text_changed(original_region_text, translated_region_text):
+                # Redaction can damage a nested source Form even when the
+                # protected atom itself was untouched. Its raster repair is
+                # intentionally visual-only so image-internal labels do not
+                # re-enter the document text layer. Accept an absent semantic
+                # copy only when the restored ink still matches the source.
+                if (
+                    not translated_region_text.strip()
+                    and _formula_ink_similarity(
+                        orig_page,
+                        region,
+                        trans_page,
+                        region,
+                    )
+                    >= 0.94
+                ):
+                    continue
                 preserved_changed_examples.append(" ".join(original_region_text.split())[:80])
                 if len(preserved_changed_examples) >= 3:
                     break
@@ -1855,6 +1897,14 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                         severity="error",
                     )
                 )
+        issues.extend(
+            _formula_visible_ink_issues(
+                orig_page,
+                trans_page,
+                translation_units_by_page.get(page_idx, []),
+                page_idx + 1,
+            )
+        )
 
         for feature in _detect_high_risk_layout_features(
             orig_page,
@@ -3108,6 +3158,186 @@ def _font_role_consistency_issues(
                         f"Page {page_number}: heading hierarchy collapsed to "
                         f"{heading_size:.2f}pt body size at x={bbox[0]:.1f}, "
                         f"y={bbox[1]:.1f}"
+                    ),
+                    severity="error",
+                )
+            )
+    return issues
+
+
+def _normalized_formula_ink_mask(
+    page: object,
+    bbox: BBox,
+    *,
+    columns: int = 96,
+    rows: int = 48,
+) -> set[Tuple[int, int]]:
+    import fitz
+
+    rect = fitz.Rect(bbox) & page.rect
+    if rect.width <= 0.2 or rect.height <= 0.2:
+        return set()
+    pixmap = page.get_pixmap(
+        matrix=fitz.Matrix(5.0, 5.0),
+        clip=rect,
+        colorspace=fitz.csGRAY,
+        alpha=False,
+    )
+    mask: set[Tuple[int, int]] = set()
+    for index, sample in enumerate(pixmap.samples):
+        if sample >= 205:
+            continue
+        row, column = divmod(index, pixmap.width)
+        mask.add(
+            (
+                min(columns - 1, int(column * columns / max(1, pixmap.width))),
+                min(rows - 1, int(row * rows / max(1, pixmap.height))),
+            )
+        )
+    return mask
+
+
+def _formula_ink_similarity(
+    source_page: object,
+    source_bbox: BBox,
+    translated_page: object,
+    translated_bbox: BBox,
+) -> float:
+    source_mask = _normalized_formula_ink_mask(source_page, source_bbox)
+    translated_mask = _normalized_formula_ink_mask(
+        translated_page,
+        translated_bbox,
+    )
+    if not source_mask or not translated_mask:
+        return 0.0
+
+    def dilate(mask: set[Tuple[int, int]]) -> set[Tuple[int, int]]:
+        return {
+            (x + dx, y + dy)
+            for x, y in mask
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+            if 0 <= x + dx < 96 and 0 <= y + dy < 48
+        }
+
+    source_dilated = dilate(source_mask)
+    translated_dilated = dilate(translated_mask)
+    source_coverage = len(source_mask & translated_dilated) / len(source_mask)
+    translated_coverage = len(translated_mask & source_dilated) / len(translated_mask)
+    return min(source_coverage, translated_coverage)
+
+
+def _formula_visible_ink_issues(
+    source_page: object,
+    translated_page: object,
+    source_blocks: Sequence[TextBlock],
+    page_number: int,
+) -> List[TranslationIssue]:
+    """Require one visible raster owner for every hidden semantic formula."""
+    expected: List[Tuple[str, BBox]] = []
+    for block in source_blocks:
+        for token in _tokenize_translation_with_formula_clips(block.text, block):
+            if (
+                token.kind == "formula"
+                and token.source_bbox is not None
+                and re.search(r"(?:∈R\^\{|∑\^\{)", token.text)
+            ):
+                expected.append((re.sub(r"\s+", "", token.text), token.source_bbox))
+    if not expected:
+        return []
+
+    hidden_runs: List[Tuple[str, BBox]] = []
+    for trace in translated_page.get_texttrace():
+        if int(trace.get("type", 0)) != 3:
+            continue
+        text = "".join(chr(char[0]) for char in trace.get("chars", []))
+        bbox = trace.get("bbox")
+        if not text or not bbox:
+            continue
+        current_bbox = tuple(float(value) for value in bbox)
+        if hidden_runs:
+            previous_text, previous_bbox = hidden_runs[-1]
+            previous_center = (previous_bbox[1] + previous_bbox[3]) / 2.0
+            current_center = (current_bbox[1] + current_bbox[3]) / 2.0
+            gap = current_bbox[0] - previous_bbox[2]
+            if abs(current_center - previous_center) <= 1.5 and -0.5 <= gap <= 2.5:
+                hidden_runs[-1] = (
+                    previous_text + text,
+                    union_bbox([previous_bbox, current_bbox]),
+                )
+                continue
+        hidden_runs.append((text, current_bbox))
+
+    images = [
+        tuple(float(value) for value in image["bbox"])
+        for image in translated_page.get_image_info(xrefs=True)
+        if image.get("bbox")
+    ]
+    issues: List[TranslationIssue] = []
+    used_runs: set[int] = set()
+    source_document = getattr(source_page, "parent", None)
+    for semantic, source_bbox in expected:
+        match_index = next(
+            (
+                index
+                for index, (text, _bbox) in enumerate(hidden_runs)
+                if index not in used_runs and re.sub(r"\s+", "", text) == semantic
+            ),
+            None,
+        )
+        if match_index is None:
+            continue
+        used_runs.add(match_index)
+        _, semantic_bbox = hidden_runs[match_index]
+        semantic_center = (
+            (semantic_bbox[0] + semantic_bbox[2]) / 2.0,
+            (semantic_bbox[1] + semantic_bbox[3]) / 2.0,
+        )
+        candidates = [
+            image_bbox
+            for image_bbox in images
+            if bbox_contains_point(
+                expand_bbox(image_bbox, 2.0),
+                semantic_center[0],
+                semantic_center[1],
+            )
+        ]
+        if not candidates:
+            issues.append(
+                TranslationIssue(
+                    page=page_number,
+                    code="formula_visible_ink_mismatch",
+                    message=(
+                        f"Page {page_number}: hidden semantic formula {semantic[:32]!r} "
+                        "has no visible formula region"
+                    ),
+                    severity="error",
+                )
+            )
+            continue
+        image_bbox = min(candidates, key=bbox_area)
+        trimmed_source = source_bbox
+        if source_document is not None:
+            trimmed_source = _trim_formula_clip_against_foreign_ink(
+                source_document,
+                page_number - 1,
+                source_bbox,
+            )
+        similarity = _formula_ink_similarity(
+            source_page,
+            trimmed_source,
+            translated_page,
+            image_bbox,
+        )
+        if similarity < 0.55:
+            issues.append(
+                TranslationIssue(
+                    page=page_number,
+                    code="formula_visible_ink_mismatch",
+                    message=(
+                        f"Page {page_number}: visible formula ink differs from source "
+                        f"near x={image_bbox[0]:.1f}, y={image_bbox[1]:.1f} "
+                        f"(similarity={similarity:.2f})"
                     ),
                     severity="error",
                 )
@@ -9641,11 +9871,12 @@ def segments_from_record(
     current_no_merge = False
     current_min_y0: Optional[float] = None
     current_inline_prefix_right: Optional[float] = None
+    current_reflowed_inline_formula = False
     preserved_line_bboxes: List[BBox] = []
 
     def flush_current() -> None:
         nonlocal current, current_has_inline_tail, current_no_merge, current_min_y0
-        nonlocal current_inline_prefix_right
+        nonlocal current_inline_prefix_right, current_reflowed_inline_formula
         block = current.flush(page_index)
         if block is not None:
             if current_has_inline_tail and not block.keepout_bboxes:
@@ -9673,12 +9904,22 @@ def segments_from_record(
                     block.redact_bboxes = list(current.line_bboxes)
             if current_no_merge:
                 block.no_merge = True
-            segments.append(block)
+            if (
+                current_reflowed_inline_formula
+                and segments
+                and segments[-1].block_type == "run_in_heading"
+                and strip_sentinels(segments[-1].text).rstrip().endswith((".", ":"))
+                and _looks_like_inline_heading_pair(segments[-1], block)
+            ):
+                segments[-1] = merge_two_blocks(segments[-1], block)
+            else:
+                segments.append(block)
         current = _SegmentAccumulator()
         current_has_inline_tail = False
         current_no_merge = False
         current_min_y0 = None
         current_inline_prefix_right = None
+        current_reflowed_inline_formula = False
 
     def append_math_line_prose_fragments(
         source_line: _LineRec,
@@ -9932,7 +10173,13 @@ def segments_from_record(
             and line.text.lstrip().startswith(SENTINEL_OPEN)
             and len(line.math_run_bboxes) >= 2
             and substantial_prose_word_count(strip_sentinels(line.text)) >= 4
-            and sentence_final_text(line.text)
+            and (
+                sentence_final_text(line.text)
+                or (
+                    current.lines
+                    and not sentence_final_text(current.lines[-1])
+                )
+            )
         )
         record_content_left = min(
             (
@@ -9948,6 +10195,43 @@ def segments_from_record(
             <= record_content_left + 4.0
         )
         if not equation_record and reflowable_formula_prefix:
+            if (
+                interleaved_formula_prose_row
+                and current.lines
+                and not sentence_final_text(current.lines[-1])
+            ):
+                _accumulate_line(current, line)
+                current_has_inline_tail = True
+                current_reflowed_inline_formula = True
+                continuation_index = line_index + 1
+                previous_line = line
+                while continuation_index < len(record.lines):
+                    next_line = record.lines[continuation_index]
+                    vertical_gap = next_line.bbox[1] - previous_line.bbox[3]
+                    vertical_overlap = min(
+                        previous_line.bbox[3], next_line.bbox[3]
+                    ) - max(previous_line.bbox[1], next_line.bbox[1])
+                    shorter_height = max(
+                        1.0,
+                        min(
+                            previous_line.bbox[3] - previous_line.bbox[1],
+                            next_line.bbox[3] - next_line.bbox[1],
+                        ),
+                    )
+                    same_visual_row = vertical_overlap >= shorter_height * 0.45
+                    if (
+                        not line_is_prose(next_line)
+                        or not (same_visual_row or -2.0 <= vertical_gap <= 16.0)
+                    ):
+                        break
+                    _accumulate_line(current, next_line)
+                    current_has_inline_tail = True
+                    skip_line_indexes.add(continuation_index)
+                    previous_line = next_line
+                    continuation_index += 1
+                    if sentence_final_text(next_line.text):
+                        break
+                continue
             flush_current()
             formula_sentence = _SegmentAccumulator()
             _accumulate_line(formula_sentence, line)
@@ -11360,8 +11644,8 @@ def _restore_redaction_damaged_preserved_regions(
 
     MuPDF can rewrite a nested Form XObject when a nearby caption is redacted.
     On some conference figures that removes unrelated vector labels elsewhere
-    in the same Form. Replaying only the affected protected atoms preserves the
-    exact source glyphs without restoring any translated redaction rectangle.
+    in the same Form. Repainting only the affected protected atoms as raster
+    clips preserves their visible ink without importing page-wide text operators.
     """
     if not preserved_regions:
         return 0
@@ -11394,13 +11678,12 @@ def _restore_redaction_damaged_preserved_regions(
         if not preserved_region_text_changed(source_text, current_text):
             continue
         clip = fitz.Rect(region)
-        page.show_pdf_page(
-            clip,
+        _insert_source_region_raster(
+            page,
             source_document,
             page_index,
-            clip=clip,
-            keep_proportion=False,
-            overlay=True,
+            clip,
+            clip,
         )
         restored += 1
     return restored
@@ -11511,6 +11794,124 @@ def expand_heading_bbox(block: TextBlock) -> TextBlock:
     )
 
 
+def _combine_inline_style_translation_items(
+    items: Sequence[Tuple[TextBlock, str]],
+) -> List[Tuple[TextBlock, str]]:
+    """Flow a source run-in heading and its same-baseline body as one block."""
+    combined_items: List[Tuple[TextBlock, str]] = []
+    index = 0
+    while index < len(items):
+        heading, heading_translation = items[index]
+        if index + 1 >= len(items):
+            combined_items.append((heading, heading_translation))
+            break
+        body, body_translation = items[index + 1]
+        heading_line = (
+            heading.source_line_bboxes[0]
+            if heading.source_line_bboxes
+            else heading.bbox
+        )
+        matching_body_line = next(
+            (
+                line_bbox
+                for line_bbox in body.source_line_bboxes
+                if min(line_bbox[3], heading_line[3])
+                - max(line_bbox[1], heading_line[1])
+                >= min(
+                    line_bbox[3] - line_bbox[1],
+                    heading_line[3] - heading_line[1],
+                )
+                * 0.65
+                and -1.0 <= line_bbox[0] - heading_line[2] <= 4.0
+            ),
+            None,
+        )
+        if (
+            heading.block_type != "run_in_heading"
+            or not heading.bold
+            or body.block_type not in {"body", "formula_prose"}
+            or matching_body_line is None
+        ):
+            combined_items.append((heading, heading_translation))
+            index += 1
+            continue
+
+        prefix = heading_translation.rstrip()
+        suffix = body_translation.lstrip()
+        translated = f"{prefix} {suffix}" if suffix else prefix
+        source_text = f"{heading.text.rstrip()} {body.text.lstrip()}"
+        source_lines = tuple(
+            dict.fromkeys([*heading.source_line_bboxes, *body.source_line_bboxes])
+        )
+        heading_baseline = heading_line[3] - heading.font_size * 0.18
+        body_baseline = matching_body_line[3] - body.font_size * 0.18
+        merged = TextBlock(
+            page_index=body.page_index,
+            bbox=union_bbox([heading.bbox, body.bbox]),
+            text=source_text,
+            font_size=body.font_size,
+            color=body.color,
+            bold=False,
+            starts_bold=True,
+            source_lines=max(1, len(source_lines)),
+            nowrap=False,
+            no_merge=True,
+            redact_bboxes=list(
+                dict.fromkeys(
+                    [
+                        *(heading.redact_bboxes or [heading.bbox]),
+                        *(body.redact_bboxes or [body.bbox]),
+                    ]
+                )
+            ),
+            keepout_bboxes=list(
+                dict.fromkeys(
+                    [
+                        *(heading.keepout_bboxes or []),
+                        *(body.keepout_bboxes or []),
+                    ]
+                )
+            )
+            or None,
+            block_type=body.block_type,
+            should_translate=True,
+            preserve_position=False,
+            bold_terms=tuple(dict.fromkeys([*heading.bold_terms, *body.bold_terms])),
+            bold_prefix=True,
+            source_style_runs=(
+                SourceStyleRun(
+                    role="heading_prefix",
+                    bbox=heading.bbox,
+                    baseline=heading_baseline,
+                    font_size=heading.font_size,
+                    bold=True,
+                ),
+                SourceStyleRun(
+                    role="body",
+                    bbox=body.bbox,
+                    baseline=body_baseline,
+                    font_size=body.font_size,
+                    bold=False,
+                ),
+            ),
+            translated_bold_prefix_chars=len(prefix),
+            flow_inline_math=True,
+            preserved_math_placeholders=tuple(
+                range(len(SENTINEL_RUN_RE.findall(source_text)))
+            ),
+            source_line_bboxes=source_lines,
+            source_math_bboxes=tuple(
+                [*heading.source_math_bboxes, *body.source_math_bboxes]
+            ),
+            formula_anchors=tuple(
+                [*heading.formula_anchors, *body.formula_anchors]
+            ),
+        )
+        combined_items.append((merged, translated))
+        index += 2
+    return combined_items
+
+
 def _expand_single_line_list_bbox(
     block: TextBlock,
     translated_text: str,
@@ -11566,6 +11967,125 @@ def _expand_single_line_list_bbox(
     if new_y0 < top_limit or new_y1 - new_y0 < desired_height - 0.1:
         return block
     return replace(block, bbox=(x0, new_y0, x1, new_y1))
+
+
+def _expand_single_line_body_bbox(
+    block: TextBlock,
+    translated_text: str,
+    page_blocks: Sequence[TextBlock],
+    font_pack: FontPack,
+    font_size: float,
+    margin: float,
+    page_width: float,
+    *,
+    obstacles: Sequence[BBox] = (),
+) -> TextBlock:
+    """Give short prose and inline-style runs enough room to keep body size."""
+    inline_style_flow = block.flow_inline_math and block.source_lines >= 1
+    if (
+        block.block_type not in {"body", "formula_prose"}
+        or (block.source_lines != 1 and not inline_style_flow)
+        or block.nowrap
+        or block.preserve_position
+    ):
+        return block
+
+    fonts = font_pack.fonts_for(block.bold)
+    bold_fonts = font_pack.fonts_for(True)
+    render_text = _translation_text_for_render(translated_text)
+    tokens = _tokenize_translation_with_formula_clips(translated_text, block)
+    apply_inline_bold(tokens, block, render_text)
+    if not tokens:
+        return block
+    for token in tokens:
+        token.width = token_width(token, fonts, font_size, bold_fonts)
+    x0, y0, x1, y1 = block.bbox
+    block_width = max(1.0, x1 - x0)
+    embedded_in_equation_row = any(
+        obstacle[0] <= x0 + 0.8
+        and obstacle[2] >= x1 - 0.8
+        and obstacle[2] - obstacle[0] >= block_width + 4.0
+        and min(y1, obstacle[3]) - max(y0, obstacle[1])
+        >= min(y1 - y0, obstacle[3] - obstacle[1]) * 0.6
+        for obstacle in obstacles
+    )
+    if inline_style_flow:
+        lines = break_lines(
+            tokens,
+            fonts,
+            font_size,
+            max(1.0, x1 - x0 - margin * 2.0),
+            prefer_space_break=False,
+            bold_fonts=bold_fonts,
+        )
+        desired_width = x1 - x0
+        desired_height = (
+            min(
+                line_block_height(lines, font_size, leading, fonts, bold_fonts)
+                for leading in leading_options(block)
+            )
+            + margin * 2.0
+        )
+    else:
+        desired_width = sum(token.width for token in tokens) + margin * 2.0
+        ascent, descent = _line_vertical_metrics(tokens, font_size, fonts, bold_fonts)
+        desired_height = ascent + descent + margin * 2.0
+
+    row_right = page_width - max(0.5, margin)
+    center_y = (y0 + y1) / 2.0
+    for other in page_blocks:
+        if other is block or other.page_index != block.page_index:
+            continue
+        vertical_overlap = min(y1, other.bbox[3]) - max(y0, other.bbox[1])
+        if vertical_overlap <= 0.0 or other.bbox[0] < x1 - 0.5:
+            continue
+        row_right = min(row_right, other.bbox[0] - 0.8)
+    new_x1 = (
+        x1
+        if inline_style_flow or embedded_in_equation_row
+        else min(row_right, max(x1, x0 + desired_width))
+    )
+
+    top_limit = 0.0
+    bottom_limit = float("inf")
+    for other in page_blocks:
+        if other is block or other.page_index != block.page_index:
+            continue
+        horizontal_overlap = min(new_x1, other.bbox[2]) - max(x0, other.bbox[0])
+        if horizontal_overlap <= 0.0:
+            continue
+        if other.bbox[3] <= center_y:
+            top_limit = max(top_limit, other.bbox[3] + 0.4)
+        elif other.bbox[1] >= center_y:
+            bottom_limit = min(bottom_limit, other.bbox[1] - 0.4)
+    if inline_style_flow:
+        for obstacle in obstacles:
+            horizontal_overlap = min(new_x1, obstacle[2]) - max(x0, obstacle[0])
+            if horizontal_overlap <= 0.0:
+                continue
+            if obstacle[3] <= center_y:
+                top_limit = max(top_limit, obstacle[3] + 0.4)
+            elif obstacle[1] >= center_y:
+                bottom_limit = min(bottom_limit, obstacle[1] - 0.4)
+
+    if inline_style_flow:
+        # Preserve the source first-line anchor and consume the free gap below
+        # before shifting upward. This keeps the run-in prefix on its original
+        # baseline while allowing the Chinese paragraph to retain body size.
+        new_y0 = y0
+        new_y1 = max(y1, y0 + desired_height)
+    else:
+        new_y0 = min(y0, center_y - desired_height / 2.0)
+        new_y1 = max(y1, center_y + desired_height / 2.0)
+    if new_y0 < top_limit:
+        new_y1 += top_limit - new_y0
+        new_y0 = top_limit
+    if new_y1 > bottom_limit:
+        new_y0 -= new_y1 - bottom_limit
+        new_y1 = bottom_limit
+    if new_x1 <= x0 or new_y0 < top_limit or new_y1 <= new_y0:
+        return block
+    return replace(block, bbox=(x0, new_y0, new_x1, new_y1))
 
 
 def relax_caption_boxes(
@@ -11896,7 +12416,7 @@ def _tokenize_translation_with_formula_clips(text: str, block: TextBlock) -> Lis
             _Token(
                 "formula",
                 semantic_formula or formula_text,
-                source_bbox=None if semantic_formula else source_bbox,
+                source_bbox=source_bbox,
                 source_page=block.page_index,
                 source_size=max(block.font_size, 1.0),
             )
@@ -11995,6 +12515,17 @@ def _bold_prefix_limit(text: str) -> int:
     offset = len(text) - len(stripped)
     if not stripped:
         return 0
+    body_cue = re.search(
+        r"(?:对于(?:式|方程|问题)\s*[\d（(]|"
+        r"(?:我们|本文)(?:首先|提出|使用|采用|将|通过)|"
+        r"在图\s*[0-9一二三四五六七八九十]|"
+        r"(?:具体而言|首先|其次|其中)[，,])",
+        stripped,
+    )
+    if body_cue is not None and 2 <= body_cue.start() <= 64:
+        prefix = stripped[: body_cue.start()].rstrip()
+        if prefix:
+            return offset + len(prefix)
     colon_positions = [pos for pos in (stripped.find(":"), stripped.find("：")) if pos >= 0]
     if colon_positions:
         first_colon = min(colon_positions)
@@ -12015,20 +12546,29 @@ def _normalize_bold_match_text(text: str) -> str:
     return re.sub(r"^[\s\"'“”‘’([{（【]+|[\s\"'“”‘’)\]}）】,.;:：。]+$", "", text).lower()
 
 
-def apply_inline_bold(tokens: List[_Token], block: TextBlock, text: str) -> None:
+def apply_inline_bold(
+    tokens: List[_Token],
+    block: TextBlock,
+    text: str,
+    *,
+    char_offset: int = 0,
+) -> None:
     if block.bold:
         for token in tokens:
             token.bold = True
         return
 
     char_index = 0
-    prefix_limit = _bold_prefix_limit(text) if block.bold_prefix else 0
+    prefix_limit = (
+        block.translated_bold_prefix_chars
+        if block.translated_bold_prefix_chars > 0
+        else _bold_prefix_limit(text) if block.bold_prefix else 0
+    )
     terms = {_normalize_bold_match_text(term) for term in block.bold_terms}
     terms = {term for term in terms if term}
     for token in tokens:
-        start = char_index
-        end = start + len(token.text)
-        char_index = end
+        start = char_offset + char_index
+        char_index += len(token.text)
         if token.kind == "space":
             continue
         normalized = _normalize_bold_match_text(token.text)
@@ -12378,6 +12918,8 @@ _KEEPOUT_MIN_SEGMENT = 40.0
 
 def _uses_fixed_source_math(block: TextBlock) -> bool:
     """Keep formulas fixed for academic statements with structural math rows."""
+    if block.flow_inline_math:
+        return False
     marker_count = len(SENTINEL_RUN_RE.findall(block.text))
     if (
         marker_count <= 0
@@ -12536,10 +13078,13 @@ def _formula_anchored_layout(
     if not markers or len(markers) != len(block.formula_anchors):
         return None
     segments: List[str] = []
+    segment_offsets: List[int] = []
     cursor = 0
     for marker in markers:
+        segment_offsets.append(cursor)
         segments.append(clean_translation(text[cursor : marker.start()]))
         cursor = marker.end()
+    segment_offsets.append(cursor)
     segments.append(clean_translation(text[cursor:]))
 
     size = font_size
@@ -12552,9 +13097,18 @@ def _formula_anchored_layout(
             Tuple[List[List[_Token]], List[Tuple[float, float, float]]]
         ] = []
         all_fit = True
-        for segment, slots in zip(segments, slots_by_segment):
+        for segment, segment_offset, slots in zip(
+            segments,
+            segment_offsets,
+            slots_by_segment,
+        ):
             tokens = tokenize_text(segment)
-            apply_inline_bold(tokens, block, segment)
+            apply_inline_bold(
+                tokens,
+                block,
+                segment,
+                char_offset=segment_offset,
+            )
             if not tokens:
                 segment_layouts.append(([], slots))
                 continue
@@ -13228,7 +13782,7 @@ def _trim_formula_clip_against_foreign_ink(
     page_index: int,
     clip: BBox,
     *,
-    max_trim_ratio: float = 0.41,
+    max_trim_ratio: float = 0.43,
 ) -> BBox:
     """Shrink a formula stamp clip so neighboring-line glyphs are excluded.
 
@@ -13303,6 +13857,41 @@ def _trim_formula_clip_against_foreign_ink(
         return clip
 
 
+def _insert_source_region_raster(
+    page: object,
+    source_document: object,
+    source_page_index: int,
+    source_rect: object,
+    target_rect: object,
+) -> None:
+    """Paint one source region without importing its page-wide text layer."""
+    import fitz
+
+    source_rect = fitz.Rect(source_rect)
+    target_rect = fitz.Rect(target_rect)
+    source_width = max(0.1, source_rect.width)
+    source_height = max(0.1, source_rect.height)
+    target_scale = max(
+        target_rect.width / source_width,
+        target_rect.height / source_height,
+    )
+    # Five device pixels per output point retains formula scripts at 360 dpi.
+    # Bound source zoom to avoid pathological memory use on malformed clips.
+    zoom = min(8.0, max(3.0, target_scale * 5.0))
+    pixmap = source_document[source_page_index].get_pixmap(
+        matrix=fitz.Matrix(zoom, zoom),
+        clip=source_rect,
+        alpha=True,
+        annots=False,
+    )
+    page.insert_image(
+        target_rect,
+        pixmap=pixmap,
+        keep_proportion=False,
+        overlay=True,
+    )
+
+
 def emit_tokens(
     page: object,
     line: Sequence[_Token],
@@ -13337,7 +13926,15 @@ def emit_tokens(
         run_chars = []
         run_font = None
 
-    def emit_hidden_copy_text(text: str, x_pos: float) -> None:
+    def emit_hidden_copy_text(
+        text: str,
+        x_pos: float,
+        max_width: Optional[float] = None,
+    ) -> None:
+        natural_width = sum(char_width(char, fonts, size) for char in text)
+        hidden_size = size
+        if max_width is not None and natural_width > max_width > 0.0:
+            hidden_size = max(size * 0.35, size * max_width / natural_width)
         hidden_x = x_pos
         for char in text:
             alias = pick_font_alias(char, fonts)
@@ -13345,11 +13942,11 @@ def emit_tokens(
                 (hidden_x, baseline),
                 char,
                 fontname=alias,
-                fontsize=size,
+                fontsize=hidden_size,
                 color=color,
                 render_mode=3,
             )
-            hidden_x += char_width(char, fonts, size)
+            hidden_x += char_width(char, fonts, hidden_size)
 
     for index, token in enumerate(line):
         gap_after = increments.get(index, 0.0)
@@ -13392,14 +13989,14 @@ def emit_tokens(
                     x + max(0.1, token.width - formula_guard * 2.0),
                     baseline + target_height * 0.18,
                 )
-                page.show_pdf_page(
-                    target_rect,
+                _insert_source_region_raster(
+                    page,
                     source_document,
                     token.source_page,
-                    clip=source_rect,
-                    keep_proportion=False,
-                    overlay=True,
+                    source_rect,
+                    target_rect,
                 )
+                emit_hidden_copy_text(token.text, x, target_rect.width)
                 x += max(0.1, token.width - formula_guard * 2.0) + formula_guard
                 if gap_after:
                     x += gap_after

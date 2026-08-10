@@ -2221,7 +2221,7 @@ class FormulaTailProseTests(unittest.TestCase):
 
         formula = next(token for token in tokens if token.kind == "formula")
         self.assertEqual(formula.text, "G∈R^{C×H×W}")
-        self.assertIsNone(formula.source_bbox)
+        self.assertEqual(formula.source_bbox, (100.0, 100.0, 180.0, 120.0))
 
     def test_formula_tokenizer_redraws_kernel_size_without_neighbor_clip(self):
         block = TextBlock(
@@ -2240,7 +2240,7 @@ class FormulaTailProseTests(unittest.TestCase):
 
         formula = next(token for token in tokens if token.kind == "formula")
         self.assertEqual(formula.text, "1×1")
-        self.assertIsNone(formula.source_bbox)
+        self.assertEqual(formula.source_bbox, (100.0, 100.0, 118.0, 118.0))
 
     def test_clean_translation_collapses_mixed_formula_parentheses(self):
         self.assertEqual(clean_translation("（U e ij≈0).）"), "（U e ij≈0）")

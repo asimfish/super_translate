@@ -1,0 +1,22 @@
+# Golden PDF fixtures
+
+## `otf_production_acceptance_full.pdf`
+
+- Title: *Optimal Flow Transport and its Entropic Regularization: a GPU-friendly Matrix Iterative Algorithm for Flow Balance Satisfaction*
+- Authors: Liangliang Shi, Yufeng Li, Kaipeng Zeng, Yihui Tu, Junchi Yan
+- Venue: ICLR 2025
+- Source: https://proceedings.iclr.cc/paper_files/paper/2025/file/4dac4a4cf3eea44eb9b192e88d1c754a-Paper-Conference.pdf
+- OpenReview record: https://openreview.net/forum?id=NtSlKEJ2DS
+- Pages: 19
+- SHA256: `77ca901150f8c0ec0a59700f7f2ec550f98e64e4a47083dc7cee1dcdaa77e4f4`
+- License: CC BY 4.0, as declared by the OpenReview record.
+- Test purpose: deterministic, non-production golden regression for text-layer ownership, untranslated prose, source-style typography, formula placement, table-caption clearance, and appendix reading order. The complete paper is retained because page-local extraction cannot exercise repeated headers or whole-document text-layer growth.
+
+Reproduce the fixture:
+
+```sh
+curl -L --fail \
+  https://proceedings.iclr.cc/paper_files/paper/2025/file/4dac4a4cf3eea44eb9b192e88d1c754a-Paper-Conference.pdf \
+  -o tests/fixtures/otf_production_acceptance_full.pdf
+shasum -a 256 tests/fixtures/otf_production_acceptance_full.pdf
+```

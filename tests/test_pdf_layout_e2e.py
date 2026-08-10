@@ -1,13 +1,382 @@
 """End-to-end PDF layout tests for native translation."""
 
+import base64
+import re
+import subprocess
 from collections import Counter
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from unittest.mock import patch
 
 import fitz
 import pytest
+from playwright.sync_api import sync_playwright
 
 from pdf_zh_translator.pdf_layout import create_dual_pdf, translate_pdf, verify_translation
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _poppler_layout_text(pdf_path: Path, *, page: int | None = None) -> str:
+    command = ["pdftotext", "-layout"]
+    if page is not None:
+        command.extend(["-f", str(page), "-l", str(page)])
+    command.extend([str(pdf_path), "-"])
+    result = subprocess.run(command, check=True, capture_output=True, text=True)
+    return result.stdout
+
+
+def _pdfjs_text_content(pdf_path: Path) -> str:
+    payload = {
+        "pdf": base64.b64encode(pdf_path.read_bytes()).decode("ascii"),
+        "worker": base64.b64encode(
+            (ROOT / "app/static/js/pdf.worker.min.js").read_bytes()
+        ).decode("ascii"),
+    }
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.add_script_tag(path=str(ROOT / "app/static/js/pdf.min.js"))
+        text = page.evaluate(
+            """async payload => {
+              const workerSource = atob(payload.worker);
+              pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(
+                new Blob([workerSource], {type: 'application/javascript'})
+              );
+              const bytes = Uint8Array.from(atob(payload.pdf), char => char.charCodeAt(0));
+              const document = await pdfjsLib.getDocument({
+                data: bytes,
+                disableWorker: true,
+              }).promise;
+              const parts = [];
+              for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+                const pdfPage = await document.getPage(pageNumber);
+                const content = await pdfPage.getTextContent();
+                parts.push(content.items.map(item => item.str).join(' '));
+              }
+              await document.destroy();
+              return parts.join('\\n');
+            }""",
+            payload,
+        )
+        browser.close()
+    return text
+
+
+def _pdfjs_drag_copy(
+    pdf_path: Path,
+    *,
+    start_text: str,
+    end_text: str,
+    screenshot_path: Path,
+) -> tuple[str, str, int]:
+    payload = {
+        "pdf": base64.b64encode(pdf_path.read_bytes()).decode("ascii"),
+        "worker": base64.b64encode(
+            (ROOT / "app/static/js/pdf.worker.min.js").read_bytes()
+        ).decode("ascii"),
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b"<!doctype html><html><body></body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context(
+                permissions=["clipboard-read", "clipboard-write"],
+                viewport={"width": 1300, "height": 1000},
+            )
+            page = context.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/")
+            page.add_style_tag(
+                content="""
+                body { margin: 0; background: white; }
+                #wrapper { position: relative; }
+                canvas { display: block; user-select: none; }
+                .textLayer {
+                  --scale-factor: 1;
+                  position: absolute;
+                  inset: 0;
+                  overflow: hidden;
+                  line-height: 1;
+                  text-align: initial;
+                  user-select: text;
+                  pointer-events: auto;
+                }
+                .textLayer span, .textLayer br {
+                  color: transparent;
+                  -webkit-text-fill-color: transparent;
+                  position: absolute;
+                  white-space: pre;
+                  cursor: text;
+                  transform-origin: 0% 0%;
+                }
+                .textLayer ::selection, .textLayer span::selection {
+                  background: rgba(24, 169, 153, 0.35);
+                }
+                """
+            )
+            page.add_script_tag(path=str(ROOT / "app/static/js/pdf.min.js"))
+            page.evaluate(
+                """async payload => {
+                  const workerSource = atob(payload.worker);
+                  pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(
+                    new Blob([workerSource], {type: 'application/javascript'})
+                  );
+                  const bytes = Uint8Array.from(
+                    atob(payload.pdf), char => char.charCodeAt(0)
+                  );
+                  const pdfDocument = await pdfjsLib.getDocument({
+                    data: bytes,
+                    disableWorker: true,
+                  }).promise;
+                  const pdfPage = await pdfDocument.getPage(1);
+                  const viewport = pdfPage.getViewport({scale: 1.5});
+                  const wrapper = document.createElement('div');
+                  wrapper.id = 'wrapper';
+                  wrapper.style.width = `${viewport.width}px`;
+                  wrapper.style.height = `${viewport.height}px`;
+                  const canvas = document.createElement('canvas');
+                  canvas.width = Math.ceil(viewport.width);
+                  canvas.height = Math.ceil(viewport.height);
+                  wrapper.appendChild(canvas);
+                  const textLayer = document.createElement('div');
+                  textLayer.className = 'textLayer';
+                  textLayer.style.width = `${viewport.width}px`;
+                  textLayer.style.height = `${viewport.height}px`;
+                  textLayer.style.setProperty('--scale-factor', viewport.scale);
+                  wrapper.appendChild(textLayer);
+                  document.body.appendChild(wrapper);
+                  await pdfPage.render({
+                    canvasContext: canvas.getContext('2d'),
+                    viewport,
+                  }).promise;
+                  const textContent = await pdfPage.getTextContent();
+                  const renderTask = pdfjsLib.renderTextLayer({
+                    textContentSource: textContent,
+                    container: textLayer,
+                    viewport,
+                    textDivs: [],
+                  });
+                  if (renderTask?.promise) await renderTask.promise;
+                  textLayer.dataset.loaded = 'true';
+                }""",
+                payload,
+            )
+            spans = page.locator(".textLayer span")
+            span_texts = spans.all_inner_texts()
+
+            flat_text = ""
+            char_span_indexes = []
+            for index, text in enumerate(span_texts):
+                for char in text:
+                    if char.isspace():
+                        continue
+                    flat_text += char
+                    char_span_indexes.append(index)
+            start_compact = "".join(start_text.split())
+            end_compact = "".join(end_text.split())
+            start_offset = flat_text.index(start_compact)
+            end_offset = flat_text.index(end_compact, start_offset)
+            start_index = char_span_indexes[start_offset]
+            end_index = char_span_indexes[end_offset + len(end_compact) - 1]
+            start_box = spans.nth(start_index).bounding_box()
+            end_box = spans.nth(end_index).bounding_box()
+            assert start_box is not None and end_box is not None
+            page.mouse.move(start_box["x"] + 1, start_box["y"] + start_box["height"] / 2)
+            page.mouse.down()
+            page.mouse.move(
+                end_box["x"] + end_box["width"] - 1,
+                end_box["y"] + end_box["height"] / 2,
+                steps=20,
+            )
+            page.mouse.up()
+            selected = page.evaluate("window.getSelection().toString()")
+            selection_rects = page.evaluate(
+                """() => {
+                  const selection = window.getSelection();
+                  if (!selection || selection.rangeCount === 0) return 0;
+                  return selection.getRangeAt(0).getClientRects().length;
+                }"""
+            )
+            shortcut = "Meta+C" if "Mac" in page.evaluate("navigator.platform") else "Control+C"
+            page.keyboard.press(shortcut)
+            copied = page.evaluate("navigator.clipboard.readText()")
+            page.screenshot(path=str(screenshot_path), full_page=True)
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    return selected, copied, selection_rects
+
+
+class _OtfP4SelectionTranslator:
+    block_types: list[str] = []
+
+    def translate_batch(self, texts):
+        outputs = []
+        for text in texts:
+            placeholders = re.findall(r"⟦\d+⟧", text)
+            if text.strip() == "Formulation of OFT":
+                outputs.append("最优流传输的形式化定义")
+            elif text.startswith("We begin by de"):
+                outputs.append(
+                    "我们首先定义最优流传输如下。考虑"
+                    f"{placeholders[0]}和{placeholders[1]}是图上的两个测度，"
+                    f"其中{''.join(placeholders[2:])}满足平衡约束。"
+                    "最优流传输可表示为："
+                )
+            else:
+                outputs.append("中文译文" + "".join(placeholders))
+        return outputs
+
+
+def test_pdfjs_drag_copy_otf_p4_selects_only_target_paragraph(tmp_path):
+    source_pdf = ROOT / "tests/fixtures/otf_p4_runin_formula.pdf"
+    output_pdf = tmp_path / "otf-p4-pdfjs.pdf"
+    translate_pdf(
+        input_pdf=source_pdf,
+        output_pdf=output_pdf,
+        translator=_OtfP4SelectionTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    pdfjs_text = "".join(_pdfjs_text_content(output_pdf).split())
+    assert pdfjs_text.count("我们首先定义最优流传输如下") == 1
+    assert "WebeginbydefiningtheOFT" not in pdfjs_text
+    assert "FormulationofOFT" not in pdfjs_text
+
+    selected, copied, selection_rects = _pdfjs_drag_copy(
+        output_pdf,
+        start_text="我们首先定义最优流传输如下",
+        end_text="最优流传输可表示为",
+        screenshot_path=tmp_path / "otf-p4-pdfjs-selection.png",
+    )
+    selected_compact = " ".join(selected.split())
+    copied_compact = " ".join(copied.split())
+    selected_no_space = "".join(selected.split())
+    assert selection_rects > 0
+    assert "我们首先定义最优流传输如下" in selected_no_space
+    assert "最优流传输可表示为" in selected_no_space
+    assert "α" in selected_compact and "β" in selected_compact
+    assert "中文译文" not in selected_compact
+    assert "Formulation of OFT" not in selected_compact
+    assert "We begin by defining the OFT" not in selected_compact
+    assert len(selected_compact) < 500
+    assert copied_compact == selected_compact
+
+
+def _build_source_clip_fixture() -> tuple[fitz.Document, fitz.Rect]:
+    source = fitz.open()
+    page = source.new_page(width=300, height=200)
+    page.insert_text((20, 24), "PUBLISHED HEADER OFF CLIP", fontsize=9)
+    page.insert_text((20, 170), "OFF CLIP BODY MUST NOT COPY", fontsize=9)
+    formula_rect = fitz.Rect(105, 72, 150, 96)
+    page.insert_text((108, 90), "x+y", fontsize=14)
+    return source, formula_rect
+
+
+def test_formula_clip_has_one_semantic_copy_without_source_page_text(tmp_path):
+    from pdf_zh_translator.pdf_layout import _Token, emit_tokens
+
+    source, formula_rect = _build_source_clip_fixture()
+    output = fitz.open()
+    page = output.new_page(width=300, height=200)
+    page.insert_font(fontname="helv", fontfile=None)
+    emit_tokens(
+        page,
+        [
+            _Token(
+                kind="formula",
+                text="x+y",
+                source_bbox=tuple(formula_rect),
+                source_page=0,
+                source_size=14,
+                width=45,
+            )
+        ],
+        [(fitz.Font("helv"), "helv")],
+        14,
+        (0.0, 0.0, 0.0),
+        105,
+        90,
+        {},
+        source_document=source,
+    )
+    output_pdf = tmp_path / "formula-clip.pdf"
+    output.save(output_pdf)
+    output.close()
+    source.close()
+
+    poppler_text = " ".join(_poppler_layout_text(output_pdf).split())
+    pdfjs_text = " ".join(_pdfjs_text_content(output_pdf).split())
+    for extracted in (poppler_text, pdfjs_text):
+        assert extracted.replace(" ", "").count("x+y") == 1
+        assert "PUBLISHED HEADER OFF CLIP" not in extracted
+        assert "OFF CLIP BODY MUST NOT COPY" not in extracted
+
+    rendered = fitz.open(output_pdf)
+    pixmap = rendered[0].get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
+    rendered.close()
+    assert min(pixmap.samples) < 245
+
+
+def test_preserved_region_restore_has_visual_patch_without_semantic_text(tmp_path):
+    from pdf_zh_translator.pdf_layout import _restore_redaction_damaged_preserved_regions
+
+    source = fitz.open()
+    source_page = source.new_page(width=300, height=200)
+    source_page.insert_text((20, 24), "PUBLISHED HEADER OFF CLIP", fontsize=9)
+    source_page.insert_text((20, 170), "OFF CLIP BODY MUST NOT COPY", fontsize=9)
+    protected_rect = fitz.Rect(82, 72, 220, 96)
+    source_page.insert_text((85, 90), "PROTECTED LABEL", fontsize=14)
+    output = fitz.open()
+    page = output.new_page(width=300, height=200)
+    restored = _restore_redaction_damaged_preserved_regions(
+        page,
+        source,
+        0,
+        [tuple(protected_rect)],
+        [],
+        0.5,
+    )
+    output_pdf = tmp_path / "preserved-region.pdf"
+    output.save(output_pdf)
+    output.close()
+    source.close()
+
+    assert restored == 1
+    for extracted in (
+        _poppler_layout_text(output_pdf),
+        _pdfjs_text_content(output_pdf),
+    ):
+        assert "PROTECTED LABEL" not in extracted
+        assert "PUBLISHED HEADER OFF CLIP" not in extracted
+        assert "OFF CLIP BODY MUST NOT COPY" not in extracted
+
+    rendered = fitz.open(output_pdf)
+    pixmap = rendered[0].get_pixmap(
+        matrix=fitz.Matrix(3, 3),
+        clip=protected_rect,
+        alpha=False,
+    )
+    rendered.close()
+    assert min(pixmap.samples) < 245
 
 
 class _RetryingStubTranslator:
