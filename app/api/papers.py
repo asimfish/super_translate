@@ -2605,9 +2605,6 @@ async def preview_page(
         / f"{pdf_path.stat().st_mtime_ns}-{page_number}.webp"
     )
     if not cache_path.exists():
-        # Drop stale previews for other revisions of the same PDF.
-        for stale in cache_path.parent.glob("*.webp"):
-            stale.unlink(missing_ok=True)
         try:
             await asyncio.to_thread(_render_page_preview, pdf_path, page_number, cache_path)
         except Exception as exc:

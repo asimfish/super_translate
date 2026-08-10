@@ -4016,6 +4016,62 @@ class TestPagePreviewEndpoint:
                     res2 = client.get("/api/papers/paper123/preview/translated/1")
                     assert res2.status_code == 200
 
+    def test_concurrent_page_previews_do_not_delete_each_other(self, client, tmp_path):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+
+        import fitz
+
+        from app.api.papers import _render_page_preview
+
+        paper, papers_dir, translations_dir = self._paper(tmp_path)
+        for path in (
+            papers_dir / "test.pdf",
+            translations_dir / "paper123" / "test-mono.pdf",
+        ):
+            document = fitz.open(path)
+            page = document.new_page(width=612, height=792)
+            page.insert_text((72, 100), "Second preview test page.")
+            document.saveIncr()
+            document.close()
+        paper.page_count = 2
+
+        first_rendered = threading.Event()
+        second_render_started = threading.Event()
+
+        def render_with_interleaving(pdf_path, page_number, out_path):
+            if page_number == 1:
+                _render_page_preview(pdf_path, page_number, out_path)
+                first_rendered.set()
+                assert second_render_started.wait(timeout=5)
+                return
+            second_render_started.set()
+            _render_page_preview(pdf_path, page_number, out_path)
+
+        with (
+            patch("app.api.papers._get_paper_or_404", new=AsyncMock(return_value=paper)),
+            patch("app.api.papers.settings") as mock_settings,
+            patch("app.api.papers._render_page_preview", side_effect=render_with_interleaving),
+            patch("app.api.papers.safe_pdf_for_use", side_effect=lambda p: p),
+        ):
+            mock_settings.papers_path = papers_dir
+            mock_settings.translations_path = translations_dir
+            mock_settings.base_dir = tmp_path
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(
+                    client.get,
+                    "/api/papers/paper123/preview/translated/1",
+                )
+                assert first_rendered.wait(timeout=5)
+                second = executor.submit(
+                    client.get,
+                    "/api/papers/paper123/preview/translated/2",
+                )
+                responses = [first.result(timeout=10), second.result(timeout=10)]
+
+        assert [response.status_code for response in responses] == [200, 200]
+        assert all(response.content[:4] == b"RIFF" for response in responses)
+
     def test_preview_rejects_out_of_range_page(self, client, tmp_path):
         from unittest.mock import patch
 

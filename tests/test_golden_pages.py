@@ -1347,6 +1347,15 @@ def test_otf_qa_uses_raster_ink_to_detect_formula_text_collision(tmp_path):
     assert "formula-text" in overlap.message
 
 
+def test_gears_inline_formula_adjacency_is_not_an_ink_overlap():
+    issues = verify_translation_issues(
+        FIXTURES / "gears_p6_inline_formulas.pdf",
+        FIXTURES / "gears_p6_inline_formulas_translated.pdf",
+    )
+
+    assert not [issue for issue in issues if issue.code == "raster_ink_overlap"]
+
+
 @pytest.mark.parametrize("fixture", GOLDEN_PAGES)
 def test_golden_page_has_no_error_issues(tmp_path, fixture):
     input_pdf = FIXTURES / fixture

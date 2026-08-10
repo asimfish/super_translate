@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-1147%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-1149%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.10+-blue)]()
@@ -123,7 +123,7 @@ super_translate/
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
 ├── docs/             # Deployment guide + Chinese tutorial
-└── tests/            # Test suite (1147 tests)
+└── tests/            # Test suite (1149 tests)
 ```
 
 ## Deployment Notes

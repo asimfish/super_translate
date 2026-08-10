@@ -2954,6 +2954,33 @@ def _raster_ink_overlap_issues(
         cjk_bbox = tuple(float(value) for value in cjk_span["bbox"])
         for formula_span in formula_spans:
             formula_bbox = tuple(float(value) for value in formula_span["bbox"])
+            formula_text = formula_span.get("text", "")
+            script_match = re.search(r"(?:\^|_)\{([^{}]+)\}\s*$", formula_text)
+            if script_match:
+                script_text = re.sub(r"\s+", "", script_match.group(1))
+                script_right_edges = [
+                    float(candidate["bbox"][2])
+                    for candidate in spans
+                    if candidate is not formula_span
+                    and float(candidate.get("size", 0.0))
+                    <= float(formula_span.get("size", 0.0)) * 0.85
+                    and re.sub(r"\s+", "", candidate.get("text", "")) == script_text
+                    and formula_bbox[0] <= float(candidate["bbox"][0])
+                    and float(candidate["bbox"][2]) <= formula_bbox[2]
+                    and float(candidate["bbox"][1]) < formula_bbox[3]
+                    and float(candidate["bbox"][3]) > formula_bbox[1]
+                ]
+                if script_right_edges:
+                    formula_bbox = (
+                        formula_bbox[0],
+                        formula_bbox[1],
+                        min(
+                            formula_bbox[2],
+                            max(script_right_edges)
+                            + float(formula_span.get("size", 0.0)) * 0.08,
+                        ),
+                        formula_bbox[3],
+                    )
             intersection = _bbox_intersection_rect(cjk_bbox, formula_bbox)
             if intersection is None:
                 continue
