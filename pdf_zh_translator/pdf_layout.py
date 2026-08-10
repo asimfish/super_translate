@@ -321,6 +321,11 @@ TTC_FACE_SOURCES = (
     ),
 )
 _SANITIZED_NOTO_CJK_FONT_FILES: set[tuple[str, int, int]] = set()
+_AMBIGUOUS_NOTO_COPY_CODEPOINTS = {
+    0x00AD: 0x002D,  # soft hyphen shares the ASCII hyphen glyph
+    0x2011: 0x002D,  # non-breaking hyphen shares the ASCII hyphen glyph
+    0x2027: 0x2022,  # hyphenation point shares the bullet glyph
+}
 
 
 @dataclass(frozen=True)
@@ -5215,18 +5220,22 @@ def _sanitize_noto_cjk_unicode_cmap(font: object) -> bool:
             glyph
             for codepoint, glyph in cmap.items()
             if not (
-                codepoint == 0x2027
+                codepoint in _AMBIGUOUS_NOTO_COPY_CODEPOINTS
                 or 0xF900 <= codepoint <= 0xFAFF
                 or 0x2F800 <= codepoint <= 0x2FA1F
             )
         }
         for codepoint, glyph in list(cmap.items()):
-            ambiguous_copy_codepoint = (
-                codepoint == 0x2027
-                or 0xF900 <= codepoint <= 0xFAFF
-                or 0x2F800 <= codepoint <= 0x2FA1F
+            canonical_codepoint = _AMBIGUOUS_NOTO_COPY_CODEPOINTS.get(codepoint)
+            explicit_duplicate = (
+                canonical_codepoint is not None
+                and cmap.get(canonical_codepoint) == glyph
             )
-            if ambiguous_copy_codepoint and glyph in canonical_glyphs:
+            compatibility_duplicate = (
+                0xF900 <= codepoint <= 0xFAFF
+                or 0x2F800 <= codepoint <= 0x2FA1F
+            ) and glyph in canonical_glyphs
+            if explicit_duplicate or compatibility_duplicate:
                 del cmap[codepoint]
                 changed = True
     return changed

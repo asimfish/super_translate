@@ -653,6 +653,9 @@ def test_noto_cjk_cmap_prefers_canonical_copy_text():
     from pdf_zh_translator.pdf_layout import _sanitize_noto_cjk_unicode_cmap
 
     cmap = {
+        0x002D: "cid00014",
+        0x00AD: "cid00014",
+        0x2011: "cid00014",
         0x2022: "cid00720",
         0x2027: "cid00720",
         0x7406: "cid26376",
@@ -670,6 +673,7 @@ def test_noto_cjk_cmap_prefers_canonical_copy_text():
 
     assert _sanitize_noto_cjk_unicode_cmap(font)
     assert cmap == {
+        0x002D: "cid00014",
         0x2022: "cid00720",
         0x7406: "cid26376",
         0x91CF: "cid41256",
