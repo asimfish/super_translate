@@ -1984,6 +1984,69 @@ def test_guidedvla_piecewise_condition_labels_stay_out_of_translation_units(fixt
     )
 
 
+def test_guidedvla_p21_sentence_after_inline_formula_stays_translatable():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "guidedvla_p21_formula.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    block, protected, mapping = next(
+        unit
+        for unit in units
+        if "specific target levels" in strip_sentinels(unit[0].text)
+    )
+
+    assert block.block_type == "body"
+    assert re.search(r"⟦\d+⟧\. We define the soft accuracy", protected)
+    assert all("We" not in formula for formula in mapping.values())
+
+
+class _GuidedVlaP21RunInTranslator(_GoldenStubTranslator):
+    def translate_batch(self, texts):
+        fallback = super().translate_batch(texts)
+        outputs = []
+        for source, default in zip(texts, fallback):
+            compact = " ".join(source.split())
+            if compact == "Skill Head.":
+                outputs.append("技能头（Skill Head）。")
+            elif compact.startswith(
+                "To examine the causal effect of skill recognition"
+            ):
+                placeholders = re.findall(r"⟦\d+⟧", source)
+                assert len(placeholders) == 4
+                outputs.append(
+                    "为考察技能识别对任务成功的因果效应，我们将模型的意图分类准确率"
+                    f"调控至特定目标水平{placeholders[0]}。我们定义软准确率"
+                    f"{placeholders[1]}为一批次中分配给真实技能类别"
+                    f"{placeholders[2]}的平均预测概率，批次大小为{placeholders[3]}"
+                )
+            else:
+                outputs.append(default)
+        return outputs
+
+
+def test_guidedvla_p21_expanded_runin_prefix_does_not_trigger_bold_spill(tmp_path):
+    source_pdf = FIXTURES / "guidedvla_p21_formula.pdf"
+    output_pdf = tmp_path / "guidedvla-p21-runin.pdf"
+    translate_pdf(
+        input_pdf=source_pdf,
+        output_pdf=output_pdf,
+        translator=_GuidedVlaP21RunInTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    with fitz.open(output_pdf) as output:
+        spans = _page_spans(output[0])
+    heading = next(span for span in spans if span["text"].startswith("技能头"))
+    body = next(span for span in spans if "为考察技能识别" in span["text"])
+    assert _span_is_bold(heading)
+    assert not _span_is_bold(body)
+    assert abs(heading["origin"][1] - body["origin"][1]) <= 1.0
+
+    issues = verify_translation_issues(source_pdf, output_pdf)
+    assert not any(issue.code == "font_role_bold_spill" for issue in issues)
+
+
 def test_guidedvla_fragmented_byline_and_affiliation_stay_metadata():
     from pdf_zh_translator.pdf_layout import strip_sentinels
 

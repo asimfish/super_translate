@@ -3138,6 +3138,61 @@ def _spans_for_source_role(spans: Sequence[dict], block: TextBlock) -> List[dict
     return output
 
 
+def _rendered_run_in_prefix_assignments(
+    spans: Sequence[dict],
+    source_blocks: Sequence[TextBlock],
+) -> Dict[int, int]:
+    """Map expanded translated run-in prefix spans back to their source role."""
+    assignments: Dict[int, int] = {}
+    for block_index, block in enumerate(source_blocks):
+        if block.block_type != "run_in_heading":
+            continue
+        source_baseline = block.bbox[3]
+        baseline_tolerance = max(4.0, block.font_size * 0.45)
+        start_tolerance = max(4.0, block.font_size * 0.5)
+        same_line = sorted(
+            (
+                span
+                for span in spans
+                if span.get("origin")
+                and abs(float(span["origin"][1]) - source_baseline)
+                <= baseline_tolerance
+                and float(span["bbox"][0]) >= block.bbox[0] - start_tolerance
+            ),
+            key=lambda span: float(span["bbox"][0]),
+        )
+        if not same_line:
+            continue
+        first_index = next(
+            (
+                index
+                for index, span in enumerate(same_line)
+                if _span_uses_bold_weight(span)
+                and abs(float(span["bbox"][0]) - block.bbox[0]) <= start_tolerance
+            ),
+            None,
+        )
+        if first_index is None:
+            continue
+        prefix_spans: List[dict] = []
+        previous_right: Optional[float] = None
+        has_regular_boundary = False
+        for span in same_line[first_index:]:
+            left = float(span["bbox"][0])
+            if previous_right is not None and left - previous_right > start_tolerance:
+                break
+            if _span_uses_bold_weight(span):
+                prefix_spans.append(span)
+                previous_right = float(span["bbox"][2])
+                continue
+            if prefix_spans:
+                has_regular_boundary = True
+            break
+        if has_regular_boundary:
+            assignments.update((id(span), block_index) for span in prefix_spans)
+    return assignments
+
+
 def _font_role_consistency_issues(
     source_blocks: Sequence[TextBlock],
     translated_page: object,
@@ -3148,8 +3203,16 @@ def _font_role_consistency_issues(
     if not cjk_spans:
         return []
 
+    rendered_run_in_assignments = _rendered_run_in_prefix_assignments(
+        cjk_spans,
+        source_blocks,
+    )
     assignments: List[List[dict]] = [[] for _ in source_blocks]
     for span in cjk_spans:
+        run_in_block_index = rendered_run_in_assignments.get(id(span))
+        if run_in_block_index is not None:
+            assignments[run_in_block_index].append(span)
+            continue
         span_bbox = tuple(float(value) for value in span["bbox"])
         center_x = (span_bbox[0] + span_bbox[2]) / 2.0
         center_y = (span_bbox[1] + span_bbox[3]) / 2.0
@@ -8713,7 +8776,10 @@ _MATH_WORDS = frozenset(
 )
 _PROSE_WORD_RE = re.compile(r"[A-Za-z]{3,}")
 _SHORT_PROSE_WORDS = frozenset(
-    "a an and are as at be by for if in is it of on or the to was were when where with".split()
+    (
+        "a an and are as at be by for if in is it of on or the to us "
+        "was we were when where with"
+    ).split()
 )
 _FORMULA_CONTEXT_WORDS = frozenset(
     "fig figure table panel top bottom left right middle row column".split()
