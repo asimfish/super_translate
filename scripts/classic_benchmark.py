@@ -131,9 +131,11 @@ def cmd_fetch(entries: list[Entry], workdir: Path, args) -> int:
                 json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
+            license_tag = (
+                license_url.rsplit("/", 2)[-2] if license_url != "unknown" else "unknown"
+            )
             print(
-                f"fetch {entry.id}: {len(pdf_bytes) / 1e6:.1f}MB "
-                f"license={license_url.rsplit('/', 2)[-2] if license_url != 'unknown' else 'unknown'}"
+                f"fetch {entry.id}: {len(pdf_bytes) / 1e6:.1f}MB license={license_tag}"
             )
             time.sleep(3.0)
         except Exception as exc:

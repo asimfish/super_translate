@@ -20,11 +20,11 @@ import fitz
 import pytest
 
 from pdf_zh_translator.page_inspector import (
-    _edge_cut,
     _LIST_MARKER_RE,
+    INSPECTOR_ISSUE_CODES,
+    _edge_cut,
     _mask_coverage,
     _rule_clusters,
-    INSPECTOR_ISSUE_CODES,
     inspect_translation,
 )
 
