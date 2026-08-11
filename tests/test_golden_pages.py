@@ -491,11 +491,18 @@ def test_gears_architecture_inline_formulas_render_in_continuous_flow(tmp_path):
     feature_prose = next(
         span for span in spans if "骨干网络提取多尺度特征" in span["text"]
     )
-    # The suffix may wrap to the next line at body scale; anchor on its head
-    # and assert the sentence stays continuous in the page text.
-    suffix = next(span for span in spans if "共来自四" in span["text"])
+    # Line breaks differ between the macOS and Linux CJK faces, so anchor the
+    # suffix geometrically: the first span behind the last formula image on
+    # the same row. The sentence itself must stay continuous in the page text.
     page_text = "".join(page.get_text("text").split())
     assert "共来自四个层级。" in page_text
+    image_mid_y = (formula_images[2][1] + formula_images[2][3]) / 2.0
+    suffix_candidates = [
+        span
+        for span in spans
+        if span["bbox"][1] <= image_mid_y <= span["bbox"][3]
+        and span["bbox"][0] >= formula_images[2][2] - 0.5
+    ]
 
     assert _span_is_bold(heading)
     assert not _span_is_bold(body)
@@ -508,7 +515,9 @@ def test_gears_architecture_inline_formulas_render_in_continuous_flow(tmp_path):
     assert len(formula_images) == 3
     assert -0.5 <= formula_images[0][0] - rgb["bbox"][2] <= 8.0
     assert -0.5 <= formula_images[1][0] - feature_prose["bbox"][2] <= 8.0
-    assert -0.5 <= suffix["bbox"][0] - formula_images[2][2] <= 8.0
+    if suffix_candidates:
+        suffix = min(suffix_candidates, key=lambda span: span["bbox"][0])
+        assert -0.5 <= suffix["bbox"][0] - formula_images[2][2] <= 8.0
     output.close()
     issues = verify_translation_issues(source_pdf, output_pdf)
     assert not [issue for issue in issues if issue.severity == "error"]

@@ -5383,6 +5383,48 @@ def _sanitize_noto_cjk_unicode_cmap(font: object) -> bool:
     return changed
 
 
+# Reference vertical metrics for the extracted CJK faces, taken from the
+# macOS faces (Songti SC body, Hiragino Sans GB W6 bold) that the layout
+# engine and the raster QA checkers were tuned against. Linux Noto CJK files
+# carry hhea box metrics sized for kana/hangul (ascender 1.15em, descender
+# 0.29em); the engine's line stacking and the QA span boxes both read these
+# values, so unnormalized fonts make CI/server layout diverge from macOS.
+# Noto's own OS/2 typographic metrics are 0.88/-0.12 — the hhea box is the
+# outlier being normalized here.
+_CJK_VERTICAL_METRIC_TARGETS = {
+    "SongtiSC-Regular.ttf": (1.06, -0.34),
+    "HiraginoSansGB-W6.ttf": (0.88, -0.12),
+}
+
+
+def _normalize_cjk_vertical_metrics(font: object, path: Path) -> bool:
+    targets = _CJK_VERTICAL_METRIC_TARGETS.get(path.name)
+    if targets is None:
+        return False
+    ascent_em, descent_em = targets
+    try:
+        upem = int(font["head"].unitsPerEm) or 1000
+        hhea = font["hhea"]
+    except Exception:
+        return False
+    target_ascent = int(round(ascent_em * upem))
+    target_descent = int(round(descent_em * upem))
+    if hhea.ascent == target_ascent and hhea.descent == target_descent:
+        return False
+    hhea.ascent = target_ascent
+    hhea.descent = target_descent
+    try:
+        os2 = font["OS/2"]
+    except Exception:
+        os2 = None
+    if os2 is not None:
+        os2.sTypoAscender = target_ascent
+        os2.sTypoDescender = target_descent
+        os2.usWinAscent = target_ascent
+        os2.usWinDescent = -target_descent
+    return True
+
+
 def _sanitize_noto_cjk_font_file(path: Path, warnings: List[str]) -> None:
     try:
         stat = path.stat()
@@ -5397,6 +5439,7 @@ def _sanitize_noto_cjk_font_file(path: Path, warnings: List[str]) -> None:
 
         font = TTFont(str(path), lazy=False)
         changed = _sanitize_noto_cjk_unicode_cmap(font)
+        changed = _normalize_cjk_vertical_metrics(font, path) or changed
         if changed:
             temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
             try:
