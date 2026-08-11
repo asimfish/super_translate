@@ -11300,8 +11300,11 @@ def _review_line_number_bboxes(page_dict: dict) -> List[BBox]:
             line_records.append((tuple(float(value) for value in bbox), text, max_size, spans))
 
             stripped = text.strip()
+            # str.isdigit accepts superscripts ("284²" in figure dimension
+            # labels) that int() rejects; line numbers are plain ASCII.
             if (
                 len(spans) == 1
+                and stripped.isascii()
                 and stripped.isdigit()
                 and len(stripped) <= 4
                 and max_size <= MARGIN_LINE_NUMBER_MAX_SIZE
@@ -11314,7 +11317,12 @@ def _review_line_number_bboxes(page_dict: dict) -> List[BBox]:
 
         for bbox, text, size, spans in line_records:
             stripped = text.strip()
-            if len(spans) != 1 or not stripped.isdigit() or len(stripped) > 4:
+            if (
+                len(spans) != 1
+                or not stripped.isascii()
+                or not stripped.isdigit()
+                or len(stripped) > 4
+            ):
                 continue
             if size > MARGIN_LINE_NUMBER_MAX_SIZE or "bbox" not in spans[0]:
                 continue
