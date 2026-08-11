@@ -1444,11 +1444,18 @@ def save_pdf_for_fast_web_view(
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     temp_pdf = output_pdf.with_name(f".{output_pdf.name}.{os.getpid()}.tmp")
     linearized_pdf = output_pdf.with_name(f".{output_pdf.name}.{os.getpid()}.linearized.tmp")
-    # garbage=2 drops unreferenced objects and compacts the xref; levels 3/4
-    # additionally deduplicate object/stream contents byte-by-byte, which
-    # takes minutes on stamp-heavy documents for no measurable size win.
+    # Translation inserts many independent text and formula streams. Deep
+    # cleanup deduplicates their resources while clean=True combines each
+    # page's stream array, which keeps PDF.js parsing work bounded.
+    compact_save_options = {
+        "garbage": 4,
+        "clean": True,
+        "deflate": True,
+        "deflate_images": True,
+        "deflate_fonts": True,
+    }
     try:
-        document.save(str(temp_pdf), garbage=2, deflate=True)
+        document.save(str(temp_pdf), **compact_save_options)
         try:
             import pikepdf
 

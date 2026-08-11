@@ -671,6 +671,54 @@ def test_saved_pdf_avoids_unsafe_cross_object_image_rewrite(tmp_path):
     assert b"/Linearized" in output_pdf.read_bytes()[:2048]
 
 
+def test_saved_pdf_compacts_fragmented_page_streams_without_semantic_drift(tmp_path):
+    from pdf_zh_translator.pdf_layout import save_pdf_for_fast_web_view
+
+    document = fitz.open()
+    page = document.new_page(width=612, height=792)
+    for index in range(240):
+        page.insert_text(
+            (36 + (index % 4) * 132, 48 + (index // 4) * 11),
+            f"stream-{index:03d}",
+            fontsize=7,
+        )
+    page.insert_link(
+        {
+            "kind": fitz.LINK_URI,
+            "from": fitz.Rect(36, 730, 180, 750),
+            "uri": "https://example.com/project",
+        }
+    )
+    page = document.reload_page(page)
+
+    source_text = page.get_text("text")
+    source_pixels = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False).samples
+    source_links = [link["uri"] for link in page.get_links() if "uri" in link]
+    assert len(page.get_contents()) >= 240
+
+    output_pdf = tmp_path / "compacted.pdf"
+    warnings: list[str] = []
+    save_pdf_for_fast_web_view(document, output_pdf, warnings)
+    document.close()
+
+    with fitz.open(output_pdf) as saved:
+        saved_page = saved[0]
+        saved_text = saved_page.get_text("text")
+        saved_pixels = saved_page.get_pixmap(
+            matrix=fitz.Matrix(2, 2), alpha=False
+        ).samples
+        saved_links = [
+            link["uri"] for link in saved_page.get_links() if "uri" in link
+        ]
+        assert len(saved_page.get_contents()) <= 2
+        assert saved.xref_length() < 80
+
+    assert warnings == []
+    assert saved_text == source_text
+    assert saved_pixels == source_pixels
+    assert saved_links == source_links == ["https://example.com/project"]
+
+
 def test_saved_pdf_keeps_images_with_distinct_soft_masks(tmp_path):
     """Equal RGB streams with different soft masks are different icons."""
     from pdf_zh_translator.pdf_layout import save_pdf_for_fast_web_view
