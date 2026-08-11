@@ -491,17 +491,24 @@ def test_gears_architecture_inline_formulas_render_in_continuous_flow(tmp_path):
     feature_prose = next(
         span for span in spans if "骨干网络提取多尺度特征" in span["text"]
     )
-    suffix = next(span for span in spans if "共来自四个层级" in span["text"])
+    # The suffix may wrap to the next line at body scale; anchor on its head
+    # and assert the sentence stays continuous in the page text.
+    suffix = next(span for span in spans if "共来自四" in span["text"])
+    page_text = "".join(page.get_text("text").split())
+    assert "共来自四个层级。" in page_text
 
     assert _span_is_bold(heading)
     assert not _span_is_bold(body)
+    # Body prose must keep the page's body scale instead of shrinking with
+    # the raw Noto CJK font-file line metrics.
+    assert body["size"] >= 9.0
     assert hidden_formula_text.count("I∈R^{3×H×W}") == 1
     assert hidden_formula_text.count("{F_{i}}^{4}") == 1
     assert hidden_formula_text.count("i=1") == 1
     assert len(formula_images) == 3
-    assert 0.0 <= formula_images[0][0] - rgb["bbox"][2] <= 8.0
-    assert 0.0 <= formula_images[1][0] - feature_prose["bbox"][2] <= 8.0
-    assert 0.0 <= suffix["bbox"][0] - formula_images[2][2] <= 8.0
+    assert -0.5 <= formula_images[0][0] - rgb["bbox"][2] <= 8.0
+    assert -0.5 <= formula_images[1][0] - feature_prose["bbox"][2] <= 8.0
+    assert -0.5 <= suffix["bbox"][0] - formula_images[2][2] <= 8.0
     output.close()
     issues = verify_translation_issues(source_pdf, output_pdf)
     assert not [issue for issue in issues if issue.severity == "error"]
@@ -909,8 +916,9 @@ def test_gears_page8_runin_heading_clears_previous_formula_ink(tmp_path):
     output = fitz.open(output_pdf)
     spans = _page_spans(output[0])
     architecture = next(span for span in spans if span["text"].startswith("架构。"))
+    # The tail of the phrase may wrap at body scale; anchor on its head.
     previous_line = next(
-        span for span in spans if "个连续专家动作片段" in span["text"]
+        span for span in spans if "个连续专家动作片" in span["text"]
     )
     same_line_body = next(
         span

@@ -14232,6 +14232,18 @@ def line_block_height(
     return baselines[-1] + final_descent
 
 
+# Noto CJK font files carry extreme vertical metrics (ascender 1.15em,
+# descender 0.29em) sized for kana/hangul coverage; CJK ink actually spans
+# about [-0.12, 0.88]em. Feeding the raw file metrics into line stacking
+# forces a 1.5em pitch floor, so two Chinese lines need 2.86x the font size
+# and can never fit an English-sized bbox at body scale (MemoryWAM p3 body
+# shrank to 6.9pt). Cap the per-glyph contribution at typographic bounds;
+# Latin fonts sit below these caps already, and formula tokens keep their
+# measured source ink.
+_LINE_METRIC_ASCENT_CAP = 0.92
+_LINE_METRIC_DESCENT_CAP = 0.25
+
+
 def _line_vertical_metrics(
     line: Sequence[_Token],
     size: float,
@@ -14264,8 +14276,14 @@ def _line_vertical_metrics(
                 ),
                 active_fonts[0][0],
             )
-            ascent = max(ascent, max(0.0, float(selected.ascender)) * size)
-            descent = max(descent, abs(min(0.0, float(selected.descender))) * size)
+            char_ascent = min(
+                max(0.0, float(selected.ascender)), _LINE_METRIC_ASCENT_CAP
+            )
+            char_descent = min(
+                abs(min(0.0, float(selected.descender))), _LINE_METRIC_DESCENT_CAP
+            )
+            ascent = max(ascent, char_ascent * size)
+            descent = max(descent, char_descent * size)
     return ascent, descent
 
 

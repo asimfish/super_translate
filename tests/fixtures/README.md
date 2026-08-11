@@ -28,6 +28,14 @@ shasum -a 256 tests/fixtures/otf_production_acceptance_full.pdf
 - Test purpose: sibling contribution bullets must share one harmonized font
   size instead of shrinking independently (production defect: 7.4/6.4/9.2pt).
 
+## `memorywam_p3_inline_window.pdf`
+
+- Page 3 extracted from the MemoryWAM production paper (arXiv preprint,
+  uploaded by the paper owner for internal QA).
+- Test purpose: the two-line body paragraph before Eq. (1) must keep body
+  scale; raw Noto CJK font-file metrics previously forced it to 6.9pt
+  (production defect).
+
 ```python
 import fitz
 src = fitz.open("tests/fixtures/otf_production_acceptance_full.pdf")

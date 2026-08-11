@@ -460,6 +460,60 @@ class _BulletListTranslator:
         return outputs
 
 
+class _WamP3Translator:
+    def translate_batch(self, texts):
+        outputs = []
+        for text in texts:
+            if "Prior approaches" in text and "temporal window" in text:
+                outputs.append(
+                    "视觉-语言-动作模型（VLA）[4, 62] 和世界动作模型（WAM）"
+                    "[8, 14] 中的先前方法通常将近期观测映射为动作，依赖有限的"
+                    "时间窗口"
+                )
+            else:
+                outputs.append("中文译文")
+        return outputs
+
+
+def test_two_line_body_paragraph_keeps_body_scale(tmp_path):
+    # MemoryWAM p3: the two-line paragraph before Eq. (1) rendered at 6.92pt
+    # while the page body is 9.17pt. The line-height gate used raw Noto CJK
+    # font-file metrics (2.86x size for two lines), so the Chinese could
+    # never fit the English-sized bbox at body scale.
+    input_pdf = Path(__file__).parent / "fixtures" / "memorywam_p3_inline_window.pdf"
+    output_pdf = tmp_path / "wam_p3.zh.pdf"
+
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_WamP3Translator(),
+        preserve_graphics_text=True,
+    )
+
+    translated = fitz.open(output_pdf)
+    data = translated[0].get_text("dict")
+    sizes = []
+    for block in data.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        text = "".join(
+            span["text"]
+            for line in block.get("lines", [])
+            for span in line.get("spans", [])
+        )
+        if "视觉-语言-动作模型（VLA）" in text:
+            sizes = [
+                span["size"]
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+            ]
+            break
+    translated.close()
+
+    assert sizes, "translated paragraph not found"
+    assert min(sizes) >= 8.4, f"body paragraph over-shrunk: {sorted(set(sizes))}"
+
+
 def test_sibling_contribution_bullets_share_font_size(tmp_path):
     # OTF p2 production defect: the three contribution bullets rendered at
     # 7.4/6.4/9.2pt because each bullet shrank independently against its own
