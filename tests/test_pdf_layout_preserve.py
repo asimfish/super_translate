@@ -3000,7 +3000,19 @@ class FormulaStampClipTests(unittest.TestCase):
 
         trimmed = _trim_formula_clip_against_foreign_ink(document, 0, clip)
 
-        self.assertLess(trimmed[3], following_top)
+        # The cut must exclude the following line's ink but may sit inside
+        # its bbox headroom: the edge is relocated into the real whitespace
+        # gap so tight source leading cannot slice formula sub/superscripts.
+        self.assertLess(trimmed[3], clip[3])
+        pixmap = document[0].get_pixmap(
+            matrix=fitz.Matrix(6, 6),
+            clip=fitz.Rect(trimmed),
+            colorspace=fitz.csGRAY,
+            alpha=False,
+        )
+        width = pixmap.width
+        bottom_rows = pixmap.samples[-2 * width :]
+        self.assertFalse(any(sample < 205 for sample in bottom_rows))
         document.close()
 
     def test_clip_untouched_without_intruders(self):

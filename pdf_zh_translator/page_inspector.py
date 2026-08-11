@@ -369,17 +369,17 @@ def _font_size_issues(
         area = _bbox_area(block.bbox)
         if area <= 0:
             continue
-        weighted: List[Tuple[float, float]] = []
+        # Pair with the dominant source block only: expansion may let a
+        # grown paragraph brush a neighbouring heading, and mixing that
+        # heading's size into a weighted mean would fake a drift.
+        best_overlap = 0.0
+        expected = 0.0
         for source in original_blocks:
             overlap = _bbox_overlap_area(block.bbox, source.bbox)
-            if overlap <= 0.25 * area:
-                continue
-            weighted.append((overlap, source.dominant_size()))
-        if not weighted:
-            continue
-        total = sum(overlap for overlap, _ in weighted)
-        expected = sum(overlap * size_ for overlap, size_ in weighted) / total
-        if expected <= 0:
+            if overlap > best_overlap:
+                best_overlap = overlap
+                expected = source.dominant_size()
+        if best_overlap <= 0.25 * area or expected <= 0:
             continue
         candidates.append((block, size, expected))
 
@@ -393,7 +393,10 @@ def _font_size_issues(
     issues: List[object] = []
     for block, size, expected in candidates:
         ratio = size / expected
-        if abs(ratio - median_ratio) <= _SIZE_RATIO_TOLERANCE * median_ratio:
+        # Only the shrink direction is a reader-visible defect (crushed
+        # bullets/paragraphs); a block that keeps its size while its source
+        # ran slightly smaller still renders uniform with its neighbours.
+        if ratio >= median_ratio - _SIZE_RATIO_TOLERANCE * median_ratio:
             continue
         issues.append(
             _issue(
@@ -548,6 +551,8 @@ _SPRITE_EDGE_MIN = 0.05
 
 
 def _math_clip_issues(
+    original_page: object,
+    original_ink: _InkCache,
     translated_page: object,
     translated_ink: _InkCache,
     page_number: int,
@@ -558,8 +563,16 @@ def _math_clip_issues(
     image sprites (~8-12pt tall). A too-tight crop cuts ascenders,
     superscripts or descenders, which shows up as ink on the outermost
     pixel rows of the sprite; intact sprites keep a clean margin.
-    Real figures are excluded by the height/ink limits.
+    Real figures are excluded by the height/ink limits, and image tiles
+    that keep their source position (fragments of preserved diagrams,
+    which have edge ink by design) are exempt: formula sprites are stamped
+    at reflowed positions, so they never coincide with a source image.
     """
+    source_images = [
+        tuple(float(v) for v in raw["bbox"])
+        for raw in original_page.get_text("dict").get("blocks", [])
+        if raw.get("type") == 1
+    ]
     issues: List[object] = []
     checked = 0
     for raw in translated_page.get_text("dict").get("blocks", []):
@@ -571,6 +584,24 @@ def _math_clip_issues(
         if height <= 3.0 or height > _SPRITE_MAX_HEIGHT_PT:
             continue
         if width < _SPRITE_MIN_WIDTH_PT:
+            continue
+        area = max(1.0, width * height)
+        if any(
+            _bbox_overlap_area(bbox, source) >= 0.5 * area
+            for source in source_images
+        ):
+            continue
+        # Vector diagrams restored in place (redaction repair) have no
+        # source image block; recognise them by unchanged source ink.
+        columns = max(12, min(96, int(width / 2)))
+        rows = max(8, min(64, int(height / 2)))
+        source_mask = original_ink.get().mask(bbox, columns=columns, rows=rows)
+        translated_mask = translated_ink.get().mask(bbox, columns=columns, rows=rows)
+        if (
+            source_mask
+            and translated_mask
+            and _mask_coverage(source_mask, translated_mask, columns, rows) >= 0.75
+        ):
             continue
         checked += 1
         if checked > 120:
@@ -1100,7 +1131,13 @@ def inspect_translation(
                 )
             )
             issues.extend(
-                _math_clip_issues(translated_page, translated_ink, page_number)
+                _math_clip_issues(
+                    original_page,
+                    original_ink,
+                    translated_page,
+                    translated_ink,
+                    page_number,
+                )
             )
             issues.extend(
                 _table_structure_issues(

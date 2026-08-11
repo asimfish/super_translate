@@ -660,6 +660,19 @@ def translate_pdf(
                 page_width,
                 obstacles=equation_rows.get(page_index, ()),
             )
+            block = _expand_multiline_block_bbox(
+                block,
+                translated_text,
+                [candidate for candidate, _ in candidate_items],
+                font_pack,
+                requested_size,
+                margin,
+                page.rect.height,
+                obstacles=[
+                    *page_floats,
+                    *equation_rows.get(page_index, ()),
+                ],
+            )
             # Float-aware clip: keep reflowed CJK body text out of a right-column
             # figure/table instead of painting over it. Only applied when the
             # clipped box still fits the text, so it never makes layout worse.
@@ -1587,8 +1600,6 @@ _BODY_PROSE_CITATION_CUE_RE = re.compile(
     r"open access version|computer vision foundation)\b",
     re.IGNORECASE,
 )
-
-
 def verify_translation(original_pdf: Path, translated_pdf: Path) -> List[str]:
     """Verify translated PDF quality. Returns user-readable issue messages."""
     return [issue.message for issue in verify_translation_issues(original_pdf, translated_pdf)]
@@ -12634,6 +12645,97 @@ def _expand_single_line_list_bbox(
     return replace(block, bbox=(x0, new_y0, x1, new_y1))
 
 
+_MULTILINE_EXPAND_MAX_LINES = 2.2
+_PAGE_BOTTOM_KEEPOUT = 30.0
+
+
+def _expand_multiline_block_bbox(
+    block: TextBlock,
+    translated_text: str,
+    page_blocks: Sequence[TextBlock],
+    font_pack: FontPack,
+    font_size: float,
+    margin: float,
+    page_height: float,
+    *,
+    obstacles: Sequence[BBox] = (),
+) -> TextBlock:
+    """Grow a multi-line paragraph downward instead of crushing its font.
+
+    Translated Chinese carries first-occurrence English glosses, so body
+    paragraphs regularly need one extra wrapped line. With a fixed source
+    bbox the fitting loop must drop whole font-size steps to squeeze that
+    line in (9.2pt prose ends up at 6.4-8.2pt). When the inter-paragraph
+    gap below is genuinely free, use it first: extend the bbox bottom just
+    enough for the natural line count, bounded by neighbouring blocks,
+    floats/keepouts, the page bottom margin, and a hard extension cap.
+    Only extends downward so stacked paragraphs can never fight over the
+    same gap (each block's extension is bounded by the next block's top).
+    """
+    if (
+        block.block_type not in {"body", "formula_prose", "list"}
+        or block.source_lines < 2
+        or block.nowrap
+        or block.preserve_position
+    ):
+        return block
+
+    fonts = font_pack.fonts_for(block.bold)
+    bold_fonts = font_pack.fonts_for(True)
+    render_text = _translation_text_for_render(translated_text)
+    tokens = _tokenize_translation_with_formula_clips(translated_text, block)
+    apply_inline_bold(tokens, block, render_text)
+    if not tokens:
+        return block
+
+    x0, y0, x1, y1 = block.bbox
+    usable_width = max(1.0, x1 - x0 - margin * 2.0)
+    lines = break_lines(
+        tokens,
+        fonts,
+        font_size,
+        usable_width,
+        prefer_space_break=False,
+        bold_fonts=bold_fonts,
+    )
+    needed_height = (
+        min(
+            line_block_height(lines, font_size, leading, fonts, bold_fonts)
+            for leading in leading_options(block)
+        )
+        + margin * 2.0
+    )
+    height = y1 - y0
+    if needed_height <= height + 0.1:
+        return block
+
+    # Any lower neighbour bounds the extension, including neighbours whose
+    # bbox interleaves ours by a few points (ascender/descender overlap in
+    # the source): the limit never drops below the current bottom, so an
+    # interleaved neighbour simply means "no room to grow".
+    bottom_limit = page_height - _PAGE_BOTTOM_KEEPOUT
+    for other in page_blocks:
+        if other is block or other.page_index != block.page_index:
+            continue
+        horizontal_overlap = min(x1, other.bbox[2]) - max(x0, other.bbox[0])
+        if horizontal_overlap <= 0.0:
+            continue
+        if other.bbox[1] > y0 + 1.0:
+            bottom_limit = min(bottom_limit, max(other.bbox[1] - 2.0, y1))
+    for obstacle in obstacles:
+        horizontal_overlap = min(x1, obstacle[2]) - max(x0, obstacle[0])
+        if horizontal_overlap <= 0.0:
+            continue
+        if obstacle[1] > y0 + 1.0:
+            bottom_limit = min(bottom_limit, max(obstacle[1] - 2.0, y1))
+
+    max_extension = _MULTILINE_EXPAND_MAX_LINES * font_size * 1.3
+    new_y1 = min(y0 + needed_height, y1 + max_extension, bottom_limit)
+    if new_y1 <= y1 + 0.6:
+        return block
+    return replace(block, bbox=(x0, y0, x1, new_y1))
+
+
 def _expand_single_line_body_bbox(
     block: TextBlock,
     translated_text: str,
@@ -14561,6 +14663,25 @@ def _trim_formula_clip_against_foreign_ink(
             elif sy0 < y1 < sy1 and y1 - sy0 <= max_trim_y:
                 new_y1 = min(new_y1, sy0 - _FORMULA_CLIP_FOREIGN_GAP)
 
+        # Span bboxes carry ascent/descent headroom, so cramped source lines
+        # interleave: trimming to a straddling span's bbox edge routinely
+        # slices the formula's own sub/superscripts (2026-08-11 production
+        # review: decapitated Sigma limits). Whenever a vertical trim moves
+        # into the clip, relocate the cut to the nearest whitespace gap in
+        # the actual ink profile; only the bbox-based edge is trusted when
+        # no clean gap exists.
+        if new_y0 > y0 + 0.05 or new_y1 < y1 - 0.05:
+            profile = _clip_row_ink_profile(document, page_index, clip)
+            if profile:
+                if new_y0 > y0 + 0.05:
+                    gap_edge = _ink_gap_edge_below(profile, y0, new_y0)
+                    if gap_edge is not None:
+                        new_y0 = gap_edge
+                if new_y1 < y1 - 0.05:
+                    gap_edge = _ink_gap_edge_above(profile, y1, new_y1)
+                    if gap_edge is not None:
+                        new_y1 = gap_edge
+
         if new_y1 - new_y0 <= 0:
             return clip
 
@@ -14578,6 +14699,95 @@ def _trim_formula_clip_against_foreign_ink(
         return (new_x0, new_y0, new_x1, new_y1)
     except Exception:
         return clip
+
+
+_CLIP_PROFILE_ZOOM = 6.0
+_CLIP_PROFILE_INK_THRESHOLD = 0.008
+_CLIP_PROFILE_MIN_GAP_ROWS = 3
+
+
+def _clip_row_ink_profile(
+    document: object,
+    page_index: int,
+    clip: BBox,
+) -> List[Tuple[float, float]]:
+    """(y, ink_ratio) per rendered row of the clip, top to bottom."""
+    try:
+        import fitz
+
+        rect = fitz.Rect(clip) & document[page_index].rect
+        if rect.width <= 0.5 or rect.height <= 0.5:
+            return []
+        pixmap = document[page_index].get_pixmap(
+            matrix=fitz.Matrix(_CLIP_PROFILE_ZOOM, _CLIP_PROFILE_ZOOM),
+            clip=rect,
+            colorspace=fitz.csGRAY,
+            alpha=False,
+        )
+        width = pixmap.width
+        if not width:
+            return []
+        profile: List[Tuple[float, float]] = []
+        for row_index in range(pixmap.height):
+            row = pixmap.samples[row_index * width : (row_index + 1) * width]
+            ink = sum(1 for sample in row if sample < 205) / width
+            profile.append((rect.y0 + row_index / _CLIP_PROFILE_ZOOM, ink))
+        return profile
+    except Exception:
+        return []
+
+
+def _ink_whitespace_gaps(
+    profile: Sequence[Tuple[float, float]],
+) -> List[Tuple[float, float]]:
+    gaps: List[Tuple[float, float]] = []
+    start: Optional[float] = None
+    clean_rows = 0
+    for y, ink in profile:
+        if ink < _CLIP_PROFILE_INK_THRESHOLD:
+            if start is None:
+                start = y
+            clean_rows += 1
+        else:
+            if start is not None and clean_rows >= _CLIP_PROFILE_MIN_GAP_ROWS:
+                gaps.append((start, y))
+            start = None
+            clean_rows = 0
+    if start is not None and clean_rows >= _CLIP_PROFILE_MIN_GAP_ROWS:
+        gaps.append((start, profile[-1][0]))
+    return gaps
+
+
+def _ink_gap_edge_below(
+    profile: Sequence[Tuple[float, float]],
+    clip_top: float,
+    proposed: float,
+) -> Optional[float]:
+    """Whitespace midpoint nearest the proposed (lowered) top edge."""
+    candidates = [
+        (top + bottom) / 2.0
+        for top, bottom in _ink_whitespace_gaps(profile)
+        if bottom > clip_top
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda midpoint: abs(midpoint - proposed))
+
+
+def _ink_gap_edge_above(
+    profile: Sequence[Tuple[float, float]],
+    clip_bottom: float,
+    proposed: float,
+) -> Optional[float]:
+    """Whitespace midpoint nearest the proposed (raised) bottom edge."""
+    candidates = [
+        (top + bottom) / 2.0
+        for top, bottom in _ink_whitespace_gaps(profile)
+        if top < clip_bottom
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda midpoint: abs(midpoint - proposed))
 
 
 def _insert_source_region_raster(
@@ -14688,11 +14898,20 @@ def emit_tokens(
             try:
                 import fitz
 
-                source_rect = fitz.Rect(token.source_bbox)
-                source_rect.x0 -= 0.25
-                source_rect.y0 -= 0.25
-                source_rect.x1 += 0.25
-                source_rect.y1 += 0.25
+                core_rect = fitz.Rect(token.source_bbox)
+                # Math glyphs paint past their span bbox (Sigma limits, tall
+                # ascenders); a quarter-point margin decapitates them. Pad
+                # vertically in proportion to the source size and let the
+                # foreign-ink trim below take back neighbour-line bleed. The
+                # stamped pixmap has an alpha channel, so surviving padding
+                # is transparent and cannot overpaint adjacent lines.
+                pad_y = max(0.8, token.source_size * 0.12)
+                source_rect = fitz.Rect(
+                    core_rect.x0 - 0.25,
+                    core_rect.y0 - pad_y,
+                    core_rect.x1 + 0.25,
+                    core_rect.y1 + pad_y,
+                )
                 source_rect = fitz.Rect(
                     _trim_formula_clip_against_foreign_ink(
                         source_document,
@@ -14700,17 +14919,25 @@ def emit_tokens(
                         tuple(source_rect),
                     )
                 )
+                core_y0 = max(core_rect.y0, source_rect.y0)
+                core_y1 = min(core_rect.y1, source_rect.y1)
+                # Scale from the core bbox so padding cannot shrink tall
+                # formulas through the max-height clamp, and anchor the core
+                # on the baseline exactly as before; the padding extends the
+                # stamp box symmetrically around it.
                 scale = _formula_clip_scale(
-                    tuple(source_rect),
+                    (source_rect.x0, core_y0, source_rect.x1, core_y1),
                     size,
                     token.source_size,
                 )
-                target_height = source_rect.height * scale
+                pad_top = max(0.0, core_y0 - source_rect.y0)
+                pad_bottom = max(0.0, source_rect.y1 - core_y1)
+                core_height = max(0.1, core_y1 - core_y0) * scale
                 target_rect = fitz.Rect(
                     x,
-                    baseline - target_height * 0.82,
+                    baseline - core_height * 0.82 - pad_top * scale,
                     x + max(0.1, token.width - formula_guard * 2.0),
-                    baseline + target_height * 0.18,
+                    baseline + core_height * 0.18 + pad_bottom * scale,
                 )
                 _insert_source_region_raster(
                     page,
