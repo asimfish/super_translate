@@ -4503,6 +4503,157 @@ class TestClassifyBlocks(unittest.TestCase):
 
         self.assertTrue(_looks_like_reference_entry_text(text))
 
+    def test_leading_citation_prose_after_run_in_split_is_not_reference_entry(self):
+        # GuidedVLA p5: the run-in heading split leaves the paragraph body
+        # starting with "[28] is a ..." — a citation marker flowing into
+        # lowercase prose, not a reference entry.
+        from pdf_zh_translator.pdf_layout import _looks_like_reference_entry_text
+
+        text = (
+            "[28] is a robustness-oriented benchmark built upon LIBERO [59]. "
+            "It is designed to evaluate generalist manipulation policies under "
+            "distribution shifts. It introduces perturbations along seven "
+            "dimensions: camera viewpoint, robot initial state, language "
+            "variation, lighting condition, background texture, sensor noise, "
+            "and object layout to expose failure modes under generalization "
+            "scenario beyond in-domain evaluation. We compare with "
+            "state-of-the-art baselines in Table I."
+        )
+
+        self.assertFalse(_looks_like_reference_entry_text(text))
+
+    def test_leading_citation_prose_block_is_body_not_bibliography(self):
+        import pdf_zh_translator.pdf_layout as layout
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block(
+            (
+                "[28] is a robustness-oriented benchmark built upon LIBERO [59]. "
+                "It is designed to evaluate generalist manipulation policies "
+                "under distribution shifts. It introduces perturbations along "
+                "seven dimensions: camera viewpoint, robot initial state, "
+                "language variation, lighting condition, background texture, "
+                "sensor noise, and object layout to expose failure modes under "
+                "generalization scenario beyond in-domain evaluation. We compare "
+                "with state-of-the-art baselines in Table I."
+            ),
+            bbox=(312.0, 380.5, 563.0, 546.9),
+            page=4,
+        )
+        layout._bibliography_seen.clear()
+        layout._bibliography_ended = False
+        layout._bibliography_heading_size = 0.0
+
+        try:
+            classify_blocks([block], 4, 792, [])
+        finally:
+            layout._bibliography_seen.clear()
+            layout._bibliography_ended = False
+            layout._bibliography_heading_size = 0.0
+
+        self.assertEqual(block.block_type, "body")
+        self.assertTrue(block.should_translate)
+
+    def test_merged_numbered_reference_entries_stay_bibliography(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_reference_entry_text
+
+        text = (
+            "[1] J. Smith, A. Jones, and B. Brown. Deep residual learning for "
+            "image recognition. CVPR, 2016. [2] K. He, X. Zhang, S. Ren, and "
+            "J. Sun. Identity mappings in deep residual networks. ECCV, 2016. "
+            "[3] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, "
+            "A. N. Gomez, L. Kaiser, and I. Polosukhin. Attention is all you "
+            "need. NeurIPS, 2017. [4] T. Brown, B. Mann, N. Ryder, and "
+            "M. Subbiah. Language models are few-shot learners. NeurIPS, 2020."
+        )
+
+        self.assertTrue(_looks_like_reference_entry_text(text))
+
+    def test_lowercase_particle_author_reference_stays_bibliography(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_reference_entry_text
+
+        text = (
+            "[28] van der Maaten, L. and Hinton, G. Visualizing data using "
+            "t-SNE. Journal of Machine Learning Research, 2008."
+        )
+
+        self.assertTrue(_looks_like_reference_entry_text(text))
+
+    def test_reference_author_line_detection(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_reference_author_line
+
+        # OTF p12: author lead split off a wrapped reference entry.
+        self.assertTrue(
+            _looks_like_reference_author_line("R. Mohammad Ebrahim and J. Razmi.")
+        )
+        self.assertTrue(
+            _looks_like_reference_author_line(
+                "H. Wallach, S. Larochelle, and K. Grauman."
+            )
+        )
+        # Appendix headings keep terminating the references range.
+        self.assertFalse(
+            _looks_like_reference_author_line("A. Additional Experiments")
+        )
+        self.assertFalse(
+            _looks_like_reference_author_line("A. Proof of Theorem 1.")
+        )
+        self.assertFalse(
+            _looks_like_reference_author_line("B. Convergence Analysis.")
+        )
+
+    def test_author_lead_inside_references_does_not_end_bibliography(self):
+        # OTF p12: "R. Mohammad Ebrahim and J. Razmi." looks like a lettered
+        # appendix heading; ending the references range there translated the
+        # rest of the page and overprinted the entry with a bold heading.
+        import pdf_zh_translator.pdf_layout as layout
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        references = self._make_block(
+            "REFERENCES", bbox=(108.0, 80.0, 200.0, 95.0), bold=True, page=10
+        )
+        entry = self._make_block(
+            "Yang Li, Yichuan Mo, Liangliang Shi, and Junchi Yan. Improving "
+            "generative adversarial networks via optimal transport. ICLR, 2024.",
+            bbox=(108.0, 100.0, 507.0, 130.0),
+            page=10,
+        )
+        author_lead = self._make_block(
+            "R. Mohammad Ebrahim and J. Razmi.",
+            bbox=(108.0, 468.6, 275.8, 478.7),
+            page=11,
+        )
+        tail = self._make_block(
+            "A hybrid meta heuristic algorithm for bi-objective minimum cost "
+            "flow (bmcf) problem. Advances in Engineering Software, "
+            "40(10):1056-1062, 2009. ISSN 0965-9978.",
+            bbox=(108.0, 468.6, 507.0, 511.5),
+            page=11,
+        )
+        following = self._make_block(
+            "Gaspard Monge. Memoire sur la theorie des deblais et des remblais. "
+            "Mem. Math. Phys. Acad. Royale Sci., 1781.",
+            bbox=(108.0, 515.0, 507.0, 540.0),
+            page=11,
+        )
+        layout._bibliography_seen.clear()
+        layout._bibliography_ended = False
+        layout._bibliography_heading_size = 0.0
+
+        try:
+            classify_blocks([references, entry], 10, 792, [])
+            classify_blocks([author_lead, tail, following], 11, 792, [])
+        finally:
+            layout._bibliography_seen.clear()
+            layout._bibliography_ended = False
+            layout._bibliography_heading_size = 0.0
+
+        self.assertEqual(entry.block_type, "bibliography")
+        self.assertEqual(author_lead.block_type, "bibliography")
+        self.assertEqual(tail.block_type, "bibliography")
+        self.assertEqual(following.block_type, "bibliography")
+        self.assertFalse(following.should_translate)
+
     def test_untranslated_body_with_url_is_not_exempt(self):
         text = (
             "We release the complete implementation and evaluation scripts at "

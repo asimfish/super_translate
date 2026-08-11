@@ -379,6 +379,10 @@ class TextBlock:
     source_line_bboxes: Tuple[BBox, ...] = ()
     source_math_bboxes: Tuple[BBox, ...] = ()
     formula_anchors: Tuple[BBox, ...] = ()
+    # Common font size chosen by sibling-group harmonization. When set, the
+    # typesetter starts from this size instead of the per-block requested size
+    # so sibling list items render at one consistent size.
+    fixed_translation_font_size: Optional[float] = None
 
 
 @dataclass
@@ -690,6 +694,20 @@ def translate_pdf(
             page_items.append((block, translated_text))
             item_centered_flags.append(centered)
 
+        page_items = _harmonize_sibling_list_items(
+            page_items,
+            item_centered_flags,
+            font_pack=font_pack,
+            min_font_size=min_font_size,
+            font_scale=font_scale,
+            margin=margin,
+            page_height=float(page.rect.height),
+            obstacles=[
+                *page_floats,
+                *preserved_regions.get(page_index, []),
+                *equation_rows.get(page_index, []),
+            ],
+        )
         _clear_table_caption_rules(
             page,
             page_items,
@@ -735,7 +753,10 @@ def translate_pdf(
                 block=block,
                 text=translated_text,
                 font_pack=font_pack,
-                font_size=requested_translation_font_size(block, min_font_size, font_scale),
+                font_size=(
+                    block.fixed_translation_font_size
+                    or requested_translation_font_size(block, min_font_size, font_scale)
+                ),
                 min_font_size=min_font_size,
                 margin=margin,
                 centered=centered,
@@ -1530,6 +1551,16 @@ _REFERENCE_ENTRY_RE = re.compile(
     r"[A-Z][A-Za-z'’.-]+(?:\s+(?:et\s+al\.|and|&|[A-Z]\.|"
     r"[A-Z][A-Za-z'’.-]+|,)){0,8}\s+\((?:19|20)\d{2}[a-z]?\))",
     re.IGNORECASE,
+)
+# A leading citation marker flowing into lowercase prose ("[28] is a
+# robustness-oriented benchmark ...") is a run-in-heading split leftover, not
+# a reference entry. Lowercase surname particles (van/von/de/...) still start
+# genuine entries and must keep the reference-entry shortcut.
+_LEADING_CITATION_PROSE_RE = re.compile(
+    r"^\s*\[\d+\]\s+"
+    r"(?!(?:van|von|vander|de|del|della|der|den|di|da|dos|das|du|la|le|lo|"
+    r"ter|ten|te|el|al|bin|ibn|abu|zur|zum|am|auf|mac|st)\b)"
+    r"[a-z]"
 )
 _REFERENCE_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}[a-z]?\b", re.IGNORECASE)
 _REFERENCE_FRAGMENT_CUE_RE = re.compile(
@@ -3001,7 +3032,9 @@ def _looks_like_reference_entry_text(text: str) -> bool:
     compact = " ".join(text.split())
     if not compact:
         return False
-    if _REFERENCE_ENTRY_RE.search(compact):
+    if _REFERENCE_ENTRY_RE.search(compact) and not _LEADING_CITATION_PROSE_RE.match(
+        compact
+    ):
         return True
     sentence_count = len(re.findall(r"[.!?]\s+[A-Z]", compact))
     lower = compact.lower()
@@ -3041,6 +3074,45 @@ def _looks_like_reference_entry_text(text: str) -> bool:
             return False
     cjk_chars = len(_CJK_DETECT_RE.findall(compact))
     return cjk_chars < max(4, len(words) // 3)
+
+
+_REFERENCE_NAME_PARTICLES = {
+    "van", "von", "de", "del", "della", "der", "den", "di", "da",
+    "dos", "das", "du", "la", "le", "lo", "ter", "ten", "te", "el",
+    "bin", "ibn",
+}
+
+
+def _looks_like_reference_author_line(text: str) -> bool:
+    """True for pre-segmented author leads of wrapped reference entries.
+
+    "R. Mohammad Ebrahim and J. Razmi." matches the lettered appendix-heading
+    shape, but inside the references range it is the author list of a wrapped
+    entry and must not terminate the bibliography. Author lines are made of
+    name tokens only (initials, capitalized surnames, particles) joined by
+    "and"/","/"&" and end with a period.
+    """
+    compact = " ".join(text.split()).strip()
+    if not compact.endswith(".") or len(compact) > 90:
+        return False
+    if not _REFERENCE_AUTHOR_START_RE.match(compact):
+        return False
+    body = compact[:-1]
+    has_joiner = bool(re.search(r"(?:^|\s)(?:and|&)\s", body)) or "," in body
+    has_mid_initial = bool(re.search(r"\s[A-Z]\.(?=\s|$)", body))
+    if not (has_joiner or has_mid_initial):
+        return False
+    joiners = {"and", "&", "et", "al", "al."}
+    for token in body.replace(",", " ").split():
+        low = token.lower()
+        if low in joiners or low in _REFERENCE_NAME_PARTICLES:
+            continue
+        if re.fullmatch(r"[A-Z]\.", token):
+            continue
+        if re.fullmatch(r"[A-Z][A-Za-z'’-]*\.?", token):
+            continue
+        return False
+    return True
 
 
 def _block_in_reference_section(block: dict, reference_y: float | None) -> bool:
@@ -7402,13 +7474,24 @@ def classify_blocks(
             block.preserve_position = True
             continue
 
-        if block.font_size >= 8.8 and _looks_like_appendix_heading(
-            plain,
-            block.source_lines,
+        if (
+            block.font_size >= 8.8
+            and _looks_like_appendix_heading(
+                plain,
+                block.source_lines,
+            )
+            and not (
+                _bibliography_seen
+                and not _bibliography_ended
+                and _looks_like_reference_author_line(plain)
+            )
         ):
             # Small-caps appendix titles are often split into mixed-size,
             # non-bold spans. Their semantic role must win over the aggregate
             # span weight so the translated title keeps the source hierarchy.
+            # Author leads of wrapped reference entries ("R. Mohammad Ebrahim
+            # and J. Razmi.") share the lettered-heading shape but must stay
+            # inside the bibliography range.
             block.block_type = "heading"
             block.should_translate = True
             block.bold = True
@@ -7671,7 +7754,9 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
         if _CHECKLIST_HEADING_RE.match(" ".join(raw_text.split())):
             _bibliography_ended = True
         elif not _looks_like_reference_entry_text(raw_text):
-            if _looks_like_appendix_heading(raw_text, block.source_lines):
+            if _looks_like_appendix_heading(
+                raw_text, block.source_lines
+            ) and not _looks_like_reference_author_line(raw_text):
                 _bibliography_ended = True
             else:
                 # Fallback: bold section headings also end the range.
@@ -12228,6 +12313,211 @@ def _combine_inline_style_translation_items(
         combined_items.append((merged, translated))
         index += 2
     return combined_items
+
+
+_SIBLING_LIST_MARKER_RE = re.compile(
+    r"^\s*(?:[•◦▪●·‣]|\(?\d{1,2}[).]|\(?[a-zA-Z][).]|[-–—*])\s*\S"
+)
+
+
+def _sibling_group_item_height(
+    block: TextBlock,
+    translated_text: str,
+    font_pack: FontPack,
+    size: float,
+    margin: float,
+) -> Optional[float]:
+    """Height the general typesetting branch needs for `block` at `size`.
+
+    Mirrors insert_translated_text's general path (break_lines + best
+    leading). Returns None for blocks routed to special branches whose
+    height this estimate would not represent.
+    """
+    import fitz
+
+    if block.nowrap or block.preserve_position or _uses_fixed_source_math(block):
+        return None
+    rect = shrink_rect(fitz.Rect(block.bbox), margin)
+    if rect.width <= 1:
+        return None
+    if _block_keepouts(block, rect):
+        return None
+    fonts = font_pack.fonts_for(block.bold)
+    bold_fonts = font_pack.fonts_for(True)
+    render_text = _translation_text_for_render(translated_text)
+    tokens = _tokenize_translation_with_formula_clips(translated_text, block)
+    apply_inline_bold(tokens, block, render_text)
+    if not tokens:
+        return None
+    lines = break_lines(
+        tokens,
+        fonts,
+        size,
+        rect.width,
+        prefer_space_break=False,
+        bold_fonts=bold_fonts,
+    )
+    heights = [
+        line_block_height(lines, size, leading, fonts, bold_fonts)
+        for leading in leading_options(block)
+    ]
+    return min(heights) if heights else None
+
+
+def _is_sibling_list_item(block: TextBlock, translated_text: str) -> bool:
+    if block.block_type != "body":
+        return False
+    if block.nowrap or block.preserve_position:
+        return False
+    # Run-in styled records (bold label + body flowed as one block) have a
+    # dedicated reflow path; the group pass must not re-stack them.
+    if (
+        block.bold_prefix
+        or block.translated_bold_prefix_chars
+        or block.flow_inline_math
+    ):
+        return False
+    plain = " ".join(strip_sentinels(block.text).split()).strip()
+    translated_plain = " ".join(strip_sentinels(translated_text).split()).strip()
+    return bool(
+        _SIBLING_LIST_MARKER_RE.match(plain)
+        or _SIBLING_LIST_MARKER_RE.match(translated_plain)
+    )
+
+
+def _sibling_group_floor(
+    group: Sequence[int],
+    page_items: Sequence[Tuple[TextBlock, str]],
+    obstacles: Sequence[BBox],
+    page_height: float,
+) -> float:
+    """Lowest y the group may grow to before hitting the next content."""
+    blocks = [page_items[i][0] for i in group]
+    last = blocks[-1]
+    x0 = min(block.bbox[0] for block in blocks)
+    x1 = max(block.bbox[2] for block in blocks)
+    floor = page_height - 30.0
+    group_set = set(group)
+    for index, (other, _text) in enumerate(page_items):
+        if index in group_set:
+            continue
+        ox0, oy0, ox1, _oy1 = other.bbox
+        if ox1 <= x0 + 2.0 or ox0 >= x1 - 2.0:
+            continue
+        if oy0 >= last.bbox[3] - 1.0:
+            floor = min(floor, oy0)
+    for ox0, oy0, ox1, _oy1 in obstacles:
+        if ox1 <= x0 + 2.0 or ox0 >= x1 - 2.0:
+            continue
+        if oy0 >= last.bbox[3] - 1.0:
+            floor = min(floor, oy0)
+    return floor
+
+
+def _harmonize_sibling_list_items(
+    page_items: List[Tuple[TextBlock, str]],
+    centered_flags: Sequence[bool],
+    font_pack: FontPack,
+    min_font_size: float,
+    font_scale: float,
+    margin: float,
+    page_height: float = 792.0,
+    obstacles: Sequence[BBox] = (),
+) -> List[Tuple[TextBlock, str]]:
+    """Re-typeset consecutive sibling list items at one shared font size.
+
+    Chinese line stacks are taller than the source English ones, so items
+    fitted independently against their own source bbox shrink by different
+    amounts (contribution bullets at 9.2/7.4/6.4pt on one page). Siblings are
+    laid out again as one group: the union region may grow downward into
+    free whitespace (up to the next item/obstacle) so the shared size stays
+    close to the page's body scale.
+    """
+    groups: List[List[int]] = []
+    current: List[int] = []
+    for index, (block, translated_text) in enumerate(page_items):
+        eligible = (
+            _is_sibling_list_item(block, translated_text)
+            and not centered_flags[index]
+        )
+        if eligible and current:
+            prev_block = page_items[current[-1]][0]
+            same_column = (
+                abs(block.bbox[0] - prev_block.bbox[0]) <= 6.0
+                and abs(block.bbox[2] - prev_block.bbox[2]) <= 14.0
+            )
+            same_size = abs(block.font_size - prev_block.font_size) <= 0.5
+            gap = block.bbox[1] - prev_block.bbox[3]
+            adjacent = -2.0 <= gap <= max(10.0, block.font_size * 1.6)
+            if not (same_column and same_size and adjacent):
+                if len(current) >= 2:
+                    groups.append(current)
+                current = []
+        if eligible:
+            current.append(index)
+        else:
+            if len(current) >= 2:
+                groups.append(current)
+            current = []
+    if len(current) >= 2:
+        groups.append(current)
+
+    for group in groups:
+        blocks = [page_items[i][0] for i in group]
+        texts = [page_items[i][1] for i in group]
+        union_y0 = blocks[0].bbox[1]
+        union_y1 = blocks[-1].bbox[3]
+        union_height = union_y1 - union_y0
+        if union_height <= 4.0:
+            continue
+        floor_y = _sibling_group_floor(group, page_items, obstacles, page_height)
+        allowed_height = max(union_height, floor_y - 3.0 - union_y0)
+        gaps = [
+            max(2.0, blocks[i + 1].bbox[1] - blocks[i].bbox[3])
+            for i in range(len(blocks) - 1)
+        ]
+        requested = min(
+            requested_translation_font_size(block, min_font_size, font_scale)
+            for block in blocks
+        )
+        group_min = max(
+            effective_min_font_size(block, min_font_size) for block in blocks
+        )
+        chosen: Optional[Tuple[float, List[float]]] = None
+        size = requested
+        while size >= group_min - 1e-6:
+            heights = [
+                _sibling_group_item_height(block, text, font_pack, size, margin)
+                for block, text in zip(blocks, texts)
+            ]
+            if any(height is None for height in heights):
+                chosen = None
+                break
+            padded = [height + 2.0 * margin + 0.6 for height in heights]
+            if sum(padded) + sum(gaps) <= allowed_height + 0.5:
+                chosen = (size, padded)
+                break
+            size -= 0.25
+        if chosen is None:
+            continue
+        size, padded = chosen
+        y_cursor = union_y0
+        for offset, (index, height) in enumerate(zip(group, padded)):
+            block, translated_text = page_items[index]
+            redacts = block.redact_bboxes or [block.bbox]
+            page_items[index] = (
+                replace(
+                    block,
+                    bbox=(block.bbox[0], y_cursor, block.bbox[2], y_cursor + height),
+                    redact_bboxes=list(redacts),
+                    fixed_translation_font_size=size,
+                ),
+                translated_text,
+            )
+            y_cursor += height
+            if offset < len(gaps):
+                y_cursor += gaps[offset]
+    return page_items
 
 
 def _expand_single_line_list_bbox(

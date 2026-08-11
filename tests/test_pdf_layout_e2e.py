@@ -434,6 +434,86 @@ class _InvalidationRequiredTranslator:
         return outputs
 
 
+class _BulletListTranslator:
+    def translate_batch(self, texts):
+        outputs = []
+        for text in texts:
+            if "extend the vanilla OT" in text:
+                outputs.append(
+                    "我们将二分图上的普通最优传输扩展到更一般的图情形，"
+                    "从而提出最优流传输，其中边际约束被流平衡约束所取代。"
+                )
+            elif "entropic OFT" in text:
+                outputs.append(
+                    "本文提出熵正则化最优传输（Entropic OFT），以推导出适用于 "
+                    "GPU 的 OFT-Sinkhorn 算法，从而获得 OFT 问题的近似解。"
+                    "该算法的全局收敛性在理论上得到保证。"
+                )
+            elif "capacity constraints" in text:
+                outputs.append(
+                    "本文将节点和边容量约束纳入 OFT，此时 OFT 等价于最小费用流问题。"
+                    "通过考虑这些约束，本文修改了 OFT-Sinkhorn 算法，以确保输出满足"
+                    "容量约束。在最小费用流问题上的实验结果展示了本文算法的优越性。"
+                )
+            else:
+                outputs.append("中文译文")
+        return outputs
+
+
+def test_sibling_contribution_bullets_share_font_size(tmp_path):
+    # OTF p2 production defect: the three contribution bullets rendered at
+    # 7.4/6.4/9.2pt because each bullet shrank independently against its own
+    # source bbox. Siblings must come out at one consistent size.
+    input_pdf = Path(__file__).parent / "fixtures" / "otf_p02_contributions.pdf"
+    output_pdf = tmp_path / "otf_p02.zh.pdf"
+
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_BulletListTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    translated = fitz.open(output_pdf)
+    page = translated[0]
+    data = page.get_text("dict")
+    sizes = {}
+    for needle, key in (
+        ("我们将二分图", "b1"),
+        ("熵正则化最优传输（", "b2"),
+        ("容量约束纳入", "b3"),
+    ):
+        for block in data.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            # Contribution bullets live in the 560-680pt band on this page;
+            # the stub translator reuses the same Chinese for body paragraphs
+            # that mention the same needles higher up.
+            if not 555.0 <= block["bbox"][1] <= 680.0:
+                continue
+            text = "".join(
+                span["text"]
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+            )
+            if needle in text:
+                span_sizes = [
+                    span["size"]
+                    for line in block.get("lines", [])
+                    for span in line.get("spans", [])
+                ]
+                sizes[key] = max(span_sizes)
+                break
+    translated.close()
+
+    assert set(sizes) == {"b1", "b2", "b3"}, f"missing bullets: {sizes}"
+    spread = max(sizes.values()) - min(sizes.values())
+    assert spread <= 0.6, f"sibling bullet sizes diverge: {sizes}"
+    # The group grows into the whitespace below it, so the shared size stays
+    # at the page's body scale instead of harmonizing downwards.
+    assert min(sizes.values()) >= 8.75, f"bullets over-shrunk: {sizes}"
+
+
 def _build_academic_fixture(path):
     document = fitz.open()
     page = document.new_page(width=500, height=700)

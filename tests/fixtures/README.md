@@ -20,3 +20,18 @@ curl -L --fail \
   -o tests/fixtures/otf_production_acceptance_full.pdf
 shasum -a 256 tests/fixtures/otf_production_acceptance_full.pdf
 ```
+
+## `otf_p02_contributions.pdf`
+
+- Page 2 extracted from `otf_production_acceptance_full.pdf` (same source,
+  license CC BY 4.0 as above).
+- Test purpose: sibling contribution bullets must share one harmonized font
+  size instead of shrinking independently (production defect: 7.4/6.4/9.2pt).
+
+```python
+import fitz
+src = fitz.open("tests/fixtures/otf_production_acceptance_full.pdf")
+out = fitz.open()
+out.insert_pdf(src, from_page=1, to_page=1)
+out.save("tests/fixtures/otf_p02_contributions.pdf", garbage=3, deflate=True)
+```
