@@ -12831,6 +12831,19 @@ def _clear_table_caption_rules(
         if not candidates:
             continue
         first_rule_y = min(candidates)
+        # The redact fill rect (expanded by `margin`) paints background over
+        # the table's top rule when the caption glyph box crosses it, leaving
+        # stub rules beside the caption. Stop the caption redaction above the
+        # rule: character removal is intersection-based, so every source
+        # caption glyph still intersects the clipped rect, while the fill no
+        # longer covers the rule.
+        redacts = list(block.redact_bboxes or [(x0, y0, x1, y1)])
+        safe_redact_y1 = first_rule_y - margin - 0.9
+        if safe_redact_y1 > y0 + 2.0:
+            block.redact_bboxes = [
+                (rx0, ry0, rx1, min(ry1, safe_redact_y1))
+                for rx0, ry0, rx1, ry1 in redacts
+            ]
         required_gap = 3.1
         current_gap = first_rule_y - rendered_bottom
         if current_gap >= required_gap:
@@ -12894,13 +12907,24 @@ def _caption_rendered_bottom(
             bold_fonts=bold_fonts,
         )
         for leading in leading_options(block):
-            if line_block_height(
+            height = line_block_height(
                 lines,
                 size,
                 leading,
                 fonts,
                 bold_fonts,
-            ) <= rect.height:
+            )
+            available = rect.height
+            if block.block_type == "caption" and len(lines) == 1:
+                # Mirror insert_translated_text's single-line caption gate so
+                # the rule-clearance shift sees the size that actually
+                # renders.
+                ascent, descent = _line_vertical_metrics(
+                    lines[0], size, fonts, bold_fonts
+                )
+                height = min(ascent, size * 0.88) + min(descent, size * 0.14)
+                available = max(rect.height, block.bbox[3] - block.bbox[1] - 1.0)
+            if height <= available:
                 chosen = (size, leading, lines)
                 break
         if chosen is not None:
@@ -12919,14 +12943,16 @@ def _caption_rendered_bottom(
 
     size, leading, lines = chosen
     if len(lines) == 1:
-        ascent, _ = _line_vertical_metrics(
+        # Report the glyph-box bottom: the caption clearance contract is
+        # measured against rendered span boxes, not bare ink.
+        ascent, box_descent = _line_vertical_metrics(
             lines[0],
             size,
             fonts,
             bold_fonts,
         )
         descent = _line_font_descent(lines[0], size, fonts, bold_fonts)
-        return float(rect.y0 + ascent + descent)
+        return float(rect.y0 + ascent + max(descent, box_descent))
     baselines = _line_baselines(
         lines,
         size,
@@ -14183,7 +14209,21 @@ def insert_translated_text(
                 fonts,
                 bold_fonts,
             )
-            if height <= rect.height:
+            available = rect.height
+            if block.block_type == "caption" and len(lines) == 1:
+                # A single caption line renders top-aligned inside the source
+                # caption row; only its CJK ink needs to fit (~0.88em ascent
+                # plus ~0.12em descent, not the 1.2-1.4em glyph box), and the
+                # caption row keeps its own clearance to the rule below, so
+                # gate on the unshrunk row height. Otherwise the Chinese
+                # caption drops far below caption scale (observed 5.7pt
+                # against a 10pt source row).
+                ascent, descent = _line_vertical_metrics(
+                    lines[0], size, fonts, bold_fonts
+                )
+                height = min(ascent, size * 0.88) + min(descent, size * 0.14)
+                available = max(rect.height, block.bbox[3] - block.bbox[1] - 1.0)
+            if height <= available:
                 chosen = (size, leading, lines)
                 break
         if chosen:

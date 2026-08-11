@@ -460,6 +460,86 @@ class _BulletListTranslator:
         return outputs
 
 
+class _OtfP9CaptionTranslator:
+    def translate_batch(self, texts):
+        outputs = []
+        for text in texts:
+            if "Small to medium-sized NETGEN" in text:
+                outputs.append("表 2: 中小规模 NETGEN 数据集上的多商品流评估。")
+            elif "very large sparse graph" in text:
+                outputs.append("表 3: 超大规模稀疏图上的多商品流评估。")
+            else:
+                outputs.append("中文译文")
+        return outputs
+
+
+def test_single_line_table_captions_keep_readable_size(tmp_path):
+    # OTF p9: the translated captions rendered at 5.7-6.9pt because the CJK
+    # glyph box (1.17x size) cannot fit the English caption line box. A
+    # single-line caption only needs ascent + ink descent, so it must stay
+    # near caption scale.
+    input_pdf = Path(__file__).parent / "fixtures" / "otf_p09_table_captions.pdf"
+    output_pdf = tmp_path / "otf_p9.zh.pdf"
+
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_OtfP9CaptionTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    translated = fitz.open(output_pdf)
+    data = translated[0].get_text("dict")
+    caption_sizes = {}
+    for needle, key in (
+        ("中小规模 NETGEN", "t2"),
+        ("超大规模稀疏图", "t3"),
+    ):
+        for block in data.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            text = "".join(
+                span["text"]
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+            )
+            if needle.replace(" ", "") in text.replace(" ", ""):
+                caption_sizes[key] = max(
+                    span["size"]
+                    for line in block.get("lines", [])
+                    for span in line.get("spans", [])
+                )
+                break
+    translated.close()
+
+    assert set(caption_sizes) == {"t2", "t3"}, f"captions missing: {caption_sizes}"
+    assert min(caption_sizes.values()) >= 7.8, f"captions over-shrunk: {caption_sizes}"
+
+    # The caption redaction must not clip the table top rules out of the
+    # vector layer (stub rules beside the caption). Both toprules span the
+    # full table width in the source; verify continuous ink at 4x.
+    translated = fitz.open(output_pdf)
+    page = translated[0]
+    scale = 4
+    for rule_y, rule_x0, rule_x1 in ((119.75, 109.4, 500.6), (183.77, 146.4, 463.2)):
+        clip = fitz.Rect(rule_x0 - 2, rule_y - 1.2, rule_x1 + 2, rule_y + 1.6)
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip)
+        stride, n = pix.stride, pix.n
+        samples = pix.samples
+        dark_columns = 0
+        for xx in range(pix.width):
+            column_dark = any(
+                samples[yy * stride + xx * n] < 120
+                for yy in range(pix.height)
+            )
+            dark_columns += 1 if column_dark else 0
+        coverage = dark_columns / pix.width
+        assert coverage >= 0.97, (
+            f"table rule at y={rule_y} is broken: coverage {coverage:.3f}"
+        )
+    translated.close()
+
+
 class _WamP3Translator:
     def translate_batch(self, texts):
         outputs = []

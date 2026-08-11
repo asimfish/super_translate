@@ -28,6 +28,14 @@ shasum -a 256 tests/fixtures/otf_production_acceptance_full.pdf
 - Test purpose: sibling contribution bullets must share one harmonized font
   size instead of shrinking independently (production defect: 7.4/6.4/9.2pt).
 
+## `otf_p09_table_captions.pdf`
+
+- Page 9 extracted from `otf_production_acceptance_full.pdf` (same source,
+  license CC BY 4.0 as above).
+- Test purpose: single-line table captions must stay near caption scale
+  (production defect: 5.7pt) and the caption redaction must not paint over
+  the table top rules (stub-rule artifact beside the caption).
+
 ## `memorywam_p3_inline_window.pdf`
 
 - Page 3 extracted from the MemoryWAM production paper (arXiv preprint,
