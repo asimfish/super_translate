@@ -1,5 +1,28 @@
 # Golden PDF fixtures
 
+## Visual inspector regression pairs (`otf_p*_*.pdf` / `*_translated.pdf`)
+
+Page-level pairs extracted from the OFT paper below (CC BY 4.0) and its
+2026-08-11 production translation, one pair per defect class found in the
+production review. Each `X.pdf` is the original page; `X_translated.pdf` is
+the same page from the translated PDF exhibiting the defect. Used by
+`tests/test_page_inspector.py`.
+
+- `otf_p2_font_drift`: contribution bullets shrunk to 6.4-7.4pt vs 9.2pt body
+  (`font_size_drift`, `list_font_inconsistent`)
+- `otf_p4_formula_clip`: inline formula sprites with clipped
+  ascenders/descenders (`formula_clipped`)
+- `otf_p8_table_grid`: Table 2 header rules rebuilt at wrong offsets
+  (`table_structure_mismatch`)
+- `otf_p11_12_refs`: references pages 11-12; bold author names overprint the
+  translated entry (`reference_overlap`, `reference_bold_style`)
+- `otf_p14_display_align`: appendix display equation shifted 36pt sideways
+  (`display_formula_misaligned`)
+- `otf_p1_clean`: title page with no known defects (negative control)
+
+Regenerate with `tmp/inspect_prod/make_fixtures.py` from the production
+paper pair.
+
 ## `otf_production_acceptance_full.pdf`
 
 - Title: *Optimal Flow Transport and its Entropic Regularization: a GPU-friendly Matrix Iterative Algorithm for Flow Balance Satisfaction*

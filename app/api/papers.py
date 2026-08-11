@@ -1996,6 +1996,7 @@ _SELF_HEALABLE_QA_CODES = {
     "untranslated_english",
     "untranslated_caption",
     "untranslated_formula_explanation",
+    "untranslated_block",
 }
 _SELF_HEAL_MAX_RETRIES = 1
 
@@ -2026,16 +2027,26 @@ def _has_self_healable_error(issues: list) -> bool:
 
 _QA_ERROR_LABELS = {
     "caption_overlap": "图注重叠",
+    "display_formula_misaligned": "公式对齐偏移",
     "empty_page": "空白页",
+    "font_size_drift": "字号漂移",
     "formula_changed": "公式变更",
+    "formula_clipped": "公式裁切",
+    "inspection_failed": "视觉巡检执行失败",
+    "list_font_inconsistent": "列表字号不一致",
     "missing_graphic": "矢量图缺失",
     "missing_image": "图片缺失",
     "page_count_mismatch": "页数不一致",
     "page_size_mismatch": "页面尺寸不一致",
+    "preserved_ink_mismatch": "保留区渲染异常",
     "preserved_text_changed": "表格/算法保留区被改动",
     "qa_failed": "译后质检执行失败",
     "qa_open_failed": "PDF 无法检查",
+    "reference_bold_style": "参考文献异常加粗",
+    "reference_overlap": "参考文献重叠",
+    "table_structure_mismatch": "表格结构错位",
     "text_overlap": "正文重叠",
+    "untranslated_block": "整段漏翻",
     "untranslated_caption": "图注漏翻",
     "untranslated_english": "正文疑似漏翻",
     "untranslated_formula_explanation": "公式说明漏翻",

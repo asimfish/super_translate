@@ -2205,6 +2205,20 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
     except Exception:
         pass
 
+    try:
+        from .page_inspector import inspect_translation
+
+        issues.extend(inspect_translation(original_pdf, translated_pdf))
+    except Exception as exc:
+        issues.append(
+            TranslationIssue(
+                page=0,
+                code="inspection_failed",
+                message=f"Visual inspection pass failed: {exc}",
+                severity="warning",
+            )
+        )
+
     trans_doc.close()
     orig_doc.close()
     return issues

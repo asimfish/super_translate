@@ -57,9 +57,57 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_figure_ppt_register(args)
     if args.command == "figure-ppt-audit":
         return run_figure_ppt_audit(args)
+    if args.command == "inspect":
+        return run_inspect(args)
 
     parser.print_help()
     return 2
+
+
+def run_inspect(args: argparse.Namespace) -> int:
+    """Run the post-translation visual inspection over a PDF pair."""
+    for path in (args.original_pdf, args.translated_pdf):
+        if not path.exists():
+            print("PDF does not exist: %s" % path, file=sys.stderr)
+            return 1
+
+    import json
+
+    from .page_inspector import inspect_translation
+
+    issues = inspect_translation(
+        args.original_pdf,
+        args.translated_pdf,
+        max_pages=args.max_pages,
+    )
+    payload = [
+        {
+            "page": issue.page,
+            "code": issue.code,
+            "severity": issue.severity,
+            "message": issue.message,
+        }
+        for issue in issues
+    ]
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(
+            json.dumps(
+                {"issue_count": len(payload), "issues": payload},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    for item in payload:
+        print(
+            "[%s] p%d %s: %s"
+            % (item["severity"][:4], item["page"], item["code"], item["message"])
+        )
+    errors = sum(1 for item in payload if item["severity"] == "error")
+    print("%d issue(s), %d error(s)" % (len(payload), errors))
+    return 1 if errors else 0
 
 
 def run_export(args: argparse.Namespace) -> int:
@@ -342,6 +390,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Evaluate translated papers listed in a golden manifest.",
     )
     golden_eval.add_argument("manifest", type=Path)
+
+    inspect = subparsers.add_parser(
+        "inspect",
+        help="Run the visual defect inspection over an original/translated pair.",
+    )
+    inspect.add_argument("original_pdf", type=Path)
+    inspect.add_argument("translated_pdf", type=Path)
+    inspect.add_argument("--max-pages", type=int, default=None)
+    inspect.add_argument("--json-out", type=Path, default=None)
 
     layout_learn = subparsers.add_parser(
         "layout-learn",
