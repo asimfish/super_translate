@@ -115,6 +115,15 @@ class CachedTranslator(Translator):
         if hasattr(self.wrapped, "block_types"):
             self.wrapped.block_types = value
 
+    @property
+    def quality_retry(self) -> bool:
+        return bool(getattr(self.wrapped, "quality_retry", False))
+
+    @quality_retry.setter
+    def quality_retry(self, value: bool) -> None:
+        if hasattr(self.wrapped, "quality_retry"):
+            self.wrapped.quality_retry = bool(value)
+
     def translate_batch(self, texts: Sequence[str]) -> List[str]:
         missing: List[str] = []
         for text in texts:
@@ -359,6 +368,7 @@ class VendorTranslator(Translator):
     progress: bool = True
     # Structure-aware: block types for context-aware prompts
     block_types: Optional[List[str]] = None
+    quality_retry: bool = False
 
     def translate_batch(self, texts: Sequence[str]) -> List[str]:
         results: List[str] = []
@@ -498,7 +508,11 @@ class VendorTranslator(Translator):
         return parse_translation_list(data)
 
     def _translate_openai_compatible(self, texts: Sequence[str]) -> List[str]:
-        prompt = translation_array_prompt_with_types(self.block_types, list(texts))
+        prompt = translation_array_prompt_with_types(
+            self.block_types,
+            list(texts),
+            quality_retry=self.quality_retry,
+        )
         payload = {
             "model": self.model or "gpt-4o-mini",
             "messages": [
@@ -527,7 +541,11 @@ class VendorTranslator(Translator):
         payload["reasoning_effort"] = "max"
 
     def _translate_deepseek(self, texts: Sequence[str]) -> List[str]:
-        prompt = translation_array_prompt_with_types(self.block_types, list(texts))
+        prompt = translation_array_prompt_with_types(
+            self.block_types,
+            list(texts),
+            quality_retry=self.quality_retry,
+        )
         payload: Dict[str, Any] = {
             "model": self.model or "deepseek-v4-pro",
             "messages": [
@@ -749,12 +767,20 @@ _BLOCK_TYPE_HINTS: dict[str, str] = {
     "heading": "【注意】这是章节标题，翻译为中文，保留编号格式（如 1、2.1、A.）。",
     "caption": "【注意】这是图注或表注。Figure N→图N，Table N→表N。保留描述准确性，保持简洁。",
     "body": "",  # standard prompt, no extra hint
+    "foreign_example": (
+        "【注意】这是论文正文中的外语示例，不是公式或代码。This is a foreign-language example. "
+        "Translate all natural-language "
+        "words into Simplified Chinese, including every short pronoun, article, and preposition. "
+        "Only model names, formulas, citations, URLs, and placeholders may remain unchanged."
+    ),
 }
 
 
 def translation_array_prompt_with_types(
     block_types: list[str] | None = None,
     texts: list[str] | None = None,
+    *,
+    quality_retry: bool = False,
 ) -> str:
     """Build translation prompt with block-type-specific hints and terminology.
 
@@ -775,6 +801,14 @@ def translation_array_prompt_with_types(
             base += "\n\n" + "\n".join(hints)
 
     base = _with_relevant_terminology(base, texts)
+    if quality_retry:
+        base += (
+            "\n\nQUALITY RETRY: the previous output retained natural-language text. "
+            "Translate every natural-language phrase, including text inside square brackets "
+            "or quotation marks and non-English natural-language examples such as French; "
+            "do not preserve it merely because it is quoted. Preserve only formulas, citation "
+            "markers, URLs, placeholders, and genuine proper names."
+        )
 
     return (
         base + "\nTranslate each item in the JSON array "

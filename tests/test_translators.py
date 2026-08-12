@@ -22,6 +22,7 @@ from pdf_zh_translator.translators import (
     parse_json_translations,
     parse_translation_list,
     placeholders_preserved,
+    translation_array_prompt_with_types,
 )
 
 
@@ -428,6 +429,39 @@ class TranslatorParsingTests(unittest.TestCase):
             # Structure-aware hints must reach the supplier through the cache wrapper.
             self.assertEqual(vendor.block_types, ["title", "caption"])
             self.assertEqual(cached.block_types, ["title", "caption"])
+
+    def test_cached_translator_forwards_quality_retry_to_wrapped(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            vendor = VendorTranslator(
+                api_url="https://example.com", mode="deepseek", progress=False
+            )
+            cached = CachedTranslator(vendor, cache_file)
+            cached.quality_retry = True
+
+            self.assertTrue(vendor.quality_retry)
+            self.assertTrue(cached.quality_retry)
+
+    def test_quality_retry_prompt_translates_quoted_natural_language(self):
+        prompt = translation_array_prompt_with_types(
+            ["body"],
+            ["It replaced [a medical center] with [en fonction de son etat]."],
+            quality_retry=True,
+        )
+
+        self.assertIn("square brackets", prompt)
+        self.assertIn("non-English natural-language", prompt)
+        self.assertIn("do not preserve it merely because it is quoted", prompt)
+
+    def test_foreign_example_prompt_translates_every_latin_word(self):
+        prompt = translation_array_prompt_with_types(
+            ["foreign_example"],
+            ["Un privilege est le droit d'un medecin."],
+            quality_retry=True,
+        )
+
+        self.assertIn("foreign-language example", prompt)
+        self.assertIn("Translate all natural-language words", prompt)
 
     def test_single_item_parse_failure_uses_plain_text_fallback(self):
         translator = JsonFailingVendorTranslator()
