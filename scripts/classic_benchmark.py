@@ -8,6 +8,7 @@ Runs the strict quality benchmark over the curated classic paper set
     evaluate   full QA: verify_translation_issues (incl. visual inspector)
                plus render-based visual score, one JSON report per paper
     report     aggregate REPORT.md + showcase.json + page preview images
+    gate       enforce release thresholds, provenance, and no regressions
 
 All artifacts live under data/benchmark/classic20/ (gitignored); the curated
 manifest and this script are the reproducible part.
@@ -17,6 +18,7 @@ Examples:
     .venv/bin/python scripts/classic_benchmark.py translate --only word2vec,adam
     .venv/bin/python scripts/classic_benchmark.py evaluate
     .venv/bin/python scripts/classic_benchmark.py report
+    .venv/bin/python scripts/classic_benchmark.py gate
 """
 
 from __future__ import annotations
@@ -469,15 +471,21 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
 
 
 def _baseline_comparison(workdir: Path, rows: list) -> dict | None:
-    """Aggregate current vs pre-fix (reports_baseline) evaluation totals."""
+    """Aggregate current vs pre-fix (reports_baseline) evaluation totals.
+
+    Scoped to the papers present in BOTH evaluations, so growing the
+    benchmark set never skews the improvement figures.
+    """
     baseline_dir = workdir / "reports_baseline"
     if not baseline_dir.is_dir():
         return None
-    baseline_reports = [
-        json.loads(path.read_text(encoding="utf-8"))
+    baseline_reports = {
+        path.stem: json.loads(path.read_text(encoding="utf-8"))
         for path in sorted(baseline_dir.glob("*.json"))
-    ]
-    if not baseline_reports:
+    }
+    current_reports = {entry.id: report for entry, report, _meta in rows}
+    shared = sorted(set(baseline_reports) & set(current_reports))
+    if not shared:
         return None
 
     def totals(reports: list) -> dict:
@@ -493,9 +501,126 @@ def _baseline_comparison(workdir: Path, rows: list) -> dict | None:
         }
 
     return {
-        "baseline": totals(baseline_reports),
-        "current": totals([report for _entry, report, _meta in rows]),
+        "scope": f"{len(shared)} papers evaluated in both runs",
+        "paper_ids": shared,
+        "baseline": totals([baseline_reports[pid] for pid in shared]),
+        "current": totals([current_reports[pid] for pid in shared]),
     }
+
+
+# ---------------------------------------------------------------------------
+# release gate
+# ---------------------------------------------------------------------------
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
+    """Fail unless benchmark evidence meets the open-source release policy."""
+    paths = _paths(workdir)
+    min_evaluated = max(1, int(args.min_evaluated))
+    min_strict = max(1, int(args.min_strict_passes))
+    require_all_axes = bool(getattr(args, "require_all_axes", True))
+    baseline_dir = getattr(args, "baseline_reports", None)
+    baseline_dir = Path(baseline_dir) if baseline_dir else None
+
+    reports: dict[str, dict] = {}
+    missing_reports: list[str] = []
+    provenance_errors: list[str] = []
+    regressions: list[dict] = []
+    covered_axes: set[str] = set()
+    for entry in entries:
+        report_path = paths["reports"] / f"{entry.id}.json"
+        if not report_path.exists():
+            missing_reports.append(entry.id)
+            continue
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        reports[entry.id] = report
+        covered_axes.update(entry.tags)
+
+        source_path = paths["papers"] / f"{entry.id}.pdf"
+        meta_path = paths["meta"] / f"{entry.id}.json"
+        if not source_path.exists() or not meta_path.exists():
+            provenance_errors.append(f"{entry.id}: source or metadata missing")
+        else:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            expected_hash = str(meta.get("sha256", ""))
+            if not expected_hash or _sha256_file(source_path) != expected_hash:
+                provenance_errors.append(f"{entry.id}: source SHA256 mismatch")
+            license_url = str(meta.get("license", "unknown"))
+            if license_url == "unknown":
+                provenance_errors.append(f"{entry.id}: license unknown")
+            expected_showcase = "creativecommons.org" in license_url
+            if bool(meta.get("showcase_ok")) != expected_showcase:
+                provenance_errors.append(f"{entry.id}: showcase license flag mismatch")
+
+        if baseline_dir:
+            baseline_path = baseline_dir / f"{entry.id}.json"
+            if baseline_path.exists():
+                baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+                previous = int(baseline.get("error_count", 0))
+                current = int(report.get("error_count", 0))
+                if current > previous:
+                    regressions.append(
+                        {
+                            "id": entry.id,
+                            "baseline_errors": previous,
+                            "errors": current,
+                        }
+                    )
+
+    evaluated = len(reports)
+    strict_passes = sum(bool(report.get("strict_pass")) for report in reports.values())
+    manifest_axes = set(
+        json.loads(MANIFEST.read_text(encoding="utf-8"))["layout_axes"]
+    )
+    missing_axes = sorted(manifest_axes - covered_axes) if require_all_axes else []
+    failures: list[str] = []
+    if evaluated < min_evaluated:
+        failures.append(f"evaluated {evaluated} papers; require at least {min_evaluated}")
+    if strict_passes < min_strict:
+        failures.append(f"strict passes {strict_passes}; require at least {min_strict}")
+    if missing_axes:
+        failures.append(f"layout axes not covered: {', '.join(missing_axes)}")
+    if provenance_errors:
+        failures.append(f"artifact provenance errors: {len(provenance_errors)}")
+    if regressions:
+        failures.append(f"papers regressed against baseline: {len(regressions)}")
+
+    result = {
+        "schema_version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "passed": not failures,
+        "minimum_evaluated": min_evaluated,
+        "minimum_strict_passes": min_strict,
+        "evaluated": evaluated,
+        "strict_passes": strict_passes,
+        "covered_layout_axes": sorted(covered_axes),
+        "missing_layout_axes": missing_axes,
+        "missing_reports": missing_reports,
+        "provenance_errors": provenance_errors,
+        "regressions": regressions,
+        "failures": failures,
+    }
+    output = workdir / "quality-gate.json"
+    output.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    status = "PASS" if result["passed"] else "FAIL"
+    print(
+        f"quality gate {status}: evaluated={evaluated} strict={strict_passes} "
+        f"failures={len(failures)} ({output})"
+    )
+    for failure in failures:
+        print(f"- {failure}", file=sys.stderr)
+    return 0 if result["passed"] else 1
 
 
 # ---------------------------------------------------------------------------
@@ -504,13 +629,22 @@ def _baseline_comparison(workdir: Path, rows: list) -> dict | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=["fetch", "translate", "evaluate", "report"]
+        "command", choices=["fetch", "translate", "evaluate", "report", "gate"]
     )
     parser.add_argument("--only", help="comma-separated paper ids")
     parser.add_argument("--workdir", type=Path, default=DEFAULT_WORKDIR)
     parser.add_argument("--force", action="store_true", help="redo cached steps")
     parser.add_argument(
         "--no-previews", action="store_true", help="skip preview rendering in report"
+    )
+    parser.add_argument("--min-evaluated", type=int, default=20)
+    parser.add_argument("--min-strict-passes", type=int, default=20)
+    parser.add_argument("--baseline-reports", type=Path)
+    parser.add_argument(
+        "--skip-axis-coverage",
+        action="store_false",
+        dest="require_all_axes",
+        help="do not require every manifest layout axis in evaluated papers",
     )
     args = parser.parse_args()
 
@@ -521,6 +655,7 @@ def main() -> int:
         "translate": cmd_translate,
         "evaluate": cmd_evaluate,
         "report": cmd_report,
+        "gate": cmd_gate,
     }[args.command]
     return handler(entries, args.workdir, args)
 
