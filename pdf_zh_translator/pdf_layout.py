@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import statistics
+import unicodedata
 import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -203,6 +204,10 @@ EMAIL_RE = re.compile(
 AUTHOR_YEAR_CITATION_RE = re.compile(
     r"[\(\uff08][^()\uff08\uff09\n]{0,160}\b(?:19|20)\d{2}[a-z]?\b"
     r"[^()\uff08\uff09\n]{0,80}[\)\uff09]",
+    re.IGNORECASE,
+)
+BRACKETED_AUTHOR_YEAR_CITATION_RE = re.compile(
+    r"\[[^\[\]\n]{0,240}\b(?:19|20)\d{2}[a-z]?\b[^\[\]\n]{0,100}\]",
     re.IGNORECASE,
 )
 URL_TRAILING_PUNCT = ").,;:!?]\u3002\uff0c\uff1b"
@@ -521,32 +526,77 @@ def translate_pdf(
         if _translated_block_still_english(block, translated_text)
     ]
     if retry_indexes:
-        if hasattr(translator, "block_types"):
-            translator.block_types = [units[index][0].block_type for index in retry_indexes]
-        retry_units = [units[index] for index in retry_indexes]
-        invalidate = getattr(translator, "invalidate", None)
-        if callable(invalidate):
-            retry_sources, _, _ = _source_style_translation_plan(
+        quality_retry_supported = hasattr(translator, "quality_retry")
+        if quality_retry_supported:
+            translator.quality_retry = True
+        try:
+            if hasattr(translator, "block_types"):
+                translator.block_types = [units[index][0].block_type for index in retry_indexes]
+            retry_units = []
+            for index in retry_indexes:
+                block, protected_source, mapping = units[index]
+                if _source_looks_like_foreign_example(protected_source):
+                    block = replace(block, block_type="foreign_example")
+                retry_units.append((block, protected_source, mapping))
+            invalidate = getattr(translator, "invalidate", None)
+            if callable(invalidate):
+                retry_sources, _, _ = _source_style_translation_plan(
+                    translator,
+                    retry_units,
+                    acronym_expansions,
+                )
+                invalidate(retry_sources)
+            retry_outputs, _, _ = _translate_units_with_source_style_runs(
                 translator,
                 retry_units,
                 acronym_expansions,
             )
-            invalidate(retry_sources)
-        retry_outputs, _, _ = _translate_units_with_source_style_runs(
-            translator,
-            retry_units,
-            acronym_expansions,
-        )
-        for index, retry_text in zip(retry_indexes, retry_outputs):
-            retry_cleaned, retry_missing = _restore_unit_translation(
-                retry_text,
-                units[index][2],
-                units[index][0],
-            )
-            if not _translated_block_still_english(units[index][0], retry_cleaned):
-                cleaned_results[index] = (retry_cleaned, retry_missing)
-        if hasattr(translator, "block_types"):
-            translator.block_types = block_types
+            for index, retry_text in zip(retry_indexes, retry_outputs):
+                retry_cleaned, retry_missing = _restore_unit_translation(
+                    retry_text,
+                    units[index][2],
+                    units[index][0],
+                )
+                retained_phrases = _retained_bracketed_natural_language(
+                    _text_outside_sentinels(retry_cleaned)
+                )
+                if (
+                    retained_phrases
+                    and _translated_block_still_english(
+                        units[index][0],
+                        retry_cleaned,
+                    )
+                ):
+                    if hasattr(translator, "block_types"):
+                        translator.block_types = ["foreign_example"] * len(
+                            retained_phrases
+                        )
+                    if callable(invalidate):
+                        invalidate(retained_phrases)
+                    phrase_translations = list(
+                        translator.translate_batch(retained_phrases)
+                    )
+                    if len(phrase_translations) == len(retained_phrases):
+                        for phrase, translated_phrase in zip(
+                            retained_phrases,
+                            phrase_translations,
+                        ):
+                            translated_phrase = _focused_foreign_phrase_translation(
+                                phrase,
+                                translated_phrase,
+                            )
+                            if translated_phrase:
+                                retry_cleaned = retry_cleaned.replace(
+                                    f"[{phrase}]",
+                                    f"[{translated_phrase}]",
+                                )
+                if not _translated_block_still_english(units[index][0], retry_cleaned):
+                    cleaned_results[index] = (retry_cleaned, retry_missing)
+        finally:
+            if quality_retry_supported:
+                translator.quality_retry = False
+            if hasattr(translator, "block_types"):
+                translator.block_types = block_types
 
     by_page: Dict[int, List[Tuple[TextBlock, str]]] = {}
     for (block, _, _), (translated_text, missing) in zip(units, cleaned_results):
@@ -599,6 +649,10 @@ def translate_pdf(
                 and bullet_count <= 1
                 and "action skeleton" not in plain_block_text.lower()
                 and not looks_like_action_skeleton_sequence(plain_block_text)
+                and not _has_parallel_panel_sibling(
+                    block,
+                    [candidate for candidate, _ in candidate_items],
+                )
             ):
                 containing_columns = [
                     column
@@ -641,6 +695,11 @@ def translate_pdf(
             elif block.preserve_position:
                 centered = False
             block = expand_heading_bbox(block)
+            block = _expand_standalone_heading_to_column(
+                block,
+                page_columns,
+                page_width,
+            )
             requested_size = requested_translation_font_size(block, min_font_size, font_scale)
             block = _expand_single_line_list_bbox(
                 block,
@@ -701,7 +760,10 @@ def translate_pdf(
                         text=translated_text,
                         font_pack=font_pack,
                         font_size=requested_size,
-                        min_font_size=max(min_font_size, requested_size * 0.9),
+                        min_font_size=_float_clip_min_font_size(
+                            min_font_size,
+                            requested_size,
+                        ),
                         margin=margin,
                         centered=centered,
                     )
@@ -790,8 +852,27 @@ def translate_pdf(
             font_scale=font_scale,
             margin=margin,
         )
+        page_items = _cascade_expand_page_items(
+            page_items,
+            font_pack=font_pack,
+            min_font_size=min_font_size,
+            font_scale=font_scale,
+            margin=margin,
+            page_height=float(page.rect.height),
+            obstacles=[
+                *page_floats,
+                *preserved_regions.get(page_index, []),
+                *equation_rows.get(page_index, []),
+            ],
+        )
         source_links = _page_links_for_restore(page)
-        redact_original_text(page, [block for block, _ in page_items], margin, page_gutter)
+        redact_original_text(
+            page,
+            [block for block, _ in page_items],
+            margin,
+            page_gutter,
+            protected_regions=preserved_regions.get(page_index, ()),
+        )
         page = document.reload_page(page)
         _restore_removed_page_links(page, source_links)
         restored_regions = _restore_redaction_damaged_preserved_regions(
@@ -1794,6 +1875,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         untranslated_coordinates: List[BBox] = []
         untranslated_caption_examples: List[str] = []
         untranslated_formula_examples: List[str] = []
+        untranslated_natural_language_examples: List[str] = []
+        untranslated_natural_language_coordinates: List[BBox] = []
         preserved_changed_examples: List[str] = []
         page_formula_keepouts = keepout_bboxes_by_page.get(page_idx, [])
         page_caption_bboxes = caption_bboxes_by_page.get(page_idx, [])
@@ -1862,6 +1945,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             if _looks_like_untranslated_caption(text):
                 untranslated_caption_examples.append(" ".join(text.split())[:80])
             elif _looks_like_untranslated_formula_explanation(text):
+                if _block_overlaps_preserved_regions(block, preserved_regions):
+                    continue
                 untranslated_formula_examples.append(" ".join(text.split())[:80])
             elif _looks_like_untranslated_english(text):
                 if _block_overlaps_preserved_regions(block, preserved_regions):
@@ -1894,6 +1979,14 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 looks_like_academic_structure_heading(source_block, source_plain)
                 and source_plain.casefold() in translated_plain.casefold()
             )
+            if _translation_retains_foreign_prose(
+                source_block,
+                translated_unit_text,
+            ):
+                example = " ".join(translated_unit_text.split())[:80]
+                if example and example not in untranslated_natural_language_examples:
+                    untranslated_natural_language_examples.append(example)
+                    untranslated_natural_language_coordinates.append(source_block.bbox)
             if (
                 not short_structure_echo
                 and not _translation_retains_source_prose_run(
@@ -1946,6 +2039,22 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     message=(
                         f"Page {page_idx + 1}: {len(untranslated_formula_examples)} formula "
                         "explanation block(s) still look like English"
+                    ),
+                    severity="error",
+                )
+            )
+        if untranslated_natural_language_examples:
+            location = untranslated_natural_language_coordinates[0]
+            issues.append(
+                TranslationIssue(
+                    page=page_idx + 1,
+                    code="untranslated_natural_language",
+                    message=(
+                        f"Page {page_idx + 1}: "
+                        f"{len(untranslated_natural_language_examples)} block(s) retain "
+                        "source-language natural text outside references/formulas at "
+                        f"x={location[0]:.1f}, y={location[1]:.1f}; example: "
+                        f"{untranslated_natural_language_examples[0]}"
                     ),
                     severity="error",
                 )
@@ -2666,9 +2775,42 @@ def _looks_like_detached_prompt_code_fragment(text: str) -> bool:
     return words <= object_vocabulary
 
 
+def _looks_like_parenthetical_gloss_with_citation(text: str) -> bool:
+    """Allow a translated first-use English term followed only by a citation."""
+    match = re.fullmatch(
+        r"(?:(?P<prefix>[A-Z][A-Za-z0-9.-]{1,15})\s*)?"
+        r"[（(](?P<term>[^()（）\[\]]{2,100})[）)]\s*"
+        r"\[(?P<citation>[^\[\]]{2,160})(?P<closed>\])?",
+        text,
+    )
+    if match is None:
+        return False
+    term_words = re.findall(r"[A-Za-z][A-Za-z'-]*", match.group("term"))
+    if not (1 <= len(term_words) <= 8) or not all(
+        word[0].isupper() for word in term_words
+    ):
+        return False
+    citation = match.group("citation")
+    if not re.search(r"\b(?:19|20)\d{2}[a-z]?\b", citation):
+        if match.group("closed") or not re.search(r"\b(?:et|al)\.?$", citation):
+            return False
+        return bool(
+            re.fullmatch(
+                r"[A-Z][A-Za-z'’-]*(?:\s+(?:and|et|al\.?|[A-Z][A-Za-z'’-]*)){0,5}",
+                citation,
+            )
+        )
+    residue = re.sub(r"\b(?:19|20)\d{2}[a-z]?\b", " ", citation)
+    residue = re.sub(r"\b(?:and|et|al)\b\.?", " ", residue, flags=re.IGNORECASE)
+    residue = re.sub(r"\b[A-Z][A-Za-z'’-]*\b", " ", residue)
+    return not re.search(r"[A-Za-z]", residue)
+
+
 def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 35 or _is_reference_or_formula_text(compact):
+        return False
+    if _looks_like_parenthetical_gloss_with_citation(compact):
         return False
     if _looks_like_split_parenthetical_gloss(compact):
         return False
@@ -3179,7 +3321,19 @@ def _looks_like_reference_author_line(text: str) -> bool:
         lead = compact[:quote_index].strip().rstrip(",")
         if _REFERENCE_AUTHOR_START_RE.match(lead) and _reference_author_tokens_only(lead):
             return True
+    # PDF columns can split the final author from the rest of an entry
+    # (MobileNet p8: ``Y. Chen.``).  The terminal period distinguishes this
+    # reference fragment from ordinary lettered headings such as ``A. Prompt``.
+    if re.fullmatch(r"(?:[A-Z]\.){1,4}\s+[A-Z][A-Za-z'’-]+\.", compact):
+        return True
     ends_with_wrap_hyphen = bool(re.search(r"[A-Za-z]-$", compact))
+    if ends_with_wrap_hyphen:
+        author_tokens = re.findall(
+            r"(?:^|[,;]\s*|\band\s+)[A-Z]\.\s+[A-Z][A-Za-z'’-]+",
+            compact,
+        )
+        if len(author_tokens) >= 2:
+            return True
     if not (compact.endswith(".") or ends_with_wrap_hyphen):
         return False
     if not _REFERENCE_AUTHOR_START_RE.match(compact):
@@ -3198,7 +3352,7 @@ def _reference_author_tokens_only(body: str) -> bool:
         low = token.lower()
         if low in joiners or low in _REFERENCE_NAME_PARTICLES:
             continue
-        if re.fullmatch(r"[A-Z]\.", token):
+        if re.fullmatch(r"(?:[A-Z]\.){1,4}", token):
             continue
         if re.fullmatch(r"[A-Z][A-Za-z'’-]*\.?", token):
             continue
@@ -3318,7 +3472,11 @@ def _rendered_run_in_prefix_assignments(
         if block.block_type != "run_in_heading":
             continue
         source_baseline = block.bbox[3]
-        baseline_tolerance = max(4.0, block.font_size * 0.45)
+        # Column cascade can move a run-in paragraph by roughly two source
+        # lines while preserving its bold-prefix boundary. Keep matching the
+        # prefix by baseline within that bounded reflow distance; a genuinely
+        # over-bold line still lacks the required following regular span.
+        baseline_tolerance = max(4.0, block.font_size * 3.2)
         start_tolerance = max(4.0, block.font_size * 0.5)
         same_line = sorted(
             (
@@ -3402,6 +3560,43 @@ def _font_role_consistency_issues(
         if candidates:
             assignments[min(candidates)[2]].append(span)
 
+    # Reflow can push a translated heading a few points below its source
+    # rectangle while the preceding paragraph grows into that rectangle.
+    # In that case fixed-coordinate assignment attributes body text to the
+    # heading and reports both missing bold and collapsed hierarchy. Recover
+    # only an expected bold heading from the same column immediately below;
+    # a genuinely regular/missing heading still has no candidate and remains
+    # an error.
+    claimed_cascaded_headings: set[int] = set()
+    for index, block in enumerate(source_blocks):
+        if block.block_type not in {"heading", "run_in_heading"} or not block.bold:
+            continue
+        if any(_span_uses_bold_weight(span) for span in assignments[index]):
+            continue
+        x_tolerance = max(6.0, block.font_size * 0.75)
+        y_tolerance = max(8.0, block.font_size * 0.85)
+        candidates = [
+            span
+            for span in cjk_spans
+            if id(span) not in claimed_cascaded_headings
+            and _span_uses_bold_weight(span)
+            and abs(float(span["bbox"][0]) - block.bbox[0]) <= x_tolerance
+            and float(span["bbox"][1]) >= block.bbox[1] - 2.0
+            and float(span["bbox"][1]) <= block.bbox[3] + y_tolerance
+            and float(span["size"]) >= block.font_size * 0.65
+        ]
+        if not candidates:
+            continue
+        recovered = min(
+            candidates,
+            key=lambda span: (
+                abs(float(span["bbox"][1]) - block.bbox[1]),
+                abs(float(span["bbox"][0]) - block.bbox[0]),
+            ),
+        )
+        assignments[index] = [recovered]
+        claimed_cascaded_headings.add(id(recovered))
+
     issues: List[TranslationIssue] = []
     ordinary_body_sizes: List[float] = []
     source_body_sizes = [
@@ -3409,6 +3604,9 @@ def _font_role_consistency_issues(
         for block in source_blocks
         if block.block_type == "body" and not block.bold
     ]
+    source_body_size = (
+        statistics.median(source_body_sizes) if source_body_sizes else None
+    )
     run_in_blocks = [
         block for block in source_blocks if block.block_type == "run_in_heading"
     ]
@@ -3506,6 +3704,24 @@ def _font_role_consistency_issues(
                     severity="error",
                 )
             )
+        size_counts: Dict[float, int] = {}
+        for span in role_spans:
+            rounded = round(float(span["size"]), 2)
+            cjk_weight = max(
+                1,
+                len(re.findall(r"[\u3400-\u9fff]", span.get("text", ""))),
+            )
+            size_counts[rounded] = size_counts.get(rounded, 0) + cjk_weight
+        dominant_size = max(size_counts, key=lambda size: (size_counts[size], size))
+        if source_body_size is not None and abs(block.font_size - source_body_size) <= max(
+            1.0,
+            source_body_size * 0.18,
+        ):
+            ordinary_body_sizes.extend(
+                float(span["size"])
+                for span in role_spans
+                if abs(float(span["size"]) - dominant_size) <= 0.5
+            )
         if (
             block.source_lines != 1
             or block.formula_anchors
@@ -3513,16 +3729,6 @@ def _font_role_consistency_issues(
             or block.source_math_bboxes
         ):
             continue
-        size_counts: Dict[float, int] = {}
-        for span in role_spans:
-            rounded = round(float(span["size"]), 2)
-            size_counts[rounded] = size_counts.get(rounded, 0) + 1
-        dominant_size = max(size_counts, key=lambda size: (size_counts[size], size))
-        ordinary_body_sizes.extend(
-            float(span["size"])
-            for span in role_spans
-            if abs(float(span["size"]) - dominant_size) <= 0.5
-        )
         for span in role_spans:
             size = float(span["size"])
             if abs(size - dominant_size) <= 0.5:
@@ -3541,9 +3747,8 @@ def _font_role_consistency_issues(
             )
             break
 
-    if ordinary_body_sizes and source_body_sizes:
+    if ordinary_body_sizes and source_body_size is not None:
         body_size = statistics.median(ordinary_body_sizes)
-        source_body_size = statistics.median(source_body_sizes)
         for block, role_spans in zip(source_blocks, assignments):
             if block.block_type != "heading" or not role_spans:
                 continue
@@ -3947,12 +4152,14 @@ def _raster_ink_overlap_issues(
                 )
             ]
 
-    run_in_regions: List[BBox] = []
+    heading_regions: List[BBox] = []
     for block in source_blocks:
         plain = " ".join(strip_sentinels(block.text).split())
         if _ACADEMIC_FORMULA_STATEMENT_RE.match(plain):
             continue
-        if block.block_type != "run_in_heading" and not block.bold_prefix:
+        standalone_heading = block.block_type == "heading" and block.bold
+        run_in_heading = block.block_type == "run_in_heading" or block.bold_prefix
+        if not standalone_heading and not run_in_heading:
             continue
         first_line = (
             block.source_line_bboxes[0]
@@ -3964,7 +4171,17 @@ def _raster_ink_overlap_issues(
                 min(block.bbox[3], block.bbox[1] + block.font_size * 1.4),
             )
         )
-        run_in_regions.append(expand_bbox(first_line, 2.0))
+        if standalone_heading:
+            heading_regions.append(
+                (
+                    block.bbox[0] - 2.0,
+                    block.bbox[1] - 2.0,
+                    block.bbox[2] + max(4.0, block.font_size * 0.5),
+                    block.bbox[3] + block.font_size * 1.3,
+                )
+            )
+        else:
+            heading_regions.append(expand_bbox(first_line, 2.0))
     bold_cjk_spans = [
         span
         for span in cjk_spans
@@ -3975,7 +4192,7 @@ def _raster_ink_overlap_issues(
                 (float(span["bbox"][0]) + float(span["bbox"][2])) / 2.0,
                 (float(span["bbox"][1]) + float(span["bbox"][3])) / 2.0,
             )
-            for region in run_in_regions
+            for region in heading_regions
         )
     ]
     body_cjk_spans = [span for span in cjk_spans if not _span_uses_bold_weight(span)]
@@ -4283,6 +4500,39 @@ def _side_adjacent_preserved_regions(
     return adjacent
 
 
+_PARALLEL_PANEL_MARKER_RE = re.compile(r"^\s*\([a-z]\)\s+", re.IGNORECASE)
+
+
+def _has_parallel_panel_sibling(
+    block: TextBlock,
+    candidates: Sequence[TextBlock],
+) -> bool:
+    """Distinguish horizontal subfigure captions from vertical list items."""
+    plain = " ".join(strip_sentinels(block.text).split()).strip()
+    if not _PARALLEL_PANEL_MARKER_RE.match(plain):
+        return False
+
+    bx0, by0, bx1, by1 = block.bbox
+    block_width = max(1.0, bx1 - bx0)
+    block_height = max(1.0, by1 - by0)
+    for other in candidates:
+        if other is block or other.page_index != block.page_index:
+            continue
+        other_plain = " ".join(strip_sentinels(other.text).split()).strip()
+        if not _PARALLEL_PANEL_MARKER_RE.match(other_plain):
+            continue
+        ox0, oy0, ox1, oy1 = other.bbox
+        other_width = max(1.0, ox1 - ox0)
+        other_height = max(1.0, oy1 - oy0)
+        vertical_overlap = min(by1, oy1) - max(by0, oy0)
+        if vertical_overlap < 0.55 * min(block_height, other_height):
+            continue
+        horizontal_gap = max(ox0 - bx1, bx0 - ox1, 0.0)
+        if horizontal_gap <= max(18.0, 0.2 * min(block_width, other_width)):
+            return True
+    return False
+
+
 def _block_mostly_inside_preserved_regions(
     block: TextBlock,
     regions: Sequence[BBox],
@@ -4439,7 +4689,12 @@ def _translation_retains_source_prose_run(
                 else match.group(0),
                 plain,
             )
-        for boundary_re in (EMAIL_RE, AUTHOR_YEAR_CITATION_RE, CITATION_RE):
+        for boundary_re in (
+            EMAIL_RE,
+            AUTHOR_YEAR_CITATION_RE,
+            BRACKETED_AUTHOR_YEAR_CITATION_RE,
+            CITATION_RE,
+        ):
             plain = boundary_re.sub("\n", plain)
         return [
             [
@@ -4497,11 +4752,164 @@ def _translated_block_still_english(block: TextBlock, translated_text: str) -> b
     return (
         _translation_echoes_source(block, translated_text)
         or _translation_retains_source_prose_run(block, translated_text)
+        or _translation_retains_foreign_prose(block, translated_text)
+        or bool(_retained_bracketed_natural_language(translated_text))
         or _looks_like_untranslated_english(translated_text)
         or _contains_untranslated_english_run(translated_text)
         or _looks_like_untranslated_formula_explanation(translated_text)
         or _translation_contains_commentary(translated_text)
     )
+
+
+_FRENCH_FUNCTION_WORDS = frozenset(
+    (
+        "au aux avec ce ces dans de des du elle en est et il la le les leur lui "
+        "mais ne nous ou par pour que qui sa se ses son sur un une vous"
+    ).split()
+)
+_FOREIGN_RESIDUE_WORDS = frozenset(
+    (
+        "an and are as at be been being by for from had has have he her hers "
+        "him his in is it its of on or our she that the their them they this "
+        "to was we were with you your added said"
+    ).split()
+) | _FRENCH_FUNCTION_WORDS
+_SINGLE_TOKEN_FOREIGN_RESIDUES = frozenset(
+    "he her hers him his its she their them they we you your added said".split()
+)
+
+
+def _latin_prose_words(text: str) -> List[str]:
+    normalized = unicodedata.normalize("NFKD", text)
+    normalized = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    return re.findall(r"[A-Za-z]+", normalized)
+
+
+def _residue_comparison_text(text: str) -> str:
+    plain = _text_outside_sentinels(text)
+    if _CJK_DETECT_RE.search(plain):
+        plain = re.sub(r"\([^()\n]{1,180}\)|（[^（）\n]{1,180}）", " ", plain)
+    for boundary_re in (
+        EMAIL_RE,
+        URL_RE,
+        AUTHOR_YEAR_CITATION_RE,
+        BRACKETED_AUTHOR_YEAR_CITATION_RE,
+        CITATION_RE,
+    ):
+        plain = boundary_re.sub(" ", plain)
+    return plain
+
+
+def _translation_retains_foreign_prose(
+    block: TextBlock,
+    translated_text: str,
+) -> bool:
+    """Detect short source-language function words left in a Chinese result.
+
+    The generic English detector intentionally ignores short Latin fragments
+    to avoid flagging acronyms and names. Source comparison makes this narrow
+    check safe enough to catch split PDF spans such as ``he`` or French
+    ``un ... son ... de`` without treating GPU, RNNsearch, or a first-use
+    parenthetical gloss as untranslated prose.
+    """
+    if not block.should_translate or block.block_type in (
+        "algorithm",
+        "bibliography",
+        "equation",
+        "figure_label",
+        "footer",
+    ):
+        return False
+    if not _CJK_DETECT_RE.search(translated_text):
+        return False
+
+    source_words = {
+        word.casefold()
+        for word in _latin_prose_words(_residue_comparison_text(block.text))
+    }
+    result_text = _residue_comparison_text(translated_text)
+    quoted_single_words = {
+        words[0].casefold()
+        for quoted in re.findall(
+            r"[‘’“”\"']([^‘’“”\"'\n]{1,40})[‘’“”\"']",
+            translated_text,
+        )
+        if len(words := _latin_prose_words(quoted)) == 1
+    }
+    result_words = _latin_prose_words(result_text)
+    residues = [
+        word.casefold()
+        for word in result_words
+        if word.islower()
+        and word.casefold() in source_words
+        and word.casefold() in _FOREIGN_RESIDUE_WORDS
+        and word.casefold() not in quoted_single_words
+    ]
+    if any(word in _SINGLE_TOKEN_FOREIGN_RESIDUES for word in residues):
+        return True
+    return len(residues) >= 2
+
+
+def _source_looks_like_foreign_example(text: str) -> bool:
+    words = [word.casefold() for word in _latin_prose_words(_text_outside_sentinels(text))]
+    return sum(word in _FRENCH_FUNCTION_WORDS for word in words) >= 3
+
+
+def _retained_bracketed_natural_language(text: str) -> List[str]:
+    """Natural-language square-bracket spans eligible for focused retry."""
+    phrases: List[str] = []
+    for match in re.finditer(r"\[([^\[\]]{2,180})\]", text):
+        phrase = " ".join(match.group(1).split()).strip()
+        if not phrase or _CJK_DETECT_RE.search(phrase):
+            continue
+        if re.fullmatch(r"\d+(?:\s*[,\u2013-]\s*\d+)*", phrase):
+            continue
+        if re.fullmatch(r"[A-Za-z](?:\s*,\s*[A-Za-z])+", phrase):
+            continue
+        words = _latin_prose_words(phrase)
+        single_natural_word = bool(
+            len(words) == 1
+            and not phrase.isupper()
+            and (
+                len(words[0]) >= 3
+                or words[0].casefold() in _FOREIGN_RESIDUE_WORDS
+                or bool(re.fullmatch(r"[A-Za-z]['’]", phrase))
+            )
+        )
+        if len(words) < 2 and not single_natural_word:
+            continue
+        if looks_like_math(phrase) or URL_RE.search(phrase):
+            continue
+        phrases.append(phrase)
+    return phrases
+
+
+def _focused_foreign_phrase_translation(
+    phrase: str,
+    translated_phrase: str,
+) -> str:
+    """Validate a focused retry and gloss isolated linguistic morphemes."""
+    candidate = translated_phrase.strip()
+    if (
+        candidate
+        and _CJK_DETECT_RE.search(candidate)
+        and candidate.casefold() != phrase.casefold()
+    ):
+        return candidate
+    normalized = phrase.strip().replace("’", "'").casefold()
+    if normalized == "l'":
+        return "省音定冠词（l'）"
+    if normalized in {"le", "la", "les"}:
+        return f"定冠词（{normalized}）"
+    if normalized == "the":
+        return "定冠词（the）"
+    if normalized == "man":
+        return "男人（man）"
+    if normalized == "homme":
+        return "男人（homme）"
+    return ""
 
 
 def _visible_image_stats(
@@ -4800,6 +5208,11 @@ def _clip_block_bbox_against_floats(
     return bbox
 
 
+def _float_clip_min_font_size(min_font_size: float, requested_size: float) -> float:
+    """A permanent side-column clip must preserve the page's body-size role."""
+    return max(min_font_size, requested_size * 0.96)
+
+
 def _looks_like_text_background(bbox: BBox, text_boxes: Sequence[BBox]) -> bool:
     area = max(1.0, bbox_area(bbox))
     return any(bbox_intersection_area(bbox, text_box) / area >= 0.10 for text_box in text_boxes)
@@ -4844,6 +5257,15 @@ def _extract_formula_fragments(
                 if not is_review_line_number:
                     text_parts.append(span.get("text", ""))
         text = "".join(text_parts) if saw_span else _extract_text_from_block(block)
+        # Explanatory parentheticals can be emitted in the same PDF text
+        # object as a preceding scalar (``d (i.e., ||eps||...)``).  They are
+        # prose, not a formula preservation signature.
+        text = re.split(
+            r"\(\s*(?:i\.?e\.?|e\.?g\.?)\s*,",
+            text,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
         if not _looks_like_formula_fragment(text):
             continue
         compact = re.sub(r"\s+", "", text)
@@ -4900,8 +5322,22 @@ _INLINE_FORMULA_MATH_CUE_RE = re.compile(r"[=+−\-*/→↗↘∈≤≥<>()\[\],
 
 def _normalize_inline_formula_signature(text: str) -> str:
     """Flatten source script wrappers while preserving formula reading order."""
-    normalized = _normalize_formula_fragment_for_compare(text).replace("∑", "P")
+    normalized = _normalize_formula_fragment_for_compare(
+        _normalize_formula_accessibility_text(text)
+    ).replace("∑", "P")
     return _INLINE_FORMULA_SIGNATURE_STRIP_RE.sub("", normalized)
+
+
+def _normalize_formula_accessibility_text(text: str) -> str:
+    """Return a font-portable copy/search representation of formula text.
+
+    Mathematical alphanumeric Unicode glyphs are compatibility characters.
+    NFKC maps them to ordinary Latin/Greek code points that the hidden text
+    layer's fallback fonts can encode, while the visible formula remains the
+    untouched source raster. Normalise the Unicode minus as well so copied
+    expressions and QA signatures use the same stable ASCII spelling.
+    """
+    return unicodedata.normalize("NFKC", text).replace("−", "-")
 
 
 def _inline_formula_anchor_fragments(blocks: Sequence[TextBlock]) -> List[str]:
@@ -5797,6 +6233,9 @@ def prepare_translation_units(
             preserved_union.setdefault(page_index, []).extend(
                 _table_region_bboxes(page_blocks)
             )
+            preserved_union.setdefault(page_index, []).extend(
+                _vector_table_region_bboxes(document[page_index], page_blocks)
+            )
         for page_index, page_algorithm_regions in algorithm_regions.items():
             preserved_union.setdefault(page_index, []).extend(page_algorithm_regions)
         for page_index, page_table_regions in equation_table_regions.items():
@@ -5946,7 +6385,7 @@ def _formula_anchor_merge_cost(first: BBox, second: BBox) -> float:
 
 
 _REFERENCES_HEADING_RE = re.compile(
-    r"^(?:references|bibliography|参考文献)$",
+    r"^(?:references(?:\s+and\s+notes)?|bibliography|参考文献)$",
     re.IGNORECASE,
 )
 _APPENDIX_HEADING_RE = re.compile(r"^(?:appendix\b|appendix[A-Z0-9])", re.IGNORECASE)
@@ -7042,6 +7481,14 @@ def _promote_equation_table_neighbor_blocks(
                 and substantial_prose_word_count(plain) >= TABLE_HEADER_PROSE_WORD_LIMIT
             ):
                 continue
+            if (
+                not center_inside_table
+                and len(_prose_words(plain)) >= 4
+                and _PROSE_VERB_RE.search(plain)
+                and not _looks_like_table_header_text(plain)
+                and len(re.findall(r"\d+(?:\.\d+)?", plain)) < 2
+            ):
+                continue
             # A sentence ending in ":" introduces what follows (an equation, a
             # list); it is never a table header ("This leads to the Static SB
             # problem:" above equation (2) on IPMF p3).
@@ -7067,7 +7514,12 @@ def _attach_formula_keepouts(
     """Keep translated prose from painting over neighboring formula records."""
     for block in blocks:
         expanded = expand_bbox(block.bbox, 1.5)
-        hits = [line.bbox for line in formula_lines if bboxes_intersect(expanded, line.bbox)]
+        hits = [
+            keepout
+            for line in formula_lines
+            for keepout in (line.math_run_bboxes or [line.bbox])
+            if bboxes_intersect(expanded, keepout)
+        ]
         if hits:
             block.keepout_bboxes = list(
                 dict.fromkeys([*(block.keepout_bboxes or []), *hits])
@@ -7157,7 +7609,16 @@ def detect_columns(blocks: List[TextBlock]) -> List[Tuple[float, float]]:
     full_widths = [w for w in all_widths if w > 300]
     widths_to_use = full_widths or all_widths
     col_width = float(_stats.mode(widths_to_use))
-    return [(float(primary_x0), col_width)]
+    # Long indented lists can outweigh surrounding prose by character count.
+    # In a single-column page the true column margin is the left-most cluster
+    # that still carries full-width blocks, not the most verbose indent.
+    near_full_width_x0s = [
+        x0
+        for x0, widths in x0_to_widths.items()
+        if any(width >= col_width - 12.0 for width in widths)
+    ]
+    column_left = min(near_full_width_x0s) if near_full_width_x0s else primary_x0
+    return [(float(column_left), col_width)]
 
 
 def _block_in_zone(bbox: BBox, zone: BBox) -> bool:
@@ -7264,6 +7725,151 @@ def _table_region_bboxes(blocks: Sequence[TextBlock]) -> List[BBox]:
     return regions
 
 
+def _vector_table_region_bboxes(
+    page: object,
+    blocks: Sequence[TextBlock],
+) -> List[BBox]:
+    """Return caption-anchored table grids missed by text classification.
+
+    Some PDFs expose every table cell as an ordinary prose block. Their vector
+    rules still form an unambiguous connected grid, so use that geometry as a
+    conservative fallback. Requiring an explicit Table caption avoids treating
+    chart frames and generic diagrams as preserved tables.
+    """
+    captions = [
+        block
+        for block in blocks
+        if block.block_type == "caption"
+        and _TABLE_CAPTION_RE.match(strip_sentinels(block.text))
+    ]
+    if not captions:
+        return []
+
+    horizontal: List[List[float]] = []
+    vertical: List[List[float]] = []
+    for drawing in _page_drawings(page):
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        x0, y0, x1, y1 = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+        width = x1 - x0
+        height = y1 - y0
+        if width >= 80.0 and height <= 2.5:
+            horizontal.append([x0, (y0 + y1) / 2.0, x1])
+        elif height >= 12.0 and width <= 2.5:
+            vertical.append([(x0 + x1) / 2.0, y0, y1])
+
+    def merge_collinear(
+        segments: List[List[float]],
+        *,
+        horizontal_axis: bool,
+    ) -> List[List[float]]:
+        merged: List[List[float]] = []
+        join_gap = (
+            2.5
+            if horizontal_axis or len(horizontal) < 5 or not captions
+            else 14.0
+        )
+        for segment in sorted(segments, key=lambda item: (item[1], item[0])):
+            coordinate = segment[1] if horizontal_axis else segment[0]
+            start = segment[0] if horizontal_axis else segment[1]
+            end = segment[2]
+            for existing in merged:
+                existing_coordinate = existing[1] if horizontal_axis else existing[0]
+                existing_start = existing[0] if horizontal_axis else existing[1]
+                if abs(coordinate - existing_coordinate) > 1.0:
+                    continue
+                if start > existing[2] + join_gap or existing_start > end + join_gap:
+                    continue
+                if horizontal_axis:
+                    existing[0] = min(existing[0], start)
+                    existing[2] = max(existing[2], end)
+                else:
+                    existing[1] = min(existing[1], start)
+                    existing[2] = max(existing[2], end)
+                break
+            else:
+                merged.append(list(segment))
+        return merged
+
+    horizontal = merge_collinear(horizontal, horizontal_axis=True)
+    vertical = merge_collinear(vertical, horizontal_axis=False)
+    single_separator_grid = bool(
+        len(horizontal) >= 5
+        and len(vertical) == 1
+        and sum(
+            vertical[0][1] - 3.0 <= y <= vertical[0][2] + 3.0
+            and x0 - 3.0 <= vertical[0][0] <= x1 + 3.0
+            for x0, y, x1 in horizontal
+        )
+        >= 5
+    )
+    if len(horizontal) < 2 or (len(vertical) < 2 and not single_separator_grid):
+        return []
+
+    nodes = [("h", index) for index in range(len(horizontal))]
+    nodes.extend(("v", index) for index in range(len(vertical)))
+    adjacency = {node: set() for node in nodes}
+    for h_index, (x0, y, x1) in enumerate(horizontal):
+        for v_index, (x, y0, y1) in enumerate(vertical):
+            if x0 - 2.5 <= x <= x1 + 2.5 and y0 - 2.5 <= y <= y1 + 2.5:
+                adjacency[("h", h_index)].add(("v", v_index))
+                adjacency[("v", v_index)].add(("h", h_index))
+
+    regions: List[BBox] = []
+    unseen = set(nodes)
+    while unseen:
+        start = unseen.pop()
+        component = {start}
+        pending = [start]
+        while pending:
+            node = pending.pop()
+            for neighbor in adjacency[node]:
+                if neighbor not in component:
+                    component.add(neighbor)
+                    unseen.discard(neighbor)
+                    pending.append(neighbor)
+        h_indexes = [index for kind, index in component if kind == "h"]
+        v_indexes = [index for kind, index in component if kind == "v"]
+        component_single_separator = bool(
+            len(h_indexes) >= 5
+            and len(v_indexes) == 1
+            and vertical[v_indexes[0]][1]
+            <= min(horizontal[index][1] for index in h_indexes) + 3.0
+            and vertical[v_indexes[0]][2]
+            >= max(horizontal[index][1] for index in h_indexes) - 3.0
+        )
+        if len(h_indexes) < 2 or (
+            len(v_indexes) < 2 and not component_single_separator
+        ):
+            continue
+        x0 = min(horizontal[index][0] for index in h_indexes)
+        x1 = max(horizontal[index][2] for index in h_indexes)
+        y0 = min(vertical[index][1] for index in v_indexes)
+        y1 = max(vertical[index][2] for index in v_indexes)
+        region = (x0, y0, x1, y1)
+        anchors = [
+            caption
+            for caption in captions
+            if caption.bbox[0] < x1
+            and caption.bbox[2] > x0
+            and (
+                0.0 <= y0 - caption.bbox[3] <= _TABLE_CAPTION_MAX_ABOVE_GAP
+                or 0.0 <= caption.bbox[1] - y1 <= _TABLE_CAPTION_MAX_BELOW_GAP + 40.0
+            )
+        ]
+        cell_blocks = [
+            block
+            for block in blocks
+            if block.block_type != "caption"
+            and x0 <= (block.bbox[0] + block.bbox[2]) / 2.0 <= x1
+            and y0 <= (block.bbox[1] + block.bbox[3]) / 2.0 <= y1
+        ]
+        if anchors and len(cell_blocks) >= 3:
+            regions.append(region)
+    return regions
+
+
 def _partition_table_blocks_by_caption(
     table_blocks: Sequence[TextBlock],
     table_captions: Sequence[TextBlock],
@@ -7340,6 +7946,83 @@ def _looks_like_table_header_text(text: str) -> bool:
     return len(terms) >= 2
 
 
+def _promote_borderless_captioned_table_blocks(
+    blocks: Sequence[TextBlock],
+    table_captions: Sequence[TextBlock],
+) -> None:
+    """Preserve aligned multi-column tables that expose no vector rules."""
+    excluded_types = {
+        "algorithm",
+        "bibliography",
+        "caption",
+        "equation",
+        "figure_label",
+        "footer",
+        "heading",
+        "metadata",
+        "table",
+    }
+    for caption in table_captions:
+        candidates = [
+            block
+            for block in blocks
+            if block.block_type not in excluded_types
+            and block.source_lines <= 2
+            and block.font_size <= caption.font_size + 1.0
+            and caption.bbox[1] - 90.0 <= block.bbox[1]
+            and block.bbox[3] <= caption.bbox[1]
+            and block.bbox[0] < caption.bbox[2]
+            and block.bbox[2] > caption.bbox[0]
+        ]
+        rows: List[List[TextBlock]] = []
+        for block in sorted(candidates, key=lambda item: (item.bbox[1], item.bbox[0])):
+            center_y = (block.bbox[1] + block.bbox[3]) / 2.0
+            for row in rows:
+                row_center = statistics.median(
+                    (item.bbox[1] + item.bbox[3]) / 2.0 for item in row
+                )
+                if abs(center_y - row_center) <= 2.0:
+                    row.append(block)
+                    break
+            else:
+                rows.append([block])
+        dense_rows = [row for row in rows if len(row) >= 3]
+        numeric_rows = [
+            row
+            for row in dense_rows
+            if sum(
+                bool(_PRESERVED_NUMERIC_TOKEN_RE.search(strip_sentinels(item.text)))
+                for item in row
+            )
+            >= 2
+        ]
+        if len(dense_rows) < 3 or len(numeric_rows) < 2:
+            continue
+        column_centers = sorted(
+            (item.bbox[0] + item.bbox[2]) / 2.0 for item in dense_rows[0]
+        )
+        aligned_rows = [
+            row
+            for row in dense_rows
+            if all(
+                any(
+                    abs((item.bbox[0] + item.bbox[2]) / 2.0 - center) <= 45.0
+                    for item in row
+                )
+                for center in column_centers[:3]
+            )
+        ]
+        if len(aligned_rows) < 3:
+            continue
+        for row in aligned_rows:
+            for block in row:
+                block.block_type = "table"
+                block.should_translate = False
+                block.preserve_position = True
+                block.nowrap = True
+                block.no_merge = True
+
+
 def _promote_table_component_blocks(blocks: Sequence[TextBlock]) -> None:
     """Preserve table headers and group labels split from detected cell rows."""
     table_captions = [
@@ -7348,6 +8031,8 @@ def _promote_table_component_blocks(blocks: Sequence[TextBlock]) -> None:
         if block.block_type == "caption"
         and _TABLE_CAPTION_RE.match(strip_sentinels(block.text))
     ]
+
+    _promote_borderless_captioned_table_blocks(blocks, table_captions)
 
     excluded_types = {
         "algorithm",
@@ -7579,6 +8264,19 @@ def classify_blocks(
         ):
             _is_bibliography_context(block, blocks)
 
+        # Extraction may pre-classify a wrapped author lead as a run-in
+        # heading.  Bibliography ownership has higher priority than that
+        # typographic hint; otherwise the fast path below reopens translation
+        # in the middle of a reference entry or its next column.
+        if (
+            block.block_type == "run_in_heading"
+            or _looks_like_reference_author_line(plain)
+        ) and _is_bibliography_context(block, blocks):
+            block.block_type = "bibliography"
+            block.should_translate = False
+            block.preserve_position = True
+            continue
+
         if block.block_type == "run_in_heading" and _looks_like_fragmented_byline_metadata(
             block,
             plain,
@@ -7759,6 +8457,13 @@ def _looks_like_split_caption_reference(
     blocks: Sequence[TextBlock],
 ) -> bool:
     """Detect a prose reference split immediately after phrases like `shown in`."""
+    if re.match(
+        r"^(?:Figure|Fig\.)\s*\d+\s*\([a-z]\)\.\s*"
+        r"(?:Consider|Suppose|Assume|Let|Observe|Note|We)\b",
+        plain,
+        re.IGNORECASE,
+    ):
+        return True
     if not re.match(
         r"^(?:Figure|Fig\.|Table)\s*(?:\d+|[IVXLCDM]+)[.:]\s+",
         plain,
@@ -7815,6 +8520,42 @@ def _looks_like_fragmented_byline_metadata(
     compact = " ".join(strip_sentinels(plain).split()).strip()
     if not compact:
         return False
+
+    byline_name_re = re.compile(
+        r"\b(?:[A-Z][A-Za-z'’-]+|[A-Z]\.)"
+        r"(?:\s+(?:[A-Z][A-Za-z'’-]+|[A-Z]\.)){1,3}\b"
+    )
+    affiliation_re = re.compile(
+        r"\b(?:univer\w*|institu\w*|depart\w*|school|college|laborator\w*|lab|"
+        r"research|technolog\w*)\b",
+        re.IGNORECASE,
+    )
+    if block.font_size <= 12.5 and block.bbox[1] >= 105.0:
+        own_names = byline_name_re.findall(compact)
+        nearby_names = 0
+        has_affiliation = bool(affiliation_re.search(compact))
+        has_contact = "@" in compact
+        for other in blocks:
+            if other.page_index != 0 or other.font_size > 12.5:
+                continue
+            if other.bbox[1] > 250.0 or other.bbox[3] < 120.0:
+                continue
+            other_plain = " ".join(strip_sentinels(other.text).split())
+            nearby_names += len(byline_name_re.findall(other_plain))
+            has_affiliation = has_affiliation or bool(
+                affiliation_re.search(other_plain)
+            )
+            has_contact = has_contact or "@" in other_plain
+        if (
+            own_names
+            and nearby_names >= 3
+            and (has_affiliation or has_contact)
+        ) or (
+            (has_affiliation or has_contact)
+            and nearby_names >= 2
+            and block.bbox[3] <= 250.0
+        ):
+            return True
 
     if re.match(r"^\d+\s*", compact) and re.search(
         r"\b(?:university|institute|department|school|college|laboratory|lab)\b",
@@ -7891,10 +8632,9 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
     """
     global _bibliography_heading_size, _bibliography_ended
     raw_text = block.text.strip()
-    text = raw_text.lower()
 
     # Check if this block IS the references heading
-    if re.match(r"^(references|bibliography|参考文献)\s*$", text, re.IGNORECASE):
+    if _REFERENCES_HEADING_RE.match(raw_text):
         _bibliography_seen[block.page_index] = True
         _bibliography_heading_size = block.font_size
         _bibliography_ended = False
@@ -8095,6 +8835,12 @@ def _span_is_prose_word_fragment(
     size = float(span.get("size", line_max_size))
     if line_max_size > 0 and size < line_max_size * 0.85:
         return False
+    fragmented_word = _fragmented_prose_word(span_index, spans, line_max_size)
+    if (
+        len(fragmented_word) >= 3
+        or fragmented_word.casefold() in _SHORT_PROSE_WORDS
+    ):
+        return True
     if stripped.lower() in _SHORT_PROSE_WORDS and len(stripped) >= 2:
         return True
     if not re.fullmatch(r"[A-Za-z]{1,2}", stripped):
@@ -8123,10 +8869,66 @@ def _span_is_prose_word_fragment(
     return False
 
 
+def _fragmented_prose_word(
+    span_index: int,
+    spans: Sequence[dict],
+    line_max_size: float,
+) -> str:
+    """Rejoin a word split into same-style full-size PDF spans."""
+    anchor = spans[span_index]
+    anchor_font = str(anchor.get("font", ""))
+    anchor_size = float(anchor.get("size", line_max_size))
+    left = span_index
+    right = span_index
+
+    def compatible(first: dict, second: dict) -> bool:
+        if str(second.get("font", "")) != anchor_font:
+            return False
+        second_size = float(second.get("size", line_max_size))
+        if abs(second_size - anchor_size) > max(0.8, line_max_size * 0.12):
+            return False
+        return _span_horizontal_gap(first, second) <= 0.8
+
+    while left > 0:
+        current_text = normalize_span_text(spans[left].get("text", ""))
+        previous_text = normalize_span_text(spans[left - 1].get("text", ""))
+        if current_text[:1].isspace() or previous_text[-1:].isspace():
+            break
+        if not compatible(spans[left], spans[left - 1]):
+            break
+        if not re.search(r"[A-Za-z´`^'-]$", previous_text):
+            break
+        left -= 1
+    while right + 1 < len(spans):
+        current_text = normalize_span_text(spans[right].get("text", ""))
+        following_text = normalize_span_text(spans[right + 1].get("text", ""))
+        if current_text[-1:].isspace() or following_text[:1].isspace():
+            break
+        if not compatible(spans[right], spans[right + 1]):
+            break
+        if not re.match(r"[A-Za-z´`^'-]", following_text):
+            break
+        right += 1
+
+    joined = "".join(
+        normalize_span_text(span.get("text", "")) for span in spans[left : right + 1]
+    ).strip()
+    words = _latin_prose_words(joined)
+    return "".join(words) if words else ""
+
+
 def _formula_like_plain_span_text(text: str) -> bool:
     """Return whether a normal-font span is formula syntax rather than prose."""
     stripped = text.strip()
     if not stripped or len(stripped) > 80:
+        return False
+    short_words = re.findall(r"[A-Za-z]{2,}", stripped)
+    if len(short_words) >= 2 and all(
+        word.lower() in _SHORT_PROSE_WORDS for word in short_words
+    ):
+        # Formula expansion walks across adjacent plain-font spans. Without
+        # this guard, a connector such as ``to be`` between U_B and sigma is
+        # absorbed into one protected math run and can never be translated.
         return False
     wordish = re.sub(r"^[^A-Za-z]+|[^A-Za-z]+$", "", stripped).lower()
     if len(wordish) > 1 and wordish in _SHORT_PROSE_WORDS:
@@ -9058,7 +9860,8 @@ _PROSE_WORD_RE = re.compile(r"[A-Za-z]{3,}")
 _SHORT_PROSE_WORDS = frozenset(
     (
         "a an and are as at be by for if in is it of on or the to us "
-        "was we were when where with"
+        "was we were when where with he her him his she they their "
+        "au aux ce de des du en et il la le les lui ou sa ses son un une"
     ).split()
 )
 _FORMULA_CONTEXT_WORDS = frozenset(
@@ -9860,6 +10663,14 @@ def trim_redact_bbox_against_formula_lines(
                 x1 = min(x1, ox0 - EQUATION_TABLE_REDACT_GAP)
             if ox1 <= x0 + 0.6 and x0 - ox1 <= 4.0:
                 x0 = max(x0, ox1 + EQUATION_TABLE_REDACT_GAP)
+            # A tall formula on the following physical line can extend into
+            # the lower half of this prose glyph box.  Stop the redaction at
+            # the formula's top edge; the remaining upper strip still
+            # intersects the source text object, so MuPDF removes the prose
+            # without touching the formula.
+            x_overlap = min(x1, ox1) - max(x0, ox0)
+            if x_overlap > 0 and oy0 - y0 >= max(2.0, (y1 - y0) * 0.25):
+                y1 = min(y1, oy0 - EQUATION_TABLE_REDACT_GAP)
             continue
 
         x_overlap = min(x1, ox1) - max(x0, ox0)
@@ -9885,10 +10696,50 @@ def _trim_redacts_against_block_keepouts(blocks: Sequence[TextBlock]) -> None:
             for keepout in dict.fromkeys(block.keepout_bboxes)
         ]
         redacts = block.redact_bboxes or [block.bbox]
-        block.redact_bboxes = [
-            trim_redact_bbox_against_formula_lines(redact, keepout_lines)
-            for redact in redacts
-        ]
+        safe_redacts: List[BBox] = []
+        for redact in redacts:
+            segments = [redact]
+            for keepout in block.keepout_bboxes:
+                next_segments: List[BBox] = []
+                for segment in segments:
+                    vertical_overlap = min(segment[3], keepout[3]) - max(
+                        segment[1], keepout[1]
+                    )
+                    horizontal_overlap = min(segment[2], keepout[2]) - max(
+                        segment[0], keepout[0]
+                    )
+                    tall_cross_line_formula = bool(
+                        vertical_overlap > 0.0
+                        and horizontal_overlap > 0.0
+                        and keepout[3] - keepout[1]
+                        >= (segment[3] - segment[1]) * 1.5
+                    )
+                    if not tall_cross_line_formula:
+                        next_segments.append(segment)
+                        continue
+                    left = (
+                        segment[0],
+                        segment[1],
+                        min(segment[2], keepout[0] - EQUATION_TABLE_REDACT_GAP),
+                        segment[3],
+                    )
+                    right = (
+                        max(segment[0], keepout[2] + EQUATION_TABLE_REDACT_GAP),
+                        segment[1],
+                        segment[2],
+                        segment[3],
+                    )
+                    next_segments.extend(
+                        candidate
+                        for candidate in (left, right)
+                        if candidate[2] - candidate[0] >= 1.0
+                    )
+                segments = next_segments
+            safe_redacts.extend(
+                trim_redact_bbox_against_formula_lines(segment, keepout_lines)
+                for segment in segments
+            )
+        block.redact_bboxes = safe_redacts or list(redacts)
 
 
 def bbox_share_y_band(first: BBox, second: BBox) -> bool:
@@ -9927,7 +10778,15 @@ def segments_from_formula_tail_prose(
 
     for where_index, line in enumerate(lines[:-1]):
         line_text_lower = line.text.lower()
-        cue_offset = line_text_lower.find("where")
+        cue_matches = [
+            (offset, cue)
+            for cue in ("to be", "where")
+            for offset in (line_text_lower.find(cue),)
+            if offset >= 0
+        ]
+        if not cue_matches:
+            continue
+        cue_offset, cue = min(cue_matches)
         if cue_offset < 0:
             continue
         # Normal prose lines starting at the paragraph left should translate as
@@ -9951,6 +10810,18 @@ def segments_from_formula_tail_prose(
                 _accumulate_line(prefix, prefix_line)
         prefix_block = prefix.flush(page_index)
         if prefix_block is not None:
+            cue_bbox = line_tail_bbox_from_cue(line, cue)
+            cue_x0 = cue_bbox[0] if cue_bbox is not None else line.bbox[0]
+            prefix_math = [
+                bbox
+                for prefix_line in lines[: where_index + 1]
+                for bbox in prefix_line.math_run_bboxes
+                if bbox[0] < cue_x0
+            ]
+            if prefix_math:
+                prefix_block.keepout_bboxes = list(
+                    dict.fromkeys([*(prefix_block.keepout_bboxes or []), *prefix_math])
+                )
             segments.append(prefix_block)
 
         clause_parts = [line.text[cue_offset:]]
@@ -9967,12 +10838,27 @@ def segments_from_formula_tail_prose(
             return None
 
         redact_bboxes: List[BBox] = []
-        cue_bbox = line_tail_bbox_from_cue(line, "where")
+        cue_bbox = line_tail_bbox_from_cue(line, cue)
         if cue_bbox is not None:
             redact_bboxes.append(cue_bbox)
         redact_bboxes.extend(tail_line.bbox for tail_line in lines[where_index + 1 :])
         clause_block.text = clause_text
         clause_block.redact_bboxes = redact_bboxes
+        cue_x0 = cue_bbox[0] if cue_bbox is not None else line.bbox[0]
+        clause_block.source_math_bboxes = tuple(
+            dict.fromkeys(
+                [
+                    bbox
+                    for bbox in line.math_run_bboxes
+                    if bbox[2] > cue_x0
+                ]
+                + [
+                    bbox
+                    for tail_line in lines[where_index + 1 :]
+                    for bbox in tail_line.math_run_bboxes
+                ]
+            )
+        )
         clause_block.no_merge = True
         segments.append(clause_block)
         return segments
@@ -10127,7 +11013,7 @@ def _math_line_prose_fragments(line: _LineRec) -> List[_LineRec]:
 
 
 _FORMULA_PROSE_SUFFIX_CUE_RE = re.compile(
-    r"^[\s\.,;:)]*(?:as|where|when|if|hence|therefore|thus|then)\b",
+    r"^[\s\.,;:)]*(?:as|where|when|if|hence|therefore|thus|then|to\s+be)\b",
     re.IGNORECASE,
 )
 
@@ -10357,6 +11243,97 @@ def _fragmented_inline_math_paragraph_block(
     return block
 
 
+def _same_row_formula_suffix_reflow_y0(
+    line: _LineRec,
+    preserved_math_bboxes: Sequence[BBox],
+) -> Optional[float]:
+    """Move a translatable equation suffix below a wide fixed formula row.
+
+    TeX often emits ``defined as <formula> where ...`` as several physical
+    lines sharing one baseline.  The short English suffix fits to the right of
+    the formula, while its Chinese translation generally does not.  Reflowing
+    that suffix from the column's left edge would therefore paint over the
+    preserved formula.  Keep the source redaction where it is, but start the
+    translated flow immediately below the fixed math row.
+    """
+    plain = _text_outside_sentinels(line.text).lstrip()
+    if not line.prose_bboxes or not _FORMULA_PROSE_SUFFIX_CUE_RE.match(plain):
+        return None
+    line_height = max(1.0, line.bbox[3] - line.bbox[1])
+    candidates = [
+        bbox
+        for bbox in preserved_math_bboxes
+        if bbox[2] <= line.bbox[0] + 1.0
+        and line.bbox[0] - bbox[2] <= max(12.0, line_height * 1.25)
+        and min(line.bbox[3], bbox[3]) - max(line.bbox[1], bbox[1])
+        >= min(line_height, bbox[3] - bbox[1]) * 0.2
+    ]
+    if not candidates:
+        return None
+    formula_width = max(bbox[2] for bbox in candidates) - min(
+        bbox[0] for bbox in candidates
+    )
+    if formula_width < max(36.0, line_height * 4.0):
+        return None
+    return max(bbox[3] for bbox in candidates) + max(1.0, line_height * 0.1)
+
+
+def _trailing_table_prose_start(record: _RawBlockRec) -> Optional[int]:
+    """Find a full-width paragraph accidentally fused after compact table rows."""
+    record_width = max(1.0, record.bbox[2] - record.bbox[0])
+    for index, line in enumerate(record.lines):
+        if index < 4 or not _line_is_prose_dominant_sentence(line):
+            continue
+        preceding = record.lines[:index]
+        trailing = record.lines[index:]
+        if sum(not line_is_prose(candidate) for candidate in preceding) < 4:
+            continue
+        if not all(line_is_prose(candidate) for candidate in trailing):
+            continue
+        if line.bbox[0] > record.bbox[0] + 4.0:
+            continue
+        if line.bbox[2] - line.bbox[0] < record_width * 0.75:
+            continue
+        previous_bottom = max(candidate.bbox[3] for candidate in preceding)
+        vertical_gap = line.bbox[1] - previous_bottom
+        if not -1.0 <= vertical_gap <= 24.0:
+            continue
+        return index
+    return None
+
+
+def _trailing_caption_prose_start(record: _RawBlockRec) -> Optional[int]:
+    """Split full-width body prose fused after a narrow float caption."""
+    if len(record.lines) < 2:
+        return None
+    opener = " ".join(strip_sentinels(record.lines[0].text).split())
+    if not _CAPTION_RE.match(opener):
+        return None
+    for index in range(1, len(record.lines)):
+        line = record.lines[index]
+        preceding = record.lines[:index]
+        preceding_text = join_lines(
+            [" ".join(strip_sentinels(candidate.text).split()) for candidate in preceding]
+        )
+        if not sentence_final_text(preceding_text):
+            continue
+        caption_bbox = union_bbox([candidate.bbox for candidate in preceding])
+        caption_width = max(1.0, caption_bbox[2] - caption_bbox[0])
+        line_width = max(1.0, line.bbox[2] - line.bbox[0])
+        left_shift = caption_bbox[0] - line.bbox[0]
+        vertical_gap = line.bbox[1] - caption_bbox[3]
+        if left_shift < max(24.0, caption_width * 0.25):
+            continue
+        if line_width < caption_width * 1.5:
+            continue
+        if not -1.0 <= vertical_gap <= 24.0:
+            continue
+        if substantial_prose_word_count(strip_sentinels(line.text)) < 5:
+            continue
+        return index
+    return None
+
+
 def _equation_flagged_small_caps_heading_block(
     page_index: int,
     record: _RawBlockRec,
@@ -10410,6 +11387,28 @@ def segments_from_record(
     caption_record = bool(
         _CAPTION_RE.match(" ".join(strip_sentinels(record.bare_text()).split()).lstrip())
     )
+    trailing_caption_prose_start = (
+        _trailing_caption_prose_start(record) if caption_record else None
+    )
+    if trailing_caption_prose_start is not None:
+        caption = _SegmentAccumulator()
+        for line in record.lines[:trailing_caption_prose_start]:
+            _accumulate_line(caption, line)
+        caption_block = caption.flush(page_index)
+        paragraph = _SegmentAccumulator()
+        for line in record.lines[trailing_caption_prose_start:]:
+            _accumulate_line(paragraph, line)
+        paragraph_block = paragraph.flush(page_index)
+        split_blocks: List[TextBlock] = []
+        if caption_block is not None:
+            caption_block.block_type = "caption"
+            caption_block.no_merge = True
+            split_blocks.append(caption_block)
+        if paragraph_block is not None:
+            paragraph_block.block_type = "body"
+            paragraph_block.nowrap = False
+            split_blocks.append(paragraph_block)
+        return split_blocks
     if table_record:
         prose_equation_segments = _prose_wrapped_numbered_equation_segments(
             page_index,
@@ -10446,7 +11445,13 @@ def segments_from_record(
         return segments
 
     if not equation_record and table_record:
-        for line in record.lines:
+        trailing_prose_start = _trailing_table_prose_start(record)
+        table_lines = (
+            record.lines
+            if trailing_prose_start is None
+            else record.lines[:trailing_prose_start]
+        )
+        for line in table_lines:
             cell = _SegmentAccumulator()
             _accumulate_line(cell, line)
             block = cell.flush(page_index)
@@ -10454,6 +11459,16 @@ def segments_from_record(
                 block.nowrap = True
                 block.no_merge = True
                 block.block_type = "table"
+                segments.append(block)
+        if trailing_prose_start is not None:
+            paragraph = _SegmentAccumulator()
+            for line in record.lines[trailing_prose_start:]:
+                _accumulate_line(paragraph, line)
+            block = paragraph.flush(page_index)
+            if block is not None:
+                block.block_type = "body"
+                block.nowrap = False
+                block.no_merge = True
                 segments.append(block)
         return segments
 
@@ -10590,6 +11605,16 @@ def segments_from_record(
         next_physical_line = (
             record.lines[line_index + 1] if line_index + 1 < len(record.lines) else None
         )
+        if not current.lines:
+            suffix_reflow_y0 = _same_row_formula_suffix_reflow_y0(
+                line,
+                preserved_line_bboxes,
+            )
+            if suffix_reflow_y0 is not None:
+                current_min_y0 = max(
+                    current_min_y0 or float("-inf"),
+                    suffix_reflow_y0,
+                )
         if (
             not equation_record
             and not word_fragment
@@ -10971,10 +11996,23 @@ def segments_from_record(
         # must avoid it and QA must know the line stays verbatim.
         for block in segments:
             reach = expand_bbox(block.bbox, 8.0)
+            plain = " ".join(strip_sentinels(block.text).split()).strip()
+            inline_formula_leadin = bool(
+                re.search(
+                    r"(?:\b(?:as|is|are|be|ratio|equals?|gives?)|[:=])\s*$",
+                    plain,
+                    re.IGNORECASE,
+                )
+            )
             hits = [
                 bbox
                 for bbox in preserved_line_bboxes
                 if bboxes_intersect(bbox, reach)
+                or (
+                    inline_formula_leadin
+                    and bbox_share_y_band(block.bbox, bbox)
+                    and 0.0 <= bbox[0] - block.bbox[2] <= max(16.0, block.font_size * 1.6)
+                )
             ]
             if hits:
                 block.keepout_bboxes = (block.keepout_bboxes or []) + hits
@@ -11583,6 +12621,22 @@ def merge_paragraph_blocks(
     return merged
 
 
+def _has_parallel_header_cell_lines(block: TextBlock) -> bool:
+    """Whether a PDF text block contains side-by-side table header cells."""
+    line_boxes = block.source_line_bboxes
+    for index, first in enumerate(line_boxes):
+        first_height = max(1.0, first[3] - first[1])
+        for second in line_boxes[index + 1 :]:
+            second_height = max(1.0, second[3] - second[1])
+            vertical_overlap = min(first[3], second[3]) - max(first[1], second[1])
+            if vertical_overlap < min(first_height, second_height) * 0.55:
+                continue
+            horizontal_gap = max(second[0] - first[2], first[0] - second[2], 0.0)
+            if horizontal_gap >= max(8.0, block.font_size * 0.8):
+                return True
+    return False
+
+
 def can_merge_blocks(
     prev: TextBlock,
     nxt: TextBlock,
@@ -11635,6 +12689,12 @@ def can_merge_blocks(
     )
     if _looks_like_academic_formula_statement_pair(prev, nxt):
         return True
+    previous_plain = " ".join(strip_sentinels(prev.text).split())
+    if (
+        _TABLE_CAPTION_RE.match(previous_plain)
+        and _has_parallel_header_cell_lines(nxt)
+    ):
+        return False
     if _looks_like_caption_continuation_pair(prev, nxt):
         return True
     if _CAPTION_RE.match(strip_sentinels(nxt.text).lstrip()) and not float_wrap_merge:
@@ -12207,6 +13267,17 @@ def sentence_final_text(text: str) -> bool:
 
 def merge_two_blocks(prev: TextBlock, nxt: TextBlock) -> TextBlock:
     inline_heading = _looks_like_inline_heading_pair(prev, nxt)
+    previous_plain = " ".join(strip_sentinels(prev.text).split()).casefold()
+    narrow_formula_connector = bool(
+        previous_plain in {"and", "or", "where", "with"}
+        and prev.source_lines == 1
+        and prev.keepout_bboxes
+        and prev.bbox[2] - prev.bbox[0] <= max(32.0, prev.font_size * 3.2)
+        and nxt.bbox[2] - nxt.bbox[0]
+        >= (prev.bbox[2] - prev.bbox[0]) * 8.0
+        and nxt.bbox[0] < prev.bbox[0] - max(36.0, prev.font_size * 3.5)
+        and 0.0 <= nxt.bbox[1] - prev.bbox[3] <= prev.font_size * 1.1
+    )
     redact_bboxes: List[BBox] = []
     redact_bboxes.extend(prev.redact_bboxes or [prev.bbox])
     redact_bboxes.extend(nxt.redact_bboxes or [nxt.bbox])
@@ -12214,7 +13285,13 @@ def merge_two_blocks(prev: TextBlock, nxt: TextBlock) -> TextBlock:
     bold_terms = tuple(dict.fromkeys([*prev.bold_terms, *nxt.bold_terms]))
     return TextBlock(
         page_index=prev.page_index,
-        bbox=union_bbox([prev.bbox, nxt.bbox]),
+        # A connector extracted from the middle of a display equation is
+        # part of the same translation sentence, but it is not a viable text
+        # origin. Starting the merged CJK at that narrow formula-row bbox
+        # moves every following inline formula upward over the display math.
+        # Keep the connector in the redaction list while typesetting from the
+        # full-width prose continuation below it.
+        bbox=nxt.bbox if narrow_formula_connector else union_bbox([prev.bbox, nxt.bbox]),
         text=join_lines([prev.text, nxt.text]),
         font_size=nxt.font_size if inline_heading else prev.font_size,
         color=prev.color,
@@ -12247,6 +13324,8 @@ def redact_original_text(
     blocks: Sequence[TextBlock],
     margin: float,
     extra_rects: Sequence[BBox] = (),
+    *,
+    protected_regions: Sequence[BBox] = (),
 ) -> None:
     try:
         import fitz
@@ -12300,6 +13379,34 @@ def redact_original_text(
                 rect.y0 = min(rect.y1, band_bottom)
         return rect
 
+    def _pull_edges_off_protected(
+        rect: "fitz.Rect",
+        source_bbox: BBox,
+    ) -> "fitz.Rect":
+        source_x0, source_y0, source_x1, source_y1 = source_bbox
+        edge_band = margin + 0.8
+        for region in protected_regions:
+            rx0, ry0, rx1, ry1 = region
+            if source_x1 <= rx0 + 0.2 or source_x0 >= rx1 - 0.2:
+                continue
+            # PDF glyph boxes from a figure label can overlap the following
+            # caption by a fraction of a point. The caption still intersects
+            # a redaction that starts just after the protected glyph, while
+            # the label retains both its visible ink and selectable text.
+            if (
+                ry0 < source_y0
+                and source_y0 < ry1 <= source_y0 + edge_band
+                and rect.y0 < ry1
+            ):
+                rect.y0 = min(rect.y1, ry1 + 0.1)
+            elif (
+                source_y1 - edge_band <= ry0 < source_y1
+                and ry1 > source_y1
+                and rect.y1 > ry0
+            ):
+                rect.y1 = max(rect.y0, ry0 - 0.1)
+        return rect
+
     for block in blocks:
         preserve_source_math = _uses_fixed_source_math(block)
         for bbox in block.redact_bboxes or [block.bbox]:
@@ -12318,11 +13425,17 @@ def redact_original_text(
                 elif x0 >= kx1 - 0.6 and x0 - kx1 <= 4.0:
                     x0 = max(x0, kx1 + margin + 0.2)
             safe_bbox = (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else bbox
-            rect = _pull_edges_off_rules(expand_rect(fitz.Rect(safe_bbox), margin))
+            rect = _pull_edges_off_protected(
+                _pull_edges_off_rules(expand_rect(fitz.Rect(safe_bbox), margin)),
+                safe_bbox,
+            )
             fill = sample_background_color(background, safe_bbox, margin)
             page.add_redact_annot(rect, fill=fill)
     for bbox in extra_rects:
-        rect = _pull_edges_off_rules(expand_rect(fitz.Rect(bbox), margin))
+        rect = _pull_edges_off_protected(
+            _pull_edges_off_rules(expand_rect(fitz.Rect(bbox), margin)),
+            bbox,
+        )
         fill = sample_background_color(background, bbox, margin)
         page.add_redact_annot(rect, fill=fill)
 
@@ -12499,6 +13612,45 @@ def expand_heading_bbox(block: TextBlock) -> TextBlock:
     )
 
 
+def _expand_standalone_heading_to_column(
+    block: TextBlock,
+    page_columns: Sequence[Tuple[float, float]],
+    page_width: float,
+) -> TextBlock:
+    """Give a standalone translated heading the width of its source column."""
+    if (
+        block.block_type != "heading"
+        or block.nowrap
+        or block.preserve_position
+        or not page_columns
+    ):
+        return block
+    x0, y0, x1, y1 = block.bbox
+    containing = [
+        column
+        for column in page_columns
+        if column[0] - 4.0 <= x0 <= column[0] + column[1] + 4.0
+    ]
+    if not containing:
+        return block
+    column_left, column_width = min(
+        containing,
+        key=lambda column: abs(x0 - column[0]),
+    )
+    column_right = min(float(page_width), column_left + column_width)
+    if column_right <= x1 + 1.0:
+        return block
+    redacts = block.redact_bboxes or [block.bbox]
+    return replace(
+        block,
+        bbox=(x0, y0, column_right, y1),
+        redact_bboxes=list(redacts),
+        fixed_translation_font_size=(
+            block.fixed_translation_font_size or block.font_size
+        ),
+    )
+
+
 def _combine_inline_style_translation_items(
     items: Sequence[Tuple[TextBlock, str]],
 ) -> List[Tuple[TextBlock, str]]:
@@ -12637,7 +13789,11 @@ def _sibling_group_item_height(
     """
     import fitz
 
-    if block.nowrap or block.preserve_position or _uses_fixed_source_math(block):
+    if (
+        block.nowrap
+        or (block.preserve_position and block.block_type != "formula_prose")
+        or _uses_fixed_source_math(block)
+    ):
         return None
     rect = shrink_rect(fitz.Rect(block.bbox), margin)
     if rect.width <= 1:
@@ -12724,9 +13880,11 @@ def _expand_caption_bbox_upward(
 
 
 def _is_sibling_list_item(block: TextBlock, translated_text: str) -> bool:
-    if block.block_type != "body":
+    if block.block_type not in {"body", "formula_prose"}:
         return False
-    if block.nowrap or block.preserve_position:
+    if block.nowrap or (
+        block.preserve_position and block.block_type != "formula_prose"
+    ):
         return False
     # Run-in styled records (bold label + body flowed as one block) have a
     # dedicated reflow path; the group pass must not re-stack them.
@@ -12803,7 +13961,8 @@ def _harmonize_sibling_list_items(
             prev_block = page_items[current[-1]][0]
             same_column = (
                 abs(block.bbox[0] - prev_block.bbox[0]) <= 6.0
-                and abs(block.bbox[2] - prev_block.bbox[2]) <= 14.0
+                and abs(block.bbox[2] - prev_block.bbox[2])
+                <= max(20.0, block.font_size * 2.0)
             )
             same_size = abs(block.font_size - prev_block.font_size) <= 0.5
             gap = block.bbox[1] - prev_block.bbox[3]
@@ -12877,6 +14036,234 @@ def _harmonize_sibling_list_items(
             if offset < len(gaps):
                 y_cursor += gaps[offset]
     return page_items
+
+
+_CASCADE_EXPANDABLE_TYPES = frozenset(
+    {"body", "formula_prose", "list", "heading", "caption"}
+)
+_CASCADE_MOVABLE_TYPES = frozenset(
+    {"body", "formula_prose", "list", "heading", "run_in_heading"}
+)
+
+
+def _cascade_same_column(first: TextBlock, second: TextBlock) -> bool:
+    first_width = max(1.0, first.bbox[2] - first.bbox[0])
+    second_width = max(1.0, second.bbox[2] - second.bbox[0])
+    width_ratio = min(first_width, second_width) / max(first_width, second_width)
+    overlap = min(first.bbox[2], second.bbox[2]) - max(
+        first.bbox[0], second.bbox[0]
+    )
+    return width_ratio >= 0.55 and overlap >= min(first_width, second_width) * 0.65
+
+
+def _cascade_item_movable(block: TextBlock) -> bool:
+    return bool(
+        block.block_type in _CASCADE_MOVABLE_TYPES
+        and not block.nowrap
+        and not block.preserve_position
+        and not _uses_fixed_source_math(block)
+    )
+
+
+def _cascade_item_expandable(block: TextBlock) -> bool:
+    """Whether an item's bottom may grow while its source top stays fixed."""
+    return bool(
+        block.block_type in _CASCADE_EXPANDABLE_TYPES
+        and not block.nowrap
+        and (
+            not block.preserve_position
+            or block.block_type == "caption"
+        )
+    )
+
+
+def _cascade_required_height(
+    block: TextBlock,
+    translated_text: str,
+    *,
+    font_pack: FontPack,
+    min_font_size: float,
+    requested: float,
+    margin: float,
+) -> Optional[float]:
+    needed = _sibling_group_item_height(
+        block,
+        translated_text,
+        font_pack,
+        requested,
+        margin,
+    )
+    if needed is not None:
+        return needed + margin * 2.0 + 0.6
+
+    # Formula keepouts make the generic line-height estimate invalid. Probe
+    # the real fitter while growing only the target bottom; this keeps every
+    # absolute keepout in place and finds the smallest body-scale rectangle.
+    if not block.keepout_bboxes:
+        return None
+    current = block.bbox[3] - block.bbox[1]
+    maximum = current + _MULTILINE_EXPAND_MAX_LINES * requested * 1.3
+
+    def fits(height: float) -> bool:
+        trial = replace(
+            block,
+            bbox=(
+                block.bbox[0],
+                block.bbox[1],
+                block.bbox[2],
+                block.bbox[1] + height,
+            ),
+        )
+        return translated_text_fits(
+            block=trial,
+            text=translated_text,
+            font_pack=font_pack,
+            font_size=requested,
+            min_font_size=max(min_font_size, requested * 0.995),
+            margin=margin,
+            centered=False,
+        )
+
+    if fits(current):
+        return current
+    if not fits(maximum):
+        return None
+    low = current
+    high = maximum
+    for _ in range(6):
+        if high - low <= 0.5:
+            break
+        middle = (low + high) / 2.0
+        if fits(middle):
+            high = middle
+        else:
+            low = middle
+    return high
+
+
+def _cascade_expand_page_items(
+    page_items: List[Tuple[TextBlock, str]],
+    *,
+    font_pack: FontPack,
+    min_font_size: float,
+    font_scale: float,
+    margin: float,
+    page_height: float,
+    obstacles: Sequence[BBox] = (),
+) -> List[Tuple[TextBlock, str]]:
+    """Grow prose at body scale and carry the deficit down its text column.
+
+    The local growth passes stop at the next source block. In a dense column
+    that leaves no usable gap, even when several following prose blocks could
+    move together into whitespace near the bottom of the column. This pass
+    propagates a required height increase through movable followers, stopping
+    at fixed floats, equations, captions, preserved blocks, or the page foot.
+    """
+    updated = list(page_items)
+    order = sorted(
+        range(len(updated)),
+        key=lambda index: (
+            updated[index][0].bbox[1],
+            updated[index][0].bbox[0],
+        ),
+    )
+    page_floor = page_height - _PAGE_BOTTOM_KEEPOUT
+    for index in order:
+        block, translated_text = updated[index]
+        if (
+            block.block_type not in _CASCADE_EXPANDABLE_TYPES
+            or not _cascade_item_expandable(block)
+        ):
+            continue
+        requested = (
+            block.fixed_translation_font_size
+            or requested_translation_font_size(block, min_font_size, font_scale)
+        )
+        target_height = _cascade_required_height(
+            block,
+            translated_text,
+            font_pack=font_pack,
+            min_font_size=min_font_size,
+            requested=requested,
+            margin=margin,
+        )
+        if target_height is None:
+            continue
+        current_height = block.bbox[3] - block.bbox[1]
+        deficit = target_height - current_height
+        if deficit <= 0.6:
+            continue
+        deficit = min(
+            deficit,
+            _MULTILINE_EXPAND_MAX_LINES * requested * 1.3,
+        )
+
+        floor = page_floor
+        followers: List[int] = []
+        for other_index, (other, _other_text) in enumerate(updated):
+            if other_index == index or not _cascade_same_column(block, other):
+                continue
+            if other.bbox[1] < block.bbox[3] - 1.0:
+                continue
+            if _cascade_item_movable(other):
+                followers.append(other_index)
+            else:
+                floor = min(floor, other.bbox[1] - 2.0)
+        for obstacle in obstacles:
+            overlap = min(block.bbox[2], obstacle[2]) - max(
+                block.bbox[0], obstacle[0]
+            )
+            if overlap <= min(
+                block.bbox[2] - block.bbox[0],
+                obstacle[2] - obstacle[0],
+            ) * 0.35:
+                continue
+            if obstacle[1] >= block.bbox[3] - 1.0:
+                floor = min(floor, obstacle[1] - 2.0)
+
+        followers = [
+            other_index
+            for other_index in followers
+            if updated[other_index][0].bbox[1] < floor
+        ]
+        last_bottom = max(
+            [block.bbox[3]]
+            + [updated[other_index][0].bbox[3] for other_index in followers]
+        )
+        if floor - last_bottom < deficit - 0.2:
+            continue
+
+        redacts = block.redact_bboxes or [block.bbox]
+        updated[index] = (
+            replace(
+                block,
+                bbox=(
+                    block.bbox[0],
+                    block.bbox[1],
+                    block.bbox[2],
+                    block.bbox[3] + deficit,
+                ),
+                redact_bboxes=list(redacts),
+            ),
+            translated_text,
+        )
+        for other_index in followers:
+            other, other_text = updated[other_index]
+            redacts = other.redact_bboxes or [other.bbox]
+            updated[other_index] = (
+                replace(
+                    other,
+                    bbox=(
+                        other.bbox[0],
+                        other.bbox[1] + deficit,
+                        other.bbox[2],
+                        other.bbox[3] + deficit,
+                    ),
+                    redact_bboxes=list(redacts),
+                ),
+                other_text,
+            )
+    return updated
 
 
 def _expand_single_line_list_bbox(
@@ -13143,6 +14530,14 @@ def _expand_single_line_body_bbox(
             top_limit = max(top_limit, other.bbox[3] + 0.4)
         elif other.bbox[1] >= center_y:
             bottom_limit = min(bottom_limit, other.bbox[1] - 0.4)
+    for keepout in _unresolved_formula_keepouts(block):
+        horizontal_overlap = min(new_x1, keepout[2]) - max(x0, keepout[0])
+        if horizontal_overlap <= 0.0:
+            continue
+        if keepout[3] <= center_y:
+            top_limit = max(top_limit, keepout[3] + 0.4)
+        elif keepout[1] >= center_y:
+            bottom_limit = min(bottom_limit, keepout[1] - 0.4)
     if inline_style_flow:
         for obstacle in obstacles:
             horizontal_overlap = min(new_x1, obstacle[2]) - max(x0, obstacle[0])
@@ -13613,6 +15008,14 @@ def _formula_markers_form_atom(first: BBox, second: BBox, separator: str) -> boo
     reference = max(first_height, second_height)
     horizontal_gap = second[0] - first[2]
     vertical_overlap = min(first[3], second[3]) - max(first[1], second[1])
+    if horizontal_gap < -max(2.0, reference * 0.25):
+        first_width = max(1.0, first[2] - first[0])
+        second_width = max(1.0, second[2] - second[0])
+        return (
+            horizontal_gap >= -max(2.0, min(first_width, second_width) * 0.85)
+            and vertical_overlap
+            >= min(first_height, second_height) * 0.45
+        )
     return (
         -max(2.0, reference * 0.25)
         <= horizontal_gap
@@ -14025,6 +15428,7 @@ def choose_compressed_layout(
 
 _KEEPOUT_PAD = 1.2
 _KEEPOUT_MIN_SEGMENT = 40.0
+_FIXED_MATH_MIN_FONT_SCALE = 0.88
 
 
 def _uses_fixed_source_math(block: TextBlock) -> bool:
@@ -14069,7 +15473,13 @@ def _unresolved_formula_keepouts(block: TextBlock) -> List[BBox]:
     for keepout in dict.fromkeys(block.keepout_bboxes or []):
         keepout_center_y = (keepout[1] + keepout[3]) / 2.0
         if not block.bbox[1] <= keepout_center_y <= block.bbox[3]:
-            continue
+            compact_boundary_fragment = bool(
+                keepout[3] - keepout[1] <= block.font_size * 1.25
+                and keepout[3] >= block.bbox[1] - block.font_size * 0.2
+                and keepout[1] <= block.bbox[3] + block.font_size * 0.2
+            )
+            if not compact_boundary_fragment:
+                continue
         keepout_area = max(1.0, bbox_area(keepout))
         represented = any(
             bbox_intersection_area(keepout, source_bbox) / keepout_area >= threshold
@@ -14414,7 +15824,10 @@ def _demote_unanchorable_math_blocks(
             min_size,
             centered,
         )
-        if anchored is None:
+        if (
+            anchored is None
+            or anchored[0] < requested * _FIXED_MATH_MIN_FONT_SCALE
+        ):
             block = replace(block, flow_inline_math=True)
         updated.append((block, text))
     return updated
@@ -15071,6 +16484,49 @@ def _trim_formula_clip_against_foreign_ink(
         return clip
 
 
+def _source_region_has_visible_ink(
+    document: object,
+    page_index: int,
+    clip: BBox,
+) -> bool:
+    """Verify that a candidate formula stamp contains painted source ink."""
+    try:
+        import fitz
+
+        rect = fitz.Rect(clip) & document[page_index].rect
+        if rect.width <= 0.2 or rect.height <= 0.2:
+            return False
+        pixmap = document[page_index].get_pixmap(
+            matrix=fitz.Matrix(4.0, 4.0),
+            clip=rect,
+            colorspace=fitz.csGRAY,
+            alpha=True,
+            annots=False,
+        )
+        alpha = pixmap.samples[1::2]
+        return sum(value >= 24 for value in alpha) >= 2
+    except Exception:
+        return False
+
+
+def _select_formula_source_rect(
+    document: object,
+    page_index: int,
+    core_rect: BBox,
+    padded_rect: BBox,
+) -> BBox:
+    """Choose a trimmed formula clip only when it still contains visible ink."""
+    trimmed = _trim_formula_clip_against_foreign_ink(
+        document,
+        page_index,
+        padded_rect,
+    )
+    for candidate in (trimmed, padded_rect, core_rect):
+        if _source_region_has_visible_ink(document, page_index, candidate):
+            return candidate
+    raise ValueError("formula source region has no visible ink")
+
+
 _CLIP_PROFILE_ZOOM = 6.0
 _CLIP_PROFILE_INK_THRESHOLD = 0.008
 _CLIP_PROFILE_MIN_GAP_ROWS = 3
@@ -15187,9 +16643,40 @@ def _insert_source_region_raster(
         alpha=True,
         annots=False,
     )
+    # Add transparent device pixels after all source-side trimming. Expanding
+    # the source clip here would reintroduce neighbouring text; padding the
+    # RGBA sprite instead preserves the exact visible formula and guarantees
+    # a clean alpha margin for ascenders, descenders, and QA edge checks.
+    pad_pixels = max(3, round(zoom * 0.8))
+    padded = fitz.Pixmap(
+        pixmap.colorspace,
+        fitz.IRect(
+            0,
+            0,
+            pixmap.width + pad_pixels * 2,
+            pixmap.height + pad_pixels * 2,
+        ),
+        True,
+    )
+    padded.clear_with(0)
+    padded.set_alpha(bytes(padded.width * padded.height))
+    # Pixmap.copy uses absolute pixmap coordinates. A clipped source pixmap
+    # retains its page-space origin (often hundreds of device pixels away),
+    # so copying into a zero-origin destination without rebasing silently
+    # produces a fully transparent image.
+    pixmap.set_origin(pad_pixels, pad_pixels)
+    padded.copy(pixmap, pixmap.irect)
+    pad_x = pad_pixels * target_rect.width / max(1, pixmap.width)
+    pad_y = pad_pixels * target_rect.height / max(1, pixmap.height)
+    padded_target = fitz.Rect(
+        target_rect.x0 - pad_x,
+        target_rect.y0 - pad_y,
+        target_rect.x1 + pad_x,
+        target_rect.y1 + pad_y,
+    )
     page.insert_image(
-        target_rect,
-        pixmap=pixmap,
+        padded_target,
+        pixmap=padded,
         keep_proportion=False,
         overlay=True,
     )
@@ -15234,6 +16721,7 @@ def emit_tokens(
         x_pos: float,
         max_width: Optional[float] = None,
     ) -> None:
+        text = _normalize_formula_accessibility_text(text)
         natural_width = sum(char_width(char, fonts, size) for char in text)
         hidden_size = size
         if max_width is not None and natural_width > max_width > 0.0:
@@ -15276,17 +16764,18 @@ def emit_tokens(
                 # stamped pixmap has an alpha channel, so surviving padding
                 # is transparent and cannot overpaint adjacent lines.
                 pad_y = max(0.8, token.source_size * 0.12)
-                source_rect = fitz.Rect(
+                padded_source_rect = fitz.Rect(
                     core_rect.x0 - 0.25,
                     core_rect.y0 - pad_y,
                     core_rect.x1 + 0.25,
                     core_rect.y1 + pad_y,
                 )
                 source_rect = fitz.Rect(
-                    _trim_formula_clip_against_foreign_ink(
+                    _select_formula_source_rect(
                         source_document,
                         token.source_page,
-                        tuple(source_rect),
+                        tuple(core_rect),
+                        tuple(padded_source_rect),
                     )
                 )
                 core_y0 = max(core_rect.y0, source_rect.y0)

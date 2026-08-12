@@ -861,6 +861,9 @@ class TestTranslationEndpoint:
                 "warning_count": 1,
                 "repair_attempted_after": True,
                 "issue_codes": ["text_overlap"],
+                "agent_action": "repair_layout",
+                "agent_reason": "conservative PDF layout fixer supports an overlap issue",
+                "issue_fingerprint": report["pass_history"][0]["issue_fingerprint"],
             },
             {
                 "pass": 2,
@@ -869,6 +872,9 @@ class TestTranslationEndpoint:
                 "warning_count": 0,
                 "repair_attempted_after": False,
                 "issue_codes": [],
+                "agent_action": "accept",
+                "agent_reason": "all detectors passed",
+                "issue_fingerprint": report["pass_history"][1]["issue_fingerprint"],
             },
         ]
 

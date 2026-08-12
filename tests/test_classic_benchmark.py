@@ -97,6 +97,56 @@ class TestHarness:
         assert showcase["papers"][0]["legacy_pass"] is True
         assert showcase["papers"][0]["showcase_ok"] is False
 
+    def test_report_never_renders_previews_for_restricted_paper(
+        self, benchmark_module, tmp_path, monkeypatch
+    ):
+        workdir = tmp_path / "bench"
+        for name in ("reports", "meta", "papers", "translations"):
+            (workdir / name).mkdir(parents=True)
+        entries = benchmark_module._load_entries("word2vec")
+        (workdir / "reports" / "word2vec.json").write_text(
+            json.dumps(
+                {
+                    "pages": 1,
+                    "visual_score": 0.9,
+                    "error_count": 0,
+                    "legacy_error_count": 0,
+                    "error_pages": [],
+                    "issues_by_code": {},
+                    "strict_pass": True,
+                    "legacy_pass": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (workdir / "meta" / "word2vec.json").write_text(
+            json.dumps(
+                {
+                    "license": "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
+                    "showcase_ok": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (workdir / "papers" / "word2vec.pdf").write_bytes(b"%PDF source")
+        (workdir / "translations" / "word2vec-mono.pdf").write_bytes(
+            b"%PDF translated"
+        )
+        render_calls = []
+        monkeypatch.setattr(
+            benchmark_module,
+            "_render_previews",
+            lambda *args, **kwargs: render_calls.append((args, kwargs)),
+        )
+
+        class Args:
+            no_previews = False
+
+        assert benchmark_module.cmd_report(entries, workdir, Args()) == 0
+        showcase = json.loads((workdir / "showcase.json").read_text(encoding="utf-8"))
+        assert render_calls == []
+        assert showcase["papers"][0]["previews"] == []
+
     def test_quality_gate_enforces_strict_passes_and_artifact_provenance(
         self, benchmark_module, tmp_path
     ):

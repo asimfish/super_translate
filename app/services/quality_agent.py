@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Protocol, Sequence
@@ -43,6 +44,21 @@ def has_retranslatable_error(issues: Sequence[object]) -> bool:
         and getattr(issue, "code", "") in RETRANSLATABLE_ISSUE_CODES
         for issue in issues
     )
+
+
+def issue_fingerprint(issues: Sequence[object]) -> str:
+    """Return a stable identity for one detector result, independent of ordering."""
+    rows = sorted(
+        (
+            str(getattr(issue, "severity", "warning")),
+            str(getattr(issue, "code", "unknown")),
+            int(getattr(issue, "page", 0) or 0),
+            str(getattr(issue, "message", "")),
+        )
+        for issue in issues
+    )
+    payload = "\n".join("\t".join(map(str, row)) for row in rows)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 class DeterministicQualityAgent:

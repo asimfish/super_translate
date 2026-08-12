@@ -26,35 +26,37 @@ Gates per paper:
 
 ## Paper set
 
-`manifest.json` currently curates 43 papers: 25 landmarks, six CC-licensed
-showcase papers, and 12 recent stress papers. Together they cover the layout
-axes the engine must handle (single/two column, math-dense, algorithm blocks,
-table-heavy, figure-dense, long references, appendix-heavy, short/long). The
-fetch step records per-paper license, source URL, SHA256 and byte size in
-`data/benchmark/classic20/meta/`.
+`manifest.json` currently curates 50 papers: 25 core landmarks, seven classic
+expansion papers, six CC-licensed showcase papers, and 12 recent stress papers.
+Together they cover the layout axes the engine must handle (single/two column,
+math-dense, algorithm blocks, table-heavy, figure-dense, long references,
+appendix-heavy, short/long). The fetch step records per-paper license, source
+URL, SHA256 and byte size in `data/benchmark/classic20/meta/`.
 
 **License policy**: `showcase_ok` is true only for Creative Commons
 licensed papers; only those may have full translated pages displayed in the
 public showcase. Papers under the arXiv non-exclusive licence contribute
 metrics (and internal review artifacts) only, unless permission is obtained.
 
-The 25 classics all carry the arXiv non-exclusive licence, so the manifest
-additionally curates a `"group": "showcase_cc"` set of CC BY 4.0 papers
-(LLaMA, Mistral 7B, Mamba, DPO, Chain-of-Thought, vLLM - licenses verified
-at fetch time) whose original-vs-translated page pairs power the public
-comparison wall.
+The core classics generally carry the arXiv non-exclusive licence, so the
+manifest additionally curates a `"group": "showcase_cc"` set of papers whose
+licences are verified at fetch time. The report generator exposes full
+original-vs-translated page previews only when the recorded licence sets
+`showcase_ok=true`; restricted papers contribute aggregate metrics only.
 
 ## Running
 
 ```sh
 .venv/bin/python scripts/classic_benchmark.py fetch
-.venv/bin/python scripts/classic_benchmark.py translate            # needs DEEPSEEK_API_KEY
+.venv/bin/python scripts/classic_benchmark.py translate --isolate  # needs DEEPSEEK_API_KEY
 .venv/bin/python scripts/classic_benchmark.py evaluate
 .venv/bin/python scripts/classic_benchmark.py report
 .venv/bin/python scripts/classic_benchmark.py gate
 ```
 
-All steps are resumable (`--force` to redo, `--only id,id` to scope).
+All steps are resumable (`--force` to redo, `--only id,id` to scope). Use
+`--isolate` for multi-paper translation runs so each paper gets a fresh
+interpreter and engine memory remains bounded.
 The `gate` command writes `quality-gate.json` and exits non-zero unless at
 least 20 papers were evaluated, 20 strictly pass, every layout axis is covered,
 source hashes and license metadata agree, and an optional `--baseline-reports`

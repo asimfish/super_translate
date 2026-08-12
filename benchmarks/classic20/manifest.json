@@ -1,6 +1,6 @@
 {
   "name": "classic20",
-  "description": "Classic-paper translation quality benchmark. 25 landmark ML/AI papers chosen to cover every layout profile the engine must handle; at least 20 must pass the strict gate before a release is showcased.",
+  "description": "Classic-paper translation quality benchmark. 50 landmark ML/AI papers chosen to cover every layout profile the engine must handle; at least 20 must pass the strict gate before a release is showcased.",
   "layout_axes": [
     "single_column",
     "two_column",
@@ -60,6 +60,9 @@
     {"id": "vae", "arxiv_id": "1312.6114", "title": "Auto-Encoding Variational Bayes", "tags": ["single_column", "math_dense", "short_paper"], "group": "classic_expansion"},
     {"id": "distillation", "arxiv_id": "1503.02531", "title": "Distilling the Knowledge in a Neural Network", "tags": ["single_column", "math_dense", "short_paper"], "group": "classic_expansion"},
     {"id": "xgboost", "arxiv_id": "1603.02754", "title": "XGBoost: A Scalable Tree Boosting System", "tags": ["two_column", "math_dense", "table_heavy"], "group": "classic_expansion"},
-    {"id": "mobilenet", "arxiv_id": "1704.04861", "title": "MobileNets: Efficient Convolutional Neural Networks for Mobile Vision Applications", "tags": ["single_column", "figure_dense", "table_heavy", "short_paper"], "group": "classic_expansion"}
+    {"id": "mobilenet", "arxiv_id": "1704.04861", "title": "MobileNets: Efficient Convolutional Neural Networks for Mobile Vision Applications", "tags": ["single_column", "figure_dense", "table_heavy", "short_paper"], "group": "classic_expansion"},
+    {"id": "dropout", "arxiv_id": "1207.0580", "title": "Improving Neural Networks by Preventing Co-adaptation of Feature Detectors", "tags": ["single_column", "math_dense", "short_paper"], "group": "classic_expansion"},
+    {"id": "squeezenet", "arxiv_id": "1602.07360", "title": "SqueezeNet: AlexNet-level Accuracy with 50x Fewer Parameters", "tags": ["single_column", "figure_dense", "table_heavy", "short_paper"], "group": "classic_expansion"},
+    {"id": "efficientnet", "arxiv_id": "1905.11946", "title": "EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks", "tags": ["two_column", "math_dense", "figure_dense", "table_heavy"], "group": "classic_expansion"}
   ]
 }

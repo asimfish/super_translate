@@ -609,8 +609,6 @@ def _image_mask_row_profile(raw: dict) -> Optional[List[float]]:
             sum(value >= _MASK_OPACITY_MIN for value in pixels) / pixmap.width
         )
     return profile
-
-
 def _edge_is_decoration_bar(profile: Sequence[float], *, from_top: bool) -> bool:
     """Dense edge rows followed by a whitespace gap: an overline/underline."""
     rows = list(profile) if from_top else list(reversed(profile))
@@ -1269,6 +1267,7 @@ def _untranslated_block_issues(
     translated_page: object,
     page_number: int,
     *,
+    original_page: Optional[object] = None,
     reference_y: Optional[float],
     table_bands: Sequence[Tuple[float, float]] = (),
     preserved_regions: Sequence[BBox] = (),
@@ -1292,6 +1291,7 @@ def _untranslated_block_issues(
     from .pdf_layout import _is_reference_or_formula_text
 
     issues: List[object] = []
+    original_blocks = _text_blocks(original_page) if original_page is not None else []
     for block in _text_blocks(translated_page):
         if algorithm_regions and any(
             _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
@@ -1351,6 +1351,20 @@ def _untranslated_block_issues(
         if len(_EXAMPLE_LABEL_RE.findall(text)) >= 2:
             continue
         if _is_reference_or_formula_text(text):
+            continue
+        protected_source_match = False
+        if any(
+            _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
+            for region in preserved_regions
+        ):
+            normalized = re.sub(r"\s+", "", text).casefold()
+            protected_source_match = any(
+                _bbox_overlap_area(block.bbox, source.bbox)
+                > 0.75 * min(_bbox_area(block.bbox), _bbox_area(source.bbox))
+                and re.sub(r"\s+", "", source.text).casefold() == normalized
+                for source in original_blocks
+            )
+        if protected_source_match:
             continue
         # Rows inside a rendered table grid are preserved cell text, not
         # missed prose.
@@ -1562,6 +1576,7 @@ def inspect_translation(
                 _untranslated_block_issues(
                     translated_page,
                     page_number,
+                    original_page=original_page,
                     reference_y=reference_y,
                     table_bands=table_bands,
                     preserved_regions=page_regions,

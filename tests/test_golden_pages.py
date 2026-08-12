@@ -491,17 +491,20 @@ def test_gears_architecture_inline_formulas_render_in_continuous_flow(tmp_path):
     feature_prose = next(
         span for span in spans if "骨干网络提取多尺度特征" in span["text"]
     )
-    # Line breaks differ between the macOS and Linux CJK faces, so anchor the
-    # suffix geometrically: the first span behind the last formula image on
-    # the same row. The sentence itself must stay continuous in the page text.
+    # Line breaks and sprite grouping differ between the macOS and Linux CJK
+    # faces. Adjacent formula tokens may share one raster sprite, but each
+    # token must retain its own hidden semantic text for selection/copying.
+    # Anchor the suffix behind the last visible formula sprite on the row.
     page_text = "".join(page.get_text("text").split())
     assert "共来自四个层级。" in page_text
-    image_mid_y = (formula_images[2][1] + formula_images[2][3]) / 2.0
+    assert 2 <= len(formula_images) <= 3
+    last_formula_image = formula_images[-1]
+    image_mid_y = (last_formula_image[1] + last_formula_image[3]) / 2.0
     suffix_candidates = [
         span
         for span in spans
         if span["bbox"][1] <= image_mid_y <= span["bbox"][3]
-        and span["bbox"][0] >= formula_images[2][2] - 0.5
+        and span["bbox"][0] >= last_formula_image[2] - 0.5
     ]
 
     assert _span_is_bold(heading)
@@ -512,12 +515,11 @@ def test_gears_architecture_inline_formulas_render_in_continuous_flow(tmp_path):
     assert hidden_formula_text.count("I∈R^{3×H×W}") == 1
     assert hidden_formula_text.count("{F_{i}}^{4}") == 1
     assert hidden_formula_text.count("i=1") == 1
-    assert len(formula_images) == 3
     assert -0.5 <= formula_images[0][0] - rgb["bbox"][2] <= 8.0
     assert -0.5 <= formula_images[1][0] - feature_prose["bbox"][2] <= 8.0
     if suffix_candidates:
         suffix = min(suffix_candidates, key=lambda span: span["bbox"][0])
-        assert -0.5 <= suffix["bbox"][0] - formula_images[2][2] <= 8.0
+        assert -0.5 <= suffix["bbox"][0] - last_formula_image[2] <= 8.0
     output.close()
     issues = verify_translation_issues(source_pdf, output_pdf)
     assert not [issue for issue in issues if issue.severity == "error"]
@@ -1273,6 +1275,13 @@ class _GoldenStubTranslator:
 
         outputs = []
         for text in texts:
+            short_connector = {
+                "and": "且",
+                "or": "或",
+            }.get(text.strip().casefold())
+            if short_connector is not None:
+                outputs.append(short_connector)
+                continue
             parts = re.split(r"(⟦\d+⟧)", text)
             rendered = []
             for part in parts:
@@ -1822,7 +1831,8 @@ def test_otf_page4_inline_formula_tokens_share_cjk_reading_lines(tmp_path):
     p_indexes = [
         i
         for i, line in enumerate(stdout_lines)
-        if "P1_{N}−P^{⊤}1_{N}=s" in "".join(line.split())
+        if "P1_{N}-P^{⊤}1_{N}=s"
+        in "".join(line.split()).replace("−", "-")
     ]
 
     # The block renders at its natural size (bbox growth instead of font

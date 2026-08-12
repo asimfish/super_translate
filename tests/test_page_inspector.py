@@ -152,6 +152,32 @@ class TestUntranslatedBlock:
         codes = Counter(issue.code for issue in issues)
         assert codes["untranslated_block"] >= 1
 
+    def test_verbatim_figure_panel_text_is_not_flagged(self, tmp_path):
+        label = (
+            "(c) 1x1 Convolutional Filters called Pointwise Convolution "
+            "in the context of Depthwise Separable Convolution"
+        )
+        original = tmp_path / "original-figure.pdf"
+        translated = tmp_path / "translated-figure.pdf"
+        for path in (original, translated):
+            document = fitz.open()
+            page = document.new_page(width=612, height=792)
+            shape = page.new_shape()
+            shape.draw_rect(fitz.Rect(310, 300, 545, 390))
+            shape.finish(color=(0, 0, 0))
+            shape.commit()
+            page.insert_textbox(
+                fitz.Rect(313, 360, 541, 410),
+                label,
+                fontsize=8,
+            )
+            document.save(path)
+            document.close()
+
+        issues = inspect_translation(original, translated)
+
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
 
 class TestHelpers:
     def test_dominant_size_uses_cjk_body_not_hidden_formula_copy(self):

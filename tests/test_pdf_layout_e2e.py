@@ -383,10 +383,13 @@ class _RetryingStubTranslator:
     def __init__(self):
         self.calls: list[list[str]] = []
         self.block_types: list[str] = []
+        self.quality_retry = False
+        self.quality_retry_calls: list[bool] = []
 
     def translate_batch(self, texts):
         batch = list(texts)
         self.calls.append(batch)
+        self.quality_retry_calls.append(self.quality_retry)
         outputs = []
         first_call = len(self.calls) == 1
         for text in batch:
@@ -717,6 +720,8 @@ def test_translate_pdf_preserves_formula_image_and_translates_caption(tmp_path):
 
     assert report.translated_blocks >= 4
     assert len(translator.calls) == 2
+    assert translator.quality_retry_calls == [False, True]
+    assert translator.quality_retry is False
     assert "The proposed method" not in translated_text
     assert "Figure 1:" not in translated_text
     assert "所提出的方法" in translated_text
@@ -1262,3 +1267,96 @@ def test_exemplar_separator_rules_survive_redaction(tmp_path):
     assert not [e for e in errors if e.code == "table_structure_mismatch"], [
         str(e.message) for e in errors
     ]
+
+
+def test_vector_grid_with_caption_below_preserves_table_cells(tmp_path):
+    input_pdf = tmp_path / "source.pdf"
+    source = fitz.open()
+    page = source.new_page(width=612, height=792)
+    for y in (120, 160, 200):
+        page.draw_line((100, y), (510, y), width=0.5)
+    for x in (100, 300, 510):
+        page.draw_line((x, 120), (x, 200), width=0.5)
+    page.insert_text((120, 145), "Method", fontsize=10)
+    page.insert_text((330, 145), "Score", fontsize=10)
+    page.insert_text((120, 185), "Baseline", fontsize=10)
+    page.insert_text((330, 185), "91.2", fontsize=10)
+    page.insert_text((100, 225), "Table 2: Evaluation results.", fontsize=10)
+    page.insert_text((100, 270), "The method improves accuracy.", fontsize=10)
+    source.save(input_pdf)
+    source.close()
+
+    class _Stub:
+        def translate_batch(self, texts):
+            output = []
+            for text in texts:
+                if text.startswith("Table 2"):
+                    output.append("表2：评估结果。")
+                elif "improves accuracy" in text:
+                    output.append("该方法提升了准确率。")
+                else:
+                    output.append("错误翻译。")
+            return output
+
+    output_pdf = tmp_path / "translated.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_Stub(),
+        preserve_graphics_text=True,
+    )
+    translated_text = fitz.open(output_pdf)[0].get_text("text")
+    assert "Method" in translated_text
+    assert "Baseline" in translated_text
+    assert "错误翻译" not in translated_text
+    assert "表2" in translated_text
+    assert "该方法提升了准确率" in translated_text
+
+
+def test_single_separator_multiline_table_with_caption_below_is_preserved(tmp_path):
+    input_pdf = tmp_path / "source.pdf"
+    source = fitz.open()
+    page = source.new_page(width=612, height=792)
+    page.draw_line((100, 40), (510, 40), width=0.5)
+    rows = (120, 150, 180, 210, 240, 270)
+    for y in rows:
+        page.draw_line((100, y), (510, y), width=0.5)
+    page.draw_line((180, rows[0]), (180, rows[-1]), width=0.5)
+    labels = ("Source", "Reference", "Model A", "Model B", "Google Translate")
+    for index, label in enumerate(labels):
+        baseline = 140 + index * 30
+        page.insert_text((108, baseline), label, fontsize=8)
+        page.insert_text(
+            (190, baseline),
+            "A long translation example remains verbatim.",
+            fontsize=8,
+        )
+    page.insert_text((100, 300), "Table 3: Long translation examples.", fontsize=10)
+    page.insert_text((100, 345), "The appendix explains the evaluation.", fontsize=10)
+    source.save(input_pdf)
+    source.close()
+
+    class _Stub:
+        def translate_batch(self, texts):
+            return [
+                "表3：长句翻译示例。"
+                if text.startswith("Table 3")
+                else "附录说明了评估过程。"
+                if "appendix explains" in text
+                else "错误翻译。"
+                for text in texts
+            ]
+
+    output_pdf = tmp_path / "translated.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_Stub(),
+        preserve_graphics_text=True,
+    )
+    translated_text = fitz.open(output_pdf)[0].get_text("text")
+    assert "Source" in translated_text
+    assert "Google Translate" in translated_text
+    assert "错误翻译" not in translated_text
+    assert "表3" in translated_text
+    assert "附录说明了评估过程" in translated_text

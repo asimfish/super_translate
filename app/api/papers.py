@@ -45,6 +45,7 @@ from app.services.quality_agent import (
     QualityAction,
     create_quality_agent,
     has_retranslatable_error,
+    issue_fingerprint,
 )
 from app.services.translator import (
     QualityPreset,
@@ -1750,6 +1751,8 @@ def _run_post_translation_qa(
         pass_history = []
         passes_run = 0
         repair_attempted = False
+        quality_agent = create_quality_agent()
+        attempted_layout_fingerprints: set[str] = set()
         for pass_index in range(1, passes + 1):
             if _is_cancel_requested(paper_id):
                 raise TranslationCancelledError("Translation cancelled by user")
@@ -1784,6 +1787,8 @@ def _run_post_translation_qa(
             issues = _verify_translation_isolated(input_path, mono_path)
             passes_run += 1
             update_qa_stage(f"译后检查 {pass_index}/{passes}", 0.4)
+            plan = quality_agent.plan(issues)
+            fingerprint = issue_fingerprint(issues)
             if not issues:
                 _set_translation_stage(
                     paper_id,
@@ -1793,7 +1798,15 @@ def _run_post_translation_qa(
                     eta_seconds=0,
                     job_id=job_id,
                 )
-                pass_history.append(_qa_pass_summary(pass_index, issues))
+                pass_history.append(
+                    _qa_pass_summary(
+                        pass_index,
+                        issues,
+                        agent_action=plan.action,
+                        agent_reason=plan.reason,
+                        issue_fingerprint=fingerprint,
+                    )
+                )
                 _append_log(paper_id, loop, f"译文检查通过 (第 {pass_index} 轮)")
                 _write_qa_report(
                     trans_result,
@@ -1814,9 +1827,31 @@ def _run_post_translation_qa(
             for issue in issues[:3]:
                 _append_log(paper_id, loop, issue.message)
 
-            if not _has_fixable_layout_issue(issues):
-                pass_history.append(_qa_pass_summary(pass_index, issues))
+            if plan.action is not QualityAction.REPAIR_LAYOUT:
+                pass_history.append(
+                    _qa_pass_summary(
+                        pass_index,
+                        issues,
+                        agent_action=plan.action,
+                        agent_reason=plan.reason,
+                        issue_fingerprint=fingerprint,
+                    )
+                )
                 break
+
+            if fingerprint in attempted_layout_fingerprints:
+                pass_history.append(
+                    _qa_pass_summary(
+                        pass_index,
+                        issues,
+                        agent_action=QualityAction.STOP,
+                        agent_reason="detector result repeated after a repair attempt",
+                        issue_fingerprint=fingerprint,
+                    )
+                )
+                _append_log(paper_id, loop, "巡检结果未变化，已停止无进展循环")
+                break
+            attempted_layout_fingerprints.add(fingerprint)
             update_qa_stage("版面修复", 0.58)
             before_repair_issues = list(issues)
             snapshot = _snapshot_translated_outputs(trans_result)
@@ -1827,7 +1862,14 @@ def _run_post_translation_qa(
                 raise
             repair_attempted = True
             pass_history.append(
-                _qa_pass_summary(pass_index, issues, repair_attempted_after=True)
+                _qa_pass_summary(
+                    pass_index,
+                    issues,
+                    repair_attempted_after=True,
+                    agent_action=plan.action,
+                    agent_reason=plan.reason,
+                    issue_fingerprint=fingerprint,
+                )
             )
             if not fixed:
                 break
@@ -1836,6 +1878,8 @@ def _run_post_translation_qa(
             issues = _verify_translation_isolated(input_path, mono_path)
             passes_run += 1
             update_qa_stage("复查版面", 0.95)
+            candidate_plan = quality_agent.plan(issues)
+            candidate_fingerprint = issue_fingerprint(issues)
             candidate_score = _qa_issue_score(issues)
             previous_score = _qa_issue_score(before_repair_issues)
             if candidate_score >= previous_score:
@@ -1847,9 +1891,25 @@ def _run_post_translation_qa(
                     loop,
                     f"版面修复{reason}，已回滚到修复前译文",
                 )
-                pass_history.append(_qa_pass_summary(passes_run, issues))
+                pass_history.append(
+                    _qa_pass_summary(
+                        passes_run,
+                        issues,
+                        agent_action=QualityAction.STOP,
+                        agent_reason="candidate did not strictly improve issue score",
+                        issue_fingerprint=issue_fingerprint(issues),
+                    )
+                )
                 break
-            pass_history.append(_qa_pass_summary(passes_run, issues))
+            pass_history.append(
+                _qa_pass_summary(
+                    passes_run,
+                    issues,
+                    agent_action=candidate_plan.action,
+                    agent_reason=candidate_plan.reason,
+                    issue_fingerprint=candidate_fingerprint,
+                )
+            )
             if not issues:
                 _set_translation_stage(
                     paper_id,
@@ -1959,6 +2019,9 @@ def _qa_pass_summary(
     issues: list,
     *,
     repair_attempted_after: bool = False,
+    agent_action: QualityAction | None = None,
+    agent_reason: str | None = None,
+    issue_fingerprint: str | None = None,
 ) -> dict:
     issue_items = [_qa_issue_to_dict(issue) for issue in issues]
     return {
@@ -1968,6 +2031,9 @@ def _qa_pass_summary(
         "warning_count": sum(1 for item in issue_items if item["severity"] != "error"),
         "repair_attempted_after": repair_attempted_after,
         "issue_codes": sorted({item["code"] for item in issue_items})[:12],
+        "agent_action": agent_action.value if agent_action else None,
+        "agent_reason": agent_reason,
+        "issue_fingerprint": issue_fingerprint,
     }
 
 
@@ -2047,6 +2113,7 @@ _QA_ERROR_LABELS = {
     "qa_open_failed": "PDF 无法检查",
     "reference_bold_style": "参考文献异常加粗",
     "reference_overlap": "参考文献重叠",
+    "raster_heading_body_overlap": "标题与正文重叠",
     "table_structure_mismatch": "表格结构错位",
     "text_overlap": "正文重叠",
     "untranslated_block": "整段漏翻",

@@ -5,6 +5,7 @@ import pytest
 from app.services.quality_agent import (
     QualityAction,
     create_quality_agent,
+    issue_fingerprint,
 )
 
 
@@ -35,3 +36,18 @@ def test_deterministic_quality_agent_plans_typed_action(issues, expected):
 def test_quality_agent_rejects_unknown_implementation():
     with pytest.raises(KeyError):
         create_quality_agent("llm-mutates-pdf")
+
+
+def test_issue_fingerprint_is_order_independent_and_detects_page_change():
+    page_1 = issue("text_overlap")
+    page_1.page = 1
+    page_1.message = "overlap at x=10"
+    page_2 = issue("formula_changed")
+    page_2.page = 2
+    page_2.message = "formula changed"
+
+    original = issue_fingerprint([page_1, page_2])
+    assert original == issue_fingerprint([page_2, page_1])
+
+    page_2.page = 3
+    assert original != issue_fingerprint([page_1, page_2])
