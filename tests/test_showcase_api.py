@@ -122,9 +122,9 @@ class TestShowcaseData:
         self, client, benchmark_dir, monkeypatch
     ):
         """The showcase bypasses the bearer-token wall; other APIs do not."""
-        from app.core.config import settings
-
         from pydantic import SecretStr
+
+        from app.core.config import settings
 
         monkeypatch.setattr(settings, "api_token", SecretStr("secret-token"))
         assert client.get("/api/showcase").status_code == 200
@@ -155,9 +155,9 @@ class TestShowcasePreviews:
     def test_authenticated_operator_previews_non_cc_paper(
         self, client, benchmark_dir, monkeypatch
     ):
-        from app.core.config import settings
-
         from pydantic import SecretStr
+
+        from app.core.config import settings
 
         monkeypatch.setattr(settings, "api_token", SecretStr("secret-token"))
         anonymous = client.get("/api/showcase/previews/closed/p001_original.jpg")
