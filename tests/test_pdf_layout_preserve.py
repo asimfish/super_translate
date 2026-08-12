@@ -1152,6 +1152,43 @@ class TableDetectionTests(unittest.TestCase):
 
         self.assertTrue(record_is_algorithm(record))
 
+    def test_prose_mentioning_output_colon_is_not_algorithm(self):
+        # GPT-3 analysis prose cites "Output:" inline; keyword search over
+        # the merged text preserved (and silently dropped) whole analysis
+        # paragraphs. Running prose with sentence structure must not count.
+        record = _RawBlockRec(
+            lines=[
+                _line(
+                    "We evaluate each example by drawing K examples as",
+                    (99.0, 380.0, 542.0, 392.0),
+                ),
+                _line(
+                    "conditioning. The prompt shows Output: followed by the",
+                    (99.0, 393.0, 542.0, 405.0),
+                ),
+                _line(
+                    "answer. We then compare the likelihood of each option",
+                    (99.0, 406.0, 542.0, 418.0),
+                ),
+                _line(
+                    "and pick the best one. This is the standard protocol.",
+                    (99.0, 419.0, 542.0, 431.0),
+                ),
+            ]
+        )
+
+        self.assertFalse(record_is_algorithm(record))
+
+    def test_line_initial_io_markers_stay_algorithm(self):
+        record = _RawBlockRec(
+            lines=[
+                _line("Input: a sequence of tokens x", (99.0, 380.0, 300.0, 392.0)),
+                _line("Output: the predicted label y", (99.0, 393.0, 300.0, 405.0)),
+            ]
+        )
+
+        self.assertTrue(record_is_algorithm(record))
+
     def test_python_style_algorithm_block_is_preserved(self):
         record = _RawBlockRec(
             lines=[
@@ -7332,6 +7369,24 @@ class TranslationEchoDetectionTests(unittest.TestCase):
         )
 
         self.assertTrue(_translated_block_still_english(block, block.text))
+
+    def test_url_footnote_echo_is_accepted(self):
+        # word2vec p2: "1The test set is available at www..." churned through
+        # the retry loop forever (the vendor echoes the scaffolding around
+        # the link). Link footnotes accept the echo instead of retrying.
+        block = TextBlock(
+            page_index=1,
+            bbox=(108.0, 690.0, 400.0, 700.0),
+            text="1The test set is available at www.fit.vutbr.cz/~imikolov/rnnlm/word-test.v1.txt",
+            font_size=8.0,
+            color=(0.0, 0.0, 0.0),
+            bold=False,
+            source_lines=1,
+            should_translate=True,
+            block_type="body",
+        )
+
+        self.assertFalse(_translated_block_still_english(block, block.text))
 
     def test_formula_dense_echo_is_flagged(self):
         """IPMF p3: the restored echo of a formula-explanation block must be

@@ -4478,6 +4478,22 @@ def _translated_block_still_english(block: TextBlock, translated_text: str) -> b
         return False
     if block.block_type in ("algorithm", "bibliography", "equation", "figure_label", "footer"):
         return False
+    # URL-dominant blocks (footnote link lists) legitimately echo their
+    # source: after stripping URLs there is nothing left to translate, and
+    # retrying such blocks loops forever between echo and paraphrase.
+    plain_source = strip_sentinels(block.text)
+    url_stripped = re.sub(r"(?:https?://|www\.)\S+", " ", plain_source)
+    if url_stripped != plain_source:
+        source_without_urls = " ".join(url_stripped.split())
+        remaining_words = len(_prose_words(source_without_urls))
+        if remaining_words < 4:
+            return False
+        # Link footnotes ("1The test set is available at <url>"): the
+        # payload is the link itself; vendors echo the scaffolding half
+        # the time, and the retry churns forever without improving
+        # anything.
+        if remaining_words < 10 and re.match(r"^\d{1,2}[A-Z]", source_without_urls):
+            return False
     return (
         _translation_echoes_source(block, translated_text)
         or _translation_retains_source_prose_run(block, translated_text)
@@ -8797,6 +8813,12 @@ def mark_equation_blocks(records: Sequence[_RawBlockRec]) -> List[bool]:
 _PSEUDOCODE_STEP_RE = re.compile(r"^\s*\d{1,2}:\s*\S", re.MULTILINE)
 _ALGORITHM_TITLE_RE = re.compile(r"^\s*Algorithm\s+\d+\b", re.IGNORECASE)
 _ALGORITHM_IO_RE = re.compile(r"\b(?:Require|Ensure|Input|Output)\s*:", re.IGNORECASE)
+_ALGORITHM_IO_LINE_RE = re.compile(r"^(?:Require|Ensure|Input|Output)\s*:", re.IGNORECASE)
+_PROSE_STOPWORD_RE = re.compile(
+    r"\b(?:the|of|to|and|in|that|is|for|we|with|as|are|on|this|by|be|from|it|"
+    r"an|which|or|was|were|these|their|also|can|our|not|have|has)\b",
+    re.IGNORECASE,
+)
 _ALGORITHM_STAGE_RE = re.compile(r"^\s*(?:Stage|Phase)\s+\d+\s*:", re.IGNORECASE)
 _CODE_FONT_RE = re.compile(
     r"(?:Inconsolata|Courier|Mono|Typewriter|Consolas|Menlo|CMTT|CMRTypewriter)",
@@ -8853,8 +8875,20 @@ def record_is_algorithm(record: _RawBlockRec) -> bool:
         len(compact) <= 180 or _PSEUDOCODE_STEP_RE.search(compact)
     ):
         return True
-    if _ALGORITHM_IO_RE.search(compact) and len(record.lines) <= 12:
-        return True
+    # Require/Ensure/Input/Output cues must anchor line starts: prose that
+    # merely mentions "the output:" would preserve a whole paragraph
+    # otherwise (GPT-3 analysis sections). Running prose vetoes the cue.
+    io_lines = sum(
+        1
+        for line in record.lines
+        if _ALGORITHM_IO_LINE_RE.match(strip_sentinels(line.text).lstrip())
+    )
+    if io_lines >= 1 and len(record.lines) <= 12:
+        sentence_count = len(re.findall(r"[.!?](?:\s|$)", compact))
+        stopwords = len(_PROSE_STOPWORD_RE.findall(compact))
+        prose_like = sentence_count >= 2 and stopwords >= 8
+        if io_lines >= 2 or not prose_like:
+            return True
 
     steps = len(_PSEUDOCODE_STEP_RE.findall(bare))
     if steps >= 1:
