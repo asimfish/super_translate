@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import fitz
 import pytest
@@ -23,12 +24,41 @@ from pdf_zh_translator.page_inspector import (
     _LIST_MARKER_RE,
     INSPECTOR_ISSUE_CODES,
     _edge_cut,
+    _font_size_issues,
     _mask_coverage,
     _rule_clusters,
     inspect_translation,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_font_size_pairs_against_source_semantic_role_before_raw_pdf_block():
+    original = fitz.open()
+    original_page = original.new_page(width=300, height=200)
+    original_page.insert_text((40, 60), "Table 2: compact caption", fontsize=9)
+    original_page.insert_text((40, 100), "Large source body block", fontsize=10)
+    translated = fitz.open()
+    translated_page = translated.new_page(width=300, height=200)
+    translated_page.insert_text((40, 60), "表2：紧凑图注内容", fontsize=8.3)
+    for y in (100, 120, 140):
+        translated_page.insert_text((40, y), "普通中文正文内容足够长", fontsize=9.2)
+    caption_role = SimpleNamespace(
+        bbox=(40.0, 45.0, 180.0, 65.0),
+        font_size=9.0,
+    )
+
+    issues = _font_size_issues(
+        original_page,
+        translated_page,
+        1,
+        exclusion_bboxes=(),
+        source_role_blocks=(caption_role,),
+    )
+
+    assert not [issue for issue in issues if issue.code == "font_size_drift"]
+    translated.close()
+    original.close()
 
 
 def _codes(stem: str) -> Counter:
@@ -124,6 +154,133 @@ class TestUntranslatedBlock:
 
 
 class TestHelpers:
+    def test_dominant_size_uses_cjk_body_not_hidden_formula_copy(self):
+        from pdf_zh_translator.page_inspector import _Block, _Span
+
+        block = _Block(
+            bbox=(100.0, 100.0, 500.0, 120.0),
+            spans=(
+                _Span(
+                    text="z=(z_{1},...,z_{n})",
+                    font="STSongti-SC-Regular",
+                    size=8.08,
+                    bbox=(100.0, 100.0, 220.0, 120.0),
+                ),
+                _Span(
+                    text="给定表示后，解码器生成下一个输出元素",
+                    font="STSongti-SC-Regular",
+                    size=9.17,
+                    bbox=(220.0, 100.0, 500.0, 120.0),
+                ),
+            ),
+        )
+
+        assert block.dominant_size() == 9.17
+
+    def test_formula_mask_ignores_foreign_ink_at_image_bbox_edge(self, tmp_path):
+        def ppm(width: int, height: int) -> bytes:
+            header = f"P6\n{width} {height}\n255\n".encode("ascii")
+            return header + bytes([0, 0, 0]) * (width * height)
+
+        def clean_formula_mask(width: int, height: int) -> bytes:
+            pixels = bytearray(width * height)
+            for y in range(3, height - 3):
+                for x in range(4, width - 4):
+                    if y in (4, height - 5) or x in (5, width - 6):
+                        pixels[y * width + x] = 255
+            header = f"P5\n{width} {height}\n255\n".encode("ascii")
+            return header + bytes(pixels)
+
+        original = tmp_path / "original.pdf"
+        translated = tmp_path / "translated.pdf"
+        document = fitz.open()
+        document.new_page(width=300, height=200)
+        document.save(original)
+        document.close()
+
+        document = fitz.open()
+        page = document.new_page(width=300, height=200)
+        image_rect = fitz.Rect(60, 80, 180, 100)
+        page.insert_image(
+            image_rect,
+            stream=ppm(60, 20),
+            mask=clean_formula_mask(60, 20),
+        )
+        # The vector belongs to adjacent content. Page-raster sampling sees it
+        # inside the image bbox, but the formula's own alpha mask stays clean.
+        page.draw_rect(
+            fitz.Rect(70, 80, 105, 81.5),
+            color=(0, 0, 0),
+            fill=(0, 0, 0),
+        )
+        document.save(translated)
+        document.close()
+
+        issues = inspect_translation(original, translated)
+        assert not [issue for issue in issues if issue.code == "formula_clipped"]
+
+    def test_marginal_formula_edge_ink_is_reported_as_warning(self, tmp_path):
+        width, height = 60, 20
+        rgb = f"P6\n{width} {height}\n255\n".encode("ascii") + bytes(
+            [0, 0, 0]
+        ) * (width * height)
+        pixels = bytearray(width * height)
+        for y in (0, 1):
+            for x in range(5, 9):
+                pixels[y * width + x] = 255
+        for y in range(2, height - 3):
+            for x in range(5, width - 5):
+                if x == 5 or y == 2:
+                    pixels[y * width + x] = 255
+        mask = f"P5\n{width} {height}\n255\n".encode("ascii") + bytes(pixels)
+        original = tmp_path / "original.pdf"
+        translated = tmp_path / "translated.pdf"
+        document = fitz.open()
+        document.new_page(width=300, height=200)
+        document.save(original)
+        document.close()
+        document = fitz.open()
+        page = document.new_page(width=300, height=200)
+        page.insert_image(fitz.Rect(60, 80, 180, 100), stream=rgb, mask=mask)
+        document.save(translated)
+        document.close()
+
+        issues = [
+            issue
+            for issue in inspect_translation(original, translated)
+            if issue.code == "formula_clipped"
+        ]
+        assert len(issues) == 1
+        assert issues[0].severity == "warning"
+
+    def test_fully_transparent_formula_sprite_is_an_error(self, tmp_path):
+        width, height = 60, 20
+        rgb = f"P6\n{width} {height}\n255\n".encode("ascii") + bytes(
+            [0, 0, 0]
+        ) * (width * height)
+        mask = f"P5\n{width} {height}\n255\n".encode("ascii") + bytes(
+            width * height
+        )
+        original = tmp_path / "original.pdf"
+        translated = tmp_path / "translated.pdf"
+        document = fitz.open()
+        document.new_page(width=300, height=200)
+        document.save(original)
+        document.close()
+        document = fitz.open()
+        page = document.new_page(width=300, height=200)
+        page.insert_image(fitz.Rect(60, 80, 180, 100), stream=rgb, mask=mask)
+        document.save(translated)
+        document.close()
+
+        issues = [
+            issue
+            for issue in inspect_translation(original, translated)
+            if issue.code == "formula_visible_ink_mismatch"
+        ]
+        assert len(issues) == 1
+        assert issues[0].severity == "error"
+
     def test_edge_cut_needs_partial_ink_on_both_rows(self):
         assert _edge_cut([0.2, 0.1, 0.0, 0.0], 0, 1)
         assert not _edge_cut([0.0, 0.4, 0.0, 0.0], 0, 1)  # clean outer row

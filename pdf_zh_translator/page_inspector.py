@@ -11,6 +11,8 @@ Detects the semantic-visual defect classes that density/text QA cannot see:
   rules, rebuilt rows, damaged formulas).
 - ``formula_clipped``: math line whose glyph ink is cut at the rendered edge
   (lost ascenders/superscripts of preserved formula atoms).
+- ``formula_visible_ink_mismatch``: a formula sprite exists geometrically but
+  its alpha mask contains no visible formula ink.
 - ``reference_overlap``: overprinted text inside the references section
   (exempted from the generic text_overlap check).
 - ``reference_bold_style``: bold prose injected into references entries that
@@ -43,6 +45,7 @@ INSPECTOR_ISSUE_CODES = frozenset(
         "font_size_drift",
         "list_font_inconsistent",
         "formula_clipped",
+        "formula_visible_ink_mismatch",
         "table_structure_mismatch",
         "preserved_ink_mismatch",
         "reference_overlap",
@@ -103,12 +106,20 @@ class _Block:
 
     def dominant_size(self) -> float:
         weights: Dict[float, int] = {}
+        has_cjk = self.cjk_chars() > 0
         for span in self.spans:
             stripped = span.text.strip()
             if not stripped:
                 continue
+            weight = (
+                len(_CJK_HAN_RE.findall(stripped))
+                if has_cjk
+                else len(stripped)
+            )
+            if weight <= 0:
+                continue
             key = round(span.size, 2)
-            weights[key] = weights.get(key, 0) + len(stripped)
+            weights[key] = weights.get(key, 0) + weight
         if not weights:
             return 0.0
         return max(weights, key=lambda size: (weights[size], size))
@@ -346,6 +357,7 @@ def _font_size_issues(
     page_number: int,
     *,
     exclusion_bboxes: Sequence[BBox],
+    source_role_blocks: Sequence[object] = (),
 ) -> List[object]:
     original_blocks = [
         block for block in _text_blocks(original_page) if block.dominant_size() > 0
@@ -377,6 +389,19 @@ def _font_size_issues(
         best_overlap = 0.0
         best_score = 0.0
         expected = 0.0
+        for source in source_role_blocks:
+            source_bbox = tuple(float(value) for value in source.bbox)
+            overlap = _bbox_overlap_area(block.bbox, source_bbox)
+            if overlap <= 0.25 * area:
+                continue
+            source_area = _bbox_area(source_bbox)
+            if source_area <= 0:
+                continue
+            score = (overlap * overlap) / (area * source_area)
+            if score > best_score:
+                best_score = score
+                best_overlap = overlap
+                expected = float(source.font_size)
         for source in original_blocks:
             overlap = _bbox_overlap_area(block.bbox, source.bbox)
             if overlap <= 0.25 * area:
@@ -558,6 +583,32 @@ _SPRITE_MAX_HEIGHT_PT = 34.0
 _SPRITE_MIN_WIDTH_PT = 8.0
 _SPRITE_MAX_INK = 0.42
 _SPRITE_EDGE_MIN = 0.05
+_SPRITE_BLOCKING_EDGE_MIN = 0.12
+_MASK_OPACITY_MIN = 16
+
+
+def _image_mask_row_profile(raw: dict) -> Optional[List[float]]:
+    """Return per-row opacity density for an image's own alpha mask."""
+    mask = raw.get("mask")
+    if not isinstance(mask, bytes) or not mask:
+        return None
+    try:
+        import fitz
+
+        pixmap = fitz.Pixmap(mask)
+    except Exception:
+        return None
+    if pixmap.width <= 0 or pixmap.height <= 0 or pixmap.n <= 0:
+        return None
+    samples = pixmap.samples
+    profile: List[float] = []
+    for row in range(pixmap.height):
+        start = row * pixmap.stride
+        pixels = samples[start : start + pixmap.width * pixmap.n : pixmap.n]
+        profile.append(
+            sum(value >= _MASK_OPACITY_MIN for value in pixels) / pixmap.width
+        )
+    return profile
 
 
 def _edge_is_decoration_bar(profile: Sequence[float], *, from_top: bool) -> bool:
@@ -627,10 +678,31 @@ def _math_clip_issues(
         checked += 1
         if checked > 120:
             break
-        profile = translated_ink.get().row_profile(bbox)
+        # Page-raster sampling includes foreign text and rules that happen to
+        # overlap the image bbox. Formula sprites carry an alpha mask, which
+        # is the exact glyph silhouette and therefore the authoritative clip
+        # signal. Old/external images without a mask retain the raster fallback.
+        profile = _image_mask_row_profile(raw)
+        if profile is None:
+            profile = translated_ink.get().row_profile(bbox)
         if len(profile) < 8:
             continue
         mean_ink = sum(profile) / len(profile)
+        if raw.get("mask") and mean_ink < 0.001:
+            issues.append(
+                _issue(
+                    page_number,
+                    "formula_visible_ink_mismatch",
+                    (
+                        f"Page {page_number}: inline formula sprite at "
+                        f"x={bbox[0]:.1f}, y={bbox[1]:.1f} "
+                        f"({width:.0f}x{height:.0f}pt) has no visible ink"
+                    ),
+                )
+            )
+            if len(issues) >= 5:
+                break
+            continue
         if not 0.01 <= mean_ink <= _SPRITE_MAX_INK:
             continue
         top = min(profile[0], profile[1])
@@ -649,6 +721,7 @@ def _math_clip_issues(
         if not top_cut and not bottom_cut:
             continue
         edge = "top" if top_cut else "bottom"
+        edge_density = top if top_cut else bottom
         issues.append(
             _issue(
                 page_number,
@@ -657,7 +730,12 @@ def _math_clip_issues(
                     f"Page {page_number}: inline formula sprite at "
                     f"x={bbox[0]:.1f}, y={bbox[1]:.1f} "
                     f"({width:.0f}x{height:.0f}pt) has ink cut at its {edge} "
-                    f"edge (density {top if top_cut else bottom:.2f})"
+                    f"edge (density {edge_density:.2f})"
+                ),
+                severity=(
+                    "error"
+                    if edge_density >= _SPRITE_BLOCKING_EDGE_MIN
+                    else "warning"
                 ),
             )
         )
@@ -1342,6 +1420,7 @@ def inspect_translation(
         algorithm_regions: Dict[int, List[BBox]] = {}
         caption_bands: Dict[int, List[BBox]] = {}
         keepouts: Dict[int, List[BBox]] = {}
+        source_role_blocks: Dict[int, List[object]] = {}
         try:
             units, _gutters, _skipped = prepare_translation_units(
                 original,
@@ -1367,6 +1446,7 @@ def inspect_translation(
             graphic_regions_by_page = {}
         caption_kinds: Dict[int, List[Tuple[BBox, str]]] = {}
         for unit_block, _prompt, _mapping in units:
+            source_role_blocks.setdefault(unit_block.page_index, []).append(unit_block)
             if unit_block.block_type == "caption":
                 caption_bands.setdefault(unit_block.page_index, []).append(
                     expand_bbox(unit_block.bbox, 2.0)
@@ -1430,6 +1510,7 @@ def inspect_translation(
                     translated_page,
                     page_number,
                     exclusion_bboxes=exclusions,
+                    source_role_blocks=source_role_blocks.get(index, ()),
                 )
             )
             issues.extend(
