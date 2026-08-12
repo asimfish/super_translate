@@ -673,6 +673,19 @@ def translate_pdf(
                     *equation_rows.get(page_index, ()),
                 ],
             )
+            block = _expand_caption_bbox_upward(
+                block,
+                translated_text,
+                [candidate for candidate, _ in candidate_items],
+                font_pack,
+                requested_size,
+                margin,
+                obstacles=[
+                    *page_floats,
+                    *equation_rows.get(page_index, ()),
+                    *preserved_regions.get(page_index, []),
+                ],
+            )
             # Float-aware clip: keep reflowed CJK body text out of a right-column
             # figure/table instead of painting over it. Accepted when the
             # clipped column still holds the text near the requested size;
@@ -3152,10 +3165,22 @@ def _looks_like_reference_author_line(text: str) -> bool:
     shape, but inside the references range it is the author list of a wrapped
     entry and must not terminate the bibliography. Author lines are made of
     name tokens only (initials, capitalized surnames, particles) joined by
-    "and"/","/"&" and end with a period.
+    "and"/","/"&" and end with a period — or with a wrap hyphen when the
+    line breaks inside a surname ("... and A. W. Smeul-").
     """
     compact = " ".join(text.split()).strip()
-    if not compact.endswith(".") or len(compact) > 90:
+    if len(compact) > 90:
+        return False
+    # An author lead followed by the opening quote of the entry title
+    # ("R. Girshick, ..., and J. Malik, “Rich feature") is a wrapped
+    # reference fragment, not an appendix heading.
+    quote_index = compact.find("\u201c")
+    if quote_index > 0:
+        lead = compact[:quote_index].strip().rstrip(",")
+        if _REFERENCE_AUTHOR_START_RE.match(lead) and _reference_author_tokens_only(lead):
+            return True
+    ends_with_wrap_hyphen = bool(re.search(r"[A-Za-z]-$", compact))
+    if not (compact.endswith(".") or ends_with_wrap_hyphen):
         return False
     if not _REFERENCE_AUTHOR_START_RE.match(compact):
         return False
@@ -3164,6 +3189,10 @@ def _looks_like_reference_author_line(text: str) -> bool:
     has_mid_initial = bool(re.search(r"\s[A-Z]\.(?=\s|$)", body))
     if not (has_joiner or has_mid_initial):
         return False
+    return _reference_author_tokens_only(body)
+
+
+def _reference_author_tokens_only(body: str) -> bool:
     joiners = {"and", "&", "et", "al", "al."}
     for token in body.replace(",", " ").split():
         low = token.lower()
@@ -5667,6 +5696,7 @@ def prepare_translation_units(
     *,
     preserved_regions_out: Optional[Dict[int, List[BBox]]] = None,
     equation_rows_out: Optional[Dict[int, List[BBox]]] = None,
+    algorithm_regions_out: Optional[Dict[int, List[BBox]]] = None,
 ) -> Tuple[List[TranslationUnit], Dict[int, List[BBox]], int]:
     """Shared extraction pipeline for both `translate` and `export`.
 
@@ -5689,6 +5719,10 @@ def prepare_translation_units(
         # graphics mode is off.
         display_equation_regions_out=display_equation_regions,
     )
+    if algorithm_regions_out is not None:
+        algorithm_regions_out.clear()
+        for page_index, page_algorithm_regions in algorithm_regions.items():
+            algorithm_regions_out[page_index] = list(page_algorithm_regions)
     if equation_rows_out is not None:
         equation_rows_out.clear()
         for page_index, page_rows in display_equation_regions.items():
@@ -8776,7 +8810,22 @@ _CODE_LINE_RE = re.compile(
 
 
 def line_has_code_font(line: _LineRec) -> bool:
-    return any(_CODE_FONT_RE.search(str(span.get("font", ""))) for span in line.spans)
+    """True when typewriter spans dominate the line.
+
+    Prose paragraphs cite inline code tokens (``P(completion|context)`` in
+    GPT-3 style papers) with a few monospace spans; only lines that are
+    mostly monospace belong to code listings or pseudocode floats.
+    """
+    total = 0
+    code = 0
+    for span in line.spans:
+        length = len(str(span.get("text", "")).strip())
+        if length <= 0:
+            continue
+        total += length
+        if _CODE_FONT_RE.search(str(span.get("font", ""))):
+            code += length
+    return total > 0 and code >= max(2, total * 0.5)
 
 
 def line_is_code_like(line: _LineRec) -> bool:
@@ -12570,6 +12619,63 @@ def _sibling_group_item_height(
         for leading in leading_options(block)
     ]
     return min(heights) if heights else None
+
+
+def _expand_caption_bbox_upward(
+    block: TextBlock,
+    translated_text: str,
+    candidates: Sequence[TextBlock],
+    font_pack: FontPack,
+    requested_size: float,
+    margin: float,
+    obstacles: Sequence[BBox] = (),
+) -> TextBlock:
+    """Grow a position-anchored caption upward by its height deficit.
+
+    Table captions anchor above their table (preserve_position=True), so the
+    growth passes skip them; when the Chinese needs one more wrapped line
+    than the English, the fitter crushes the font instead. The whitespace
+    above a caption is almost always free, so grow y0 by exactly the missing
+    height (the render then fills back down to the anchored bottom edge)
+    while respecting neighbouring ink.
+    """
+    if block.block_type != "caption" or not block.preserve_position:
+        return block
+    if block.nowrap or _uses_fixed_source_math(block):
+        return block
+    x0, y0, x1, y1 = block.bbox
+    needed = _sibling_group_item_height(
+        replace(block, preserve_position=False),
+        translated_text,
+        font_pack,
+        requested_size,
+        margin,
+    )
+    if needed is None:
+        return block
+    current = y1 - y0
+    deficit = needed + margin * 2.0 - current
+    if deficit <= 0.5 or deficit > requested_size * 1.6 * 3:
+        return block
+    ceiling = 36.0
+    for candidate in candidates:
+        if candidate is block:
+            continue
+        cx0, cy0, cx1, cy1 = candidate.bbox
+        if min(x1, cx1) - max(x0, cx0) <= 0.0:
+            continue
+        if cy1 <= y0 + 0.5 and cy1 > ceiling:
+            ceiling = cy1
+    for region in obstacles:
+        rx0, ry0, rx1, ry1 = region
+        if min(x1, rx1) - max(x0, rx0) <= 0.0:
+            continue
+        if ry1 <= y0 + 0.5 and ry1 > ceiling:
+            ceiling = ry1
+    new_y0 = max(y0 - deficit, ceiling + 2.0)
+    if new_y0 >= y0 - 0.5:
+        return block
+    return replace(block, bbox=(x0, new_y0, x1, y1))
 
 
 def _is_sibling_list_item(block: TextBlock, translated_text: str) -> bool:

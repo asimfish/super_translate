@@ -657,7 +657,8 @@ def _page_line_art(
     """Horizontal rules (y, x0, x1) plus y-centres of bezier curve items.
 
     Curves are how plot lines are drawn; their presence around a rule
-    cluster marks a chart frame rather than a table grid.
+    cluster marks a chart frame rather than a table grid. Dashed rules are
+    chart gridlines, never table rules, and are dropped at the source.
     """
     rules: List[Tuple[float, float, float]] = []
     curves: List[float] = []
@@ -666,9 +667,13 @@ def _page_line_art(
     except Exception:
         return rules, curves
     for drawing in drawings:
+        dashes = drawing.get("dashes")
+        dashed = bool(dashes) and dashes not in ("", "[] 0")
         for item in drawing.get("items", []):
             kind = item[0]
             if kind == "l":
+                if dashed:
+                    continue
                 p1, p2 = item[1], item[2]
                 if abs(p1.y - p2.y) <= 0.6 and abs(p2.x - p1.x) >= 40.0:
                     rules.append(
@@ -679,6 +684,8 @@ def _page_line_art(
                         )
                     )
             elif kind == "re":
+                if dashed:
+                    continue
                 rect = item[1]
                 if rect.height <= 1.6 and rect.width >= 40.0:
                     rules.append((round((rect.y0 + rect.y1) / 2.0, 1), rect.x0, rect.x1))
@@ -691,6 +698,41 @@ def _page_line_art(
         else:
             merged[y] = (x0, x1)
     return sorted((y, x0, x1) for y, (x0, x1) in merged.items()), curves
+
+
+def _page_vertical_lines(page: object) -> List[Tuple[float, float, float]]:
+    """Vertical line segments (x, y0, y1) at least 24pt tall.
+
+    Academic tables draw horizontal rules only; vertical edges around a
+    rule cluster mean plot frames or legend boxes.
+    """
+    verticals: List[Tuple[float, float, float]] = []
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        return verticals
+    for drawing in drawings:
+        for item in drawing.get("items", []):
+            kind = item[0]
+            if kind == "l":
+                p1, p2 = item[1], item[2]
+                if abs(p1.x - p2.x) <= 0.6 and abs(p2.y - p1.y) >= 24.0:
+                    verticals.append(
+                        (
+                            (p1.x + p2.x) / 2.0,
+                            min(p1.y, p2.y),
+                            max(p1.y, p2.y),
+                        )
+                    )
+            elif kind == "re":
+                rect = item[1]
+                if rect.width <= 1.6 and rect.height >= 24.0:
+                    verticals.append(((rect.x0 + rect.x1) / 2.0, rect.y0, rect.y1))
+                elif rect.width >= 40.0 and rect.height >= 24.0:
+                    # A stroked rectangle frame contributes its side edges.
+                    verticals.append((rect.x0, rect.y0, rect.y1))
+                    verticals.append((rect.x1, rect.y0, rect.y1))
+    return verticals
 
 
 def _rule_clusters(
@@ -774,6 +816,21 @@ def _rule_pixel_coverage(
     return dark_columns / pix.width
 
 
+def _rule_inside_regions(
+    rule: Tuple[float, float, float],
+    regions: Sequence[BBox],
+) -> bool:
+    y, x0, x1 = rule
+    width = max(1.0, x1 - x0)
+    for rx0, ry0, rx1, ry1 in regions:
+        if not (ry0 - 2.0 <= y <= ry1 + 2.0):
+            continue
+        covered = min(x1, rx1 + 2.0) - max(x0, rx0 - 2.0)
+        if covered >= width * 0.7:
+            return True
+    return False
+
+
 def _table_structure_issues(
     page_number: int,
     original_rules: Sequence[Tuple[float, float, float]],
@@ -781,6 +838,7 @@ def _table_structure_issues(
     translated_rules: Sequence[Tuple[float, float, float]],
     original_page: object = None,
     translated_page: object = None,
+    preserved_regions: Sequence[BBox] = (),
 ) -> List[object]:
     """Compare table rule geometry between the original and the translation.
 
@@ -789,10 +847,28 @@ def _table_structure_issues(
     Vector counting alone misses fill-overpainted rules (the rule object
     survives redaction but background paint covers its middle), so each
     cluster rule is also compared by rendered ink coverage.
+
+    Rules living inside preserved graphic regions (plot frames, legend
+    boxes) are restored verbatim and verified by the preserved-ink module;
+    counting them here only manufactures chart-shaped false tables.
     """
+    if preserved_regions:
+        original_rules = [
+            rule
+            for rule in original_rules
+            if not _rule_inside_regions(rule, preserved_regions)
+        ]
+        translated_rules = [
+            rule
+            for rule in translated_rules
+            if not _rule_inside_regions(rule, preserved_regions)
+        ]
     original_clusters = _rule_clusters(original_rules)
     if not original_clusters:
         return []
+    original_verticals = (
+        _page_vertical_lines(original_page) if original_page is not None else []
+    )
     issues: List[object] = []
     for cluster in original_clusters:
         top, bottom = cluster[0][0], cluster[-1][0]
@@ -804,6 +880,19 @@ def _table_structure_issues(
             1 for y in original_curves if top - 6.0 <= y <= bottom + 6.0
         )
         if curves_in_band >= 10:
+            continue
+        band_height = max(1.0, bottom - top)
+        cluster_x0 = min(rule[1] for rule in cluster)
+        cluster_x1 = max(rule[2] for rule in cluster)
+        frame_verticals = sum(
+            1
+            for x, y0, y1 in original_verticals
+            if cluster_x0 - 4.0 <= x <= cluster_x1 + 4.0
+            and min(bottom, y1) - max(top, y0) >= band_height * 0.55
+        )
+        if frame_verticals >= 2:
+            # Plot frames and legend boxes: vertical edges spanning the rule
+            # band mean boxed chart art, not an academic table.
             continue
         # Match per source rule, mirroring the cluster criterion: a short
         # in-table rule (equation underline glued into the cluster) must not
@@ -1053,6 +1142,7 @@ def _untranslated_block_issues(
     reference_y: Optional[float],
     table_bands: Sequence[Tuple[float, float]] = (),
     preserved_regions: Sequence[BBox] = (),
+    algorithm_regions: Sequence[BBox] = (),
 ) -> List[object]:
     """Paragraphs of running English prose left in the translated page.
 
@@ -1061,12 +1151,19 @@ def _untranslated_block_issues(
     translation, so trusting those regions here would hide the defect
     (GuidedVLA section V-A, 2026-08-11). Author lists, figure legends,
     references and config tables carry almost no English stopwords and
-    stay exempt.
+    stay exempt. Algorithm floats are the deliberate exception: prompt and
+    completion samples (GPT-3 style) are quoted model I/O kept verbatim by
+    policy, so prose inside a detected algorithm region is not a miss.
     """
     from .pdf_layout import _is_reference_or_formula_text
 
     issues: List[object] = []
     for block in _text_blocks(translated_page):
+        if algorithm_regions and any(
+            _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
+            for region in algorithm_regions
+        ):
+            continue
         if reference_y is not None and block.bbox[1] >= reference_y - 4.0:
             continue
         text = " ".join(block.text.split())
@@ -1160,6 +1257,7 @@ def inspect_translation(
     try:
         preserved_regions: Dict[int, List[BBox]] = {}
         equation_rows: Dict[int, List[BBox]] = {}
+        algorithm_regions: Dict[int, List[BBox]] = {}
         caption_bands: Dict[int, List[BBox]] = {}
         keepouts: Dict[int, List[BBox]] = {}
         try:
@@ -1168,6 +1266,7 @@ def inspect_translation(
                 preserve_graphics_text=True,
                 preserved_regions_out=preserved_regions,
                 equation_rows_out=equation_rows,
+                algorithm_regions_out=algorithm_regions,
             )
         except TypeError:
             units, _gutters, _skipped = prepare_translation_units(
@@ -1260,6 +1359,7 @@ def inspect_translation(
                     translated_rules,
                     original_page=original_page,
                     translated_page=translated_page,
+                    preserved_regions=page_regions,
                 )
             )
             issues.extend(
@@ -1285,6 +1385,7 @@ def inspect_translation(
                     reference_y=reference_y,
                     table_bands=table_bands,
                     preserved_regions=page_regions,
+                    algorithm_regions=algorithm_regions.get(index, []),
                 )
             )
     finally:

@@ -165,3 +165,18 @@ class TestShowcasePreviews:
     def test_missing_file_is_404(self, client, benchmark_dir):
         response = client.get("/api/showcase/previews/otf/p002_original.jpg")
         assert response.status_code == 404
+
+
+class TestShowcasePublicAccess:
+    def test_showcase_api_needs_no_token(self, client, benchmark_dir, monkeypatch):
+        # The showcase endpoints are public: an API token being configured
+        # must not lock the aggregate metrics behind authentication.
+        from pydantic import SecretStr
+
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "api_token", SecretStr("secret-token"))
+        response = client.get("/api/showcase")
+        assert response.status_code == 200
+        response = client.get("/api/papers")
+        assert response.status_code == 401

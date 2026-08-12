@@ -1175,3 +1175,60 @@ def test_unanchorable_math_block_flows_sprites_at_body_scale(tmp_path):
     assert min(prose_sizes) >= 8.8, (
         f"unanchorable math paragraph over-shrunk: {sorted(set(prose_sizes))}"
     )
+
+
+class _FrcnnP7Translator:
+    def translate_batch(self, texts):
+        outputs = []
+        for text in texts:
+            if "Detection results on PASCAL VOC 2007" in text and "test set" in text:
+                outputs.append(
+                    "表2：PASCAL VOC 2007 测试集上的检测结果（在VOC 2007 "
+                    "trainval 上训练）。检测器为带有ZF 网络的Fast R-CNN，"
+                    "使用不同的候选框方法进行训练和测试。"
+                )
+            else:
+                outputs.append("中文译文")
+        return outputs
+
+
+def test_anchored_table_caption_grows_upward_instead_of_shrinking(tmp_path):
+    # faster_rcnn p7 production defect: the Chinese table caption needs one
+    # more wrapped line than the English, but captions preserve position and
+    # were excluded from every growth pass, so the fitter crushed them to
+    # ~6.9pt against the table's top rule. The caption must instead grow
+    # upward into the free whitespace above it.
+    input_pdf = Path(__file__).parent / "fixtures" / "faster_rcnn_p07_table_caption.pdf"
+    output_pdf = tmp_path / "frcnn_p7.zh.pdf"
+
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_FrcnnP7Translator(),
+        preserve_graphics_text=True,
+    )
+
+    translated = fitz.open(output_pdf)
+    data = translated[0].get_text("dict")
+    caption_sizes = []
+    for block in data.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        text = "".join(
+            span["text"]
+            for line in block.get("lines", [])
+            for span in line.get("spans", [])
+        )
+        if "表2" in text and "PASCAL" in text:
+            caption_sizes = [
+                span["size"]
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+            ]
+            break
+    translated.close()
+
+    assert caption_sizes, "translated table caption not found"
+    assert min(caption_sizes) >= 8.8, (
+        f"anchored table caption over-shrunk: {sorted(set(caption_sizes))}"
+    )
