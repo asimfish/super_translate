@@ -424,6 +424,9 @@ def _font_size_issues(
     median_ratio = _median(ratios)
     if median_ratio <= 0:
         return []
+    cohorts: Dict[float, List[float]] = {}
+    for _, size, expected in candidates:
+        cohorts.setdefault(round(expected, 1), []).append(size / expected)
 
     issues: List[object] = []
     for block, size, expected in candidates:
@@ -431,7 +434,17 @@ def _font_size_issues(
         # Only the shrink direction is a reader-visible defect (crushed
         # bullets/paragraphs); a block that keeps its size while its source
         # ran slightly smaller still renders uniform with its neighbours.
-        if ratio >= median_ratio - _SIZE_RATIO_TOLERANCE * median_ratio:
+        # Judge against the block's own expectation cohort: pages mixing
+        # run-in headings (14.4pt sources) with body prose (12.1pt sources)
+        # render both at one uniform Chinese size, so their ratios form two
+        # healthy modes and the page-wide median would flag whichever mode
+        # loses (dreamerv3 appendix). A cohort that is itself crushed still
+        # fails the absolute floor.
+        cohort = cohorts[round(expected, 1)]
+        reference = _median(cohort) if len(cohort) >= 2 else median_ratio
+        uniform_with_cohort = ratio >= reference - _SIZE_RATIO_TOLERANCE * reference
+        cohort_itself_crushed = reference < 0.80 and ratio < 0.72
+        if uniform_with_cohort and not cohort_itself_crushed:
             continue
         issues.append(
             _issue(
