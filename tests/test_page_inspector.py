@@ -50,7 +50,10 @@ class TestProductionRegressions:
         assert codes["formula_clipped"] >= 2
 
     def test_table_header_grid_mismatch(self):
-        codes = _codes("otf_p8_table_grid")
+        # First-round production p9: the caption redaction fill painted over
+        # the Table 2 toprule (ink coverage 1.00 -> 0.24). The vector rule
+        # object survives, so only the pixel-coverage comparison catches it.
+        codes = _codes("otf_p9_table_grid")
         assert codes["table_structure_mismatch"] >= 1
 
     def test_reference_bold_overprint(self):

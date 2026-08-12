@@ -369,14 +369,24 @@ def _font_size_issues(
         area = _bbox_area(block.bbox)
         if area <= 0:
             continue
-        # Pair with the dominant source block only: expansion may let a
-        # grown paragraph brush a neighbouring heading, and mixing that
-        # heading's size into a weighted mean would fake a drift.
+        # Pair by symmetric (Dice-style) bbox similarity. Raw overlap area
+        # lets a page-wide extraction artefact swallow every caption inside
+        # it; plain source-coverage lets a tiny embedded formula block win
+        # against the true paragraph. overlap^2/(area*source_area) prefers
+        # the source that mutually matches the translated block best.
         best_overlap = 0.0
+        best_score = 0.0
         expected = 0.0
         for source in original_blocks:
             overlap = _bbox_overlap_area(block.bbox, source.bbox)
-            if overlap > best_overlap:
+            if overlap <= 0.25 * area:
+                continue
+            source_area = _bbox_area(source.bbox)
+            if source_area <= 0:
+                continue
+            score = (overlap * overlap) / (area * source_area)
+            if score > best_score:
+                best_score = score
                 best_overlap = overlap
                 expected = source.dominant_size()
         if best_overlap <= 0.25 * area or expected <= 0:
@@ -706,16 +716,79 @@ def _rule_clusters(
     ]
 
 
+def _rule_is_text_underline(page: object, rule: Tuple[float, float, float]) -> bool:
+    """True when the rule underlines a source text span.
+
+    Underlines of replaced source text are legitimately erased together with
+    the text they decorate; only free-standing table rules must survive.
+    """
+    rule_y, rule_x0, rule_x1 = rule
+    width = max(1.0, rule_x1 - rule_x0)
+    try:
+        data = page.get_text("dict")
+    except Exception:
+        return False
+    for block in data.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                bx0, _by0, bx1, by1 = span["bbox"]
+                # Underlines sit between the baseline and the glyph-box
+                # bottom (descender space), up to a couple of points below.
+                if not (by1 - 2.5 <= rule_y <= by1 + 2.8):
+                    continue
+                # An underline hugs its text horizontally; a table rule that
+                # merely touches a caption's glyph box extends well past it.
+                if rule_x0 < bx0 - 6.0 or rule_x1 > bx1 + 6.0:
+                    continue
+                overlap = min(rule_x1, bx1) - max(rule_x0, bx0)
+                if overlap >= 0.7 * width:
+                    return True
+    return False
+
+
+def _rule_pixel_coverage(
+    page: object,
+    rule: Tuple[float, float, float],
+) -> float:
+    """Fraction of the rule's span showing ink at 216dpi."""
+    import fitz
+
+    rule_y, rule_x0, rule_x1 = rule
+    if rule_x1 - rule_x0 < 8.0:
+        return 1.0
+    scale = 3.0
+    clip = fitz.Rect(rule_x0 + 0.5, rule_y - 1.2, rule_x1 - 0.5, rule_y + 1.6)
+    try:
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip)
+    except Exception:
+        return 1.0
+    if pix.width <= 0 or pix.height <= 0:
+        return 1.0
+    samples, stride, n = pix.samples, pix.stride, pix.n
+    dark_columns = 0
+    for xx in range(pix.width):
+        if any(samples[yy * stride + xx * n] < 130 for yy in range(pix.height)):
+            dark_columns += 1
+    return dark_columns / pix.width
+
+
 def _table_structure_issues(
     page_number: int,
     original_rules: Sequence[Tuple[float, float, float]],
     original_curves: Sequence[float],
     translated_rules: Sequence[Tuple[float, float, float]],
+    original_page: object = None,
+    translated_page: object = None,
 ) -> List[object]:
     """Compare table rule geometry between the original and the translation.
 
     Tables are re-typeset cell by cell, so a header row set at the wrong
     baseline shifts (or drops) its rules relative to the original grid.
+    Vector counting alone misses fill-overpainted rules (the rule object
+    survives redaction but background paint covers its middle), so each
+    cluster rule is also compared by rendered ink coverage.
     """
     original_clusters = _rule_clusters(original_rules)
     if not original_clusters:
@@ -723,8 +796,6 @@ def _table_structure_issues(
     issues: List[object] = []
     for cluster in original_clusters:
         top, bottom = cluster[0][0], cluster[-1][0]
-        x0 = min(rule[1] for rule in cluster)
-        x1 = max(rule[2] for rule in cluster)
         # Chart frames: narrow rules (subplot boxes) or bezier plot lines
         # inside the band mean this is a figure, not a re-typeset table.
         if max(rule[2] - rule[1] for rule in cluster) < 120.0:
@@ -734,11 +805,19 @@ def _table_structure_issues(
         )
         if curves_in_band >= 10:
             continue
+        # Match per source rule, mirroring the cluster criterion: a short
+        # in-table rule (equation underline glued into the cluster) must not
+        # be dropped for covering little of the whole cluster envelope,
+        # otherwise the original never matches its own geometry.
         counterpart = [
             rule
             for rule in translated_rules
             if top - 12.0 <= rule[0] <= bottom + 12.0
-            and min(rule[2], x1) - max(rule[1], x0) > 0.4 * (x1 - x0)
+            and any(
+                min(rule[2], source[2]) - max(rule[1], source[1])
+                > 0.5 * min(rule[2] - rule[1], source[2] - source[1])
+                for source in cluster
+            )
         ]
         if not counterpart:
             issues.append(
@@ -783,6 +862,31 @@ def _table_structure_issues(
                     ),
                 )
             )
+            if len(issues) >= 3:
+                break
+            continue
+        if original_page is not None and translated_page is not None:
+            for rule in cluster:
+                source_coverage = _rule_pixel_coverage(original_page, rule)
+                if source_coverage < 0.85:
+                    continue
+                translated_coverage = _rule_pixel_coverage(translated_page, rule)
+                if source_coverage - translated_coverage > 0.25 and not (
+                    _rule_is_text_underline(original_page, rule)
+                ):
+                    issues.append(
+                        _issue(
+                            page_number,
+                            "table_structure_mismatch",
+                            (
+                                f"Page {page_number}: table rule at y={rule[0]:.1f} "
+                                f"is partially erased in the translation "
+                                f"(ink coverage {source_coverage:.2f} -> "
+                                f"{translated_coverage:.2f})"
+                            ),
+                        )
+                    )
+                    break
         if len(issues) >= 3:
             break
     return issues
@@ -1145,6 +1249,8 @@ def inspect_translation(
                     original_rules,
                     original_curves,
                     translated_rules,
+                    original_page=original_page,
+                    translated_page=translated_page,
                 )
             )
             issues.extend(

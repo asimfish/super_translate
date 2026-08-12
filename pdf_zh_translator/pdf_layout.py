@@ -674,22 +674,51 @@ def translate_pdf(
                 ],
             )
             # Float-aware clip: keep reflowed CJK body text out of a right-column
-            # figure/table instead of painting over it. Only applied when the
-            # clipped box still fits the text, so it never makes layout worse.
+            # figure/table instead of painting over it. Accepted when the
+            # clipped column still holds the text near the requested size;
+            # otherwise body paragraphs keep their full box and flow around
+            # the float through keepout slots (the source page wraps the
+            # same way), instead of getting crushed into the side column.
             if not block.preserve_position and not block.nowrap:
                 clipped = _clip_block_bbox_against_floats(block.bbox, page_floats, page_width)
                 if clipped != block.bbox:
                     clipped_block = replace(block, bbox=clipped)
-                    if block.block_type == "body" or translated_text_fits(
+                    clip_fits = translated_text_fits(
                         block=clipped_block,
                         text=translated_text,
                         font_pack=font_pack,
                         font_size=requested_size,
-                        min_font_size=min_font_size,
+                        min_font_size=max(min_font_size, requested_size * 0.9),
                         margin=margin,
                         centered=centered,
-                    ):
+                    )
+                    if clip_fits:
                         block = clipped_block
+                    elif block.block_type == "body":
+                        bx0, by0, bx1, by1 = block.bbox
+                        wrap_keepouts = [
+                            expand_bbox(region, 2.0)
+                            for region in page_floats
+                            if min(bx1, region[2]) - max(bx0, region[0]) > 0.0
+                            and min(by1, region[3]) - max(by0, region[1]) > 0.0
+                        ]
+                        wrap_keepouts.extend(
+                            expand_bbox(candidate.bbox, 2.0)
+                            for candidate, _ in candidate_items
+                            if candidate is not block
+                            and candidate.block_type == "caption"
+                            and min(bx1, candidate.bbox[2]) - max(bx0, candidate.bbox[0]) > 0.0
+                            and min(by1, candidate.bbox[3]) - max(by0, candidate.bbox[1]) > 0.0
+                        )
+                        if wrap_keepouts:
+                            block = replace(
+                                block,
+                                keepout_bboxes=list(
+                                    dict.fromkeys(
+                                        [*(block.keepout_bboxes or []), *wrap_keepouts]
+                                    )
+                                ),
+                            )
             if skip_overflow and not translated_text_fits(
                 block=block,
                 text=translated_text,
@@ -12074,6 +12103,41 @@ def redact_original_text(
         raise RuntimeError("PyMuPDF is required. Install with: pip install -e .") from exc
 
     background = render_background(page)
+    # Thin wide horizontal rules (table top/mid/bottom rules). The redaction
+    # fill paints background over everything inside its rect; when a rect
+    # edge (grown by `margin` or by glyph-box overshoot) grazes a rule, the
+    # fill wipes the rule's middle and leaves stub lines beside the
+    # translated text. Pull such edges back. Rules deep inside a rect belong
+    # to text that genuinely straddles them; those stay and the preserved-
+    # region restore handles the damage.
+    protected_rules: List[Tuple[float, float, float]] = []
+    for drawing in _page_drawings(page):
+        drawing_rect = drawing.get("rect")
+        if (
+            drawing_rect is None
+            or float(drawing_rect.width) < 40.0
+            or float(drawing_rect.height) > 2.5
+        ):
+            continue
+        protected_rules.append(
+            (float(drawing_rect.y0), float(drawing_rect.x0), float(drawing_rect.x1))
+        )
+
+    def _pull_edges_off_rules(rect: "fitz.Rect") -> "fitz.Rect":
+        edge_band = margin + 1.4
+        for rule_y, rule_x0, rule_x1 in protected_rules:
+            if rect.x1 <= rule_x0 + 1.0 or rect.x0 >= rule_x1 - 1.0:
+                continue
+            if not rect.y0 < rule_y < rect.y1:
+                continue
+            top_overlap = rule_y - rect.y0
+            bottom_overlap = rect.y1 - rule_y
+            if bottom_overlap <= top_overlap and bottom_overlap <= edge_band:
+                rect.y1 = max(rect.y0, rule_y - 0.9)
+            elif top_overlap < bottom_overlap and top_overlap <= edge_band:
+                rect.y0 = min(rect.y1, rule_y + 0.9)
+        return rect
+
     for block in blocks:
         preserve_source_math = _uses_fixed_source_math(block)
         for bbox in block.redact_bboxes or [block.bbox]:
@@ -12092,11 +12156,11 @@ def redact_original_text(
                 elif x0 >= kx1 - 0.6 and x0 - kx1 <= 4.0:
                     x0 = max(x0, kx1 + margin + 0.2)
             safe_bbox = (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else bbox
-            rect = expand_rect(fitz.Rect(safe_bbox), margin)
+            rect = _pull_edges_off_rules(expand_rect(fitz.Rect(safe_bbox), margin))
             fill = sample_background_color(background, safe_bbox, margin)
             page.add_redact_annot(rect, fill=fill)
     for bbox in extra_rects:
-        rect = expand_rect(fitz.Rect(bbox), margin)
+        rect = _pull_edges_off_rules(expand_rect(fitz.Rect(bbox), margin))
         fill = sample_background_color(background, bbox, margin)
         page.add_redact_annot(rect, fill=fill)
 
@@ -12730,17 +12794,44 @@ def _expand_multiline_block_bbox(
             continue
         if other.bbox[1] > y0 + 1.0:
             bottom_limit = min(bottom_limit, max(other.bbox[1] - 2.0, y1))
+    # Floats that leave a usable side column are flowed around instead of
+    # capping the extension: the paragraph grows past the float's top and
+    # the keepout slot layout wraps the overflow lines beside it (matching
+    # how the source page wraps the following paragraphs).
+    float_keepouts: List[BBox] = []
     for obstacle in obstacles:
         horizontal_overlap = min(x1, obstacle[2]) - max(x0, obstacle[0])
         if horizontal_overlap <= 0.0:
             continue
         if obstacle[1] > y0 + 1.0:
-            bottom_limit = min(bottom_limit, max(obstacle[1] - 2.0, y1))
+            free_side = max(obstacle[0] - x0, x1 - obstacle[2])
+            if free_side >= 120.0:
+                float_keepouts.append(
+                    (
+                        float(obstacle[0]),
+                        float(obstacle[1]),
+                        float(obstacle[2]),
+                        float(obstacle[3]),
+                    )
+                )
+            else:
+                bottom_limit = min(bottom_limit, max(obstacle[1] - 2.0, y1))
 
     max_extension = _MULTILINE_EXPAND_MAX_LINES * font_size * 1.3
     new_y1 = min(y0 + needed_height, y1 + max_extension, bottom_limit)
     if new_y1 <= y1 + 0.6:
         return block
+    entered_floats = [
+        keepout for keepout in float_keepouts if keepout[1] < new_y1 + 2.0
+    ]
+    if entered_floats:
+        return replace(
+            block,
+            bbox=(x0, y0, x1, new_y1),
+            keepout_bboxes=list(
+                dict.fromkeys([*(block.keepout_bboxes or []), *entered_floats])
+            ),
+        )
     return replace(block, bbox=(x0, y0, x1, new_y1))
 
 
