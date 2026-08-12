@@ -30,18 +30,19 @@ def test_reader_sync_scroll_maps_page_fraction_and_renders_target_panel():
     assert "function pageScrollPosition(panel, scrollTop)" in js
     assert "function targetScrollTop(panel, pageIdx, fraction)" in js
     assert "const fraction = pageHeight > 0" in js
-    assert "otherContainer.scrollTop = targetScrollTop(otherPanel, pageIdx, fraction);" in js
-    assert "releaseScrollSyncAfterPaint(token, otherPanel);" in js
+    assert "const mirroredTop = targetScrollTop(otherPanel, pageIdx, fraction);" in js
+    assert "otherContainer.scrollTop = mirroredTop;" in js
     assert "requestAnimationFrame(() => syncScrollFromPanel('original'));" in js
 
 
 def test_reader_sync_scroll_does_not_lock_source_panel_during_mirror_update():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
 
-    assert "let scrollSyncTargetPanel = null;" in js
-    assert "scrollSyncTargetPanel === panel" in js
-    assert "scrollSyncTargetPanel = otherPanel;" in js
-    assert "scrollSyncTargetPanel = null;" in js
+    assert "let mirroredScrollTops = { original: null, translated: null };" in js
+    assert "const mirroredTop = mirroredScrollTops[panel];" in js
+    assert "Math.abs(container.scrollTop - mirroredTop) <= 1" in js
+    assert "scrollSyncTargetPanel" not in js
+    assert "releaseScrollSyncAfterPaint" not in js
     assert "let scrollRafIds = { original: null, translated: null };" in js
     assert "if (scrollRafIds[panel]) return;" in js
     assert "let scrollSyncing = false;" not in js
@@ -70,6 +71,7 @@ def test_reader_sync_scroll_defers_mirror_render_to_avoid_jank():
     assert "syncRenderTimer" in js
     # Programmatic scrollTop must not be animated by CSS smooth scrolling.
     assert "scroll-behavior: smooth" not in css
+    assert "overflow-anchor: none" in css
 
 
 def test_reader_image_mode_builds_scroll_metrics_and_can_drive_sync():
@@ -81,8 +83,11 @@ def test_reader_image_mode_builds_scroll_metrics_and_can_drive_sync():
     assert "refreshImagePageMetrics(panel);" in js
     assert "setupSmoothScrollSync(panel);" in js
     assert "!pdfDocs[otherPanel] && !pageWrappers[otherPanel]?.length" in js
-    assert "img.onload = () => {" in js
-    assert "requestAnimationFrame(() => refreshImagePageMetrics(panel));" in js
+    assert "await imageLoaded;" in js
+    assert "await new Promise(resolve => requestAnimationFrame(resolve));" in js
+    assert "refreshImagePageMetrics(panel);" in js
+    assert "wrapper._previewLoadId === loadId" in js
+    assert "return wrapper._previewLoadPromise;" in js
     assert "window.addEventListener('resize'" in js
     assert "refreshImagePageMetrics('original')" not in js
 
@@ -278,7 +283,7 @@ def test_reader_image_mode_sync_scroll_real_browser(tmp_path):
                       const target = document.getElementById(`pdf-container-${targetPanel}`);
                       return {
                         syncScrollEnabled,
-                        scrollSyncTargetPanel,
+                        mirroredScrollTops,
                         scrollRafIds,
                         sourceTop: source.scrollTop,
                         targetTop: target.scrollTop,
@@ -288,6 +293,18 @@ def test_reader_image_mode_sync_scroll_real_browser(tmp_path):
                         sourceHeight: source.clientHeight,
                         targetHeight: target.clientHeight,
                         targetHidden: target.classList.contains('hidden'),
+                        sourceMetric: pageMetrics[sourcePanel][pageIndex],
+                        targetMetric: pageMetrics[targetPanel][pageIndex],
+                        sourceWrapper: {
+                          top: pageWrappers[sourcePanel][pageIndex].offsetTop,
+                          height: pageWrappers[sourcePanel][pageIndex].offsetHeight,
+                        },
+                        targetWrapper: {
+                          top: pageWrappers[targetPanel][pageIndex].offsetTop,
+                          height: pageWrappers[targetPanel][pageIndex].offsetHeight,
+                        },
+                        sourcePosition: pageScrollPosition(sourcePanel, source.scrollTop),
+                        targetPosition: pageScrollPosition(targetPanel, target.scrollTop),
                       };
                     }""",
                     [source_panel, target_panel, page_index, fraction],
@@ -296,6 +313,8 @@ def test_reader_image_mode_sync_scroll_real_browser(tmp_path):
                     assert abs(diagnostics["sourceTop"] - diagnostics["sourceMax"]) <= 1
                     assert abs(diagnostics["targetTop"] - diagnostics["targetMax"]) <= 1
                     continue
+                assert source_position["pageIdx"] == page_index, diagnostics
+                assert abs(source_position["fraction"] - fraction) <= 0.02, diagnostics
                 assert target_position["pageIdx"] == source_position["pageIdx"], diagnostics
                 assert (
                     abs(target_position["fraction"] - source_position["fraction"])

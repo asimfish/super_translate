@@ -365,6 +365,10 @@ select:focus-visible {
   border-radius: 0 0 var(--radius) var(--radius);
   /* No smooth scroll: synced panels set scrollTop programmatically and CSS
      smooth animation makes the mirrored panel lag behind the user's panel. */
+  /* Image pages replace fixed-height placeholders asynchronously. Browser
+     scroll anchoring turns that reflow into synthetic scroll events, which
+     can make the mirrored panel synchronize back in the wrong direction. */
+  overflow-anchor: none;
   overscroll-behavior: contain;
 }
 .pdf-container canvas {

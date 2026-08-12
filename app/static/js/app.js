@@ -560,7 +560,6 @@ const MAX_SCALE = 3.0;
 const MAX_CANVAS_DPR = 1.5;
 const OVERSCAN_PX = 320;
 const PAGE_GAP_PX = 4;
-let scrollSyncToken = 0;
 
 function availablePdfWidth(container) {
   return Math.max(320, (container?.clientWidth || 0) - 20);
@@ -814,27 +813,45 @@ async function loadImageDocument(panel, loadId = currentLoadId) {
   setupSmoothScrollSync(panel);
 }
 
-async function loadPreviewImage(panel, wrapper, loadId) {
+function loadPreviewImage(panel, wrapper, loadId) {
+  if (wrapper._previewLoadId === loadId && wrapper._previewLoadPromise) {
+    return wrapper._previewLoadPromise;
+  }
+  wrapper._previewLoadId = loadId;
+  wrapper._previewLoadPromise = loadPreviewImageOnce(panel, wrapper, loadId)
+    .catch(() => {
+      wrapper.innerHTML = '<div class="pdf-page-loading">本页加载失败</div>';
+      wrapper._previewLoadPromise = null;
+    });
+  return wrapper._previewLoadPromise;
+}
+
+async function loadPreviewImageOnce(panel, wrapper, loadId) {
   const page = parseInt(wrapper.dataset.pageIdx, 10) + 1;
+  const res = await apiFetch(`/api/papers/${currentPaper.id}/preview/${panel}/${page}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  if (loadId !== currentLoadId) return;
+  const url = URL.createObjectURL(blob);
   try {
-    const res = await apiFetch(`/api/papers/${currentPaper.id}/preview/${panel}/${page}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const blob = await res.blob();
-    if (loadId !== currentLoadId) return;
-    const url = URL.createObjectURL(blob);
     const img = document.createElement('img');
-    img.src = url;
     img.alt = `第 ${page} 页`;
     img.style.width = '100%';
     img.style.display = 'block';
-    img.onload = () => {
-      wrapper.style.minHeight = '';
-      requestAnimationFrame(() => refreshImagePageMetrics(panel));
-    };
+    const imageLoaded = new Promise((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('preview image failed to decode'));
+    });
     wrapper.textContent = '';
     wrapper.appendChild(img);
-  } catch {
-    wrapper.innerHTML = '<div class="pdf-page-loading">本页加载失败</div>';
+    img.src = url;
+    await imageLoaded;
+    if (loadId !== currentLoadId) return;
+    wrapper.style.minHeight = '';
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    refreshImagePageMetrics(panel);
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 
@@ -1201,7 +1218,7 @@ async function copyPdfSelection() {
 // Scroll sync with page-based alignment
 let scrollRafIds = { original: null, translated: null };
 let syncRenderTimer = null;
-let scrollSyncTargetPanel = null;
+let mirroredScrollTops = { original: null, translated: null };
 
 function resetScrollSyncScheduling() {
   for (const panel of ['original', 'translated']) {
@@ -1210,8 +1227,7 @@ function resetScrollSyncScheduling() {
   }
   if (syncRenderTimer) clearTimeout(syncRenderTimer);
   syncRenderTimer = null;
-  scrollSyncTargetPanel = null;
-  scrollSyncToken++;
+  mirroredScrollTops = { original: null, translated: null };
 }
 
 // Render the mirrored panel only after scrolling settles. Rendering PDF pages
@@ -1231,7 +1247,16 @@ function setupSmoothScrollSync(panel) {
 
   const listener = () => {
     updatePageInfo(panel, container.scrollTop);
-    if (!syncScrollEnabled || scrollSyncTargetPanel === panel) return;
+    if (!syncScrollEnabled) return;
+
+    const mirroredTop = mirroredScrollTops[panel];
+    if (mirroredTop !== null) {
+      mirroredScrollTops[panel] = null;
+      // Consume only the event caused by our own mirrored assignment. A
+      // different position means the user moved this panel before that event
+      // arrived, so the new gesture must become the synchronization source.
+      if (Math.abs(container.scrollTop - mirroredTop) <= 1) return;
+    }
 
     if (scrollRafIds[panel]) return;
     scrollRafIds[panel] = requestAnimationFrame(() => {
@@ -1275,16 +1300,6 @@ function targetScrollTop(panel, pageIdx, fraction) {
   return Math.max(0, Math.min(maxScrollTop, rawScrollTop));
 }
 
-function releaseScrollSyncAfterPaint(token, targetPanel) {
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      if (scrollSyncToken === token && scrollSyncTargetPanel === targetPanel) {
-        scrollSyncTargetPanel = null;
-      }
-    });
-  });
-}
-
 function syncScrollFromPanel(panel) {
   const otherPanel = panel === 'original' ? 'translated' : 'original';
   if (!pdfDocs[otherPanel] && !pageWrappers[otherPanel]?.length) return;
@@ -1297,12 +1312,11 @@ function syncScrollFromPanel(panel) {
   if (otherContainer.classList.contains('hidden') || otherContainer.clientHeight <= 0) return;
 
   const { pageIdx, fraction } = pageScrollPosition(panel, container.scrollTop);
-  const token = ++scrollSyncToken;
-  scrollSyncTargetPanel = otherPanel;
-  otherContainer.scrollTop = targetScrollTop(otherPanel, pageIdx, fraction);
+  const mirroredTop = targetScrollTop(otherPanel, pageIdx, fraction);
+  mirroredScrollTops[otherPanel] = mirroredTop;
+  otherContainer.scrollTop = mirroredTop;
   updatePageInfo(otherPanel, otherContainer.scrollTop);
   scheduleOtherPanelRender(otherPanel, otherContainer);
-  releaseScrollSyncAfterPaint(token, otherPanel);
 }
 
 function updatePageInfo(panel, scrollTop) {
