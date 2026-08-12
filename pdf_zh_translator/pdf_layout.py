@@ -2806,6 +2806,25 @@ def _looks_like_parenthetical_gloss_with_citation(text: str) -> bool:
     return not re.search(r"[A-Za-z]", residue)
 
 
+_PROSE_SHAPED_WORD_RE = re.compile(r"^[A-Z]?[a-z]{1,}$")
+_CONDITIONAL_PROB_RE = re.compile(r"\([^()]*\|[^()]*\)")
+_CJK_SAMPLE_LABEL_RE = re.compile(r"^[\u4e00-\u9fff][^：:]{0,11}[：:]")
+_CJK_SAMPLE_LABEL_KEYWORD_RE = re.compile(r"英语|英文|原文|提示|示例|样例|输入|输出")
+
+
+def _looks_like_cjk_sample_label(text: str) -> bool:
+    """A translated sample-field label whose content is English by design.
+
+    "较差的英语输入：Please provide ..." quotes model input/output kept
+    verbatim; the label must carry an explicit sample cue so figure
+    captions ("图6：...") and task records ("目标谓词集：...") stay checked.
+    """
+    match = _CJK_SAMPLE_LABEL_RE.match(text)
+    if not match:
+        return False
+    return bool(_CJK_SAMPLE_LABEL_KEYWORD_RE.search(match.group(0)))
+
+
 def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 35 or _is_reference_or_formula_text(compact):
@@ -2815,6 +2834,10 @@ def _looks_like_untranslated_english(text: str) -> bool:
     if _looks_like_split_parenthetical_gloss(compact):
         return False
     if _looks_like_detached_prompt_code_fragment(compact):
+        return False
+    # A CJK-labelled sample field ("较差的英语输入：Please provide ...") quotes
+    # model input/output that stays verbatim by design.
+    if _looks_like_cjk_sample_label(compact):
         return False
     prompt_remainder = _without_structured_prompt_lists(compact)
     if (
@@ -2832,13 +2855,21 @@ def _looks_like_untranslated_english(text: str) -> bool:
         return False
     if _looks_like_translated_metric_fragment(compact):
         return False
-    words = _ASCII_WORD_DETECT_RE.findall(compact)
+    # Judge the whole block on prose-shaped Latin words. Conditional
+    # probability notation, dataset identifiers (SQuADv2, RACE-h) and math
+    # words do not count as English prose.
+    prose_basis = _CONDITIONAL_PROB_RE.sub(" ", compact)
+    words = [
+        word
+        for word in _ASCII_WORD_DETECT_RE.findall(prose_basis)
+        if _PROSE_SHAPED_WORD_RE.match(word) and word.lower() not in _MATH_WORDS
+    ]
     if len(words) < 5:
         return False
     cjk_chars = len(_CJK_DETECT_RE.findall(compact))
     if cjk_chars >= max(4, len(words) // 2):
         return False
-    ascii_letters = sum(1 for char in compact if char.isascii() and char.isalpha())
+    ascii_letters = sum(1 for char in prose_basis if char.isascii() and char.isalpha())
     return ascii_letters / max(len(compact), 1) >= 0.45
 
 
@@ -4666,6 +4697,22 @@ def _translation_retains_source_prose_run(
     ):
         return False
     if URL_RE.search(strip_sentinels(block.text)) or URL_RE.search(translated_text):
+        return False
+    # Judge the whole result first: a CJK-dominant translation retaining a
+    # short quoted English run (benchmark names, prompt excerpts, glossary
+    # terms) is a translation carrying a quotation, not a kept source block.
+    result_plain = " ".join(strip_sentinels(translated_text).split())
+    result_cjk = len(_CJK_DETECT_RE.findall(result_plain))
+    result_latin_words = [
+        word
+        for word in re.findall(r"[A-Za-z]{2,}", result_plain)
+        if word.lower() not in _MATH_WORDS
+    ]
+    if result_cjk >= 12 and len(result_latin_words) <= max(6, result_cjk // 5):
+        return False
+    # A CJK-labelled sample field ("较差的英语输入：Please ...") quotes model
+    # input/output that stays in English by design.
+    if _looks_like_cjk_sample_label(result_plain):
         return False
 
     def prose_word_segments(text: str) -> List[List[str]]:
