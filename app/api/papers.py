@@ -40,6 +40,12 @@ from app.services.library import (
     get_pdf_info,
 )
 from app.services.pdf_sanitizer import safe_pdf_for_use
+from app.services.quality_agent import (
+    RETRANSLATABLE_ISSUE_CODES,
+    QualityAction,
+    create_quality_agent,
+    has_retranslatable_error,
+)
 from app.services.translator import (
     QualityPreset,
     TranslationConfig,
@@ -1830,10 +1836,17 @@ def _run_post_translation_qa(
             issues = _verify_translation_isolated(input_path, mono_path)
             passes_run += 1
             update_qa_stage("复查版面", 0.95)
-            if _qa_issue_score(issues) > _qa_issue_score(before_repair_issues):
+            candidate_score = _qa_issue_score(issues)
+            previous_score = _qa_issue_score(before_repair_issues)
+            if candidate_score >= previous_score:
                 _restore_translated_outputs(snapshot)
                 issues = before_repair_issues
-                _append_log(paper_id, loop, "版面修复使问题增多，已回滚到修复前译文")
+                reason = "使问题增多" if candidate_score > previous_score else "未减少问题"
+                _append_log(
+                    paper_id,
+                    loop,
+                    f"版面修复{reason}，已回滚到修复前译文",
+                )
                 pass_history.append(_qa_pass_summary(passes_run, issues))
                 break
             pass_history.append(_qa_pass_summary(passes_run, issues))
@@ -1980,9 +1993,7 @@ def _qa_issue_to_dict(issue: object) -> dict:
 
 
 def _has_fixable_layout_issue(issues: list) -> bool:
-    return any(
-        getattr(issue, "code", "") in {"caption_overlap", "text_overlap"} for issue in issues
-    )
+    return create_quality_agent().plan(issues).action is QualityAction.REPAIR_LAYOUT
 
 
 def _has_unresolved_error(issues: list) -> bool:
@@ -1992,12 +2003,7 @@ def _has_unresolved_error(issues: list) -> bool:
 # QA error classes a fresh translation pass can plausibly fix: the supplier
 # echoed the source text or the pipeline fell back to it. Layout/structural
 # errors (overlaps, missing images, ...) do not benefit from re-translation.
-_SELF_HEALABLE_QA_CODES = {
-    "untranslated_english",
-    "untranslated_caption",
-    "untranslated_formula_explanation",
-    "untranslated_block",
-}
+_SELF_HEALABLE_QA_CODES = set(RETRANSLATABLE_ISSUE_CODES)
 _SELF_HEAL_MAX_RETRIES = 1
 
 
@@ -2018,11 +2024,7 @@ def _has_self_healable_error(issues: list) -> bool:
     final QA gate decides the outcome anyway — the alternative is certain
     failure.
     """
-    return any(
-        getattr(issue, "severity", "warning") == "error"
-        and getattr(issue, "code", "") in _SELF_HEALABLE_QA_CODES
-        for issue in issues
-    )
+    return has_retranslatable_error(issues)
 
 
 _QA_ERROR_LABELS = {
@@ -2032,6 +2034,7 @@ _QA_ERROR_LABELS = {
     "font_size_drift": "字号漂移",
     "formula_changed": "公式变更",
     "formula_clipped": "公式裁切",
+    "formula_visible_ink_mismatch": "公式可见内容缺失",
     "inspection_failed": "视觉巡检执行失败",
     "list_font_inconsistent": "列表字号不一致",
     "missing_graphic": "矢量图缺失",
@@ -2050,6 +2053,7 @@ _QA_ERROR_LABELS = {
     "untranslated_caption": "图注漏翻",
     "untranslated_english": "正文疑似漏翻",
     "untranslated_formula_explanation": "公式说明漏翻",
+    "untranslated_natural_language": "正文残留外语",
 }
 
 

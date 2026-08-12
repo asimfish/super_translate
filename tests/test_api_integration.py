@@ -994,6 +994,58 @@ class TestTranslationEndpoint:
         assert report["status"] == "warning"
         assert report["issue_count"] == 1
 
+    def test_qa_rolls_back_layout_fix_when_issue_score_does_not_improve(self, tmp_path):
+        from app.api.papers import _run_post_translation_qa
+        from app.services.translator import TranslationResult
+
+        mono_path = tmp_path / "paper-mono.pdf"
+        dual_path = tmp_path / "paper-dual.pdf"
+        input_path = tmp_path / "paper.pdf"
+        mono_path.write_bytes(b"%PDF-1.4 mono-original")
+        dual_path.write_bytes(b"%PDF-1.4 dual-original")
+        input_path.write_bytes(b"%PDF-1.4 input")
+
+        issue = MagicMock()
+        issue.code = "text_overlap"
+        issue.severity = "warning"
+        issue.message = "Page 1: text blocks overlap"
+
+        def ineffective_layout_fix(path):
+            path.write_bytes(b"%PDF-1.4 changed-with-same-issue")
+            return True
+
+        with (
+            patch("app.api.papers._append_log") as mock_log,
+            patch("app.api.papers._set_translation_stage"),
+            patch("app.api.papers._record_terminology_candidates"),
+            patch("app.api.papers._is_cancel_requested", return_value=False),
+            patch(
+                "app.api.papers._verify_translation_isolated",
+                side_effect=[[issue], [issue]],
+            ) as mock_verify,
+            patch("pdf_zh_translator.pdf_layout.create_dual_pdf"),
+            patch(
+                "app.services.layout_fix.fix_translated_layout",
+                side_effect=ineffective_layout_fix,
+            ),
+        ):
+            unresolved = _run_post_translation_qa(
+                "abcd12345678",
+                MagicMock(),
+                input_path,
+                TranslationResult(mono_path=mono_path, dual_path=dual_path),
+                qa_mode="iterative",
+                max_passes=4,
+            )
+
+        assert unresolved == [issue]
+        assert mock_verify.call_count == 2
+        assert mono_path.read_bytes() == b"%PDF-1.4 mono-original"
+        assert any(
+            "未减少问题" in call.args[2]
+            for call in mock_log.call_args_list
+        )
+
 
 class TestCancelEndpoint:
     """Test cancel translation endpoint."""
