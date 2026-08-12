@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -95,3 +96,63 @@ class TestHarness:
         showcase = json.loads((workdir / "showcase.json").read_text(encoding="utf-8"))
         assert showcase["papers"][0]["legacy_pass"] is True
         assert showcase["papers"][0]["showcase_ok"] is False
+
+    def test_quality_gate_enforces_strict_passes_and_artifact_provenance(
+        self, benchmark_module, tmp_path
+    ):
+        workdir = tmp_path / "bench"
+        reports = workdir / "reports"
+        meta_dir = workdir / "meta"
+        papers = workdir / "papers"
+        reports.mkdir(parents=True)
+        meta_dir.mkdir(parents=True)
+        papers.mkdir(parents=True)
+        entries = benchmark_module._load_entries("word2vec")
+        source = papers / "word2vec.pdf"
+        source.write_bytes(b"%PDF-1.4 benchmark fixture")
+        (reports / "word2vec.json").write_text(
+            json.dumps(
+                {
+                    "id": "word2vec",
+                    "error_count": 0,
+                    "strict_pass": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (meta_dir / "word2vec.json").write_text(
+            json.dumps(
+                {
+                    "id": "word2vec",
+                    "license": "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
+                    "showcase_ok": False,
+                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        class Args:
+            min_evaluated = 1
+            min_strict_passes = 1
+            baseline_reports = None
+            require_all_axes = False
+
+        assert benchmark_module.cmd_gate(entries, workdir, Args()) == 0
+        result = json.loads(
+            (workdir / "quality-gate.json").read_text(encoding="utf-8")
+        )
+        assert result["passed"] is True
+        assert result["evaluated"] == 1
+        assert result["strict_passes"] == 1
+
+        report = json.loads((reports / "word2vec.json").read_text(encoding="utf-8"))
+        report["strict_pass"] = False
+        report["error_count"] = 1
+        (reports / "word2vec.json").write_text(json.dumps(report), encoding="utf-8")
+        assert benchmark_module.cmd_gate(entries, workdir, Args()) == 1
+        failed = json.loads(
+            (workdir / "quality-gate.json").read_text(encoding="utf-8")
+        )
+        assert failed["passed"] is False
+        assert any("strict passes" in failure for failure in failed["failures"])

@@ -1,8 +1,9 @@
 # Classic-paper translation benchmark (classic20)
 
-Strict, reproducible quality benchmark for the PDF translation engine over
-25 landmark ML/AI papers. Release policy: **at least 20 papers must pass the
-strict gate** before translation results are showcased publicly.
+Strict, reproducible quality benchmark for the PDF translation engine over a
+growing set of landmark and current ML/AI papers. Release policy: **at least 20
+papers must pass the strict gate** before translation results are showcased
+publicly.
 
 ## What it measures
 
@@ -25,10 +26,11 @@ Gates per paper:
 
 ## Paper set
 
-`manifest.json` curates 25 papers across the layout axes the engine must
-handle (single/two column, math-dense, algorithm blocks, table-heavy,
-figure-dense, long references, appendix-heavy, short/long). The fetch step
-records per-paper license, source URL, SHA256 and byte size in
+`manifest.json` currently curates 43 papers: 25 landmarks, six CC-licensed
+showcase papers, and 12 recent stress papers. Together they cover the layout
+axes the engine must handle (single/two column, math-dense, algorithm blocks,
+table-heavy, figure-dense, long references, appendix-heavy, short/long). The
+fetch step records per-paper license, source URL, SHA256 and byte size in
 `data/benchmark/classic20/meta/`.
 
 **License policy**: `showcase_ok` is true only for Creative Commons
@@ -49,9 +51,14 @@ comparison wall.
 .venv/bin/python scripts/classic_benchmark.py translate            # needs DEEPSEEK_API_KEY
 .venv/bin/python scripts/classic_benchmark.py evaluate
 .venv/bin/python scripts/classic_benchmark.py report
+.venv/bin/python scripts/classic_benchmark.py gate
 ```
 
 All steps are resumable (`--force` to redo, `--only id,id` to scope).
+The `gate` command writes `quality-gate.json` and exits non-zero unless at
+least 20 papers were evaluated, 20 strictly pass, every layout axis is covered,
+source hashes and license metadata agree, and an optional `--baseline-reports`
+directory has no per-paper error-count regressions.
 Artifacts land in `data/benchmark/classic20/`:
 
 - `papers/` originals, `translations/` mono PDFs + translation caches,

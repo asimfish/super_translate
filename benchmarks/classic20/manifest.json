@@ -56,6 +56,10 @@
     {"id": "gaussian_splat", "arxiv_id": "2308.04079", "title": "3D Gaussian Splatting for Real-Time Radiance Fields", "tags": ["two_column", "figure_dense", "math_dense"], "group": "hot"},
     {"id": "dit", "arxiv_id": "2212.09748", "title": "Scalable Diffusion Models with Transformers (DiT)", "tags": ["two_column", "figure_dense", "table_heavy"], "group": "hot"},
     {"id": "qlora", "arxiv_id": "2305.14314", "title": "QLoRA: Efficient Finetuning of Quantized LLMs", "tags": ["single_column", "table_heavy", "appendix_heavy"], "group": "hot"},
-    {"id": "vggt", "arxiv_id": "2503.11651", "title": "VGGT: Visual Geometry Grounded Transformer", "tags": ["two_column", "figure_dense", "table_heavy"], "group": "hot"}
+    {"id": "vggt", "arxiv_id": "2503.11651", "title": "VGGT: Visual Geometry Grounded Transformer", "tags": ["two_column", "figure_dense", "table_heavy"], "group": "hot"},
+    {"id": "vae", "arxiv_id": "1312.6114", "title": "Auto-Encoding Variational Bayes", "tags": ["single_column", "math_dense", "short_paper"], "group": "classic_expansion"},
+    {"id": "distillation", "arxiv_id": "1503.02531", "title": "Distilling the Knowledge in a Neural Network", "tags": ["single_column", "math_dense", "short_paper"], "group": "classic_expansion"},
+    {"id": "xgboost", "arxiv_id": "1603.02754", "title": "XGBoost: A Scalable Tree Boosting System", "tags": ["two_column", "math_dense", "table_heavy"], "group": "classic_expansion"},
+    {"id": "mobilenet", "arxiv_id": "1704.04861", "title": "MobileNets: Efficient Convolutional Neural Networks for Mobile Vision Applications", "tags": ["single_column", "figure_dense", "table_heavy", "short_paper"], "group": "classic_expansion"}
   ]
 }
