@@ -769,6 +769,14 @@ def translate_pdf(
             margin=margin,
             source_document=source_document,
         )
+        page_items = _demote_unanchorable_math_blocks(
+            page_items,
+            item_centered_flags,
+            font_pack=font_pack,
+            min_font_size=min_font_size,
+            font_scale=font_scale,
+            margin=margin,
+        )
         source_links = _page_links_for_restore(page)
         redact_original_text(page, [block for block, _ in page_items], margin, page_gutter)
         page = document.reload_page(page)
@@ -11477,7 +11485,16 @@ def merge_paragraph_blocks(
             graphic_regions_by_page.get(block.page_index, []) if graphic_regions_by_page else []
         )
         if previous is not None and can_merge_blocks(previous, block, regions):
-            merged[-1] = merge_two_blocks(previous, block)
+            joined = merge_two_blocks(previous, block)
+            if _looks_like_float_wrap_boundary(previous, block) and (
+                _float_wrap_region_beside(previous, regions) is not None
+            ):
+                # The reflow around the side float abandons the source line
+                # grid, so anchored-in-place math cannot align any more:
+                # flow the formulas as inline clips and let redaction remove
+                # the source glyphs.
+                joined = replace(joined, flow_inline_math=True)
+            merged[-1] = joined
         else:
             merged.append(block)
     return merged
@@ -11530,19 +11547,29 @@ def can_merge_blocks(
         # A run-in heading starts a new structural unit. Formula-continuation
         # heuristics must not pull it backward into the preceding paragraph.
         return False
+    float_wrap_merge = _looks_like_float_wrap_boundary(prev, nxt) and (
+        _float_wrap_region_beside(prev, graphic_regions) is not None
+    )
     if _looks_like_academic_formula_statement_pair(prev, nxt):
         return True
     if _looks_like_caption_continuation_pair(prev, nxt):
         return True
-    if _CAPTION_RE.match(strip_sentinels(nxt.text).lstrip()):
+    if _CAPTION_RE.match(strip_sentinels(nxt.text).lstrip()) and not float_wrap_merge:
         # A caption opener belongs to the float below the preceding table
         # rows, never to those rows. It may still absorb its own continuation
         # on the next iteration through _looks_like_caption_continuation_pair.
+        # A wrap continuation that happens to resume at an inline figure
+        # citation ("... as shown in | Fig. 5. In Shell Game ...") is prose,
+        # not a caption.
         return False
     if _looks_like_inline_heading_pair(prev, nxt):
-        if graphic_regions and bbox_crosses_graphic_region(
-            union_bbox([prev.bbox, nxt.bbox]),
-            graphic_regions,
+        if (
+            not float_wrap_merge
+            and graphic_regions
+            and bbox_crosses_graphic_region(
+                union_bbox([prev.bbox, nxt.bbox]),
+                graphic_regions,
+            )
         ):
             return False
         return True
@@ -11550,6 +11577,7 @@ def can_merge_blocks(
         caption_split = bool(_CAPTION_RE.match(strip_sentinels(prev.text).lstrip()))
         if (
             not caption_split
+            and not float_wrap_merge
             and graphic_regions
             and bbox_crosses_graphic_region(
                 union_bbox([prev.bbox, nxt.bbox]),
@@ -11559,16 +11587,24 @@ def can_merge_blocks(
             return False
         return True
     if _looks_like_formula_gap_bridge_pair(prev, nxt):
-        if graphic_regions and bbox_crosses_graphic_region(
-            union_bbox([prev.bbox, nxt.bbox]),
-            graphic_regions,
+        if (
+            not float_wrap_merge
+            and graphic_regions
+            and bbox_crosses_graphic_region(
+                union_bbox([prev.bbox, nxt.bbox]),
+                graphic_regions,
+            )
         ):
             return False
         return True
     if _looks_like_formula_rich_continuation_pair(prev, nxt):
-        if graphic_regions and bbox_crosses_graphic_region(
-            union_bbox([prev.bbox, nxt.bbox]),
-            graphic_regions,
+        if (
+            not float_wrap_merge
+            and graphic_regions
+            and bbox_crosses_graphic_region(
+                union_bbox([prev.bbox, nxt.bbox]),
+                graphic_regions,
+            )
         ):
             return False
         return True
@@ -11598,7 +11634,15 @@ def can_merge_blocks(
     ):
         return False
     if _looks_like_float_wrap_boundary(prev, nxt):
-        return False
+        if not float_wrap_merge:
+            return False
+        # The narrow fragment is explained by a side float: keep the wrapped
+        # paragraph as one unit. Downstream the float clip / keepout slots
+        # re-wrap the translation around the float, so the merged envelope
+        # crossing the graphic region is intended here.
+        overlap = min(prev.bbox[2], nxt.bbox[2]) - max(prev.bbox[0], nxt.bbox[0])
+        narrower = min(prev.bbox[2] - prev.bbox[0], nxt.bbox[2] - nxt.bbox[0])
+        return narrower > 0 and overlap / narrower >= PARAGRAPH_MIN_X_OVERLAP
     overlap = min(prev.bbox[2], nxt.bbox[2]) - max(prev.bbox[0], nxt.bbox[0])
     narrower = min(prev.bbox[2] - prev.bbox[0], nxt.bbox[2] - nxt.bbox[0])
     if narrower <= 0 or overlap / narrower < PARAGRAPH_MIN_X_OVERLAP:
@@ -11965,6 +12009,30 @@ def _looks_like_overlapping_formula_tail_continuation(
         return False
     words = _PROSE_WORD_RE.findall(bare)
     return len(words) >= 5
+
+
+def _float_wrap_region_beside(
+    prev: TextBlock,
+    graphic_regions: Sequence[BBox],
+) -> Optional[BBox]:
+    """The graphic region that explains a narrow wrap fragment, if any.
+
+    A paragraph wrapping a side float is extracted as a narrow fragment whose
+    right edge hugs the float's left edge for most of its height.
+    """
+    x0, y0, x1, y1 = prev.bbox
+    height = max(1.0, y1 - y0)
+    for region in graphic_regions or ():
+        rx0 = region[0]
+        vertical_overlap = min(y1, region[3]) - max(y0, region[1])
+        if vertical_overlap < height * 0.5:
+            continue
+        # Detected graphic envelopes run generous margins, so the region may
+        # overlap the fragment's right edge by a few tens of points; it just
+        # must not swallow the fragment's text column itself.
+        if x1 - 40.0 <= rx0 <= x1 + 42.0 and rx0 > x0 + 60.0:
+            return region
+    return None
 
 
 def _looks_like_float_wrap_boundary(prev: TextBlock, nxt: TextBlock) -> bool:
@@ -14147,6 +14215,58 @@ def _free_formula_intervals(
     if x1 - cursor >= min_width:
         output.append((baseline, cursor, x1))
     return output
+
+
+def _demote_unanchorable_math_blocks(
+    page_items: List[Tuple[TextBlock, str]],
+    centered_flags: Sequence[bool],
+    *,
+    font_pack: FontPack,
+    min_font_size: float,
+    font_scale: float,
+    margin: float,
+) -> List[Tuple[TextBlock, str]]:
+    """Flow formulas as inline clips when in-place anchoring cannot work.
+
+    Anchored math keeps the source glyphs and threads the translation
+    between them on the original line grid. When that layout is infeasible
+    the renderer would fall back to squeezing the formula as styled text
+    next to the surviving source glyphs. Deciding before redaction lets the
+    demoted block erase its source math and render sprite clips instead.
+    """
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError("PyMuPDF is required. Install with: pip install -e .") from exc
+
+    updated: List[Tuple[TextBlock, str]] = []
+    for index, (block, text) in enumerate(page_items):
+        if not _uses_fixed_source_math(block):
+            updated.append((block, text))
+            continue
+        rect = shrink_rect(fitz.Rect(block.bbox), margin)
+        if rect.width <= 1 or rect.height <= 1:
+            updated.append((block, text))
+            continue
+        fonts = font_pack.fonts_for(block.bold)
+        bold_fonts = font_pack.fonts_for(True)
+        min_size = effective_min_font_size(block, min_font_size)
+        requested = requested_translation_font_size(block, min_font_size, font_scale)
+        centered = bool(centered_flags[index]) if index < len(centered_flags) else False
+        anchored = _formula_anchored_layout(
+            block,
+            text,
+            rect,
+            fonts,
+            bold_fonts,
+            requested,
+            min_size,
+            centered,
+        )
+        if anchored is None:
+            block = replace(block, flow_inline_math=True)
+        updated.append((block, text))
+    return updated
 
 
 def translated_text_fits(

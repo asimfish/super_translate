@@ -1059,3 +1059,119 @@ def test_math_symbols_fall_back_to_math_font(tmp_path):
         alias = pick_font_alias(char, fonts)
         chosen = next(font for font, name in fonts if name == alias)
         assert chosen.has_glyph(ord(char)), (char, alias)
+
+
+class _WamP8WrapTranslator:
+    def translate_batch(self, texts):
+        outputs = []
+        for text in texts:
+            if "hardware platform" in text and "Shell Game" in text:
+                outputs.append(
+                    "我们的硬件平台由一台ARX 双臂机器人和一个RealSense D455 "
+                    "相机组成。我们设计了两个具有挑战性的记忆依赖任务，即"
+                    "\u201c猜杯子\u201d和\u201c看与按\u201d，如图5 所示。"
+                    "在\u201c猜杯子\u201d任务中，"
+                    "机器人需要在人类交换杯子后，识别出覆盖小方块的杯子。"
+                    "在\u201c看与按\u201d任务中，机器人观察桌面上的两个数字，"
+                    "根据观察到的数字分别按下相应的按钮。"
+                )
+            else:
+                outputs.append("中文译文")
+        return outputs
+
+
+def test_float_wrap_paragraph_merges_and_keeps_body_scale(tmp_path):
+    # MemoryWAM p8: a paragraph wrapping Figure 5 is extracted as a narrow
+    # 8-line fragment beside the float plus a full-width tail below it. The
+    # halves must merge into one unit whose translation re-wraps around the
+    # float at body scale, instead of each half shrinking to ~7.5pt.
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    input_pdf = Path(__file__).parent / "fixtures" / "memorywam_p8_float_wrap.pdf"
+
+    source = fitz.open(input_pdf)
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    merged_unit_texts = [
+        " ".join(strip_sentinels(block.text).split()) for block, _, _ in units
+    ]
+    assert any(
+        "hardware platform" in text and "In Shell Game" in text
+        for text in merged_unit_texts
+    ), "wrap halves were not merged into one unit"
+
+    output_pdf = tmp_path / "wam_p8.zh.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_WamP8WrapTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    translated = fitz.open(output_pdf)
+    data = translated[0].get_text("dict")
+    prose_sizes = []
+    for block in data.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                if "硬件平台" in span["text"] or "猜杯子" in span["text"]:
+                    prose_sizes.append(span["size"])
+    translated.close()
+
+    assert prose_sizes, "translated wrap paragraph not found"
+    assert min(prose_sizes) >= 8.8, f"wrap paragraph over-shrunk: {sorted(set(prose_sizes))}"
+
+
+class _OtfP6Translator:
+    def translate_batch(self, texts):
+        from pdf_zh_translator.pdf_layout import SENTINEL_RUN_RE
+
+        outputs = []
+        for text in texts:
+            if "remaining matrix elements" in text:
+                runs = SENTINEL_RUN_RE.findall(text)
+                outputs.append(
+                    "".join(runs)
+                    + "而其余矩阵元素仍保持对应取值。通过迭代这一过程，"
+                    "可以得到更接近最优流传输（OFT）精确解的结果，"
+                    "从而得到更接近最优解的估计。"
+                )
+            else:
+                outputs.append("中文译文")
+        return outputs
+
+
+def test_unanchorable_math_block_flows_sprites_at_body_scale(tmp_path):
+    # OTF p6 production defect: a body paragraph carrying 14 inline formulas
+    # could not thread its translation between the fixed source glyphs, so
+    # the renderer squeezed the formulas as styled text at 6.4pt next to the
+    # surviving source math. Demoting the block before redaction must erase
+    # the source math and flow the paragraph with sprite clips at body scale.
+    input_pdf = Path(__file__).parent / "fixtures" / "otf_p06_matrix_iteration.pdf"
+    output_pdf = tmp_path / "otf_p6.zh.pdf"
+
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_OtfP6Translator(),
+        preserve_graphics_text=True,
+    )
+
+    translated = fitz.open(output_pdf)
+    data = translated[0].get_text("dict")
+    prose_sizes = []
+    for block in data.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                if "更接近最优" in span["text"] or "矩阵元素" in span["text"]:
+                    prose_sizes.append(span["size"])
+    translated.close()
+
+    assert prose_sizes, "translated matrix-iteration paragraph not found"
+    assert min(prose_sizes) >= 8.8, (
+        f"unanchorable math paragraph over-shrunk: {sorted(set(prose_sizes))}"
+    )
