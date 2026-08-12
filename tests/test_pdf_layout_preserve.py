@@ -4299,6 +4299,35 @@ class FormulaStampClipTests(unittest.TestCase):
         self.assertFalse(any(sample < 205 for sample in bottom_rows))
         document.close()
 
+    def test_clip_uses_least_ink_row_when_tight_leading_has_no_clean_gap(self):
+        from pdf_zh_translator import pdf_layout
+
+        document = SimpleNamespace(
+            _pdfzh_span_cache={0: [(0.0, 8.0, 10.0, 12.0)]}
+        )
+        profile = [
+            (0.0, 0.08),
+            (1.0, 0.10),
+            (2.0, 0.12),
+            (3.0, 0.09),
+            (4.0, 0.07),
+            (5.0, 0.05),
+            (6.0, 0.03),
+            (7.0, 0.02),
+            (8.0, 0.012),
+            (9.0, 0.018),
+            (10.0, 0.04),
+        ]
+
+        with patch.object(pdf_layout, "_clip_row_ink_profile", return_value=profile):
+            trimmed = pdf_layout._trim_formula_clip_against_foreign_ink(
+                document,
+                0,
+                (0.0, 0.0, 10.0, 10.0),
+            )
+
+        self.assertAlmostEqual(trimmed[3], 8.0)
+
     def test_clip_untouched_without_intruders(self):
         from pdf_zh_translator.pdf_layout import _trim_formula_clip_against_foreign_ink
 

@@ -927,6 +927,37 @@ def _rule_inside_regions(
     return False
 
 
+def _figure_graphic_regions(
+    graphic_regions: Sequence[BBox],
+    caption_kinds: Sequence[Tuple[BBox, str]],
+) -> List[BBox]:
+    """Graphic envelopes paired with a nearby figure caption.
+
+    ``collect_graphic_regions`` also finds boxed tables, so passing every
+    envelope to table QA would hide genuine grid damage.  Figure art is
+    exempt only when a figure caption provides an independent semantic cue.
+    """
+    figures: List[BBox] = []
+    for region in graphic_regions:
+        rx0, ry0, rx1, ry1 = region
+        region_width = max(1.0, rx1 - rx0)
+        for (cx0, cy0, cx1, cy1), kind in caption_kinds:
+            if kind != "figure":
+                continue
+            caption_width = max(1.0, cx1 - cx0)
+            horizontal_overlap = min(rx1, cx1) - max(rx0, cx0)
+            if horizontal_overlap < 0.25 * min(region_width, caption_width):
+                continue
+            below_gap = cy0 - ry1
+            above_gap = ry0 - cy1
+            # Drawing envelopes often include axis labels or whitespace that
+            # reaches into the caption's extracted line box by a few points.
+            if -16.0 <= below_gap <= 180.0 or -16.0 <= above_gap <= 80.0:
+                figures.append(region)
+                break
+    return figures
+
+
 def _table_structure_issues(
     page_number: int,
     original_rules: Sequence[Tuple[float, float, float]],
@@ -935,6 +966,7 @@ def _table_structure_issues(
     original_page: object = None,
     translated_page: object = None,
     preserved_regions: Sequence[BBox] = (),
+    graphic_regions: Sequence[BBox] = (),
 ) -> List[object]:
     """Compare table rule geometry between the original and the translation.
 
@@ -948,16 +980,17 @@ def _table_structure_issues(
     boxes) are restored verbatim and verified by the preserved-ink module;
     counting them here only manufactures chart-shaped false tables.
     """
-    if preserved_regions:
+    excluded_regions = list(preserved_regions) + list(graphic_regions)
+    if excluded_regions:
         original_rules = [
             rule
             for rule in original_rules
-            if not _rule_inside_regions(rule, preserved_regions)
+            if not _rule_inside_regions(rule, excluded_regions)
         ]
         translated_rules = [
             rule
             for rule in translated_rules
-            if not _rule_inside_regions(rule, preserved_regions)
+            if not _rule_inside_regions(rule, excluded_regions)
         ]
     original_clusters = _rule_clusters(original_rules)
     if not original_clusters:
@@ -1486,6 +1519,10 @@ def inspect_translation(
             translated_page = translated[index]
             page_number = index + 1
             page_regions = preserved_regions.get(index, [])
+            page_figure_regions = _figure_graphic_regions(
+                graphic_regions_by_page.get(index, []),
+                caption_kinds.get(index, []),
+            )
             page_keepouts = keepouts.get(index, [])
             page_captions = caption_bands.get(index, [])
             reference_y = _reference_section_start_y(translated_page)
@@ -1554,6 +1591,7 @@ def inspect_translation(
                     original_page=original_page,
                     translated_page=translated_page,
                     preserved_regions=page_regions,
+                    graphic_regions=page_figure_regions,
                 )
             )
             issues.extend(

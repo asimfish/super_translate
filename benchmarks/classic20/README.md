@@ -57,6 +57,19 @@ original-vs-translated page previews only when the recorded licence sets
 All steps are resumable (`--force` to redo, `--only id,id` to scope). Use
 `--isolate` for multi-paper translation runs so each paper gets a fresh
 interpreter and engine memory remains bounded.
+Evaluation cache entries are content-addressed: source PDF SHA-256, translated
+PDF SHA-256, and a QA-code fingerprint must all match. Reports also record the
+QA and translation-engine commits/fingerprints. The release gate rejects stale
+reports and translations whose timing metadata cannot prove which engine built
+the exact output PDF. A cached translation is reused only when its source hash
+and engine fingerprint still match; terminology corpus, layout, and prompt
+changes therefore force a real rebuild instead of silently recycling old output.
+Block-level API response caches are separately namespaced by model, prompts,
+and terminology content, so a semantic translation change cannot reuse text
+produced under an older policy.
+The selected regular, bold, fallback, and math font files are fingerprinted as
+well, because identical code with different CJK metrics is not the same layout
+engine for reproducibility purposes.
 The `gate` command writes `quality-gate.json` and exits non-zero unless at
 least 20 papers were evaluated, 20 strictly pass, every layout axis is covered,
 source hashes and license metadata agree, and an optional `--baseline-reports`

@@ -24,9 +24,11 @@ from pdf_zh_translator.page_inspector import (
     _LIST_MARKER_RE,
     INSPECTOR_ISSUE_CODES,
     _edge_cut,
+    _figure_graphic_regions,
     _font_size_issues,
     _mask_coverage,
     _rule_clusters,
+    _table_structure_issues,
     inspect_translation,
 )
 
@@ -331,6 +333,39 @@ class TestHelpers:
         clusters = _rule_clusters(rules)
         assert len(clusters) == 1
         assert len(clusters[0]) == 4
+
+    def test_graphic_envelope_exempts_plot_rules_but_not_neighbor_table(self):
+        plot_rules = [
+            (100.0, 40.0, 220.0),
+            (120.0, 40.0, 220.0),
+            (140.0, 40.0, 220.0),
+        ]
+        table_rules = [
+            (300.0, 40.0, 260.0),
+            (320.0, 40.0, 260.0),
+            (340.0, 40.0, 260.0),
+        ]
+        translated = plot_rules + table_rules[:2]
+
+        issues = _table_structure_issues(
+            1,
+            plot_rules + table_rules,
+            [],
+            translated,
+            graphic_regions=[(30.0, 90.0, 230.0, 150.0)],
+        )
+
+        assert len(issues) == 1
+        assert "y=300" in issues[0].message
+        assert "2 rules vs 3" in issues[0].message
+
+    def test_figure_caption_pairs_with_slightly_overlapping_graphic_envelope(self):
+        region = (56.0, 80.9, 558.5, 720.1)
+        # Inspector expands caption bands by 2pt before pairing.
+        caption = (224.0, 711.5, 388.0, 727.5)
+
+        assert _figure_graphic_regions([region], [(caption, "figure")]) == [region]
+        assert _figure_graphic_regions([region], [(caption, "table")]) == []
 
     @pytest.mark.parametrize(
         "text",

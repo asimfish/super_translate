@@ -24,9 +24,11 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import time
 import urllib.request
@@ -44,6 +46,27 @@ _LICENSE_RE = re.compile(
     r"https?://(?:arxiv\.org/licenses|creativecommons\.org/(?:licenses|publicdomain))/[a-z0-9./-]+"
 )
 _USER_AGENT = "paper-china-benchmark/1.0 (translation quality benchmark)"
+_QA_FILES = (
+    REPO / "pdf_zh_translator" / "pdf_layout.py",
+    REPO / "pdf_zh_translator" / "page_inspector.py",
+    REPO / "pdf_zh_translator" / "visual_qa.py",
+)
+_ENGINE_FILES = (
+    REPO / "pdf_zh_translator" / "pdf_layout.py",
+    REPO / "pdf_zh_translator" / "layout_profiles.py",
+    REPO / "pdf_zh_translator" / "translators.py",
+    REPO / "pdf_zh_translator" / "corpus.py",
+    REPO / "pdf_zh_translator" / "corpus.json",
+    REPO / "pdf_zh_translator" / "corpora" / "ai_conferences.json",
+    REPO / "pdf_zh_translator" / "corpora" / "top_venue_tracks.json",
+)
+_TRANSLATION_FILES = (
+    REPO / "pdf_zh_translator" / "translators.py",
+    REPO / "pdf_zh_translator" / "corpus.py",
+    REPO / "pdf_zh_translator" / "corpus.json",
+    REPO / "pdf_zh_translator" / "corpora" / "ai_conferences.json",
+    REPO / "pdf_zh_translator" / "corpora" / "top_venue_tracks.json",
+)
 
 
 @dataclass(frozen=True)
@@ -88,6 +111,147 @@ def _paths(workdir: Path) -> dict:
         "reports": workdir / "reports",
         "previews": workdir / "previews",
     }
+
+
+def _content_fingerprint(paths: tuple[Path, ...]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(str(path.relative_to(REPO)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def _qa_fingerprint() -> str:
+    return _content_fingerprint(_QA_FILES)
+
+
+@functools.lru_cache(maxsize=1)
+def _engine_fingerprint() -> str:
+    return _content_fingerprint(_ENGINE_FILES)
+
+
+@functools.lru_cache(maxsize=1)
+def _translation_fingerprint() -> str:
+    return _content_fingerprint(_TRANSLATION_FILES)
+
+
+@functools.lru_cache(maxsize=1)
+def _font_fingerprint() -> str:
+    from pdf_zh_translator.pdf_layout import build_font_pack
+
+    pack = build_font_pack(None, [])
+    digest = hashlib.sha256()
+    for role, path in (
+        ("regular", pack.regular_file),
+        ("bold", pack.bold_file),
+        ("fallback", pack.fallback_file),
+        ("math", pack.math_fallback_file),
+    ):
+        digest.update(role.encode("ascii"))
+        digest.update(b"\0")
+        if path is not None:
+            digest.update(Path(path).read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def _evaluation_cache_matches(
+    report: dict,
+    source: Path,
+    translated: Path,
+    timing_path: Path | None = None,
+) -> bool:
+    if not source.exists() or not translated.exists():
+        return False
+    source_sha256 = _sha256_file(source)
+    translated_sha256 = _sha256_file(translated)
+    matches = (
+        report.get("schema_version") == 2
+        and report.get("source_sha256") == source_sha256
+        and report.get("translated_sha256") == translated_sha256
+        and report.get("qa_fingerprint") == _qa_fingerprint()
+    )
+    if not matches or timing_path is None:
+        return matches
+    provenance = _translation_provenance(
+        timing_path,
+        source_sha256,
+        translated_sha256,
+    )
+    return all(report.get(key) == value for key, value in provenance.items())
+
+
+def _translation_provenance(
+    timing_path: Path,
+    source_sha256: str,
+    translated_sha256: str,
+) -> dict:
+    try:
+        timing = json.loads(timing_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        timing = {}
+    if (
+        timing.get("schema_version") != 2
+        or timing.get("source_sha256") != source_sha256
+        or timing.get("translated_sha256") != translated_sha256
+    ):
+        return {
+            "engine_fingerprint": "unknown",
+            "engine_commit": "unknown",
+            "translation_model": "unknown",
+            "font_fingerprint": "unknown",
+        }
+    return {
+        "engine_fingerprint": str(timing.get("engine_fingerprint") or "unknown"),
+        "engine_commit": str(timing.get("engine_commit") or "unknown"),
+        "translation_model": str(timing.get("translation_model") or "unknown"),
+        "font_fingerprint": str(timing.get("font_fingerprint") or "unknown"),
+    }
+
+
+def _translation_cache_matches(
+    timing_path: Path,
+    source: Path,
+    translated: Path,
+    model: str,
+) -> bool:
+    if not source.exists() or not translated.exists():
+        return False
+    provenance = _translation_provenance(
+        timing_path,
+        _sha256_file(source),
+        _sha256_file(translated),
+    )
+    return (
+        provenance["engine_fingerprint"] == _engine_fingerprint()
+        and provenance["translation_model"] == model
+        and provenance["font_fingerprint"] == _font_fingerprint()
+    )
+
+
+def _block_cache_path(translations_dir: Path, paper_id: str, model: str) -> Path:
+    digest = hashlib.sha256()
+    digest.update(model.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(_translation_fingerprint().encode("ascii"))
+    namespace = digest.hexdigest()[:16]
+    return translations_dir / f"{paper_id}.translation-cache.{namespace}.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +348,6 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
         # One subprocess per paper: the engine accumulates memory across
         # papers in-process (long 40+ paper runs segfault around paper ~34),
         # so bound each translation to a fresh interpreter.
-        import subprocess
-
         failures = 0
         for entry in entries:
             cmd = [
@@ -213,6 +375,7 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
 
     paths = _paths(workdir)
     paths["translations"].mkdir(parents=True, exist_ok=True)
+    model = _env("DEEPSEEK_MODEL", "deepseek-v4-pro")
     failures = 0
     for entry in entries:
         source = paths["papers"] / f"{entry.id}.pdf"
@@ -223,20 +386,22 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
         mono = paths["translations"] / f"{entry.id}-mono.pdf"
         timing_path = paths["translations"] / f"{entry.id}.timing.json"
         if mono.exists() and not args.force:
-            print(f"translate {entry.id}: cached")
-            continue
+            if _translation_cache_matches(timing_path, source, mono, model):
+                print(f"translate {entry.id}: cached")
+                continue
+            print(f"translate {entry.id}: stale translation, retranslating")
         vendor = VendorTranslator(
             api_url=_env("DEEPSEEK_API_URL", "https://api.deepseek.com"),
             api_key=api_key,
             mode="deepseek",
-            model=_env("DEEPSEEK_MODEL", "deepseek-v4-pro"),
+            model=model,
             source_lang="en",
             target_lang="zh",
             progress=False,
         )
         translator = CachedTranslator(
             vendor,
-            paths["translations"] / f"{entry.id}.translation-cache.jsonl",
+            _block_cache_path(paths["translations"], entry.id, model),
         )
         started = time.time()
         try:
@@ -254,11 +419,18 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
         timing_path.write_text(
             json.dumps(
                 {
+                    "schema_version": 2,
                     "id": entry.id,
                     "seconds": round(elapsed, 1),
                     "pages": report.page_count,
                     "translated_blocks": report.translated_blocks,
                     "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "source_sha256": _sha256_file(source),
+                    "translated_sha256": _sha256_file(mono),
+                    "engine_fingerprint": _engine_fingerprint(),
+                    "engine_commit": _git_commit(),
+                    "translation_model": model,
+                    "font_fingerprint": _font_fingerprint(),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -294,8 +466,19 @@ def cmd_evaluate(entries: list[Entry], workdir: Path, args) -> int:
             print(f"evaluate {entry.id}: missing pair, skipping")
             continue
         if report_path.exists() and not args.force:
-            print(f"evaluate {entry.id}: cached")
-            continue
+            try:
+                cached = json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                cached = {}
+            if _evaluation_cache_matches(
+                cached,
+                source,
+                mono,
+                paths["translations"] / f"{entry.id}.timing.json",
+            ):
+                print(f"evaluate {entry.id}: cached")
+                continue
+            print(f"evaluate {entry.id}: stale report, reevaluating")
         started = time.time()
         try:
             issues = verify_translation_issues(source, mono)
@@ -314,12 +497,24 @@ def cmd_evaluate(entries: list[Entry], workdir: Path, args) -> int:
             by_code[issue.code] = by_code.get(issue.code, 0) + 1
             if issue.severity == "error" and issue.page:
                 error_pages.add(issue.page)
+        source_sha256 = _sha256_file(source)
+        translated_sha256 = _sha256_file(mono)
         payload = {
+            "schema_version": 2,
             "id": entry.id,
             "arxiv_id": entry.arxiv_id,
             "title": entry.title,
             "tags": list(entry.tags),
             "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "source_sha256": source_sha256,
+            "translated_sha256": translated_sha256,
+            "qa_fingerprint": _qa_fingerprint(),
+            "qa_commit": _git_commit(),
+            **_translation_provenance(
+                paths["translations"] / f"{entry.id}.timing.json",
+                source_sha256,
+                translated_sha256,
+            ),
             "seconds": round(time.time() - started, 1),
             "visual_score": round(visual.overall_score, 4),
             "visual_risk": visual.risk_level,
@@ -485,10 +680,17 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
                 "issues_by_code": report["issues_by_code"],
                 "strict_pass": report["strict_pass"],
                 "legacy_pass": report["legacy_pass"],
+                "qa_fingerprint": report.get("qa_fingerprint", "unknown"),
+                "qa_commit": report.get("qa_commit", "unknown"),
+                "engine_fingerprint": report.get("engine_fingerprint", "unknown"),
+                "engine_commit": report.get("engine_commit", "unknown"),
+                "translation_model": report.get("translation_model", "unknown"),
+                "font_fingerprint": report.get("font_fingerprint", "unknown"),
                 "previews": previews,
             }
         )
     payload = {
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "papers": showcase,
     }
@@ -556,6 +758,7 @@ def _sha256_file(path: Path) -> str:
 
 def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
     """Fail unless benchmark evidence meets the open-source release policy."""
+    _load_env_file()
     paths = _paths(workdir)
     min_evaluated = max(1, int(args.min_evaluated))
     min_strict = max(1, int(args.min_strict_passes))
@@ -578,6 +781,7 @@ def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
         covered_axes.update(entry.tags)
 
         source_path = paths["papers"] / f"{entry.id}.pdf"
+        translated_path = paths["translations"] / f"{entry.id}-mono.pdf"
         meta_path = paths["meta"] / f"{entry.id}.json"
         if not source_path.exists() or not meta_path.exists():
             provenance_errors.append(f"{entry.id}: source or metadata missing")
@@ -592,6 +796,26 @@ def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
             expected_showcase = "creativecommons.org" in license_url
             if bool(meta.get("showcase_ok")) != expected_showcase:
                 provenance_errors.append(f"{entry.id}: showcase license flag mismatch")
+        if not _evaluation_cache_matches(
+            report,
+            source_path,
+            translated_path,
+            paths["translations"] / f"{entry.id}.timing.json",
+        ):
+            provenance_errors.append(f"{entry.id}: report provenance is stale")
+        if (
+            report.get("engine_fingerprint") in (None, "", "unknown")
+            or report.get("engine_commit") in (None, "", "unknown")
+        ):
+            provenance_errors.append(f"{entry.id}: translation engine provenance missing")
+        elif report.get("engine_fingerprint") != _engine_fingerprint():
+            provenance_errors.append(f"{entry.id}: translation engine is stale")
+        if report.get("font_fingerprint") != _font_fingerprint():
+            provenance_errors.append(f"{entry.id}: translation font pack is stale")
+        if report.get("translation_model") != _env(
+            "DEEPSEEK_MODEL", "deepseek-v4-pro"
+        ):
+            provenance_errors.append(f"{entry.id}: translation model is stale")
 
         if baseline_dir:
             baseline_path = baseline_dir / f"{entry.id}.json"
@@ -627,7 +851,7 @@ def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
         failures.append(f"papers regressed against baseline: {len(regressions)}")
 
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "passed": not failures,
         "minimum_evaluated": min_evaluated,

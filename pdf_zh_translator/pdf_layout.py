@@ -16528,10 +16528,17 @@ def _trim_formula_clip_against_foreign_ink(
             if profile:
                 if new_y0 > y0 + 0.05:
                     gap_edge = _ink_gap_edge_below(profile, y0, new_y0)
+                    if gap_edge is None:
+                        # Tight leading may leave no fully white raster row.
+                        # Cut at the thinnest row instead of the font bbox,
+                        # which otherwise retains a hairline of foreign ink.
+                        gap_edge = _least_ink_row_edge(profile, y0, new_y0)
                     if gap_edge is not None:
                         new_y0 = gap_edge
                 if new_y1 < y1 - 0.05:
                     gap_edge = _ink_gap_edge_above(profile, y1, new_y1)
+                    if gap_edge is None:
+                        gap_edge = _least_ink_row_edge(profile, new_y1, y1)
                     if gap_edge is not None:
                         new_y1 = gap_edge
 
@@ -16652,6 +16659,18 @@ def _ink_whitespace_gaps(
     if start is not None and clean_rows >= _CLIP_PROFILE_MIN_GAP_ROWS:
         gaps.append((start, profile[-1][0]))
     return gaps
+
+
+def _least_ink_row_edge(
+    profile: Sequence[Tuple[float, float]],
+    lo: float,
+    hi: float,
+) -> Optional[float]:
+    """Return the least-damaging raster cut inside a tight ink band."""
+    window = [(y, ink) for y, ink in profile if lo <= y <= hi]
+    if not window:
+        return None
+    return min(window, key=lambda item: item[1])[0]
 
 
 def _ink_gap_edge_below(
