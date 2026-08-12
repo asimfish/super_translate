@@ -180,6 +180,34 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
             "DEEPSEEK_API_KEY / PAPER_CHINA_DEEPSEEK_API_KEY is not set"
         )
 
+    if getattr(args, "isolate", False):
+        # One subprocess per paper: the engine accumulates memory across
+        # papers in-process (long 40+ paper runs segfault around paper ~34),
+        # so bound each translation to a fresh interpreter.
+        import subprocess
+
+        failures = 0
+        for entry in entries:
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "translate",
+                "--only",
+                entry.id,
+                "--workdir",
+                str(workdir),
+            ]
+            if args.force:
+                cmd.append("--force")
+            rc = subprocess.call(cmd)
+            if rc != 0:
+                failures += 1
+                print(
+                    f"translate {entry.id}: subprocess exited rc={rc}",
+                    file=sys.stderr,
+                )
+        return 1 if failures else 0
+
     from pdf_zh_translator.pdf_layout import translate_pdf
     from pdf_zh_translator.translators import CachedTranslator, VendorTranslator
 
@@ -430,7 +458,12 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
         source = paths["papers"] / f"{entry.id}.pdf"
         mono = paths["translations"] / f"{entry.id}-mono.pdf"
         previews = []
-        if not args.no_previews and source.exists() and mono.exists():
+        if (
+            not args.no_previews
+            and bool(meta.get("showcase_ok"))
+            and source.exists()
+            and mono.exists()
+        ):
             previews = _render_previews(
                 entry.id,
                 source,
@@ -634,6 +667,11 @@ def main() -> int:
     parser.add_argument("--only", help="comma-separated paper ids")
     parser.add_argument("--workdir", type=Path, default=DEFAULT_WORKDIR)
     parser.add_argument("--force", action="store_true", help="redo cached steps")
+    parser.add_argument(
+        "--isolate",
+        action="store_true",
+        help="translate each paper in a fresh subprocess (bounds engine memory)",
+    )
     parser.add_argument(
         "--no-previews", action="store_true", help="skip preview rendering in report"
     )
