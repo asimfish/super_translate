@@ -1033,6 +1033,13 @@ _BIBLIOGRAPHY_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 _PSEUDOCODE_LINE_RE = re.compile(r"\b\d{1,2}:\s*[A-Z]")
+# Quoted sample/prompt boxes ("Title: ...", "Poor English input: ...",
+# "Q: ... A: ...") are evidentiary content that stays verbatim by design.
+# Scans anywhere because PyMuPDF merges consecutive lines without spaces
+# ("...SplitSubtitle: Those..."), hiding line-initial labels.
+_EXAMPLE_LABEL_RE = re.compile(
+    r"[A-Z][a-zA-Z]{0,20}(?:\s[a-zA-Z]{1,15}){0,3}:\s*[\"'A-Z0-9]"
+)
 _PSEUDOCODE_KEYWORD_RE = re.compile(
     r"(?<![A-Za-z])(?:Update|Initialize|Compute|Return|Require|Ensure|Input|"
     r"Output|Apply|Sample|repeat|until|while|end\s+(?:for|while|if))(?![a-z])"
@@ -1083,6 +1090,8 @@ def _untranslated_block_issues(
             len(_PSEUDOCODE_LINE_RE.findall(text)) >= 2
             or len(_PSEUDOCODE_KEYWORD_RE.findall(text)) >= 2
         ):
+            continue
+        if len(_EXAMPLE_LABEL_RE.findall(text)) >= 2:
             continue
         if _is_reference_or_formula_text(text):
             continue

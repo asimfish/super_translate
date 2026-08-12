@@ -98,7 +98,11 @@ class TestShowcaseData:
     def test_page_is_served(self, client):
         response = client.get("/showcase")
         assert response.status_code == 200
-        assert "??????" in response.text or "showcase" in response.text.lower()
+        # Page title is Chinese ("translation quality benchmark").
+        assert (
+            "\u7ffb\u8bd1\u8d28\u91cf\u57fa\u51c6" in response.text
+            or "showcase" in response.text.lower()
+        )
 
     def test_data_endpoint_returns_payload(self, client, benchmark_dir):
         response = client.get("/api/showcase")

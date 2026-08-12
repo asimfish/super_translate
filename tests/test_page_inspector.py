@@ -96,8 +96,13 @@ class TestUntranslatedBlock:
         page = document.new_page(width=595, height=842)
         page.insert_textbox(
             fitz.Rect(72, 90, 520, 200),
-            "??????????????????????????????????"
-            "?????????????????????",
+            # "The presented method achieves excellent results on all
+            # benchmark suites" in Chinese (escaped to keep the source ASCII).
+            "\u672c\u6587\u63d0\u51fa\u7684\u65b9\u6cd5\u5728\u6240\u6709\u57fa"
+            "\u51c6\u5957\u4ef6\u4e0a\u90fd\u53d6\u5f97\u4e86\u4f18\u5f02\u7684"
+            "\u7ed3\u679c\uff0c\u5e76\u5728\u5206\u5e03\u504f\u79fb\u8bbe\u7f6e"
+            "\u4e2d\u660e\u663e\u4f18\u4e8e\u6bcf\u4e00\u4e2a\u57fa\u7ebf\u6a21"
+            "\u578b\uff0c\u8986\u76d6\u4e03\u4e2a\u6270\u52a8\u7ef4\u5ea6\u3002",
             fontsize=10,
             fontname="china-s",
         )
@@ -152,4 +157,29 @@ class TestHelpers:
         assert _LIST_MARKER_RE.match(text)
 
     def test_list_marker_rejects_plain_prose(self):
-        assert not _LIST_MARKER_RE.match("?????????")
+        # "This paper proposes a new method" in Chinese, no list marker.
+        assert not _LIST_MARKER_RE.match(
+            "\u672c\u6587\u63d0\u51fa\u4e00\u79cd\u65b0\u65b9\u6cd5"
+        )
+
+    def test_example_label_pattern_separates_sample_boxes_from_prose(self):
+        from pdf_zh_translator.page_inspector import _EXAMPLE_LABEL_RE
+
+        # Quoted sample boxes: labels survive PyMuPDF's space-less line merge.
+        news = (
+            "Title: United Methodists Agree to Historic SplitSubtitle: "
+            "Those who oppose gay marriage will form their own denomination"
+        )
+        grammar = (
+            "Poor English input: I eated the purple berries. "
+            "Good English output: I ate the purple berries."
+        )
+        assert len(_EXAMPLE_LABEL_RE.findall(news)) >= 2
+        assert len(_EXAMPLE_LABEL_RE.findall(grammar)) >= 2
+        # Analysis prose, including colon-bearing references, stays flagged.
+        prose = (
+            "On tasks that involve choosing one correct completion from "
+            "several options, as shown in Table 3: we observe larger models "
+            "perform better."
+        )
+        assert len(_EXAMPLE_LABEL_RE.findall(prose)) < 2
