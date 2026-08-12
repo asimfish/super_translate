@@ -36,6 +36,12 @@ licensed papers; only those may have full translated pages displayed in the
 public showcase. Papers under the arXiv non-exclusive licence contribute
 metrics (and internal review artifacts) only, unless permission is obtained.
 
+The 25 classics all carry the arXiv non-exclusive licence, so the manifest
+additionally curates a `"group": "showcase_cc"` set of CC BY 4.0 papers
+(LLaMA, Mistral 7B, Mamba, DPO, Chain-of-Thought, vLLM - licenses verified
+at fetch time) whose original-vs-translated page pairs power the public
+comparison wall.
+
 ## Running
 
 ```sh

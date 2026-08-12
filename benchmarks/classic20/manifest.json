@@ -38,6 +38,12 @@
     {"id": "dcgan", "arxiv_id": "1511.06434", "title": "Unsupervised Representation Learning with DCGANs", "tags": ["single_column", "figure_dense", "short_paper"]},
     {"id": "sam", "arxiv_id": "2304.02643", "title": "Segment Anything", "tags": ["two_column", "figure_dense", "long_paper", "long_references"]},
     {"id": "rag", "arxiv_id": "2005.11401", "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP", "tags": ["single_column", "table_heavy"]},
-    {"id": "gcn", "arxiv_id": "1609.02907", "title": "Semi-Supervised Classification with Graph Convolutional Networks", "tags": ["single_column", "math_dense", "short_paper"]}
+    {"id": "gcn", "arxiv_id": "1609.02907", "title": "Semi-Supervised Classification with Graph Convolutional Networks", "tags": ["single_column", "math_dense", "short_paper"]},
+    {"id": "llama", "arxiv_id": "2302.13971", "title": "LLaMA: Open and Efficient Foundation Language Models", "tags": ["single_column", "table_heavy"], "group": "showcase_cc"},
+    {"id": "mistral", "arxiv_id": "2310.06825", "title": "Mistral 7B", "tags": ["single_column", "figure_dense", "short_paper"], "group": "showcase_cc"},
+    {"id": "mamba", "arxiv_id": "2312.00752", "title": "Mamba: Linear-Time Sequence Modeling with Selective State Spaces", "tags": ["single_column", "math_dense", "algorithm_blocks", "long_paper"], "group": "showcase_cc"},
+    {"id": "dpo", "arxiv_id": "2305.18290", "title": "Direct Preference Optimization", "tags": ["single_column", "math_dense", "appendix_heavy"], "group": "showcase_cc"},
+    {"id": "cot", "arxiv_id": "2201.11903", "title": "Chain-of-Thought Prompting Elicits Reasoning", "tags": ["single_column", "table_heavy", "appendix_heavy"], "group": "showcase_cc"},
+    {"id": "vllm", "arxiv_id": "2309.06180", "title": "Efficient Memory Management for LLM Serving (vLLM)", "tags": ["two_column", "figure_dense", "math_dense"], "group": "showcase_cc"}
   ]
 }
