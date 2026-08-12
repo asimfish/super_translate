@@ -453,20 +453,49 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
                 "previews": previews,
             }
         )
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "papers": showcase,
+    }
+    comparison = _baseline_comparison(workdir, rows)
+    if comparison:
+        payload["comparison"] = comparison
     (workdir / "showcase.json").write_text(
-        json.dumps(
-            {
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "papers": showcase,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     print(f"wrote {report_md} and showcase.json ({len(showcase)} papers)")
     return 0
+
+
+def _baseline_comparison(workdir: Path, rows: list) -> dict | None:
+    """Aggregate current vs pre-fix (reports_baseline) evaluation totals."""
+    baseline_dir = workdir / "reports_baseline"
+    if not baseline_dir.is_dir():
+        return None
+    baseline_reports = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(baseline_dir.glob("*.json"))
+    ]
+    if not baseline_reports:
+        return None
+
+    def totals(reports: list) -> dict:
+        by_code: dict[str, int] = {}
+        for report in reports:
+            for code, count in report.get("issues_by_code", {}).items():
+                by_code[code] = by_code.get(code, 0) + count
+        return {
+            "error_count": sum(report.get("error_count", 0) for report in reports),
+            "strict_pass": sum(1 for report in reports if report.get("strict_pass")),
+            "legacy_pass": sum(1 for report in reports if report.get("legacy_pass")),
+            "issues_by_code": dict(sorted(by_code.items())),
+        }
+
+    return {
+        "baseline": totals(baseline_reports),
+        "current": totals([report for _entry, report, _meta in rows]),
+    }
 
 
 # ---------------------------------------------------------------------------

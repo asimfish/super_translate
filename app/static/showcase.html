@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>翻译质量基准 - Super Translate</title>
+<style>
+  :root {
+    --bg: #f6f7fb; --card: #ffffff; --ink: #1f2430; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #2563eb; --good: #16a34a; --bad: #dc2626;
+    --chip: #eef2ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); }
+  .header { display: flex; align-items: center; justify-content: space-between; padding: 14px 28px; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  .header h1 { font-size: 18px; margin: 0; }
+  .header a { color: var(--accent); text-decoration: none; font-size: 14px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 60px; }
+  .intro { color: var(--muted); font-size: 14px; line-height: 1.7; margin: 0 0 18px; }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 10px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .stat .k { font-size: 12px; color: var(--muted); }
+  .stat .v { font-size: 22px; font-weight: 650; margin-top: 4px; }
+  .stat .d { font-size: 12px; margin-top: 2px; }
+  .d.up { color: var(--good); }
+  .note { font-size: 12px; color: var(--muted); margin: 6px 0 22px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .card h3 { margin: 0; font-size: 15px; line-height: 1.45; }
+  .card h3 a { color: inherit; text-decoration: none; }
+  .card h3 a:hover { color: var(--accent); }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--chip); color: #3730a3; border-radius: 999px; font-size: 11px; padding: 2px 9px; }
+  .chip.lic { background: #f0fdf4; color: var(--good); }
+  .chip.lic.no { background: #fef2f2; color: var(--bad); }
+  .bar { height: 6px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
+  .badges { display: flex; gap: 6px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 6px; font-weight: 600; }
+  .badge.pass { background: #f0fdf4; color: var(--good); }
+  .badge.fail { background: #fef2f2; color: var(--bad); }
+  .codes { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .btn { margin-top: 2px; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 8px; padding: 7px 0; font-size: 13px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn[disabled] { color: var(--muted); cursor: not-allowed; }
+  .modal { position: fixed; inset: 0; background: rgba(15, 20, 30, .55); display: none; align-items: flex-start; justify-content: center; overflow: auto; padding: 30px 16px; z-index: 20; }
+  .modal.open { display: flex; }
+  .sheet { background: var(--card); border-radius: 14px; max-width: 1080px; width: 100%; padding: 20px 22px 26px; }
+  .sheet h2 { margin: 0 0 4px; font-size: 17px; }
+  .sheet .close { float: right; border: 0; background: transparent; font-size: 20px; cursor: pointer; color: var(--muted); }
+  .pair { margin-top: 16px; }
+  .pair .cap { font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+  .pair .imgs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .pair img { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .empty { text-align: center; color: var(--muted); padding: 60px 0; }
+  @media (max-width: 720px) { .pair .imgs { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="header">
+  <h1>经典论文翻译质量基准</h1>
+  <a href="/">← 返回 Super Translate</a>
+</header>
+<div class="wrap">
+  <p class="intro">25 篇里程碑论文（Attention、ResNet、BERT、GPT-3、SAM……），按十个版式维度覆盖单双栏、公式密集、表格/算法、长参考文献等场景。每篇由引擎完整翻译后经过全量质量检测：文本层校验、九类视觉巡检（字号漂移、公式裁切、表格结构、漏翻……）与渲染相似度评分。所有数据可通过 <code>scripts/classic_benchmark.py</code> 复现。</p>
+  <div id="summary" class="summary"></div>
+  <p class="note" id="note"></p>
+  <div id="grid" class="grid"></div>
+  <div id="empty" class="empty" style="display:none">基准数据尚未生成：请先运行 benchmark 的 report 步骤。</div>
+</div>
+
+<div class="modal" id="modal">
+  <div class="sheet">
+    <button class="close" data-close>&times;</button>
+    <h2 id="m-title"></h2>
+    <div class="row" id="m-sub"></div>
+    <div id="m-pairs"></div>
+  </div>
+</div>
+
+<script>
+const L = {"title": "\u7ffb\u8bd1\u8d28\u91cf\u57fa\u51c6 - Super Translate", "h1": "\u7ecf\u5178\u8bba\u6587\u7ffb\u8bd1\u8d28\u91cf\u57fa\u51c6", "back": "\u2190 \u8fd4\u56de Super Translate", "intro": "25 \u7bc7\u91cc\u7a0b\u7891\u8bba\u6587\uff08Attention\u3001ResNet\u3001BERT\u3001GPT-3\u3001SAM\u2026\u2026\uff09\uff0c\u6309\u5341\u4e2a\u7248\u5f0f\u7ef4\u5ea6\u8986\u76d6\u5355\u53cc\u680f\u3001\u516c\u5f0f\u5bc6\u96c6\u3001\u8868\u683c/\u7b97\u6cd5\u3001\u957f\u53c2\u8003\u6587\u732e\u7b49\u573a\u666f\u3002\u6bcf\u7bc7\u7531\u5f15\u64ce\u5b8c\u6574\u7ffb\u8bd1\u540e\u7ecf\u8fc7\u5168\u91cf\u8d28\u91cf\u68c0\u6d4b\uff1a\u6587\u672c\u5c42\u6821\u9a8c\u3001\u4e5d\u7c7b\u89c6\u89c9\u5de1\u68c0\uff08\u5b57\u53f7\u6f02\u79fb\u3001\u516c\u5f0f\u88c1\u5207\u3001\u8868\u683c\u7ed3\u6784\u3001\u6f0f\u7ffb\u2026\u2026\uff09\u4e0e\u6e32\u67d3\u76f8\u4f3c\u5ea6\u8bc4\u5206\u3002\u6240\u6709\u6570\u636e\u53ef\u901a\u8fc7 <code>scripts/classic_benchmark.py</code> \u590d\u73b0\u3002", "empty": "\u57fa\u51c6\u6570\u636e\u5c1a\u672a\u751f\u6210\uff1a\u8bf7\u5148\u8fd0\u884c benchmark \u7684 report \u6b65\u9aa4\u3002", "papers": "\u8bba\u6587\u6570", "strict": "\u4e25\u683c\u95e8\u7981\u901a\u8fc7", "errors": "\u5f53\u524d\u9519\u8bef\u603b\u6570", "vsbase": "vs \u4fee\u590d\u524d\u57fa\u7ebf", "dropped": "\u9519\u8bef\u51cf\u5c11 ", "gen": "\u751f\u6210\u65f6\u95f4 ", "note": " \u30fb \u5b8c\u6574\u9875\u9762\u5bf9\u7167\u4ec5\u5bf9 Creative Commons \u8bb8\u53ef\u8bba\u6587\u5f00\u653e\uff0c\u5176\u4f59\u8bba\u6587\u5c55\u793a\u68c0\u6d4b\u6307\u6807\u3002", "cc_ok": "CC \u53ef\u5c55\u793a", "cc_no": "\u8bb8\u53ef\u9650\u5236", "visual": "\u89c6\u89c9\u76f8\u4f3c\u5ea6 ", "pages_issues": " \u9875 \u30fb ", "issues_suffix": " \u4e2a\u95ee\u9898", "strict_badge": "\u4e25\u683c\u95e8\u7981 ", "legacy_badge": "\u57fa\u7840\u95e8\u7981 ", "pass": "\u901a\u8fc7", "fail": "\u672a\u8fc7", "no_issues": "\u65e0\u68c0\u51fa\u95ee\u9898", "view": "\u67e5\u770b\u539f\u6587 / \u8bd1\u6587\u5bf9\u7167", "metrics_only": "\u8bb8\u53ef\u9650\u5236\uff0c\u4ec5\u5c55\u793a\u6307\u6807", "page_cap_prefix": "\u7b2c ", "page_cap_suffix": " \u9875 \u30fb \u5de6\u539f\u6587 / \u53f3\u8bd1\u6587", "m_visual": "\u89c6\u89c9\u76f8\u4f3c\u5ea6 ", "m_issues": " \u4e2a\u68c0\u51fa\u95ee\u9898", "orig": "\u539f\u6587", "trans": "\u8bd1\u6587"};
+(async function () {
+  const grid = document.getElementById("grid");
+  const summary = document.getElementById("summary");
+  const note = document.getElementById("note");
+  let data;
+  try {
+    const res = await fetch("/api/showcase");
+    if (!res.ok) throw new Error("no data");
+    data = await res.json();
+  } catch (err) {
+    document.getElementById("empty").style.display = "block";
+    return;
+  }
+  const papers = data.papers || [];
+
+  const totalErrors = papers.reduce((acc, p) => acc + (p.error_count || 0), 0);
+  const strictPass = papers.filter((p) => p.strict_pass).length;
+  const stats = [
+    { k: L.papers, v: papers.length },
+    { k: L.strict, v: strictPass + " / " + papers.length },
+    { k: L.errors, v: totalErrors },
+  ];
+  if (data.comparison) {
+    const b = data.comparison.baseline, c = data.comparison.current;
+    const drop = b.error_count ? Math.round((1 - c.error_count / b.error_count) * 100) : 0;
+    stats.push({ k: L.vsbase, v: b.error_count + " \u2192 " + c.error_count, d: L.dropped + drop + "%", cls: "up" });
+  }
+  summary.innerHTML = stats.map((s) =>
+    '<div class="stat"><div class="k">' + s.k + '</div><div class="v">' + s.v +
+    "</div>" + (s.d ? '<div class="d ' + (s.cls || "") + '">' + s.d + "</div>" : "") + "</div>"
+  ).join("");
+  note.textContent = L.gen + (data.generated_at || "").replace("T", " ").slice(0, 19) + L.note;
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+
+  grid.innerHTML = papers.map((p, i) => {
+    const codes = Object.entries(p.issues_by_code || {})
+      .sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([code, count]) => esc(code) + " \u00d7 " + count).join("\u3000") || L.no_issues;
+    const visual = Math.round((p.visual_score || 0) * 100);
+    const lic = p.showcase_ok
+      ? '<span class="chip lic">' + L.cc_ok + "</span>"
+      : '<span class="chip lic no">' + L.cc_no + "</span>";
+    const canPreview = p.showcase_ok && (p.previews || []).length;
+    return '<div class="card">' +
+      '<h3><a href="https://arxiv.org/abs/' + esc(p.arxiv_id) + '" target="_blank" rel="noopener">' + esc(p.title) + "</a></h3>" +
+      '<div class="meta">' + (p.tags || []).map((t) => '<span class="chip">' + esc(t) + "</span>").join("") + lic + "</div>" +
+      '<div class="row"><span>' + L.visual + visual + "%</span><span>" + p.pages + L.pages_issues + p.error_count + L.issues_suffix + "</span></div>" +
+      '<div class="bar"><i style="width:' + visual + '%"></i></div>' +
+      '<div class="badges">' +
+        '<span class="badge ' + (p.strict_pass ? "pass" : "fail") + '">' + L.strict_badge + (p.strict_pass ? L.pass : L.fail) + "</span>" +
+        '<span class="badge ' + (p.legacy_pass ? "pass" : "fail") + '">' + L.legacy_badge + (p.legacy_pass ? L.pass : L.fail) + "</span>" +
+      "</div>" +
+      '<div class="codes">' + codes + "</div>" +
+      '<button class="btn" data-open="' + i + '"' + (canPreview ? "" : " disabled") + ">" +
+      (canPreview ? L.view : L.metrics_only) + "</button></div>";
+  }).join("");
+
+  const modal = document.getElementById("modal");
+  document.body.addEventListener("click", (event) => {
+    const openBtn = event.target.closest("[data-open]");
+    if (openBtn) {
+      const p = papers[Number(openBtn.dataset.open)];
+      document.getElementById("m-title").textContent = p.title;
+      document.getElementById("m-sub").innerHTML =
+        "<span>" + L.m_visual + Math.round(p.visual_score * 100) + "%</span><span>" +
+        p.error_count + L.m_issues + "</span>";
+      document.getElementById("m-pairs").innerHTML = (p.previews || []).map((pair) => {
+        const num = String(pair.page).padStart(3, "0");
+        return '<div class="pair"><div class="cap">' + L.page_cap_prefix + pair.page + L.page_cap_suffix + "</div>" +
+          '<div class="imgs"><img loading="lazy" src="/api/showcase/previews/' + p.id + "/p" + num +
+          '_original.jpg" alt="' + L.orig + '"><img loading="lazy" src="/api/showcase/previews/' +
+          p.id + "/p" + num + '_translated.jpg" alt="' + L.trans + '"></div></div>';
+      }).join("");
+      modal.classList.add("open");
+    }
+    if (event.target.closest("[data-close]") || event.target === modal) {
+      modal.classList.remove("open");
+    }
+  });
+})();
+</script>
+</body>
+</html>

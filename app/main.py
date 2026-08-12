@@ -1,7 +1,9 @@
 """Main application entry point."""
 
 import asyncio
+import json
 import logging
+import re
 import time
 import webbrowser
 from collections.abc import AsyncGenerator
@@ -424,6 +426,65 @@ async def index() -> HTMLResponse:
     if html_path.exists():
         return html_path.read_text(encoding="utf-8")
     return "<h1>Super Translate</h1><p>Static files not found.</p>"
+
+
+_BENCHMARK_DIR = "data/benchmark/classic20"
+_PREVIEW_NAME_RE = re.compile(r"^p\d{3}_(?:original|translated)\.jpg$")
+_PAPER_ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+
+
+def _showcase_payload() -> dict | None:
+    path = settings.base_dir / _BENCHMARK_DIR / "showcase.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+@app.get("/showcase", response_class=HTMLResponse)
+async def showcase_page() -> HTMLResponse:
+    """Public benchmark showcase (metrics for all papers, previews for CC)."""
+    html_path = static_dir / "showcase.html"
+    if html_path.exists():
+        return html_path.read_text(encoding="utf-8")
+    return "<h1>Benchmark showcase</h1><p>Static files not found.</p>"
+
+
+@app.get("/api/showcase")
+async def showcase_data() -> JSONResponse:
+    payload = _showcase_payload()
+    if payload is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "benchmark showcase has not been generated"},
+        )
+    return JSONResponse(content=payload)
+
+
+@app.get("/api/showcase/previews/{paper_id}/{name}")
+async def showcase_preview(paper_id: str, name: str):
+    """Serve page preview images, gated by the paper's license flag."""
+    from fastapi.responses import FileResponse
+
+    if not _PAPER_ID_RE.match(paper_id) or not _PREVIEW_NAME_RE.match(name):
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    payload = _showcase_payload()
+    if payload is None:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    paper = next(
+        (item for item in payload.get("papers", []) if item.get("id") == paper_id),
+        None,
+    )
+    # Full-page previews are limited to Creative Commons papers; the rest
+    # contribute metrics only (see benchmarks/classic20/README.md).
+    if not paper or not paper.get("showcase_ok"):
+        return JSONResponse(status_code=403, content={"detail": "license restricted"})
+    path = settings.base_dir / _BENCHMARK_DIR / "previews" / paper_id / name
+    if not path.is_file():
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @app.get("/health")
