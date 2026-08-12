@@ -1232,3 +1232,33 @@ def test_anchored_table_caption_grows_upward_instead_of_shrinking(tmp_path):
     assert min(caption_sizes) >= 8.8, (
         f"anchored table caption over-shrunk: {sorted(set(caption_sizes))}"
     )
+
+
+def test_exemplar_separator_rules_survive_redaction(tmp_path):
+    # CoT appendix exemplar tables: the redaction rect of the row below a
+    # separator rule starts inside the rule's band (its top edge grazes the
+    # rule's lower half), which the old top-y-only crossing test missed --
+    # the fill then wiped the rule's middle (ink coverage 1.00 -> 0.12).
+    from pdf_zh_translator.page_inspector import inspect_translation
+
+    class _Stub:
+        def translate_batch(self, texts):
+            return ["中文译文。" for _ in texts]
+
+    input_pdf = Path(__file__).parent / "fixtures" / "cot_p25_exemplar_rules.pdf"
+    output_pdf = tmp_path / "cot_p25.zh.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_Stub(),
+        preserve_graphics_text=True,
+    )
+
+    errors = [
+        issue
+        for issue in inspect_translation(input_pdf, output_pdf)
+        if issue.severity == "error"
+    ]
+    assert not [e for e in errors if e.code == "table_structure_mismatch"], [
+        str(e.message) for e in errors
+    ]

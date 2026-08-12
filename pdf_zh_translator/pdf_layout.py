@@ -12227,7 +12227,7 @@ def redact_original_text(
     # translated text. Pull such edges back. Rules deep inside a rect belong
     # to text that genuinely straddles them; those stay and the preserved-
     # region restore handles the damage.
-    protected_rules: List[Tuple[float, float, float]] = []
+    protected_rules: List[Tuple[float, float, float, float]] = []
     for drawing in _page_drawings(page):
         drawing_rect = drawing.get("rect")
         if (
@@ -12237,22 +12237,33 @@ def redact_original_text(
         ):
             continue
         protected_rules.append(
-            (float(drawing_rect.y0), float(drawing_rect.x0), float(drawing_rect.x1))
+            (
+                float(drawing_rect.y0),
+                float(drawing_rect.y1),
+                float(drawing_rect.x0),
+                float(drawing_rect.x1),
+            )
         )
 
     def _pull_edges_off_rules(rect: "fitz.Rect") -> "fitz.Rect":
         edge_band = margin + 1.4
-        for rule_y, rule_x0, rule_x1 in protected_rules:
+        for rule_y0, rule_y1, rule_x0, rule_x1 in protected_rules:
             if rect.x1 <= rule_x0 + 1.0 or rect.x0 >= rule_x1 - 1.0:
                 continue
-            if not rect.y0 < rule_y < rect.y1:
+            band_top = rule_y0 - 0.9
+            band_bottom = rule_y1 + 0.9
+            # The rect edge must be compared against the rule's whole band:
+            # an edge landing inside the band (grazing the rule's lower or
+            # upper half) erases it just as surely as one crossing rule_y0.
+            intrusion_limit = edge_band + (rule_y1 - rule_y0)
+            if rect.y0 >= band_bottom or rect.y1 <= band_top:
                 continue
-            top_overlap = rule_y - rect.y0
-            bottom_overlap = rect.y1 - rule_y
-            if bottom_overlap <= top_overlap and bottom_overlap <= edge_band:
-                rect.y1 = max(rect.y0, rule_y - 0.9)
-            elif top_overlap < bottom_overlap and top_overlap <= edge_band:
-                rect.y0 = min(rect.y1, rule_y + 0.9)
+            top_overlap = band_bottom - rect.y0
+            bottom_overlap = rect.y1 - band_top
+            if bottom_overlap <= top_overlap and bottom_overlap <= intrusion_limit:
+                rect.y1 = max(rect.y0, band_top)
+            elif top_overlap < bottom_overlap and top_overlap <= intrusion_limit:
+                rect.y0 = min(rect.y1, band_bottom)
         return rect
 
     for block in blocks:

@@ -1135,6 +1135,38 @@ _PSEUDOCODE_KEYWORD_RE = re.compile(
 )
 
 
+_SAMPLE_LABEL_PREFIX_RE = re.compile(
+    r"^\s*(?:Q|A|Question|Answer|Input|Output|Prompt|Human|Assistant|User|"
+    r"System|Title|Subtitle)\s*[::]"
+)
+
+
+def _on_float_side_of_caption(
+    block_bbox: BBox,
+    caption_kinds: Sequence[Tuple[BBox, str]],
+) -> bool:
+    """Whether the block sits on the float side of a nearby caption.
+
+    Figure captions sit below their float, table captions on either side
+    of theirs (arXiv styles use both). Quoted evidence inside the float is
+    verbatim by design; prose on the body side of a figure caption is
+    ordinary text (the GuidedVLA V-A case: analysis prose below a figure
+    caption must stay flagged).
+    """
+    bx0, by0, bx1, by1 = block_bbox
+    for (cx0, cy0, cx1, cy1), kind in caption_kinds:
+        if min(bx1, cx1) - max(bx0, cx0) <= 0.0:
+            continue
+        if kind == "figure" and by1 <= cy0 + 4.0 and cy0 - by1 <= 150.0:
+            return True
+        if kind == "table" and by0 >= cy1 - 4.0 and by0 - cy1 <= 150.0:
+            return True
+        if kind == "table" and by1 <= cy0 + 4.0:
+            # Bottom-set table caption: the table body is everything above.
+            return True
+    return False
+
+
 def _untranslated_block_issues(
     translated_page: object,
     page_number: int,
@@ -1143,6 +1175,8 @@ def _untranslated_block_issues(
     table_bands: Sequence[Tuple[float, float]] = (),
     preserved_regions: Sequence[BBox] = (),
     algorithm_regions: Sequence[BBox] = (),
+    caption_kinds: Sequence[Tuple[BBox, str]] = (),
+    graphic_regions: Sequence[BBox] = (),
 ) -> List[object]:
     """Paragraphs of running English prose left in the translated page.
 
@@ -1151,9 +1185,11 @@ def _untranslated_block_issues(
     translation, so trusting those regions here would hide the defect
     (GuidedVLA section V-A, 2026-08-11). Author lists, figure legends,
     references and config tables carry almost no English stopwords and
-    stay exempt. Algorithm floats are the deliberate exception: prompt and
-    completion samples (GPT-3 style) are quoted model I/O kept verbatim by
-    policy, so prose inside a detected algorithm region is not a miss.
+    stay exempt. Two deliberate exceptions cover quoted evidence kept
+    verbatim by policy: algorithm floats (GPT-3 style prompt/completion
+    samples), and preserved content that starts with a sample label or
+    sits on the float side of an adjacent caption (chain-of-thought
+    exemplar boxes, dataset table cells, figure-embedded instructions).
     """
     from .pdf_layout import _is_reference_or_formula_text
 
@@ -1164,6 +1200,32 @@ def _untranslated_block_issues(
             for region in algorithm_regions
         ):
             continue
+        if graphic_regions and any(
+            _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
+            for region in graphic_regions
+        ):
+            # preserve_graphics_text keeps figure-internal text verbatim by
+            # design; English inside a graphic envelope is not a miss.
+            continue
+        # Table walls fragment into one preserved strip per cell while the
+        # extracted block spans whole rows including the gaps, so coverage
+        # is judged span by span rather than on the block envelope.
+        content_spans = [span for span in block.spans if span.text.strip()]
+        covered_spans = sum(
+            1
+            for span in content_spans
+            if any(
+                region[0] - 2.0 <= (span.bbox[0] + span.bbox[2]) / 2.0 <= region[2] + 2.0
+                and region[1] - 2.0 <= (span.bbox[1] + span.bbox[3]) / 2.0 <= region[3] + 2.0
+                for region in preserved_regions
+            )
+        )
+        if content_spans and covered_spans >= 0.7 * len(content_spans):
+            text_head = " ".join(block.text.split())
+            if _SAMPLE_LABEL_PREFIX_RE.match(text_head):
+                continue
+            if _on_float_side_of_caption(block.bbox, caption_kinds):
+                continue
         if reference_y is not None and block.bbox[1] >= reference_y - 4.0:
             continue
         text = " ".join(block.text.split())
@@ -1276,10 +1338,27 @@ def inspect_translation(
             )
         except Exception:
             units = []
+        graphic_regions_by_page: Dict[int, List[BBox]] = {}
+        try:
+            from .pdf_layout import collect_graphic_regions
+
+            graphic_regions_by_page = collect_graphic_regions(original)
+        except Exception:
+            graphic_regions_by_page = {}
+        caption_kinds: Dict[int, List[Tuple[BBox, str]]] = {}
         for unit_block, _prompt, _mapping in units:
             if unit_block.block_type == "caption":
                 caption_bands.setdefault(unit_block.page_index, []).append(
                     expand_bbox(unit_block.bbox, 2.0)
+                )
+                caption_text = " ".join(unit_block.text.split()).lstrip()
+                kind = (
+                    "table"
+                    if re.match(r"^(?:Table|Tab\.|表)\s*\d", caption_text, re.IGNORECASE)
+                    else "figure"
+                )
+                caption_kinds.setdefault(unit_block.page_index, []).append(
+                    (expand_bbox(unit_block.bbox, 2.0), kind)
                 )
             for keepout in unit_block.keepout_bboxes or []:
                 keepouts.setdefault(unit_block.page_index, []).append(keepout)
@@ -1386,6 +1465,8 @@ def inspect_translation(
                     table_bands=table_bands,
                     preserved_regions=page_regions,
                     algorithm_regions=algorithm_regions.get(index, []),
+                    caption_kinds=caption_kinds.get(index, []),
+                    graphic_regions=graphic_regions_by_page.get(index, []),
                 )
             )
     finally:
