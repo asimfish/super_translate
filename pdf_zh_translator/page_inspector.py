@@ -560,6 +560,17 @@ _SPRITE_MAX_INK = 0.42
 _SPRITE_EDGE_MIN = 0.05
 
 
+def _edge_is_decoration_bar(profile: Sequence[float], *, from_top: bool) -> bool:
+    """Dense edge rows followed by a whitespace gap: an overline/underline."""
+    rows = list(profile) if from_top else list(reversed(profile))
+    if len(rows) < 5:
+        return False
+    edge = min(rows[0], rows[1])
+    if edge < 0.35:
+        return False
+    return min(rows[2:5]) <= 0.06
+
+
 def _math_clip_issues(
     original_page: object,
     original_ink: _InkCache,
@@ -626,6 +637,15 @@ def _math_clip_issues(
         bottom = min(profile[-1], profile[-2])
         top_cut = _SPRITE_EDGE_MIN <= top <= 0.85
         bottom_cut = _SPRITE_EDGE_MIN <= bottom <= 0.85
+        # Overlined and underlined symbols (Ā, x̲) carry a solid stroke at
+        # the sprite boundary by design: a dense edge followed by a
+        # whitespace gap before the glyph body is decoration, not a cut.
+        # Sliced glyphs leave fragmentary edge ink (well under bar density)
+        # or continue straight into the body without any gap.
+        if top_cut and _edge_is_decoration_bar(profile, from_top=True):
+            top_cut = False
+        if bottom_cut and _edge_is_decoration_bar(profile, from_top=False):
+            bottom_cut = False
         if not top_cut and not bottom_cut:
             continue
         edge = "top" if top_cut else "bottom"
