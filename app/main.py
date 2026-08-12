@@ -359,6 +359,12 @@ async def enforce_api_access(request: Request, call_next: RequestResponseEndpoin
     # The login endpoint must stay reachable without a token.
     if request.url.path == "/api/auth/login":
         return await call_next(request)
+    # The benchmark showcase is public by design (read-only metrics plus
+    # previews that are themselves licence-gated inside the endpoint).
+    if request.url.path == "/api/showcase" or request.url.path.startswith(
+        "/api/showcase/"
+    ):
+        return await call_next(request)
 
     user_scopes = tuple((await refresh_token_scopes()).items())
     decision = access_decision_for_request(request, extra_token_scopes=user_scopes)

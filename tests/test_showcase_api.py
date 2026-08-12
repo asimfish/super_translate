@@ -118,6 +118,27 @@ class TestShowcaseData:
         response = client.get("/api/showcase")
         assert response.status_code == 404
 
+    def test_showcase_is_public_even_with_api_token_configured(
+        self, client, benchmark_dir, monkeypatch
+    ):
+        """The showcase bypasses the bearer-token wall; other APIs do not."""
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "api_token", "secret-token")
+        assert client.get("/api/showcase").status_code == 200
+        assert (
+            client.get(
+                "/api/showcase/previews/otf/p001_original.jpg"
+            ).status_code
+            == 200
+        )
+
+    def test_showcase_page_has_no_inline_script(self, client):
+        """Production CSP is script-src 'self'; inline script would be dead."""
+        response = client.get("/showcase")
+        assert "<script src=" in response.text
+        assert "<script>" not in response.text
+
 
 class TestShowcasePreviews:
     def test_open_paper_preview_served(self, client, benchmark_dir):
