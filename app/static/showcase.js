@@ -19,6 +19,7 @@ const L = {
   fail: "\u672a\u8fc7",
   no_issues: "\u65e0\u68c0\u51fa\u95ee\u9898",
   view: "\u67e5\u770b\u539f\u6587 / \u8bd1\u6587\u5bf9\u7167",
+  view_internal: "\u67e5\u770b\u5bf9\u7167\uff08\u5185\u90e8\u5ba1\u9605\uff09",
   metrics_only: "\u8bb8\u53ef\u9650\u5236\uff0c\u4ec5\u5c55\u793a\u6307\u6807",
   page_cap_prefix: "\u7b2c ",
   page_cap_suffix: " \u9875 \u30fb \u5de6\u539f\u6587 / \u53f3\u8bd1\u6587",
@@ -32,9 +33,14 @@ const L = {
   const grid = document.getElementById("grid");
   const summary = document.getElementById("summary");
   const note = document.getElementById("note");
+  // Reuse the main app's stored credential: authenticated operators may
+  // review non-CC papers' page pairs (the server enforces the licence gate
+  // for anonymous visitors).
+  const token = localStorage.getItem("paperChinaApiToken") || "";
+  const authHeaders = token ? { Authorization: "Bearer " + token } : {};
   let data;
   try {
-    const res = await fetch("/api/showcase");
+    const res = await fetch("/api/showcase", { headers: authHeaders });
     if (!res.ok) throw new Error("no data");
     data = await res.json();
   } catch (err) {
@@ -42,6 +48,7 @@ const L = {
     return;
   }
   const papers = data.papers || [];
+  const authed = Boolean(data.authenticated);
 
   const totalErrors = papers.reduce((acc, p) => acc + (p.error_count || 0), 0);
   const strictPass = papers.filter((p) => p.strict_pass).length;
@@ -71,7 +78,7 @@ const L = {
     const lic = p.showcase_ok
       ? '<span class="chip lic">' + L.cc_ok + "</span>"
       : '<span class="chip lic no">' + L.cc_no + "</span>";
-    const canPreview = p.showcase_ok && (p.previews || []).length;
+    const canPreview = (p.showcase_ok || authed) && (p.previews || []).length;
     return '<div class="card">' +
       '<h3><a href="https://arxiv.org/abs/' + esc(p.arxiv_id) + '" target="_blank" rel="noopener">' + esc(p.title) + "</a></h3>" +
       '<div class="meta">' + (p.tags || []).map((t) => '<span class="chip">' + esc(t) + "</span>").join("") + lic + "</div>" +
@@ -83,8 +90,19 @@ const L = {
       "</div>" +
       '<div class="codes">' + codes + "</div>" +
       '<button class="btn" data-open="' + i + '"' + (canPreview ? "" : " disabled") + ">" +
-      (canPreview ? L.view : L.metrics_only) + "</button></div>";
+      (canPreview ? (p.showcase_ok ? L.view : L.view_internal) : L.metrics_only) +
+      "</button></div>";
   }).join("");
+
+  const loadPreviewImage = async (img) => {
+    try {
+      const res = await fetch(img.dataset.src, { headers: authHeaders });
+      if (!res.ok) throw new Error(String(res.status));
+      img.src = URL.createObjectURL(await res.blob());
+    } catch (err) {
+      img.alt = "unavailable";
+    }
+  };
 
   const modal = document.getElementById("modal");
   document.body.addEventListener("click", (event) => {
@@ -97,11 +115,12 @@ const L = {
         p.error_count + L.m_issues + "</span>";
       document.getElementById("m-pairs").innerHTML = (p.previews || []).map((pair) => {
         const num = String(pair.page).padStart(3, "0");
+        const base = "/api/showcase/previews/" + p.id + "/p" + num;
         return '<div class="pair"><div class="cap">' + L.page_cap_prefix + pair.page + L.page_cap_suffix + "</div>" +
-          '<div class="imgs"><img loading="lazy" src="/api/showcase/previews/' + p.id + "/p" + num +
-          '_original.jpg" alt="' + L.orig + '"><img loading="lazy" src="/api/showcase/previews/' +
-          p.id + "/p" + num + '_translated.jpg" alt="' + L.trans + '"></div></div>';
+          '<div class="imgs"><img loading="lazy" data-src="' + base + '_original.jpg" alt="' + L.orig +
+          '"><img loading="lazy" data-src="' + base + '_translated.jpg" alt="' + L.trans + '"></div></div>';
       }).join("");
+      document.querySelectorAll("#m-pairs img[data-src]").forEach(loadPreviewImage);
       modal.classList.add("open");
     }
     if (event.target.closest("[data-close]") || event.target === modal) {

@@ -124,7 +124,9 @@ class TestShowcaseData:
         """The showcase bypasses the bearer-token wall; other APIs do not."""
         from app.core.config import settings
 
-        monkeypatch.setattr(settings, "api_token", "secret-token")
+        from pydantic import SecretStr
+
+        monkeypatch.setattr(settings, "api_token", SecretStr("secret-token"))
         assert client.get("/api/showcase").status_code == 200
         assert (
             client.get(
@@ -149,6 +151,27 @@ class TestShowcasePreviews:
     def test_license_restricted_paper_is_403(self, client, benchmark_dir):
         response = client.get("/api/showcase/previews/closed/p001_original.jpg")
         assert response.status_code == 403
+
+    def test_authenticated_operator_previews_non_cc_paper(
+        self, client, benchmark_dir, monkeypatch
+    ):
+        from app.core.config import settings
+
+        from pydantic import SecretStr
+
+        monkeypatch.setattr(settings, "api_token", SecretStr("secret-token"))
+        anonymous = client.get("/api/showcase/previews/closed/p001_original.jpg")
+        assert anonymous.status_code == 403
+        authed = client.get(
+            "/api/showcase/previews/closed/p001_original.jpg",
+            headers={"Authorization": "Bearer secret-token"},
+        )
+        assert authed.status_code == 200
+        payload = client.get(
+            "/api/showcase", headers={"Authorization": "Bearer secret-token"}
+        ).json()
+        assert payload["authenticated"] is True
+        assert client.get("/api/showcase").json()["authenticated"] is False
 
     def test_unknown_paper_is_403(self, client, benchmark_dir):
         response = client.get("/api/showcase/previews/nope/p001_original.jpg")

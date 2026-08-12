@@ -458,20 +458,40 @@ async def showcase_page() -> HTMLResponse:
     return "<h1>Benchmark showcase</h1><p>Static files not found.</p>"
 
 
+def _showcase_request_is_authenticated(request: Request) -> bool:
+    """Whether the caller presented a valid workspace/API credential.
+
+    The showcase endpoints bypass the token wall so the public page works,
+    but authenticated operators still get extra rights (previews of
+    non-CC papers for internal review).
+    """
+    try:
+        decision = access_decision_for_request(request)
+        return bool(decision.allowed and decision.authenticated)
+    except Exception:
+        return False
+
+
 @app.get("/api/showcase")
-async def showcase_data() -> JSONResponse:
+async def showcase_data(request: Request) -> JSONResponse:
     payload = _showcase_payload()
     if payload is None:
         return JSONResponse(
             status_code=404,
             content={"detail": "benchmark showcase has not been generated"},
         )
+    payload = dict(payload)
+    payload["authenticated"] = _showcase_request_is_authenticated(request)
     return JSONResponse(content=payload)
 
 
 @app.get("/api/showcase/previews/{paper_id}/{name}")
-async def showcase_preview(paper_id: str, name: str):
-    """Serve page preview images, gated by the paper's license flag."""
+async def showcase_preview(request: Request, paper_id: str, name: str):
+    """Serve page preview images, gated by the paper's license flag.
+
+    Anonymous access sees Creative Commons papers only; authenticated
+    operators may review every paper's pages.
+    """
     from fastapi.responses import FileResponse
 
     if not _PAPER_ID_RE.match(paper_id) or not _PREVIEW_NAME_RE.match(name):
@@ -483,9 +503,11 @@ async def showcase_preview(paper_id: str, name: str):
         (item for item in payload.get("papers", []) if item.get("id") == paper_id),
         None,
     )
-    # Full-page previews are limited to Creative Commons papers; the rest
-    # contribute metrics only (see benchmarks/classic20/README.md).
-    if not paper or not paper.get("showcase_ok"):
+    if not paper:
+        return JSONResponse(status_code=403, content={"detail": "license restricted"})
+    if not paper.get("showcase_ok") and not _showcase_request_is_authenticated(
+        request
+    ):
         return JSONResponse(status_code=403, content={"detail": "license restricted"})
     path = settings.base_dir / _BENCHMARK_DIR / "previews" / paper_id / name
     if not path.is_file():
