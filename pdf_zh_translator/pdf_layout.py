@@ -911,6 +911,20 @@ def translate_pdf(
                     "Page %d: translated text did not fully fit in bbox %s"
                     % (page_index + 1, compact_bbox(block.bbox))
                 )
+        if (page_index + 1) % 6 == 0:
+            # Rendering probes, redaction backgrounds and formula sprites
+            # allocate tens of MB of transient pixel buffers per page; on
+            # long documents the spikes between garbage collections stack
+            # into >500MB peaks (mupdf then dies of heap pressure around
+            # paper 34 of a 43-paper session). Collect on a page cadence
+            # and shed mupdf's internal store alongside.
+            import gc
+
+            gc.collect()
+            try:
+                fitz.TOOLS.store_shrink(60)
+            except Exception:
+                pass
 
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     document = subset_fonts_safely(
@@ -923,6 +937,15 @@ def translate_pdf(
     page_count = document.page_count
     document.close()
     source_document.close()
+    # Inter-paper hygiene for long sessions: drop everything mupdf cached
+    # for this document before the next paper starts.
+    import gc
+
+    gc.collect()
+    try:
+        fitz.TOOLS.store_shrink(100)
+    except Exception:
+        pass
     return TranslationReport(input_pdf, output_pdf, page_count, len(units), skipped, warnings)
 
 
