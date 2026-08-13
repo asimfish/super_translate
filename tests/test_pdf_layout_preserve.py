@@ -9996,3 +9996,47 @@ class DisplayEquationRowTests(unittest.TestCase):
         segments = segments_from_record(0, record, equation_record=True)
 
         self.assertEqual(segments, [])
+
+
+class ColumnStraddlingRecordTests(unittest.TestCase):
+    @staticmethod
+    def _prose_line(text, bbox):
+        line = _line(text, bbox)
+        line.prose_bboxes.append(bbox)
+        return line
+
+    def test_two_column_sample_record_splits_at_gutter(self):
+        # InstructGPT appendix: one extraction block carries the left sample
+        # column plus the right column's run-in header; keeping them together
+        # concatenates both texts and the reflow overprints the right cell.
+        from pdf_zh_translator.pdf_layout import _split_column_straddling_record
+
+        prose_line = self._prose_line
+        lines = [
+            prose_line("GPT-3 175B completion:", (118.0, 102.0, 212.0, 111.0)),
+            prose_line("InstructGPT 175B completion:", (308.1, 102.0, 427.0, 111.0)),
+            prose_line("Écrivez une histoire au sujet d'un enfant", (118.0, 113.0, 296.6, 122.0)),
+            prose_line("voudrait tout savoir sur les jeux", (118.0, 123.0, 296.6, 132.0)),
+            prose_line("retrouve dans l'une de leurs histoires.", (118.0, 133.0, 252.0, 142.0)),
+        ]
+        pieces = _split_column_straddling_record(_RawBlockRec(lines=lines))
+
+        self.assertEqual(len(pieces), 2)
+        left, right = pieces
+        self.assertEqual(len(left.lines), 4)
+        self.assertEqual(len(right.lines), 1)
+        self.assertTrue(all(line.bbox[2] <= 297.0 for line in left.lines))
+        self.assertTrue(right.lines[0].text.startswith("InstructGPT"))
+
+    def test_ordinary_paragraph_stays_whole(self):
+        from pdf_zh_translator.pdf_layout import _split_column_straddling_record
+
+        lines = [
+            _line("A normal paragraph line that spans", (72.0, 100.0, 300.0, 110.0)),
+            _line("the whole column width without any", (72.0, 112.0, 300.0, 122.0)),
+            _line("gutter between its physical lines.", (72.0, 124.0, 260.0, 134.0)),
+            _line("short tail.", (72.0, 136.0, 140.0, 146.0)),
+        ]
+        pieces = _split_column_straddling_record(_RawBlockRec(lines=lines))
+
+        self.assertEqual(len(pieces), 1)
