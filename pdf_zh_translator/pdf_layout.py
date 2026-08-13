@@ -444,6 +444,25 @@ class FontPack:
         return chain
 
 
+def open_pdf_detached(pdf_path: Path) -> object:
+    """Open a PDF without leaving mupdf mmapped onto the file.
+
+    mupdf memory-maps documents opened by path. When the file lives in a
+    sync-managed folder (iCloud Drive on this workspace) the provider can
+    dematerialize it while the process runs: the next page fault on the
+    mapping raises SIGBUS/SIGSEGV, which is how long benchmark sessions
+    died mid-run (rc=138/139) and how golden fixtures turned into
+    "no objects found" errors. Reading the bytes first both forces
+    materialization and detaches the document from the file.
+    """
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError("PyMuPDF is required. Install with: pip install -e .") from exc
+
+    return fitz.open(stream=Path(pdf_path).read_bytes(), filetype="pdf")
+
+
 def translate_pdf(
     input_pdf: Path,
     output_pdf: Path,
@@ -464,7 +483,7 @@ def translate_pdf(
     warnings: List[str] = []
     font_pack = build_font_pack(font_file, warnings)
 
-    document = fitz.open(str(input_pdf))
+    document = open_pdf_detached(input_pdf)
     try:
         from .layout_profiles import detect_layout_profile
 
@@ -502,7 +521,7 @@ def translate_pdf(
         document.close()
         return TranslationReport(input_pdf, output_pdf, page_count, 0, skipped, warnings)
 
-    source_document = fitz.open(str(input_pdf))
+    source_document = open_pdf_detached(input_pdf)
 
     block_types = [block.block_type for block, _, _ in units]
     acronym_expansions = _document_acronym_expansions(units)
@@ -1777,8 +1796,8 @@ def create_dual_pdf(
     )
     try:
         with (
-            fitz.open(str(original_pdf)) as orig_doc,
-            fitz.open(str(translated_pdf)) as trans_doc,
+            open_pdf_detached(original_pdf) as orig_doc,
+            open_pdf_detached(translated_pdf) as trans_doc,
             fitz.open() as dual_doc,
         ):
             # Insert each source document in ONE call: per-page insert_pdf
@@ -1868,12 +1887,11 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
     7. Render-based visual layout score
     8. High-risk table/algorithm/float regions
     """
-    import fitz
 
     issues: List[TranslationIssue] = []
     try:
-        orig_doc = fitz.open(str(original_pdf))
-        trans_doc = fitz.open(str(translated_pdf))
+        orig_doc = open_pdf_detached(original_pdf)
+        trans_doc = open_pdf_detached(translated_pdf)
     except Exception as e:
         return [
             TranslationIssue(
@@ -7208,7 +7226,7 @@ def collect_text_blocks(
             if dropped:
                 gutter_rects.setdefault(page_index, []).extend(dropped)
             if record is not None:
-                records.append(record)
+                records.extend(_split_column_straddling_record(record))
         equation_flags = mark_equation_blocks(records)
         algorithm_flags = [record_is_algorithm(record) for record in records]
         if equation_table_regions_out is not None:
@@ -9656,6 +9674,72 @@ def _coalesce_fragmented_same_baseline_lines(lines: Sequence[_LineRec]) -> List[
 # Horizontal span gap (in units of line font size) that separates table cells.
 CELL_GAP_FACTOR = 1.6
 CELL_GAP_MIN = 8.0
+
+
+def _split_column_straddling_record(record: _RawBlockRec) -> List[_RawBlockRec]:
+    """Split a raw record whose lines populate two prose columns.
+
+    Sample-comparison tables (InstructGPT appendix: "GPT-3 completion" |
+    "InstructGPT completion") arrive as ONE extraction block whose lines
+    alternate between the left and right cell in reading order. Keeping
+    them together concatenates the two texts and the reflow overprints the
+    right cell. Lines are split at a clean vertical gutter that no line
+    crosses, provided both sides carry multi-line prose.
+    """
+    lines = record.lines
+    if len(lines) < 4:
+        return [record]
+    if record_is_table(record):
+        # Numeric grids keep their row structure: the table pipeline
+        # translates cell by cell and the preserved-table QA compares the
+        # full grid.
+        return [record]
+    xs = sorted((line.bbox[0], line.bbox[2]) for line in lines)
+    left_anchor = min(x0 for x0, _ in xs)
+    # Candidate gutter: the largest horizontal gap between the sorted line
+    # extents' right and next left edges.
+    best_gap = 0.0
+    gutter_lo = gutter_hi = None
+    ends = sorted(x1 for _, x1 in xs)
+    starts = sorted(x0 for x0, _ in xs)
+    for end in ends:
+        following = [s for s in starts if s >= end + 8.0]
+        if not following:
+            continue
+        gap = following[0] - end
+        left = [line for line in lines if line.bbox[2] <= end + 0.5]
+        right = [line for line in lines if line.bbox[0] >= following[0] - 0.5]
+        if len(left) < 1 or len(right) < 1 or len(left) + len(right) != len(lines):
+            continue
+        if max(len(left), len(right)) < 2:
+            continue
+        if gap > best_gap:
+            best_gap = gap
+            gutter_lo, gutter_hi = end, following[0]
+    if gutter_lo is None or best_gap < 8.0:
+        return [record]
+    left_lines = [line for line in lines if line.bbox[2] <= gutter_lo + 0.5]
+    right_lines = [line for line in lines if line.bbox[0] >= gutter_hi - 0.5]
+    if min(len(left_lines), len(right_lines)) < 1 or max(
+        len(left_lines), len(right_lines)
+    ) < 2:
+        return [record]
+    # Both sides must be prose, not display-math operands. A lone side line
+    # (the other column's run-in header swept into this block) re-attaches
+    # to its own column downstream through paragraph merging.
+    for side in (left_lines, right_lines):
+        prose_rows = sum(1 for line in side if line.prose_bboxes)
+        if prose_rows < 1 or prose_rows < len(side) * 0.6:
+            return [record]
+    # A genuine paragraph wraps back to the left anchor; a column pair
+    # never does, so demand the right column start well past the left
+    # column's anchor (avoids splitting indented block quotes).
+    if gutter_hi - left_anchor < 120.0:
+        return [record]
+    return [
+        _RawBlockRec(lines=left_lines),
+        _RawBlockRec(lines=right_lines),
+    ]
 
 
 def split_line_cells(

@@ -1479,17 +1479,19 @@ def inspect_translation(
     max_pages: Optional[int] = None,
 ) -> List[object]:
     """Run the visual inspection suite over an original/translated pair."""
-    import fitz
 
     from .pdf_layout import (
         _page_looks_like_reference_continuation,
         _reference_section_start_y,
         expand_bbox,
+        open_pdf_detached,
         prepare_translation_units,
     )
 
-    original = fitz.open(str(original_pdf))
-    translated = fitz.open(str(translated_pdf))
+    # Detached opens: mupdf mmaps path-opened documents and an iCloud-style
+    # eviction mid-inspection turns page faults into SIGBUS.
+    original = open_pdf_detached(original_pdf)
+    translated = open_pdf_detached(translated_pdf)
     issues: List[object] = []
     try:
         preserved_regions: Dict[int, List[BBox]] = {}
