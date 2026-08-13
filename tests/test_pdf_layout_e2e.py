@@ -831,6 +831,133 @@ def test_saved_pdf_subsets_large_embedded_cjk_font(tmp_path):
     assert "图注" in text
 
 
+def test_saved_pdf_preserves_fonts_without_rescanning_modified_pages(tmp_path):
+    from pdf_zh_translator.pdf_layout import save_pdf_for_fast_web_view
+
+    document = fitz.open()
+    page = document.new_page(width=200, height=200)
+    page.insert_text((24, 40), "preserve source fonts", fontsize=12)
+    output_pdf = tmp_path / "preserved.pdf"
+    warnings: list[str] = []
+
+    with patch(
+        "pdf_zh_translator.pdf_layout._subset_embedded_cjk_fonts",
+        side_effect=AssertionError("modified pages must not be rescanned"),
+    ):
+        save_pdf_for_fast_web_view(
+            document,
+            output_pdf,
+            warnings,
+            preserve_source_fonts=True,
+        )
+    document.close()
+
+    assert warnings == []
+    assert b"/Linearized" in output_pdf.read_bytes()[:2048]
+    with fitz.open(output_pdf) as reopened:
+        assert "preserve source fonts" in reopened[0].get_text("text")
+
+
+def test_cjk_subsetting_filters_out_source_font_resources():
+    from pdf_zh_translator.pdf_layout import _subset_embedded_cjk_fonts
+
+    class Document:
+        page_count = 1
+
+        def __init__(self):
+            self.xref_queries: list[tuple[int, str]] = []
+
+        def get_page_fonts(self, _page_index, full=True):
+            assert full is True
+            return [
+                (10, "", "Type0", "Source Math", "sourcefont", "Identity-H"),
+                (20, "", "Type0", "Songti SC", "zhbody", "Identity-H"),
+            ]
+
+        def xref_get_key(self, xref, key):
+            self.xref_queries.append((xref, key))
+            return ("null", "null")
+
+    document = Document()
+    _subset_embedded_cjk_fonts(document, font_resource_names={"zhbody"})
+
+    assert document.xref_queries == [(20, "DescendantFonts")]
+
+
+def test_translate_pdf_checkpoints_long_preserved_document(tmp_path):
+    from pdf_zh_translator import pdf_layout
+
+    input_pdf = tmp_path / "long-paper.pdf"
+    output_pdf = tmp_path / "long-paper.zh.pdf"
+    document = fitz.open()
+    for page_number in range(13):
+        page = document.new_page(width=300, height=200)
+        page.insert_text(
+            (24, 40),
+            f"Page {page_number + 1} describes a translated research result.",
+            fontsize=11,
+        )
+    document.save(input_pdf)
+    document.close()
+
+    class Translator:
+        def translate_batch(self, texts):
+            return ["该页描述了一项翻译后的研究结果。" for _text in texts]
+
+    original_checkpoint = pdf_layout._checkpoint_modified_document
+    original_subset = pdf_layout._subset_embedded_cjk_fonts
+    with patch(
+        "pdf_zh_translator.pdf_layout._checkpoint_modified_document",
+        wraps=original_checkpoint,
+    ) as checkpoint, patch(
+        "pdf_zh_translator.pdf_layout._subset_embedded_cjk_fonts",
+        wraps=original_subset,
+    ) as subset_fonts:
+        translate_pdf(
+            input_pdf,
+            output_pdf,
+            Translator(),
+            preserve_graphics_text=True,
+        )
+
+    assert [call.kwargs["completed_pages"] for call in checkpoint.call_args_list] == [
+        12,
+        13,
+    ]
+    assert subset_fonts.call_count == 1
+    assert subset_fonts.call_args.kwargs["font_resource_names"] == {
+        "zhbody",
+        "zhbold",
+        "zhfall",
+        "zhmath",
+    }
+    with fitz.open(output_pdf) as translated:
+        assert translated.page_count == 13
+        assert "研究结果" in translated[12].get_text("text")
+
+
+def test_checkpoint_defers_cleanup_while_reopened_file_is_locked(tmp_path):
+    from pdf_zh_translator.pdf_layout import _checkpoint_modified_document
+
+    output_pdf = tmp_path / "translated.pdf"
+    document = fitz.open()
+    document.new_page(width=200, height=200)
+    real_unlink = Path.unlink
+
+    with patch.object(Path, "unlink", side_effect=PermissionError("file is open")):
+        reopened = _checkpoint_modified_document(
+            document,
+            output_pdf,
+            completed_pages=1,
+        )
+
+    checkpoint = Path(reopened._translation_checkpoint_path)
+    assert checkpoint.is_file()
+    assert reopened.page_count == 1
+    reopened.close()
+    real_unlink(checkpoint)
+
+
 def test_saved_pdf_dedupes_repeated_images(tmp_path):
     """show_pdf_page copies a source page's images once per call; the saved
     output must not carry dozens of byte-identical image streams."""

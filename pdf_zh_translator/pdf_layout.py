@@ -493,7 +493,12 @@ def translate_pdf(
     if not units:
         warnings.append("No extractable English text was found. Scanned PDFs need OCR.")
         page_count = document.page_count
-        save_pdf_for_fast_web_view(document, output_pdf, warnings)
+        save_pdf_for_fast_web_view(
+            document,
+            output_pdf,
+            warnings,
+            preserve_source_fonts=preserve_graphics_text,
+        )
         document.close()
         return TranslationReport(input_pdf, output_pdf, page_count, 0, skipped, warnings)
 
@@ -925,17 +930,56 @@ def translate_pdf(
                 fitz.TOOLS.store_shrink(60)
             except Exception:
                 pass
+        if (
+            preserve_graphics_text
+            and page_index + 1 < document.page_count
+            and (page_index + 1) % 12 == 0
+        ):
+            document = _checkpoint_modified_document(
+                document,
+                output_pdf,
+                warnings,
+                completed_pages=page_index + 1,
+            )
 
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
+    if preserve_graphics_text:
+        document = _checkpoint_modified_document(
+            document,
+            output_pdf,
+            warnings,
+            completed_pages=document.page_count,
+        )
+        _subset_embedded_cjk_fonts(
+            document,
+            warnings,
+            font_resource_names={
+                font_pack.regular_alias,
+                font_pack.bold_alias,
+                font_pack.fallback_alias,
+                font_pack.math_fallback_alias,
+            },
+        )
     document = subset_fonts_safely(
         document,
         font_pack,
         warnings,
         preserve_source_fonts=preserve_graphics_text,
     )
-    save_pdf_for_fast_web_view(document, output_pdf, warnings)
+    save_pdf_for_fast_web_view(
+        document,
+        output_pdf,
+        warnings,
+        preserve_source_fonts=preserve_graphics_text,
+    )
     page_count = document.page_count
+    checkpoint_path = getattr(document, "_translation_checkpoint_path", None)
     document.close()
+    if checkpoint_path is not None:
+        try:
+            Path(checkpoint_path).unlink(missing_ok=True)
+        except OSError as exc:
+            warnings.append(f"Temporary PDF checkpoint cleanup failed: {exc}")
     source_document.close()
     # Inter-paper hygiene for long sessions: drop everything mupdf cached
     # for this document before the next paper starts.
@@ -1405,6 +1449,8 @@ _FONT_SUBSET_MIN_BYTES = 2_000_000
 def _subset_embedded_cjk_fonts(
     document: object,
     warnings: Optional[List[str]] = None,
+    *,
+    font_resource_names: Optional[set[str]] = None,
 ) -> None:
     """Subset huge embedded fonts (CJK families) down to the used glyphs.
 
@@ -1431,6 +1477,8 @@ def _subset_embedded_cjk_fonts(
         for font in document.get_page_fonts(page_index, full=True):
             font_xref, font_type = font[0], font[2]
             if font_type != "Type0":
+                continue
+            if font_resource_names is not None and font[4] not in font_resource_names:
                 continue
             kind, descendants = document.xref_get_key(font_xref, "DescendantFonts")
             if kind != "array":
@@ -1626,9 +1674,12 @@ def save_pdf_for_fast_web_view(
     document: object,
     output_pdf: Path,
     warnings: Optional[List[str]] = None,
+    *,
+    preserve_source_fonts: bool = False,
 ) -> None:
     """Save a compact, linearized PDF so PDF.js can show page 1 with range reads."""
-    _subset_embedded_cjk_fonts(document, warnings)
+    if not preserve_source_fonts:
+        _subset_embedded_cjk_fonts(document, warnings)
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     temp_pdf = output_pdf.with_name(f".{output_pdf.name}.{os.getpid()}.tmp")
     linearized_pdf = output_pdf.with_name(f".{output_pdf.name}.{os.getpid()}.linearized.tmp")
@@ -1661,6 +1712,51 @@ def save_pdf_for_fast_web_view(
     finally:
         temp_pdf.unlink(missing_ok=True)
         linearized_pdf.unlink(missing_ok=True)
+
+
+def _checkpoint_modified_document(
+    document: object,
+    output_pdf: Path,
+    warnings: Optional[List[str]] = None,
+    *,
+    completed_pages: int,
+) -> object:
+    """Persist and reopen long native translations to isolate shared PDF resources."""
+    import fitz
+
+    output_pdf.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint = output_pdf.with_name(
+        f".{output_pdf.name}.{os.getpid()}.{uuid.uuid4().hex}.checkpoint.tmp"
+    )
+    previous_checkpoint = getattr(document, "_translation_checkpoint_path", None)
+    reopened = None
+    try:
+        document.save(str(checkpoint), garbage=2, deflate=True)
+        reopened = fitz.open(str(checkpoint))
+        document.close()
+        if previous_checkpoint is not None:
+            try:
+                Path(previous_checkpoint).unlink(missing_ok=True)
+            except OSError as exc:
+                if warnings is not None:
+                    warnings.append(f"Temporary PDF checkpoint cleanup failed: {exc}")
+        try:
+            checkpoint.unlink(missing_ok=True)
+        except PermissionError:
+            reopened._translation_checkpoint_path = checkpoint
+        return reopened
+    except Exception as exc:
+        if reopened is not None:
+            reopened.close()
+        if warnings is not None:
+            warnings.append(
+                "Page %d: PDF object checkpoint failed; continued in memory: %s"
+                % (completed_pages, exc)
+            )
+        return document
+    finally:
+        if reopened is None:
+            checkpoint.unlink(missing_ok=True)
 
 
 def create_dual_pdf(
