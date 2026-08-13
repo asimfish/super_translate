@@ -46,6 +46,11 @@ MANIFEST = REPO / "benchmarks" / "classic20" / "manifest.json"
 DEFAULT_WORKDIR = REPO / "data" / "benchmark" / "classic20"
 _LOCK_ENV = "PAPER_CHINA_BENCHMARK_LOCK"
 _LOCK_FD_ENV = "PAPER_CHINA_BENCHMARK_LOCK_FD"
+_TRANSIENT_PDF_OPEN_MARKERS = (
+    "failed to open file",
+    "cannot open broken document",
+    "cannot open document",
+)
 
 _LICENSE_RE = re.compile(
     r"https?://(?:arxiv\.org/licenses|creativecommons\.org/(?:licenses|publicdomain))/[a-z0-9./-]+"
@@ -106,6 +111,21 @@ def _http_get(url: str, *, timeout: int = 120) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
+
+
+def _run_with_pdf_open_retry(operation, *args, attempts: int = 3):
+    """Retry the short-lived PyMuPDF open failure seen under heavy QA load."""
+    for attempt in range(attempts):
+        try:
+            return operation(*args)
+        except (OSError, RuntimeError) as exc:
+            transient = any(
+                marker in str(exc).lower() for marker in _TRANSIENT_PDF_OPEN_MARKERS
+            )
+            if not transient or attempt + 1 >= attempts:
+                raise
+            time.sleep(0.25 * (2**attempt))
+    raise AssertionError("unreachable")
 
 
 def _paths(workdir: Path) -> dict:
@@ -608,8 +628,16 @@ def cmd_evaluate(entries: list[Entry], workdir: Path, args) -> int:
             print(f"evaluate {entry.id}: stale report, reevaluating")
         started = time.time()
         try:
-            issues = verify_translation_issues(source, mono)
-            visual = score_visual_layout(source, mono)
+            issues = _run_with_pdf_open_retry(
+                verify_translation_issues,
+                source,
+                mono,
+            )
+            visual = _run_with_pdf_open_retry(
+                score_visual_layout,
+                source,
+                mono,
+            )
         except Exception as exc:
             failures += 1
             print(f"evaluate {entry.id}: FAILED {exc}", file=sys.stderr)
@@ -821,7 +849,11 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "papers": showcase,
     }
-    comparison = _baseline_comparison(workdir, rows)
+    comparison = _baseline_comparison(
+        workdir,
+        rows,
+        getattr(args, "baseline_reports", None),
+    )
     if comparison:
         payload["comparison"] = comparison
     _atomic_write_text(
@@ -832,13 +864,17 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
     return 0
 
 
-def _baseline_comparison(workdir: Path, rows: list) -> dict | None:
-    """Aggregate current vs pre-fix (reports_baseline) evaluation totals.
+def _baseline_comparison(
+    workdir: Path,
+    rows: list,
+    baseline_dir: Path | None = None,
+) -> dict | None:
+    """Aggregate current vs a named frozen evaluation's totals.
 
     Scoped to the papers present in BOTH evaluations, so growing the
     benchmark set never skews the improvement figures.
     """
-    baseline_dir = workdir / "reports_baseline"
+    baseline_dir = Path(baseline_dir) if baseline_dir else workdir / "reports_baseline"
     if not baseline_dir.is_dir():
         return None
     baseline_reports = {
@@ -864,6 +900,7 @@ def _baseline_comparison(workdir: Path, rows: list) -> dict | None:
 
     return {
         "scope": f"{len(shared)} papers evaluated in both runs",
+        "baseline_reports": str(baseline_dir),
         "paper_ids": shared,
         "baseline": totals([baseline_reports[pid] for pid in shared]),
         "current": totals([current_reports[pid] for pid in shared]),

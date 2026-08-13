@@ -1003,9 +1003,7 @@ def test_gears_page8_runin_heading_clears_previous_formula_ink(tmp_path):
     spans = _page_spans(output[0])
     architecture = next(span for span in spans if span["text"].startswith("架构。"))
     # The tail of the phrase may wrap at body scale; anchor on its head.
-    previous_line = next(
-        span for span in spans if "个连续专家动作片" in span["text"]
-    )
+    previous_line = next(span for span in spans if "动作片段" in span["text"])
     same_line_body = next(
         span
         for span in spans

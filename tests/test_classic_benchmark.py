@@ -52,6 +52,58 @@ class TestManifest:
 
 
 class TestHarness:
+    def test_pdf_open_retry_recovers_from_transient_failure(
+        self, benchmark_module, monkeypatch
+    ):
+        monkeypatch.setattr(benchmark_module.time, "sleep", lambda _delay: None)
+        calls = 0
+
+        def operation(_source: Path, _translated: Path) -> str:
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise RuntimeError("Failed to open file '/tmp/result.pdf'.")
+            return "ok"
+
+        assert benchmark_module._run_with_pdf_open_retry(
+            operation, Path("a.pdf"), Path("b.pdf")
+        ) == "ok"
+        assert calls == 3
+
+    def test_pdf_open_retry_does_not_hide_other_qa_failures(
+        self, benchmark_module, monkeypatch
+    ):
+        monkeypatch.setattr(benchmark_module.time, "sleep", lambda _delay: None)
+        calls = 0
+
+        def operation(_source: Path, _translated: Path) -> None:
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("page analysis failed")
+
+        with pytest.raises(RuntimeError, match="page analysis failed"):
+            benchmark_module._run_with_pdf_open_retry(
+                operation, Path("a.pdf"), Path("b.pdf")
+            )
+        assert calls == 1
+
+    def test_pdf_open_retry_stops_after_bounded_attempts(
+        self, benchmark_module, monkeypatch
+    ):
+        monkeypatch.setattr(benchmark_module.time, "sleep", lambda _delay: None)
+        calls = 0
+
+        def operation(_source: Path, _translated: Path) -> None:
+            nonlocal calls
+            calls += 1
+            raise OSError("cannot open document")
+
+        with pytest.raises(OSError, match="cannot open document"):
+            benchmark_module._run_with_pdf_open_retry(
+                operation, Path("a.pdf"), Path("b.pdf")
+            )
+        assert calls == 3
+
     def test_load_entries_scopes_and_validates(self, benchmark_module):
         entries = benchmark_module._load_entries("word2vec,adam")
         assert {entry.id for entry in entries} == {"word2vec", "adam"}
@@ -519,6 +571,52 @@ class TestHarness:
         showcase = json.loads((workdir / "showcase.json").read_text(encoding="utf-8"))
         assert render_calls == []
         assert showcase["papers"][0]["previews"] == []
+
+    def test_report_uses_explicit_frozen_baseline(
+        self, benchmark_module, tmp_path
+    ):
+        workdir = tmp_path / "work"
+        reports = workdir / "reports"
+        meta = workdir / "meta"
+        frozen = tmp_path / "reports_r5v4"
+        reports.mkdir(parents=True)
+        meta.mkdir(parents=True)
+        frozen.mkdir()
+        entry = benchmark_module.Entry(
+            id="word2vec",
+            arxiv_id="1301.3781",
+            title="word2vec",
+            tags=("single_column",),
+        )
+        current = {
+            "pages": 1,
+            "visual_score": 0.9,
+            "error_count": 1,
+            "issues_by_code": {"font_size_drift": 1},
+            "strict_pass": False,
+            "legacy_pass": True,
+        }
+        baseline = {
+            "error_count": 4,
+            "issues_by_code": {"font_size_drift": 4},
+            "strict_pass": False,
+            "legacy_pass": False,
+        }
+        (reports / "word2vec.json").write_text(json.dumps(current), encoding="utf-8")
+        (meta / "word2vec.json").write_text(
+            json.dumps({"showcase_ok": False}), encoding="utf-8"
+        )
+        (frozen / "word2vec.json").write_text(json.dumps(baseline), encoding="utf-8")
+
+        class Args:
+            no_previews = True
+            baseline_reports = frozen
+
+        assert benchmark_module.cmd_report([entry], workdir, Args()) == 0
+        showcase = json.loads((workdir / "showcase.json").read_text(encoding="utf-8"))
+        assert showcase["comparison"]["baseline"]["error_count"] == 4
+        assert showcase["comparison"]["current"]["error_count"] == 1
+        assert showcase["comparison"]["baseline_reports"] == str(frozen)
 
     def test_quality_gate_enforces_strict_passes_and_artifact_provenance(
         self, benchmark_module, tmp_path

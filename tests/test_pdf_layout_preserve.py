@@ -2,6 +2,7 @@
 
 import re
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -18,6 +19,7 @@ from pdf_zh_translator.pdf_layout import (
     _attach_formula_keepouts,
     _cascade_expand_page_items,
     _clip_block_bbox_against_floats,
+    _combine_inline_style_translation_items,
     _demote_unanchorable_math_blocks,
     _equation_table_region_bboxes,
     _expand_single_line_body_bbox,
@@ -31,12 +33,15 @@ from pdf_zh_translator.pdf_layout import (
     _has_parallel_panel_sibling,
     _inline_formula_bridge_block,
     _insert_source_region_raster,
+    _line_is_equation_explanation,
     _LineRec,
     _looks_like_formula_fragment,
     _looks_like_overlap_exempt_text,
+    _looks_like_stranded_formula_prose_tail,
     _looks_like_untranslated_caption,
     _looks_like_untranslated_english,
     _looks_like_untranslated_formula_explanation,
+    _merge_wrapped_formula_continuation_records,
     _normalize_formula_accessibility_text,
     _normalize_formula_fragment_for_compare,
     _overlap_text_entries_from_block,
@@ -73,6 +78,7 @@ from pdf_zh_translator.pdf_layout import (
     join_lines,
     line_block_height,
     line_is_prose,
+    line_looks_like_section_heading,
     looks_like_action_skeleton_sequence,
     mark_bibliography_blocks,
     math_heavy_block,
@@ -278,6 +284,75 @@ class FontRoleConsistencyTests(unittest.TestCase):
                 "bbox": (109.1, 692.4, 168.9, 704.4),
                 "origin": (109.1, 702.0),
                 "size": 11.96,
+                "font": "HiraginoSansGB-W6",
+                "flags": 16,
+            },
+        ]
+
+        class Page:
+            def get_text(self, _kind):
+                return {"blocks": [{"type": 0, "lines": [{"spans": spans}]}]}
+
+        issues = _font_role_consistency_issues(source_blocks, Page(), 1)
+
+        self.assertFalse(
+            [issue for issue in issues if issue.code == "font_role_heading_mismatch"]
+        )
+
+    def test_consecutive_cascaded_headings_claim_distinct_bold_lines(self):
+        source_blocks = [
+            TextBlock(
+                page_index=0,
+                bbox=(108.0, 620.0, 505.0, 688.0),
+                text="Long preceding paragraph.",
+                font_size=9.86,
+                color=(0.0, 0.0, 0.0),
+                source_lines=6,
+                block_type="body",
+            ),
+            TextBlock(
+                page_index=0,
+                bbox=(108.3, 676.5, 201.7, 688.4),
+                text="3 METHODOLOGY",
+                font_size=11.96,
+                color=(0.0, 0.0, 0.0),
+                bold=True,
+                source_lines=1,
+                block_type="heading",
+            ),
+            TextBlock(
+                page_index=0,
+                bbox=(108.2, 701.7, 254.0, 711.7),
+                text="3.1 OPTIMAL FLOW TRANSPORT",
+                font_size=9.96,
+                color=(0.0, 0.0, 0.0),
+                bold=True,
+                source_lines=1,
+                block_type="heading",
+            ),
+        ]
+        spans = [
+            {
+                "text": "前段正文扩行进入原标题区域",
+                "bbox": (108.4, 682.5, 209.8, 695.4),
+                "origin": (108.4, 692.8),
+                "size": 9.21,
+                "font": "STSongti-SC-Regular",
+                "flags": 4,
+            },
+            {
+                "text": "3 方法",
+                "bbox": (109.1, 700.9, 168.9, 712.9),
+                "origin": (109.1, 710.5),
+                "size": 11.96,
+                "font": "HiraginoSansGB-W6",
+                "flags": 16,
+            },
+            {
+                "text": "3.1 最优流传输",
+                "bbox": (109.1, 720.4, 218.6, 730.4),
+                "origin": (109.1, 728.4),
+                "size": 9.96,
                 "font": "HiraginoSansGB-W6",
                 "flags": 16,
             },
@@ -1102,6 +1177,149 @@ def _span(text, bbox, size=10.0, font="NimbusRomNo9L-Regu", flags=4):
 
 def _line(text, bbox, is_cell=False):
     return _LineRec(text=text, bbox=bbox, spans=[_span(text, bbox)], is_cell=is_cell)
+
+
+class RomanSmallCapsHeadingTests(unittest.TestCase):
+    def test_roman_section_title_is_split_from_following_body(self):
+        heading = _LineRec(
+            text="V. DATA COLLECTION AND TRAINING RECIPE",
+            bbox=(338.6, 173.4, 536.4, 183.4),
+            spans=[
+                _span("V. D", (338.6, 173.4, 358.0, 183.4), size=9.96),
+                _span(
+                    "ATA COLLECTION AND TRAINING RECIPE",
+                    (358.0, 173.4, 536.4, 183.4),
+                    size=7.97,
+                ),
+            ],
+        )
+        body = _line(
+            "Broadly capable robot foundation models require the right dataset.",
+            (321.9, 189.0, 563.0, 199.0),
+        )
+
+        segments = segments_from_record(4, _RawBlockRec(lines=[heading, body]))
+
+        self.assertTrue(line_looks_like_section_heading(heading))
+        self.assertEqual(segments[0].block_type, "heading")
+        self.assertEqual(strip_sentinels(segments[0].text), heading.text)
+        self.assertFalse(segments[0].bold)
+        self.assertEqual(segments[1].block_type, "body")
+        self.assertAlmostEqual(segments[1].font_size, 10.0)
+
+    def test_roman_list_item_is_not_a_section_title(self):
+        item = _line("IV. This result follows from the previous theorem.", (72, 100, 310, 112))
+
+        self.assertFalse(line_looks_like_section_heading(item))
+
+
+class ContributionNameProtectionTests(unittest.TestCase):
+    def test_author_names_are_preserved_while_role_and_conjunction_translate(self):
+        source = (
+            "Data and operations: Noah Brown, Michael Equi, Chelsea Finn, "
+            "and Anna Walling."
+        )
+
+        protected, mapping = protect_text(source)
+        translated = protected.replace("Data and operations:", "数据与操作：").replace(
+            "and", "和"
+        )
+        restored, missing = restore_text(translated, mapping)
+        restored = clean_translation(restored)
+
+        self.assertNotIn("Noah Brown", protected)
+        self.assertEqual(len(mapping), 4)
+        self.assertEqual(missing, [])
+        self.assertIn("数据与操作：Noah Brown", restored)
+        self.assertIn("Chelsea Finn, 和 Anna Walling.", restored)
+
+    def test_unrelated_capitalized_method_list_is_not_protected(self):
+        source = "Baselines: Real Method, Vision Model, and Flow Solver."
+
+        protected, mapping = protect_text(source)
+
+        self.assertEqual(protected, source)
+        self.assertEqual(mapping, {})
+
+
+class FormulaBridgedRunInHeadingTests(unittest.TestCase):
+    def test_formula_between_run_in_heading_and_body_keeps_one_flow(self):
+        formula = (390.44, 345.09, 402.90, 355.90)
+        heading = TextBlock(
+            page_index=14,
+            bbox=(321.94, 345.23, 390.44, 355.20),
+            text="Attention mask.",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            bold=True,
+            source_lines=1,
+            block_type="run_in_heading",
+            preserve_position=True,
+            keepout_bboxes=[formula],
+            source_line_bboxes=((321.94, 345.23, 390.44, 355.20),),
+        )
+        body = TextBlock(
+            page_index=14,
+            bbox=(311.97, 345.32, 563.04, 498.75),
+            text="uses a blockwise causal attention mask with three blocks.",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            source_lines=14,
+            block_type="body",
+            keepout_bboxes=[formula],
+            source_line_bboxes=((402.90, 345.32, 563.03, 356.78),),
+        )
+
+        combined = _combine_inline_style_translation_items(
+            [(heading, "注意力掩码。"), (body, "采用分块因果注意力掩码。")]
+        )
+
+        self.assertEqual(len(combined), 1)
+        merged, translated = combined[0]
+        self.assertEqual(translated, "注意力掩码。 采用分块因果注意力掩码。")
+        self.assertTrue(merged.bold_prefix)
+        self.assertEqual(merged.keepout_bboxes, [formula])
+        self.assertFalse(merged.preserve_position)
+
+
+class FormulaExplanationExtractionTests(unittest.TestCase):
+    def test_where_glued_to_variable_with_corresponds_is_prose(self):
+        prose_prefix = (49.0, 94.1, 73.3, 104.1)
+        formula = (73.3, 93.9, 193.2, 105.4)
+        prose_suffix = (193.2, 94.0, 300.0, 104.1)
+        line = _LineRec(
+            text=(
+                f"where{SENTINEL_OPEN}A_t=[a_t,...,a_{{t+H-1}}]{SENTINEL_CLOSE} "
+                "corresponds to an action"
+            ),
+            bbox=(49.0, 93.9, 300.0, 105.4),
+            spans=[
+                _span("where", prose_prefix),
+                _span("A_t=[a_t,...,a_{t+H-1}]", formula),
+                _span(" corresponds to an action", prose_suffix),
+            ],
+            math_bboxes=[formula],
+            math_run_bboxes=[formula],
+            prose_bboxes=[prose_prefix, prose_suffix],
+        )
+
+        self.assertTrue(_line_is_equation_explanation(line))
+        segments = segments_from_record(4, _RawBlockRec(lines=[line]))
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0].block_type, "body")
+        self.assertIn("corresponds to an action", segments[0].text)
+
+    def test_whereas_is_not_a_glued_formula_cue(self):
+        line = _LineRec(
+            text=f"whereas {SENTINEL_OPEN}A_t{SENTINEL_CLOSE} corresponds to an action",
+            bbox=(49.0, 93.9, 300.0, 105.4),
+            spans=[],
+            math_bboxes=[(93.0, 93.9, 110.0, 105.4)],
+            math_run_bboxes=[(93.0, 93.9, 110.0, 105.4)],
+            prose_bboxes=[(49.0, 94.1, 93.0, 104.1), (110.0, 94.0, 300.0, 104.1)],
+        )
+
+        self.assertFalse(_line_is_equation_explanation(line))
 
 
 class TableDetectionTests(unittest.TestCase):
@@ -2770,8 +2988,9 @@ class FormulaTailProseTests(unittest.TestCase):
 
         expanded, shifted, untouched = [item[0] for item in updated]
         self.assertAlmostEqual(expanded.bbox[3], 75.6)
-        self.assertAlmostEqual(shifted.bbox[1], 85.6)
-        self.assertAlmostEqual(shifted.bbox[3], 97.6)
+        self.assertAlmostEqual(shifted.bbox[1], 79.1)
+        self.assertAlmostEqual(shifted.bbox[3], 91.1)
+        self.assertAlmostEqual(shifted.bbox[1] - expanded.bbox[3], 3.5)
         self.assertEqual(untouched.bbox, other_column.bbox)
 
     def test_layout_cascade_expands_heading_and_shifts_body_at_role_size(self):
@@ -2926,6 +3145,8 @@ class FormulaTailProseTests(unittest.TestCase):
             font_size=10.0,
             color=(0.0, 0.0, 0.0),
             source_lines=2,
+            block_type="formula_prose",
+            preserve_position=True,
             keepout_bboxes=[(120.0, 45.0, 160.0, 55.0)],
             formula_anchors=((120.0, 45.0, 160.0, 55.0),),
             preserved_math_placeholders=(0,),
@@ -3013,7 +3234,8 @@ class FormulaTailProseTests(unittest.TestCase):
         expanded, shifted = [item[0] for item in updated]
         self.assertEqual(expanded.bbox[1], caption.bbox[1])
         self.assertAlmostEqual(expanded.bbox[3], 70.0)
-        self.assertGreater(shifted.bbox[1], heading.bbox[1])
+        self.assertEqual(shifted.bbox[1], heading.bbox[1])
+        self.assertGreaterEqual(shifted.bbox[1] - expanded.bbox[3], 3.5)
 
     def test_formula_raster_adds_transparent_margin_without_rescaling_ink(self):
         source = fitz.open()
@@ -4620,6 +4842,61 @@ class PreservedRegionUnitFilterTests(unittest.TestCase):
 
 
 class PreserveGraphicsTextTests(unittest.TestCase):
+    def test_full_page_multi_panel_figure_has_one_preserved_envelope(self):
+        from pdf_zh_translator.pdf_layout import _captioned_composite_figure_regions
+
+        caption = TextBlock(
+            page_index=0,
+            bbox=(50.0, 632.0, 545.0, 654.0),
+            text="Figure 19: Complete annotation guidelines.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            block_type="caption",
+        )
+        graphic_regions = [
+            (163.0, 60.0, 557.0, 158.0),
+            (38.0, 162.0, 557.0, 260.0),
+            (38.0, 279.0, 306.0, 377.0),
+            (289.0, 381.0, 557.0, 480.0),
+            (38.0, 491.0, 557.0, 589.0),
+        ]
+
+        regions = _captioned_composite_figure_regions([caption], graphic_regions)
+
+        self.assertEqual(regions, [(38.0, 60.0, 557.0, 589.0)])
+
+    def test_composite_figure_envelope_does_not_cross_another_caption(self):
+        from pdf_zh_translator.pdf_layout import _captioned_composite_figure_regions
+
+        first_caption = TextBlock(
+            page_index=0,
+            bbox=(50.0, 260.0, 545.0, 280.0),
+            text="Figure 1: First experiment.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+        second_caption = replace(
+            first_caption,
+            bbox=(50.0, 610.0, 545.0, 630.0),
+            text="Figure 2: Second experiment.",
+        )
+        graphic_regions = [
+            (50.0, 60.0, 250.0, 150.0),
+            (300.0, 60.0, 550.0, 150.0),
+            (50.0, 300.0, 250.0, 390.0),
+            (300.0, 300.0, 550.0, 390.0),
+            (50.0, 420.0, 250.0, 510.0),
+            (300.0, 420.0, 550.0, 510.0),
+        ]
+
+        regions = _captioned_composite_figure_regions(
+            [first_caption, second_caption], graphic_regions
+        )
+
+        self.assertEqual(regions, [])
+
     def test_wide_shallow_background_rule_is_not_graphic_region(self):
         document = fitz.open()
         page = document.new_page(width=410, height=620)
@@ -5703,6 +5980,42 @@ class TestClassifyBlocks(unittest.TestCase):
             bold=bold,
         )
 
+    def test_repeated_running_header_ignores_trailing_page_number(self):
+        from pdf_zh_translator.pdf_layout import _repeated_top_header_texts
+
+        blocks = [
+            self._make_block(
+                f"Learning Transferable Visual Models From Natural Language Supervision {page}",
+                bbox=(55.4, 47.3, 541.4, 57.2),
+                page=page - 1,
+            )
+            for page in range(1, 7)
+        ]
+
+        repeated = _repeated_top_header_texts(blocks, page_count=6)
+
+        self.assertIn(
+            "learning transferable visual models from natural language supervision",
+            repeated,
+        )
+
+    def test_header_bbox_expands_upward_without_moving_bottom(self):
+        from pdf_zh_translator.pdf_layout import _expand_header_bbox_upward
+
+        block = self._make_block(
+            "Learning Transferable Visual Models From Natural Language Supervision 46",
+            bbox=(55.4, 47.3, 541.4, 57.2),
+            page=45,
+        )
+        block.block_type = "header"
+        block.font_size = 9.46
+
+        expanded = _expand_header_bbox_upward(block)
+
+        self.assertLess(expanded.bbox[1], block.bbox[1])
+        self.assertEqual(expanded.bbox[3], block.bbox[3])
+        self.assertEqual(expanded.redact_bboxes, [block.bbox])
+
     def test_caption_detection(self):
         """Figure/Table captions are classified correctly."""
         from pdf_zh_translator.pdf_layout import classify_blocks
@@ -5907,6 +6220,39 @@ class TestClassifyBlocks(unittest.TestCase):
         self.assertEqual(blocks[2].block_type, "run_in_heading")
         self.assertTrue(all(block.should_translate for block in blocks))
 
+    def test_first_page_two_column_prose_is_not_fragmented_author_metadata(self):
+        """An affiliation in the byline must not turn all nearby page-one
+        records into metadata (BERT p1 regression)."""
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        blocks = [
+            self._make_block(
+                "Jacob Devlin Ming-Wei Chang Kenton Lee Kristina Toutanova "
+                "Google AI Language {jacobdevlin,mwchang,kentonl,kristout}@google.com",
+                bbox=(107.8, 130.8, 492.7, 170.4),
+            ),
+            self._make_block("Abstract", bbox=(158.9, 224.3, 203.4, 236.3)),
+            self._make_block(
+                "We introduce a new language representation model called BERT, "
+                "which stands for Bidirectional Encoder Representations from Transformers. "
+                "The model obtains new state-of-the-art results on eleven tasks.",
+                bbox=(89.0, 245.8, 273.3, 546.8),
+            ),
+            self._make_block(
+                "There are two existing strategies for applying pre-trained language "
+                "representations to downstream tasks. The feature-based approach uses "
+                "task-specific architectures that include the representations as features.",
+                bbox=(307.3, 225.2, 525.5, 765.6),
+            ),
+        ]
+
+        classify_blocks(blocks, 0, 792, [])
+
+        self.assertEqual(blocks[0].block_type, "metadata")
+        self.assertFalse(blocks[0].should_translate)
+        self.assertTrue(all(block.should_translate for block in blocks[1:]))
+        self.assertTrue(all(block.block_type != "metadata" for block in blocks[1:]))
+
     def test_editor_name_fragments_do_not_end_bibliography(self):
         """Reference entries wrap onto editor-name fragments like
         'H. Wallach,' which match the '<letter>. <title>' appendix-heading
@@ -6053,6 +6399,38 @@ class TestClassifyBlocks(unittest.TestCase):
         layout._bibliography_heading_size = 0.0
 
         classify_blocks([block], 4, 792, [])
+
+        self.assertEqual(block.block_type, "body")
+        self.assertTrue(block.should_translate)
+
+    def test_numbered_research_questions_are_not_bibliography(self):
+        import pdf_zh_translator.pdf_layout as layout
+
+        block = self._make_block(
+            (
+                "1. How does RT-2 perform on seen tasks and more importantly, "
+                "generalize over new objects, backgrounds, and environments? "
+                "2. Can we observe and measure any emergent capabilities of RT-2? "
+                "3. How does the generalization vary with parameter count and other "
+                "design decisions? 4. Can RT-2 exhibit signs of chain-of-thought "
+                "reasoning similarly to vision-language models? We evaluate our "
+                "approach with about 6,000 trajectories and use PaLI-X "
+                "(Chen et al., 2023a) and PaLM-E (Driess et al., 2023)."
+            ),
+            bbox=(61.9, 82.8, 534.7, 247.0),
+            page=6,
+        )
+        block.source_lines = 11
+        layout._bibliography_seen.clear()
+        layout._bibliography_ended = False
+        layout._bibliography_heading_size = 0.0
+
+        try:
+            classify_blocks([block], 6, 792, [])
+        finally:
+            layout._bibliography_seen.clear()
+            layout._bibliography_ended = False
+            layout._bibliography_heading_size = 0.0
 
         self.assertEqual(block.block_type, "body")
         self.assertTrue(block.should_translate)
@@ -7601,6 +7979,7 @@ class TestTranslationVerification(unittest.TestCase):
         translated.close()
         english_issues = [issue for issue in issues if issue.code == "untranslated_english"]
         self.assertEqual(len(english_issues), 1)
+        self.assertEqual(english_issues[0].page, 1)
         self.assertIn("1 block", english_issues[0].message)
 
     def test_ignores_reference_continuation_on_following_page(self):
@@ -7641,7 +8020,29 @@ class TestTranslationVerification(unittest.TestCase):
         translated.close()
         english_issues = [issue for issue in issues if issue.code == "untranslated_english"]
         self.assertEqual(len(english_issues), 1)
-        self.assertEqual(english_issues[0].page, 1)
+
+    def test_apa_reference_page_is_detected_as_continuation(self):
+        from pdf_zh_translator.pdf_layout import _page_looks_like_reference_continuation
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        entries = (
+            "Unterthiner, T., Van Steenkiste, S., Kurach, K., and Gelly, S. "
+            "(2018). Towards accurate generative models of video. arXiv preprint.",
+            "Valevski, D., Leviathan, Y., Arar, M., and Fruchter, S. (2024). "
+            "Diffusion models are real-time game engines.",
+            "Van Den Oord, A., Vinyals, O., et al. (2017). Neural discrete "
+            "representation learning. Advances in Neural Information Processing Systems.",
+        )
+        for index, entry in enumerate(entries):
+            page.insert_textbox(
+                fitz.Rect(72, 60 + index * 90, 540, 130 + index * 90),
+                entry,
+                fontsize=10,
+            )
+
+        self.assertTrue(_page_looks_like_reference_continuation(page))
+        document.close()
 
     def test_ignores_untranslated_english_inside_visual_region(self):
         original = fitz.open()
@@ -7760,6 +8161,51 @@ class TestTranslationVerification(unittest.TestCase):
         translated.close()
         self.assertTrue(
             any(issue.code == "untranslated_formula_explanation" for issue in issues)
+        )
+
+    def test_formula_preserved_region_does_not_hide_stranded_english_tail(self):
+        original = fitz.open()
+        page = original.new_page(width=300, height=220)
+        page.insert_text((30, 80), "or up to 1,000 integration steps.")
+
+        translated = fitz.open()
+        translated.insert_pdf(original)
+
+        import tempfile
+
+        def preserve_formula_region(_document, *_args, **kwargs):
+            regions = kwargs.get("preserved_regions_out")
+            if regions is not None:
+                regions[0] = [(25.0, 65.0, 230.0, 90.0)]
+            return [], {}, 1
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            with patch(
+                "pdf_zh_translator.pdf_layout.prepare_translation_units",
+                side_effect=preserve_formula_region,
+            ):
+                issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertTrue(
+            any(issue.code == "untranslated_formula_explanation" for issue in issues),
+            [f"{issue.code}: {issue.message}" for issue in issues],
+        )
+
+    def test_stranded_formula_tail_detector_rejects_chinese_and_fragments(self):
+        self.assertTrue(
+            _looks_like_stranded_formula_prose_tail(
+                "or up to 1,000 integration steps."
+            )
+        )
+        self.assertFalse(_looks_like_stranded_formula_prose_tail("or up to 1,000"))
+        self.assertFalse(
+            _looks_like_stranded_formula_prose_tail("或最多 1,000 个积分步。")
         )
 
     def test_preserved_algorithm_formula_steps_are_not_untranslated_prose(self):
@@ -8444,6 +8890,36 @@ class PreservedCollisionSkipTests(unittest.TestCase):
         self.assertEqual(expanded.redact_bboxes, [source_bbox])
         self.assertEqual(expanded.fixed_translation_font_size, 11.96)
 
+    def test_heading_uses_nearby_full_width_body_when_float_skews_columns(self):
+        source_bbox = (108.0, 630.9, 263.3, 640.9)
+        heading = TextBlock(
+            page_index=0,
+            bbox=source_bbox,
+            text="4.5 Effectiveness of Design Choices",
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+            bold=True,
+        )
+        following = TextBlock(
+            page_index=0,
+            bbox=(107.5, 652.6, 505.7, 722.4),
+            text="Following full-width body paragraph.",
+            font_size=9.88,
+            color=(0.0, 0.0, 0.0),
+            block_type="body",
+        )
+
+        expanded = _expand_standalone_heading_to_column(
+            heading,
+            [(108.0, 129.0), (337.0, 168.0)],
+            612.0,
+            [heading, following],
+        )
+
+        self.assertEqual(expanded.bbox, (108.0, 630.9, 505.7, 640.9))
+        self.assertEqual(expanded.redact_bboxes, [source_bbox])
+
     def test_caption_opener_does_not_merge_backward_into_table_tail(self):
         table_tail = TextBlock(
             page_index=0,
@@ -9112,6 +9588,50 @@ class MixedProseEquationBlockTests(unittest.TestCase):
         self.assertFalse(block_is_strong_math(record))
         self.assertFalse(record_is_table(record))
 
+    def test_long_inference_paragraph_with_split_inline_scripts_is_not_table(self):
+        """pi0 p16: one overlapping subscript cannot preserve 40 prose lines."""
+        from pdf_zh_translator.pdf_layout import (
+            block_is_strong_math,
+            record_is_table,
+        )
+
+        lines = [
+            _line("D. Inference", (312.0, 206.2, 363.9, 216.1)),
+            _line(
+                "Recall that our model takes an observation and predicts actions",
+                (321.9, 221.1, 563.0, 231.0),
+            ),
+        ]
+        for index in range(12):
+            lines.append(
+                _line(
+                    "The model runs a forward pass and integrates the vector field",
+                    (312.0, 233.0 + index * 12.0, 563.0, 243.0 + index * 12.0),
+                )
+            )
+        lines.extend(
+            [
+                _LineRec(
+                    text=f"chunk{SENTINEL_OPEN}A_t{SENTINEL_CLOSE}, we encode each image",
+                    bbox=(312.0, 377.0, 510.0, 389.1),
+                    spans=[],
+                ),
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}_t, ..., I^n{SENTINEL_CLOSE}",
+                    bbox=(506.0, 377.0, 536.9, 390.0),
+                    spans=[],
+                ),
+            ]
+        )
+        record = _RawBlockRec(lines=lines)
+
+        self.assertFalse(block_is_strong_math(record))
+        self.assertFalse(record_is_table(record))
+
+        segments = segments_from_record(15, record)
+        self.assertEqual(segments[0].block_type, "heading")
+        self.assertTrue(any(segment.block_type == "body" for segment in segments[1:]))
+
 
     def test_script_split_fragment_matches_by_window(self):
         """Sub/superscript stream-order divergence keeps a long contiguous run
@@ -9426,6 +9946,44 @@ def test_borderless_aligned_table_above_caption_is_preserved():
     assert all(not cell.should_translate for cell in cells)
 
 
+def test_captioned_horizontal_rule_table_has_preserved_envelope():
+    from pdf_zh_translator.pdf_layout import _vector_table_region_bboxes
+
+    class FakePage:
+        def get_drawings(self):
+            return [
+                {"rect": SimpleNamespace(x0=108.0, y0=y, x1=516.0, y1=y)}
+                for y in (150.0, 182.0, 214.0, 246.0)
+            ]
+
+    caption = TextBlock(
+        0,
+        (108.0, 116.0, 505.0, 141.0),
+        "Table 12: Summary of math word problem benchmarks.",
+        9.0,
+        (0.0, 0.0, 0.0),
+        block_type="caption",
+    )
+    rows = [
+        TextBlock(
+            0,
+            (112.0, y, 512.0, y + 20.0),
+            text,
+            9.0,
+            (0.0, 0.0, 0.0),
+        )
+        for y, text in (
+            (154.0, "GSM8K 1319 example problem"),
+            (186.0, "SVAMP 1000 example problem"),
+            (218.0, "ASDiv 2096 example problem"),
+        )
+    ]
+
+    assert _vector_table_region_bboxes(FakePage(), [caption, *rows]) == [
+        (108.0, 150.0, 516.0, 246.0)
+    ]
+
+
 def test_tall_formula_keepout_is_not_vertically_trimmed_as_adjacent_line():
     """Cross-line operators are handled by block-level horizontal splitting."""
     from pdf_zh_translator.pdf_layout import (
@@ -9515,6 +10073,164 @@ class JustifiedWordFragmentTests(unittest.TestCase):
 
 
 class DetachedInlineScriptTests(unittest.TestCase):
+    def test_cross_record_stacked_fraction_rejoins_formula_paragraph(self):
+        prose_lines = [
+            _line(
+                "This paragraph explains the model training procedure and results.",
+                (50.0, 100.0 + index * 12.0, 300.0, 110.0 + index * 12.0),
+            )
+            for index in range(12)
+        ]
+        prose_lines.append(
+            _LineRec(
+                text=f"by {SENTINEL_OPEN}p(t)=Beta(s-t{SENTINEL_CLOSE}",
+                bbox=(50.0, 244.0, 150.0, 256.0),
+                spans=[_span("p(t)=Beta(s-t", (60.0, 244.0, 150.0, 256.0), font="CMMI10")],
+                math_bboxes=[(60.0, 244.0, 150.0, 256.0)],
+                math_run_bboxes=[(60.0, 244.0, 150.0, 256.0)],
+                prose_bboxes=[(50.0, 244.0, 60.0, 256.0)],
+            )
+        )
+        continuation = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}_s;1.5,1){SENTINEL_CLOSE} and is visualized.",
+                    bbox=(120.0, 252.0, 300.0, 264.0),
+                    spans=[_span("_s;1.5,1)", (120.0, 252.0, 180.0, 264.0), font="CMMI10")],
+                    math_bboxes=[(120.0, 252.0, 180.0, 264.0)],
+                    math_run_bboxes=[(120.0, 252.0, 180.0, 264.0)],
+                    prose_bboxes=[(180.0, 252.0, 300.0, 264.0)],
+                ),
+                _line("This setting allows for a ratio greater than", (50.0, 264.0, 275.0, 276.0)),
+                _line("1", (284.0, 264.0, 290.0, 271.0)),
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}_1000{SENTINEL_CLOSE}",
+                    bbox=(280.0, 271.0, 300.0, 279.0),
+                    spans=[_span("1000", (280.0, 271.0, 300.0, 279.0), size=7.0, font="CMR7")],
+                    math_bboxes=[(280.0, 271.0, 300.0, 279.0)],
+                    math_run_bboxes=[(280.0, 271.0, 300.0, 279.0)],
+                ),
+                _line("or up to one thousand integration steps.", (50.0, 280.0, 220.0, 292.0)),
+            ]
+        )
+
+        records = _merge_wrapped_formula_continuation_records(
+            [_RawBlockRec(lines=prose_lines), continuation]
+        )
+        blocks = segments_from_record(0, records[0], equation_record=False)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(blocks[0].flow_inline_math)
+        self.assertIn("or up to one thousand", strip_sentinels(blocks[0].text))
+        self.assertIn(f"{SENTINEL_OPEN}1{SENTINEL_CLOSE}", blocks[0].text)
+
+    def test_numbered_display_equation_records_are_not_joined(self):
+        prose = _RawBlockRec(
+            lines=[
+                _line(
+                    "This paragraph explains the model training procedure and results.",
+                    (50.0, 100.0 + index * 12.0, 300.0, 110.0 + index * 12.0),
+                )
+                for index in range(12)
+            ]
+            + [
+                _LineRec(
+                    text=f"by {SENTINEL_OPEN}p(t){SENTINEL_CLOSE}",
+                    bbox=(50.0, 244.0, 100.0, 256.0),
+                    spans=[_span("p(t)", (60.0, 244.0, 100.0, 256.0), font="CMMI10")],
+                    math_bboxes=[(60.0, 244.0, 100.0, 256.0)],
+                    math_run_bboxes=[(60.0, 244.0, 100.0, 256.0)],
+                    prose_bboxes=[(50.0, 244.0, 60.0, 256.0)],
+                )
+            ]
+        )
+        equation = _RawBlockRec(
+            lines=[
+                _line("(12)", (280.0, 252.0, 300.0, 264.0)),
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}x=y+z{SENTINEL_CLOSE}",
+                    bbox=(120.0, 252.0, 180.0, 264.0),
+                    spans=[_span("x=y+z", (120.0, 252.0, 180.0, 264.0), font="CMMI10")],
+                    math_bboxes=[(120.0, 252.0, 180.0, 264.0)],
+                    math_run_bboxes=[(120.0, 252.0, 180.0, 264.0)],
+                ),
+                _line("This is a complete explanatory sentence.", (50.0, 266.0, 240.0, 278.0)),
+            ]
+        )
+
+        self.assertEqual(
+            len(_merge_wrapped_formula_continuation_records([prose, equation])),
+            2,
+        )
+
+    def test_long_prose_paragraph_recovers_wide_formula_continuation(self):
+        lines = [
+            _line(
+                "This paragraph explains a model and its training procedure in detail.",
+                (50.0, 100.0 + index * 12.0, 300.0, 110.0 + index * 12.0),
+            )
+            for index in range(12)
+        ]
+        formula_bbox = (82.0, 244.0, 190.0, 256.0)
+        lines.extend(
+            [
+                _LineRec(
+                    text=(
+                        f"{SENTINEL_OPEN}q(A_t)=N(A_t,I){SENTINEL_CLOSE}. "
+                        "In practice, the network"
+                    ),
+                    bbox=(82.0, 244.0, 300.0, 256.0),
+                    spans=[_span("q(A_t)=N(A_t,I)", formula_bbox, font="CMMI10")],
+                    math_bboxes=[formula_bbox],
+                    math_run_bboxes=[formula_bbox],
+                    prose_bboxes=[(192.0, 244.0, 300.0, 256.0)],
+                ),
+                _line(
+                    "continues training with stable optimization and reports results.",
+                    (50.0, 256.0, 300.0, 266.0),
+                ),
+                _LineRec(
+                    text=f"field {SENTINEL_OPEN}u(A_t)=A_t-e{SENTINEL_CLOSE}",
+                    bbox=(50.0, 268.0, 150.0, 280.0),
+                    spans=[_span("u(A_t)=A_t-e", (75.0, 268.0, 150.0, 280.0), font="CMMI10")],
+                    math_bboxes=[(75.0, 268.0, 150.0, 280.0)],
+                    math_run_bboxes=[(75.0, 268.0, 150.0, 280.0)],
+                    prose_bboxes=[(50.0, 268.0, 75.0, 280.0)],
+                ),
+            ]
+        )
+
+        blocks = segments_from_record(0, _RawBlockRec(lines=lines), equation_record=False)
+
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(blocks[0].flow_inline_math)
+        self.assertEqual(len(blocks[0].source_math_bboxes), 2)
+        self.assertIn("In practice, the network", strip_sentinels(blocks[0].text))
+
+    def test_long_prose_does_not_absorb_wide_pure_display_formula(self):
+        lines = [
+            _line(
+                "This paragraph explains a model and its training procedure in detail.",
+                (50.0, 100.0 + index * 12.0, 300.0, 110.0 + index * 12.0),
+            )
+            for index in range(12)
+        ]
+        formula_bbox = (50.0, 244.0, 285.0, 258.0)
+        lines.append(
+            _LineRec(
+                text=f"{SENTINEL_OPEN}q(A_t)=N(A_t,I)+u(A_t){SENTINEL_CLOSE}",
+                bbox=formula_bbox,
+                spans=[_span("q(A_t)=N(A_t,I)+u(A_t)", formula_bbox, font="CMMI10")],
+                math_bboxes=[formula_bbox],
+                math_run_bboxes=[formula_bbox],
+            )
+        )
+
+        blocks = segments_from_record(0, _RawBlockRec(lines=lines), equation_record=False)
+
+        self.assertFalse(any(block.flow_inline_math for block in blocks))
+
     def test_detached_subscripts_rejoin_one_reflowable_paragraph(self):
         raw_block = {
             "lines": [
@@ -9637,6 +10353,40 @@ class DetachedInlineScriptTests(unittest.TestCase):
 
 
 class TranslationEchoDetectionTests(unittest.TestCase):
+    def test_preserved_formula_words_do_not_count_as_source_prose_echo(self):
+        from pdf_zh_translator.pdf_layout import (
+            _translation_retains_foreign_prose,
+            _translation_retains_source_prose_run,
+        )
+
+        block = TextBlock(
+            page_index=24,
+            bbox=(107.7, 622.0, 504.0, 642.3),
+            text=(
+                "Table 12: Aggregated pairwise judgments where the value is "
+                f"{SENTINEL_OPEN}# judgment x is better than y minus "
+                f"# judgment y is better than x{SENTINEL_CLOSE}"
+            ),
+            font_size=8.88,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="caption",
+        )
+        translated = (
+            "total number of judgments 表12：系统间成对判断的聚合结果，"
+            "其中单元格值为 # judgment x is better than y minus "
+            "# judgment y is better than x"
+        )
+
+        self.assertFalse(_translation_retains_source_prose_run(block, translated))
+        self.assertFalse(_translation_retains_foreign_prose(block, translated))
+        self.assertTrue(
+            _translation_retains_foreign_prose(
+                block,
+                translated + " where the value is",
+            )
+        )
+
     def test_parenthetical_english_gloss_is_not_flagged_as_untranslated(self):
         from pdf_zh_translator.pdf_layout import _translation_retains_source_prose_run
 
@@ -9924,6 +10674,7 @@ class DisplayEquationRowTests(unittest.TestCase):
 
         self.assertEqual(segments, [])
 
+
     def test_short_formula_explanation_is_still_translated(self):
         prose = _LineRec(
             "where the target is normalized",
@@ -10040,3 +10791,159 @@ class ColumnStraddlingRecordTests(unittest.TestCase):
         pieces = _split_column_straddling_record(_RawBlockRec(lines=lines))
 
         self.assertEqual(len(pieces), 1)
+class ParagraphMergeFontSizeTests(unittest.TestCase):
+    def test_formula_annotation_cannot_shrink_following_body_paragraph(self):
+        from pdf_zh_translator.pdf_layout import merge_two_blocks
+
+        annotation = TextBlock(
+            page_index=3,
+            bbox=(258.0, 180.0, 335.0, 187.0),
+            text="Joint-embedding prediction",
+            font_size=6.97,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+            block_type="body",
+            source_line_bboxes=((258.0, 180.0, 335.0, 187.0),),
+        )
+        paragraph = TextBlock(
+            page_index=3,
+            bbox=(108.0, 187.0, 504.0, 270.0),
+            text=(
+                "where sg is the stop-grad operator and the target is an "
+                "exponential moving average over several time steps."
+            ),
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            source_lines=7,
+            block_type="body",
+            source_line_bboxes=((108.0, 187.0, 504.0, 198.0),),
+        )
+
+        merged = merge_two_blocks(annotation, paragraph)
+
+        self.assertAlmostEqual(merged.font_size, 9.96)
+
+    def test_regular_one_line_paragraph_keeps_its_source_scale(self):
+        from pdf_zh_translator.pdf_layout import merge_two_blocks
+
+        first = TextBlock(
+            page_index=0,
+            bbox=(72.0, 80.0, 300.0, 92.0),
+            text="A normal paragraph starts here and continues",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+            block_type="body",
+        )
+        continuation = TextBlock(
+            page_index=0,
+            bbox=(72.0, 92.0, 300.0, 128.0),
+            text="on the following physical lines without changing its role.",
+            font_size=9.4,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+            block_type="body",
+        )
+
+        merged = merge_two_blocks(first, continuation)
+
+        self.assertAlmostEqual(merged.font_size, 9.0)
+
+    def test_formula_paragraph_can_request_three_lines_of_cascade_space(self):
+        from unittest.mock import patch
+
+        from pdf_zh_translator.pdf_layout import (
+            _cascade_required_height,
+            build_font_pack,
+        )
+
+        block = TextBlock(
+            page_index=0,
+            bbox=(72.0, 100.0, 500.0, 134.0),
+            text="A paragraph with protected math and a translated explanation.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+            block_type="body",
+            source_math_bboxes=((220.0, 110.0, 340.0, 124.0),),
+            keepout_bboxes=[(220.0, 110.0, 340.0, 124.0)],
+        )
+
+        def fits_at_required_height(*, block, **_kwargs):
+            return block.bbox[3] - block.bbox[1] >= 65.0
+
+        with (
+            patch(
+                "pdf_zh_translator.pdf_layout._sibling_group_item_height",
+                return_value=None,
+            ),
+            patch(
+                "pdf_zh_translator.pdf_layout.translated_text_fits",
+                side_effect=fits_at_required_height,
+            ),
+        ):
+            required = _cascade_required_height(
+                block,
+                "包含公式的中文解释需要在公式周围重新换行。",
+                font_pack=build_font_pack(None, []),
+                min_font_size=5.0,
+                requested=10.0,
+                margin=0.8,
+            )
+
+        self.assertIsNotNone(required)
+        self.assertGreaterEqual(required, 65.0)
+
+    def test_cascade_moves_heading_but_keeps_caption_fixed(self):
+        from pdf_zh_translator.pdf_layout import _cascade_item_movable
+
+        heading = TextBlock(
+            page_index=0,
+            bbox=(72.0, 200.0, 300.0, 216.0),
+            text="3 Experiments",
+            font_size=12.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+            block_type="heading",
+            preserve_position=True,
+        )
+        caption = TextBlock(
+            page_index=0,
+            bbox=(72.0, 240.0, 500.0, 260.0),
+            text="Figure 1: Overview of the method.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+            block_type="caption",
+            preserve_position=True,
+        )
+
+        self.assertTrue(_cascade_item_movable(heading))
+        self.assertFalse(_cascade_item_movable(caption))
+
+    def test_cascade_consumes_gaps_instead_of_shifting_whole_column(self):
+        from pdf_zh_translator.pdf_layout import _cascade_follower_shifts
+
+        def body(y0, y1, text="body"):
+            return TextBlock(
+                page_index=0,
+                bbox=(72.0, y0, 500.0, y1),
+                text=text,
+                font_size=10.0,
+                color=(0.0, 0.0, 0.0),
+                source_lines=3,
+                block_type="body",
+            )
+
+        items = [
+            (body(100.0, 134.0, "target"), "目标段落"),
+            (body(146.0, 200.0, "first follower"), "第一段"),
+            (body(230.0, 280.0, "second follower"), "第二段"),
+            (body(340.0, 390.0, "third follower"), "第三段"),
+        ]
+
+        shifts = _cascade_follower_shifts(items, 0, [1, 2, 3], 31.0)
+
+        self.assertAlmostEqual(shifts[1], 20.8)
+        self.assertNotIn(2, shifts)
+        self.assertNotIn(3, shifts)
