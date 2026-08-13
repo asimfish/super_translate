@@ -441,7 +441,11 @@ def _font_size_issues(
         # loses (dreamerv3 appendix). A cohort that is itself crushed still
         # fails the absolute floor.
         cohort = cohorts[round(expected, 1)]
-        reference = _median(cohort) if len(cohort) >= 2 else median_ratio
+        reference = (
+            min(_median(cohort), median_ratio)
+            if len(cohort) >= 2
+            else median_ratio
+        )
         uniform_with_cohort = ratio >= reference - _SIZE_RATIO_TOLERANCE * reference
         cohort_itself_crushed = reference < 0.80 and ratio < 0.72
         if uniform_with_cohort and not cohort_itself_crushed:
@@ -1008,6 +1012,15 @@ def _table_structure_issues(
     original_clusters = _rule_clusters(original_rules)
     if not original_clusters:
         return []
+    rule_geometry_identical = bool(
+        len(original_rules) == len(translated_rules)
+        and all(
+            abs(original[0] - translated[0]) <= 0.2
+            and abs(original[1] - translated[1]) <= 0.5
+            and abs(original[2] - translated[2]) <= 0.5
+            for original, translated in zip(original_rules, translated_rules)
+        )
+    )
     original_verticals = (
         _page_vertical_lines(original_page) if original_page is not None else []
     )
@@ -1040,16 +1053,20 @@ def _table_structure_issues(
         # in-table rule (equation underline glued into the cluster) must not
         # be dropped for covering little of the whole cluster envelope,
         # otherwise the original never matches its own geometry.
-        counterpart = [
-            rule
-            for rule in translated_rules
-            if top - 12.0 <= rule[0] <= bottom + 12.0
-            and any(
-                min(rule[2], source[2]) - max(rule[1], source[1])
-                > 0.5 * min(rule[2] - rule[1], source[2] - source[1])
-                for source in cluster
-            )
-        ]
+        counterpart = (
+            list(cluster)
+            if rule_geometry_identical
+            else [
+                rule
+                for rule in translated_rules
+                if top - 12.0 <= rule[0] <= bottom + 12.0
+                and any(
+                    min(rule[2], source[2]) - max(rule[1], source[1])
+                    > 0.5 * min(rule[2] - rule[1], source[2] - source[1])
+                    for source in cluster
+                )
+            ]
+        )
         if not counterpart:
             issues.append(
                 _issue(

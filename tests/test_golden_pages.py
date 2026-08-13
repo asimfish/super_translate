@@ -754,6 +754,78 @@ def test_hidden_formula_semantics_without_visible_region_is_a_qa_error():
     assert issue.severity == "error"
 
 
+def test_formula_visual_qa_falls_back_when_foreign_ink_trim_erases_formula(monkeypatch):
+    from pdf_zh_translator import pdf_layout
+    from pdf_zh_translator.pdf_layout import (
+        SENTINEL_CLOSE,
+        SENTINEL_OPEN,
+        TextBlock,
+        build_font_pack,
+        char_width,
+        pick_font_alias,
+        register_font_pack,
+    )
+
+    source = fitz.open()
+    source_page = source.new_page(width=300, height=180)
+    source_bbox = (90.0, 55.0, 180.0, 78.0)
+    source_page.insert_text((93, 72), "x in R^(H x W x C)", fontsize=12)
+    formula_png = source_page.get_pixmap(
+        matrix=fitz.Matrix(4, 4),
+        clip=fitz.Rect(source_bbox),
+        colorspace=fitz.csGRAY,
+        alpha=False,
+    ).tobytes("png")
+
+    translated = fitz.open()
+    translated_page = translated.new_page(width=300, height=180)
+    translated_bbox = (35.0, 95.0, 125.0, 118.0)
+    translated_page.insert_image(fitz.Rect(translated_bbox), stream=formula_png)
+    font_pack = build_font_pack(None, [])
+    register_font_pack(translated_page, font_pack)
+    fonts = font_pack.fonts_for(False)
+    semantic = "x∈R^{H}^{×}^{W}^{×}^{C}"
+    hidden_x = translated_bbox[0] + 3.0
+    for char in semantic:
+        translated_page.insert_text(
+            (hidden_x, translated_bbox[1] + 17.0),
+            char,
+            fontname=pick_font_alias(char, fonts),
+            fontsize=6,
+            render_mode=3,
+        )
+        hidden_x += char_width(char, fonts, 6)
+    block = TextBlock(
+        page_index=0,
+        bbox=(70.0, 45.0, 240.0, 90.0),
+        text=f"{SENTINEL_OPEN}{semantic}{SENTINEL_CLOSE}",
+        font_size=12.0,
+        color=(0.0, 0.0, 0.0),
+        formula_anchors=(source_bbox,),
+    )
+    monkeypatch.setattr(
+        pdf_layout,
+        "_trim_formula_clip_against_foreign_ink",
+        lambda *_args, **_kwargs: (
+            source_bbox[0],
+            source_bbox[3] - 2.0,
+            source_bbox[2],
+            source_bbox[3],
+        ),
+    )
+
+    issues = pdf_layout._formula_visible_ink_issues(
+        source_page,
+        translated_page,
+        [block],
+        1,
+    )
+    source.close()
+    translated.close()
+
+    assert not [issue for issue in issues if issue.code == "formula_visible_ink_mismatch"]
+
+
 def test_otf_empirical_measure_formula_uses_complete_selectable_sum():
     from pdf_zh_translator.pdf_layout import _semantic_inline_formula_text
 

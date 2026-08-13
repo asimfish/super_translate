@@ -3195,6 +3195,36 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(_align_formula_anchors(anchors, 2), anchors)
         self.assertEqual(_align_formula_anchors(anchors, 1), ())
 
+    def test_formula_anchor_absorbs_adjacent_leading_root_operator(self):
+        radicand = (457.6, 458.6, 477.0, 468.6)
+        root = (447.7, 457.3, 457.6, 467.2)
+
+        anchors = _align_formula_anchors((radicand,), 1, (root,))
+
+        self.assertEqual(anchors, ((447.7, 457.3, 477.0, 468.6),))
+
+    def test_merge_propagates_inline_formula_flow(self):
+        previous = TextBlock(
+            0,
+            (100.0, 100.0, 500.0, 112.0),
+            "The formula is x.",
+            10.0,
+            (0.0, 0.0, 0.0),
+            flow_inline_math=True,
+        )
+        following = TextBlock(
+            0,
+            (100.0, 112.0, 500.0, 124.0),
+            "The next sentence continues.",
+            10.0,
+            (0.0, 0.0, 0.0),
+        )
+
+        merged = merge_paragraph_blocks([previous, following])
+
+        self.assertEqual(len(merged), 1)
+        self.assertTrue(merged[0].flow_inline_math)
+
     def test_restored_formula_runs_keep_anchor_boundaries(self):
         from pdf_zh_translator.pdf_layout import _restore_unit_translation
 
@@ -4669,6 +4699,43 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         self.assertAlmostEqual(merged[0].font_size, first_line.font_size)
         self.assertIn("Experimental Results. Figure 3", merged[0].text)
 
+    def test_keeps_standalone_bold_heading_above_formula_rich_body_separate(self):
+        heading = TextBlock(
+            page_index=4,
+            bbox=(70.9, 397.4, 161.1, 411.7),
+            text="Critic learning",
+            font_size=14.35,
+            color=(0.0, 0.0, 0.0),
+            bold=True,
+            starts_bold=True,
+            source_lines=1,
+            source_line_bboxes=((70.9, 397.4, 161.1, 411.7),),
+        )
+        body = TextBlock(
+            page_index=4,
+            bbox=(70.5, 421.1, 543.1, 461.9),
+            text=(
+                "The actor and critic learn from abstract trajectories predicted "
+                f"by the world model{SENTINEL_OPEN}^{{14}}{SENTINEL_CLOSE}. "
+                "They operate on recurrent model states."
+            ),
+            font_size=12.03,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+            source_line_bboxes=(
+                (70.5, 421.1, 543.1, 433.0),
+                (70.9, 434.2, 541.1, 447.5),
+                (70.9, 449.9, 541.1, 461.9),
+            ),
+            source_math_bboxes=((240.6, 434.2, 248.5, 442.2),),
+        )
+
+        merged = merge_paragraph_blocks([heading, body])
+
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0].text, "Critic learning")
+        self.assertAlmostEqual(merged[1].font_size, 12.03)
+
     def test_keeps_action_skeleton_chain_separate_from_run_in_label(self):
         label = TextBlock(
             page_index=0,
@@ -5224,6 +5291,98 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         self.assertTrue(blocks[0].bold)
         self.assertTrue(blocks[0].no_merge)
         self.assertEqual(blocks[1].text, "Laboratory automation requires safe embodied agents.")
+
+    def test_segments_preserve_fragmented_single_row_numbered_equation(self):
+        def line(text, bbox, *, math=False):
+            return _LineRec(
+                text=text,
+                bbox=bbox,
+                spans=[
+                    {
+                        "text": strip_sentinels(text),
+                        "bbox": bbox,
+                        "size": 12.0,
+                        "flags": 0,
+                        "color": 0,
+                    }
+                ],
+                math_bboxes=[bbox] if math else [],
+                math_run_bboxes=[bbox] if math else [],
+            )
+
+        record = _RawBlockRec(
+            lines=[
+                line("Actor:", (172.9, 531.6, 203.4, 543.6)),
+                line(
+                    f"{SENTINEL_OPEN}a_t ∼ π(a_t | s_t){SENTINEL_CLOSE}",
+                    (225.4, 531.2, 300.2, 545.0),
+                    math=True,
+                ),
+                line("Critic:", (334.0, 531.6, 364.6, 543.6)),
+                line(
+                    f"{SENTINEL_OPEN}v(R_t | s_t){SENTINEL_CLOSE}",
+                    (386.5, 531.2, 439.1, 545.0),
+                    math=True,
+                ),
+                line("(4)", (528.0, 531.7, 541.9, 543.7)),
+            ]
+        )
+
+        self.assertEqual(segments_from_record(4, record, equation_record=True), [])
+
+    def test_segments_translate_multiline_prose_with_numbered_inline_math(self):
+        formula = f"{SENTINEL_OPEN}v_t = E[v(s_t)]{SENTINEL_CLOSE}"
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="The critic predicts a distribution from model states.",
+                    bbox=(70.9, 553.4, 541.1, 565.3),
+                    spans=[
+                        {
+                            "text": "The critic predicts a distribution from model states.",
+                            "bbox": (70.9, 553.4, 541.1, 565.3),
+                            "size": 12.0,
+                            "flags": 0,
+                            "color": 0,
+                        }
+                    ],
+                    prose_bboxes=[(70.9, 553.4, 541.1, 565.3)],
+                ),
+                _LineRec(
+                    text=f"Its predicted value is {formula} for every state.",
+                    bbox=(70.9, 567.5, 541.1, 580.4),
+                    spans=[
+                        {
+                            "text": "Its predicted value is for every state.",
+                            "bbox": (70.9, 567.5, 541.1, 580.4),
+                            "size": 12.0,
+                            "flags": 0,
+                            "color": 0,
+                        }
+                    ],
+                    prose_bboxes=[(70.9, 567.5, 541.1, 580.4)],
+                    math_bboxes=[(190.0, 567.5, 260.0, 580.4)],
+                    math_run_bboxes=[(190.0, 567.5, 260.0, 580.4)],
+                ),
+                _LineRec(
+                    text="(4)",
+                    bbox=(528.0, 567.7, 541.9, 579.7),
+                    spans=[
+                        {
+                            "text": "(4)",
+                            "bbox": (528.0, 567.7, 541.9, 579.7),
+                            "size": 12.0,
+                            "flags": 0,
+                            "color": 0,
+                        }
+                    ],
+                ),
+            ]
+        )
+
+        blocks = segments_from_record(4, record, equation_record=True)
+
+        self.assertTrue(any("critic predicts" in strip_sentinels(block.text) for block in blocks))
 
     def test_segments_split_numbered_heading_before_body(self):
         record = _RawBlockRec(
@@ -6349,6 +6508,52 @@ class TestClassifyBlocks(unittest.TestCase):
 
         self.assertEqual(block.block_type, "caption")
         self.assertTrue(block.preserve_position)
+
+    def test_pipe_separated_table_caption_detection(self):
+        from pdf_zh_translator.pdf_layout import classify_blocks
+
+        block = self._make_block(
+            f"Table 6{SENTINEL_OPEN}|{SENTINEL_CLOSE} Tokenizer batch size "
+            "scaling hyperparameters."
+        )
+        classify_blocks([block], 0, 792, [])
+
+        self.assertEqual(block.block_type, "caption")
+        self.assertTrue(block.should_translate)
+        self.assertTrue(block.preserve_position)
+
+    def test_split_figure_reference_without_punctuation_stays_body(self):
+        previous = self._make_block(
+            "Figure 8 provides a quantitative measure of the compounding "
+            "error demonstrated qualitatively in",
+            bbox=(108.0, 97.4, 504.0, 107.5),
+            page=23,
+        )
+        continuation = self._make_block(
+            "Figure 3 for DDPM and EDM based world models.",
+            bbox=(108.0, 108.4, 312.9, 118.4),
+            page=23,
+        )
+
+        classify_blocks([previous, continuation], 23, 792, [])
+
+        self.assertEqual(continuation.block_type, "body")
+        self.assertTrue(continuation.should_translate)
+        self.assertFalse(continuation.preserve_position)
+
+    def test_parameter_field_row_is_table_header_not_prose(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_table_header_text
+
+        self.assertTrue(
+            _looks_like_table_header_text(
+                "Parameters num_layers num_heads d_model k/q size"
+            )
+        )
+        self.assertFalse(
+            _looks_like_table_header_text(
+                "The parameters are optimized carefully for every experiment."
+            )
+        )
 
     def test_references_heading_inside_figure_zone_starts_bibliography(self):
         import pdf_zh_translator.pdf_layout as layout
@@ -8983,6 +9188,16 @@ class FormulaScriptNotationCompareTests(unittest.TestCase):
 
 
 class FormulaFragmentExtractionProseTrimTests(unittest.TestCase):
+    def test_author_year_citation_is_not_part_of_formula_signature(self):
+        document = fitz.open()
+        page = document.new_page(width=300, height=200)
+        page.insert_text((40, 80), "beta(tau) (Song et al., 2020).", fontsize=10)
+
+        fragments = _extract_formula_fragments(page)
+
+        document.close()
+        self.assertFalse(any("Song" in fragment for fragment in fragments))
+
     def test_leading_prose_words_are_trimmed_from_fragment(self):
         """A source block can prepend prose like 'objective),' to a formula;
         the prose is legitimately translated, so it must not be part of the
@@ -9299,6 +9514,128 @@ class JustifiedWordFragmentTests(unittest.TestCase):
         self.assertIn("We conduct experiments with", segments[0].text)
 
 
+class DetachedInlineScriptTests(unittest.TestCase):
+    def test_detached_subscripts_rejoin_one_reflowable_paragraph(self):
+        raw_block = {
+            "lines": [
+                {
+                    "bbox": (108.0, 100.0, 196.0, 113.5),
+                    "spans": [
+                        {
+                            "text": "The preconditioners ",
+                            "bbox": (108.0, 101.5, 185.0, 111.5),
+                            "size": 10.0,
+                            "font": "Times-Roman",
+                            "flags": 4,
+                            "color": 0,
+                        },
+                        {
+                            "text": "c",
+                            "bbox": (185.0, 101.2, 191.0, 111.2),
+                            "size": 10.0,
+                            "font": "CMMI10",
+                            "flags": 4,
+                            "color": 0,
+                        },
+                        {
+                            "text": "tau",
+                            "bbox": (191.0, 99.9, 196.0, 106.9),
+                            "size": 7.0,
+                            "font": "CMMI7",
+                            "flags": 4,
+                            "color": 0,
+                        },
+                    ],
+                },
+                {
+                    "bbox": (191.0, 100.0, 500.0, 123.5),
+                    "spans": [
+                        {
+                            "text": "in",
+                            "bbox": (191.0, 106.4, 198.0, 113.4),
+                            "size": 7.0,
+                            "font": "Times-Roman",
+                            "flags": 4,
+                            "color": 0,
+                        },
+                        {
+                            "text": " are selected to keep the network input at unit variance.",
+                            "bbox": (198.0, 101.5, 500.0, 111.5),
+                            "size": 10.0,
+                            "font": "Times-Roman",
+                            "flags": 4,
+                            "color": 0,
+                        },
+                    ],
+                },
+                {
+                    "bbox": (108.0, 114.0, 470.0, 124.0),
+                    "spans": [
+                        {
+                            "text": (
+                                "These preconditioners are fully described in the appendix "
+                                "and remain stable during training."
+                            ),
+                            "bbox": (108.0, 114.0, 500.0, 124.0),
+                            "size": 10.0,
+                            "font": "Times-Roman",
+                            "flags": 4,
+                            "color": 0,
+                        }
+                    ],
+                },
+            ]
+        }
+
+        record, _ = parse_block_lines(raw_block, page_width=612.0)
+        self.assertIsNotNone(record)
+        segments = segments_from_record(0, record, equation_record=False)
+
+        self.assertEqual(len(segments), 1)
+        self.assertTrue(segments[0].flow_inline_math)
+        self.assertIn("c", strip_sentinels(segments[0].text))
+        self.assertIn("_{in}", segments[0].text)
+        self.assertNotIn("c in are", strip_sentinels(segments[0].text))
+
+    def test_full_size_wrapped_in_remains_prose(self):
+        raw_block = {
+            "lines": [
+                {
+                    "bbox": (108.0, 100.0, 500.0, 110.0),
+                    "spans": [
+                        {
+                            "text": "We evaluate a policy with x",
+                            "bbox": (108.0, 100.0, 250.0, 110.0),
+                            "size": 10.0,
+                            "font": "Times-Roman",
+                            "flags": 4,
+                            "color": 0,
+                        }
+                    ],
+                },
+                {
+                    "bbox": (108.0, 112.0, 500.0, 122.0),
+                    "spans": [
+                        {
+                            "text": "in multiple environments and report the results.",
+                            "bbox": (108.0, 112.0, 500.0, 122.0),
+                            "size": 10.0,
+                            "font": "Times-Roman",
+                            "flags": 4,
+                            "color": 0,
+                        }
+                    ],
+                },
+            ]
+        }
+
+        record, _ = parse_block_lines(raw_block, page_width=612.0)
+
+        self.assertIsNotNone(record)
+        self.assertFalse(record.detached_inline_scripts)
+        self.assertIn("in multiple", strip_sentinels(record.lines[1].text))
+
+
 class TranslationEchoDetectionTests(unittest.TestCase):
     def test_parenthetical_english_gloss_is_not_flagged_as_untranslated(self):
         from pdf_zh_translator.pdf_layout import _translation_retains_source_prose_run
@@ -9533,6 +9870,92 @@ class CaptionBandGlueScopeTests(unittest.TestCase):
 
 
 class DisplayEquationRowTests(unittest.TestCase):
+    def test_underbrace_annotation_stays_inside_formula(self):
+        def formula_span(text, bbox):
+            return {
+                "text": text,
+                "bbox": bbox,
+                "size": 10.0,
+                "font": "CMEX10",
+                "flags": 4,
+                "color": 0,
+            }
+        label_span = {
+            "text": "Network training target",
+            "bbox": (327.7, 619.5, 393.0, 626.4),
+            "size": 7.0,
+            "font": "Times-Roman",
+            "flags": 4,
+            "color": 0,
+        }
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    f"{SENTINEL_OPEN}|{SENTINEL_CLOSE}",
+                    (313.8, 615.6, 318.3, 625.6),
+                    [formula_span("|", (313.8, 615.6, 318.3, 625.6))],
+                    math_bboxes=[(313.8, 615.6, 318.3, 625.6)],
+                    math_run_bboxes=[(313.8, 615.6, 318.3, 625.6)],
+                ),
+                _LineRec(
+                    f"{SENTINEL_OPEN}{{z{SENTINEL_CLOSE}",
+                    (355.9, 615.6, 364.8, 625.6),
+                    [formula_span("{z", (355.9, 615.6, 364.8, 625.6))],
+                    math_bboxes=[(355.9, 615.6, 364.8, 625.6)],
+                    math_run_bboxes=[(355.9, 615.6, 364.8, 625.6)],
+                ),
+                _LineRec(
+                    f"{SENTINEL_OPEN}}}{SENTINEL_CLOSE}",
+                    (402.4, 615.6, 406.9, 625.6),
+                    [formula_span("}", (402.4, 615.6, 406.9, 625.6))],
+                    math_bboxes=[(402.4, 615.6, 406.9, 625.6)],
+                    math_run_bboxes=[(402.4, 615.6, 406.9, 625.6)],
+                ),
+                _LineRec(
+                    "Network training target",
+                    (327.7, 619.5, 393.0, 626.4),
+                    [label_span],
+                    prose_bboxes=[(327.7, 619.5, 393.0, 626.4)],
+                ),
+            ]
+        )
+
+        segments = segments_from_record(3, record, equation_record=True)
+
+        self.assertEqual(segments, [])
+
+    def test_short_formula_explanation_is_still_translated(self):
+        prose = _LineRec(
+            "where the target is normalized",
+            (250.0, 100.0, 390.0, 110.0),
+            [
+                {
+                    "text": "where the target is normalized",
+                    "bbox": (250.0, 100.0, 390.0, 110.0),
+                    "size": 10.0,
+                    "font": "Times-Roman",
+                    "flags": 4,
+                    "color": 0,
+                }
+            ],
+            prose_bboxes=[(250.0, 100.0, 390.0, 110.0)],
+        )
+        formula = _LineRec(
+            f"{SENTINEL_OPEN}x=1{SENTINEL_CLOSE}",
+            (150.0, 100.0, 180.0, 110.0),
+            [{"text": "x=1", "bbox": (150.0, 100.0, 180.0, 110.0), "size": 10.0}],
+            math_bboxes=[(150.0, 100.0, 180.0, 110.0)],
+            math_run_bboxes=[(150.0, 100.0, 180.0, 110.0)],
+        )
+
+        segments = segments_from_record(
+            0,
+            _RawBlockRec(lines=[formula, prose]),
+            equation_record=True,
+        )
+
+        self.assertTrue(any("target is normalized" in block.text for block in segments))
+
     def test_where_clause_on_numbered_equation_row_stays_preserved(self):
         """MCF p3 eq (1): the 'where U(a,b) = {...}' clause shares the visual
         row with 'min <C,P> −εH(P), (1)' (subscript towers make the math

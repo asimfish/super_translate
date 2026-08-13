@@ -63,6 +63,48 @@ def test_font_size_pairs_against_source_semantic_role_before_raw_pdf_block():
     original.close()
 
 
+def test_font_size_cohort_cannot_be_stricter_than_page_scale():
+    original = fitz.open()
+    original_page = original.new_page(width=300, height=360)
+    translated = fitz.open()
+    translated_page = translated.new_page(width=300, height=360)
+    roles = []
+    expected_sizes = (10.0, 10.0, 10.0, 10.0, 12.0, 12.0, 12.0)
+    translated_sizes = (9.2, 9.2, 11.0, 11.0, 11.04, 11.04, 11.04)
+    for index, (y, expected, actual) in enumerate(
+        zip((40, 80, 120, 160, 200, 240, 280), expected_sizes, translated_sizes)
+    ):
+        original_page.insert_text(
+            (30, y),
+            f"Source paragraph number {index}",
+            fontsize=expected,
+        )
+        translated_page.insert_text(
+            (30, y),
+            "正常中文段落内容用于字号一致性检测",
+            fontsize=actual,
+            fontname="china-ss",
+        )
+        roles.append(
+            SimpleNamespace(
+                bbox=(30.0, y - 13.0, 270.0, y + 4.0),
+                font_size=expected,
+            )
+        )
+
+    issues = _font_size_issues(
+        original_page,
+        translated_page,
+        1,
+        exclusion_bboxes=(),
+        source_role_blocks=roles,
+    )
+
+    assert not [issue for issue in issues if issue.code == "font_size_drift"]
+    translated.close()
+    original.close()
+
+
 def _codes(stem: str) -> Counter:
     issues = inspect_translation(
         FIXTURES / f"{stem}.pdf",
@@ -358,6 +400,25 @@ class TestHelpers:
         assert len(issues) == 1
         assert "y=300" in issues[0].message
         assert "2 rules vs 3" in issues[0].message
+
+    def test_identical_adjacent_table_rules_do_not_cross_match(self):
+        rules = [
+            (106.2, 127.2, 282.9),
+            (111.2, 310.5, 503.4),
+            (121.5, 127.2, 282.9),
+            (126.5, 310.5, 503.4),
+            (171.7, 310.5, 503.4),
+            (176.7, 127.2, 282.9),
+            (214.4, 108.0, 515.6),
+            (239.7, 108.0, 515.6),
+            (264.8, 108.0, 515.6),
+            (290.0, 108.0, 515.6),
+            (315.3, 108.0, 515.6),
+        ]
+
+        issues = _table_structure_issues(8, rules, [], list(rules))
+
+        assert not issues
 
     def test_figure_caption_pairs_with_slightly_overlapping_graphic_envelope(self):
         region = (56.0, 80.9, 558.5, 720.1)
