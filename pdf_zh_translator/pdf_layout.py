@@ -10053,6 +10053,19 @@ def _split_column_straddling_record(record: _RawBlockRec) -> List[_RawBlockRec]:
     lines = record.lines
     if len(lines) < 4:
         return [record]
+    # Text-only bodies only. A record carrying formula ink (sentinel math
+    # spans, non-prose rows) or clipped sprite anchors keeps its geometry:
+    # the clip and sprite pipelines address rows by their record-relative
+    # position, so splitting one would move the anchors out from under them.
+    if any(line.math_bboxes or line.math_run_bboxes for line in lines):
+        return [record]
+    if getattr(record, "detached_inline_scripts", None):
+        return [record]
+    # Short label rows ("GPT-3 175B completion:") read as non-prose, so the
+    # gate is a majority rather than a unanimity: a record dominated by
+    # non-prose rows is a formula stack or a label grid, not a text body.
+    if sum(1 for line in lines if line_is_prose(line)) < len(lines) * 0.6:
+        return [record]
     if record_is_table(record):
         # Numeric grids keep their row structure: the table pipeline
         # translates cell by cell and the preserved-table QA compares the
