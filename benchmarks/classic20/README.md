@@ -54,9 +54,16 @@ original-vs-translated page previews only when the recorded licence sets
 .venv/bin/python scripts/classic_benchmark.py gate
 ```
 
-All steps are resumable (`--force` to redo, `--only id,id` to scope). Use
-`--isolate` for multi-paper translation runs so each paper gets a fresh
-interpreter and engine memory remains bounded.
+All steps are resumable (`--force` to redo, `--only id,id` to scope). Multi-paper
+translation automatically gives every paper a fresh interpreter so native PDF
+engine memory remains bounded. `--isolate` applies the same protection to an
+explicit single-paper run.
+The harness takes an OS-level exclusive lock on the canonical work directory;
+a second fetch/translate/evaluate/report/gate process fails fast, even when it
+runs from another Git worktree. Isolated translation children inherit that
+lock. PDFs and JSON evidence are published with atomic replacement, and a
+translation is rejected if its engine files or selected font pack change while
+the paper is running.
 Evaluation cache entries are content-addressed: source PDF SHA-256, translated
 PDF SHA-256, and a QA-code fingerprint must all match. Reports also record the
 QA and translation-engine commits/fingerprints. The release gate rejects stale

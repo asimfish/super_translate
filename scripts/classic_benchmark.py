@@ -27,11 +27,14 @@ import argparse
 import functools
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +44,8 @@ sys.path.insert(0, str(REPO))
 
 MANIFEST = REPO / "benchmarks" / "classic20" / "manifest.json"
 DEFAULT_WORKDIR = REPO / "data" / "benchmark" / "classic20"
+_LOCK_ENV = "PAPER_CHINA_BENCHMARK_LOCK"
+_LOCK_FD_ENV = "PAPER_CHINA_BENCHMARK_LOCK_FD"
 
 _LICENSE_RE = re.compile(
     r"https?://(?:arxiv\.org/licenses|creativecommons\.org/(?:licenses|publicdomain))/[a-z0-9./-]+"
@@ -128,9 +133,13 @@ def _qa_fingerprint() -> str:
     return _content_fingerprint(_QA_FILES)
 
 
+def _current_engine_fingerprint() -> str:
+    return _content_fingerprint(_ENGINE_FILES)
+
+
 @functools.lru_cache(maxsize=1)
 def _engine_fingerprint() -> str:
-    return _content_fingerprint(_ENGINE_FILES)
+    return _current_engine_fingerprint()
 
 
 @functools.lru_cache(maxsize=1)
@@ -138,8 +147,7 @@ def _translation_fingerprint() -> str:
     return _content_fingerprint(_TRANSLATION_FILES)
 
 
-@functools.lru_cache(maxsize=1)
-def _font_fingerprint() -> str:
+def _current_font_fingerprint() -> str:
     from pdf_zh_translator.pdf_layout import build_font_pack
 
     pack = build_font_pack(None, [])
@@ -156,6 +164,98 @@ def _font_fingerprint() -> str:
             digest.update(Path(path).read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def _font_fingerprint() -> str:
+    return _current_font_fingerprint()
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_write_text(path: Path, payload: str) -> None:
+    _atomic_write_bytes(path, payload.encode("utf-8"))
+
+
+@contextmanager
+def _benchmark_workdir_lock(workdir: Path, command: str):
+    """Keep one benchmark writer on a workdir, including across worktrees."""
+    import fcntl
+
+    lock_path = workdir.resolve() / ".benchmark.lock"
+    inherited_lock = os.environ.get(_LOCK_ENV)
+    inherited_fd = os.environ.get(_LOCK_FD_ENV)
+    if inherited_lock == str(lock_path) and inherited_fd:
+        try:
+            descriptor = int(inherited_fd)
+            descriptor_stat = os.fstat(descriptor)
+            lock_stat = lock_path.stat()
+        except (OSError, ValueError):
+            pass
+        else:
+            if (descriptor_stat.st_dev, descriptor_stat.st_ino) == (
+                lock_stat.st_dev,
+                lock_stat.st_ino,
+            ):
+                yield
+                return
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.seek(0)
+            owner = handle.read().strip() or "owner metadata unavailable"
+            raise SystemExit(
+                f"benchmark workdir is already in use: {lock_path}\n{owner}"
+            ) from exc
+
+        owner = {
+            "pid": os.getpid(),
+            "command": command,
+            "repo": str(REPO),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(owner, ensure_ascii=False) + "\n")
+        handle.flush()
+        previous = os.environ.get(_LOCK_ENV)
+        previous_fd = os.environ.get(_LOCK_FD_ENV)
+        os.environ[_LOCK_ENV] = str(lock_path)
+        os.environ[_LOCK_FD_ENV] = str(handle.fileno())
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop(_LOCK_ENV, None)
+            else:
+                os.environ[_LOCK_ENV] = previous
+            if previous_fd is None:
+                os.environ.pop(_LOCK_FD_ENV, None)
+            else:
+                os.environ[_LOCK_FD_ENV] = previous_fd
+            handle.seek(0)
+            handle.truncate()
+            handle.flush()
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 @functools.lru_cache(maxsize=1)
@@ -280,7 +380,7 @@ def cmd_fetch(entries: list[Entry], workdir: Path, args) -> int:
             pdf_bytes = _http_get(f"https://arxiv.org/pdf/{entry.arxiv_id}")
             if not pdf_bytes.startswith(b"%PDF"):
                 raise RuntimeError("response is not a PDF")
-            pdf_path.write_bytes(pdf_bytes)
+            _atomic_write_bytes(pdf_path, pdf_bytes)
             meta = {
                 "id": entry.id,
                 "arxiv_id": entry.arxiv_id,
@@ -293,9 +393,9 @@ def cmd_fetch(entries: list[Entry], workdir: Path, args) -> int:
                 "bytes": len(pdf_bytes),
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
             }
-            meta_path.write_text(
+            _atomic_write_text(
+                meta_path,
                 json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
             )
             license_tag = (
                 license_url.rsplit("/", 2)[-2] if license_url != "unknown" else "unknown"
@@ -344,7 +444,7 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
             "DEEPSEEK_API_KEY / PAPER_CHINA_DEEPSEEK_API_KEY is not set"
         )
 
-    if getattr(args, "isolate", False):
+    if len(entries) > 1 or getattr(args, "isolate", False):
         # One subprocess per paper: the engine accumulates memory across
         # papers in-process (long 40+ paper runs segfault around paper ~34),
         # so bound each translation to a fresh interpreter.
@@ -361,7 +461,9 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
             ]
             if args.force:
                 cmd.append("--force")
-            rc = subprocess.call(cmd)
+            inherited_fd = os.environ.get(_LOCK_FD_ENV)
+            pass_fds = (int(inherited_fd),) if inherited_fd else ()
+            rc = subprocess.call(cmd, pass_fds=pass_fds)
             if rc != 0:
                 failures += 1
                 print(
@@ -403,20 +505,46 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
             vendor,
             _block_cache_path(paths["translations"], entry.id, model),
         )
+        engine_fingerprint = _current_engine_fingerprint()
+        font_fingerprint = _current_font_fingerprint()
+        handle, temporary_name = tempfile.mkstemp(
+            dir=paths["translations"],
+            prefix=f".{entry.id}-mono.",
+            suffix=".pdf",
+        )
+        os.close(handle)
+        temporary_mono = Path(temporary_name)
+        temporary_mono.unlink()
         started = time.time()
         try:
             report = translate_pdf(
                 input_pdf=source,
-                output_pdf=mono,
+                output_pdf=temporary_mono,
                 translator=translator,
                 preserve_graphics_text=True,
             )
+            final_engine_fingerprint = _current_engine_fingerprint()
+            final_font_fingerprint = _current_font_fingerprint()
+            if final_engine_fingerprint != engine_fingerprint:
+                raise RuntimeError(
+                    "translation engine changed during translation; "
+                    "refusing mixed-version artifact"
+                )
+            if final_font_fingerprint != font_fingerprint:
+                raise RuntimeError(
+                    "font pack changed during translation; refusing mixed-layout artifact"
+                )
+            translated_sha256 = _sha256_file(temporary_mono)
+            os.replace(temporary_mono, mono)
         except Exception as exc:
             failures += 1
             print(f"translate {entry.id}: FAILED {exc}", file=sys.stderr)
             continue
+        finally:
+            temporary_mono.unlink(missing_ok=True)
         elapsed = time.time() - started
-        timing_path.write_text(
+        _atomic_write_text(
+            timing_path,
             json.dumps(
                 {
                     "schema_version": 2,
@@ -426,17 +554,16 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
                     "translated_blocks": report.translated_blocks,
                     "finished_at": datetime.now(timezone.utc).isoformat(),
                     "source_sha256": _sha256_file(source),
-                    "translated_sha256": _sha256_file(mono),
-                    "engine_fingerprint": _engine_fingerprint(),
+                    "translated_sha256": translated_sha256,
+                    "engine_fingerprint": engine_fingerprint,
                     "engine_commit": _git_commit(),
                     "translation_model": model,
-                    "font_fingerprint": _font_fingerprint(),
+                    "font_fingerprint": font_fingerprint,
                 },
                 ensure_ascii=False,
                 indent=2,
             )
             + "\n",
-            encoding="utf-8",
         )
         print(
             f"translate {entry.id}: {report.page_count}p "
@@ -536,9 +663,9 @@ def cmd_evaluate(entries: list[Entry], workdir: Path, args) -> int:
                 for issue in issues
             ],
         }
-        report_path.write_text(
+        _atomic_write_text(
+            report_path,
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
         )
         print(
             f"evaluate {entry.id}: visual={payload['visual_score']:.2f} "
@@ -647,7 +774,7 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
     ]
 
     report_md = workdir / "REPORT.md"
-    report_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(report_md, "\n".join(lines) + "\n")
 
     for entry, report, meta in rows:
         source = paths["papers"] / f"{entry.id}.pdf"
@@ -697,9 +824,9 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
     comparison = _baseline_comparison(workdir, rows)
     if comparison:
         payload["comparison"] = comparison
-    (workdir / "showcase.json").write_text(
+    _atomic_write_text(
+        workdir / "showcase.json",
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
     )
     print(f"wrote {report_md} and showcase.json ({len(showcase)} papers)")
     return 0
@@ -866,9 +993,9 @@ def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
         "failures": failures,
     }
     output = workdir / "quality-gate.json"
-    output.write_text(
+    _atomic_write_text(
+        output,
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
     )
     status = "PASS" if result["passed"] else "FAIL"
     print(
@@ -894,7 +1021,7 @@ def main() -> int:
     parser.add_argument(
         "--isolate",
         action="store_true",
-        help="translate each paper in a fresh subprocess (bounds engine memory)",
+        help="isolate even a single-paper translation in a fresh subprocess",
     )
     parser.add_argument(
         "--no-previews", action="store_true", help="skip preview rendering in report"
@@ -919,7 +1046,8 @@ def main() -> int:
         "report": cmd_report,
         "gate": cmd_gate,
     }[args.command]
-    return handler(entries, args.workdir, args)
+    with _benchmark_workdir_lock(args.workdir, args.command):
+        return handler(entries, args.workdir, args)
 
 
 if __name__ == "__main__":

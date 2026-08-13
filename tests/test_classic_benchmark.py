@@ -5,8 +5,12 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -241,6 +245,185 @@ class TestHarness:
         assert first != benchmark_module._block_cache_path(
             tmp_path, "paper", "model-a"
         )
+
+    def test_workdir_lock_rejects_a_second_process(
+        self, benchmark_module, tmp_path
+    ):
+        script = textwrap.dedent(
+            f"""
+            import importlib.util
+            import sys
+            import time
+            from pathlib import Path
+
+            spec = importlib.util.spec_from_file_location(
+                "lock_holder", {str(REPO / 'scripts' / 'classic_benchmark.py')!r}
+            )
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            with module._benchmark_workdir_lock(Path(sys.argv[1]), "holder"):
+                print("locked", flush=True)
+                time.sleep(30)
+            """
+        )
+        holder = subprocess.Popen(
+            [sys.executable, "-c", script, str(tmp_path)],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline().strip() == "locked"
+            with pytest.raises(SystemExit, match="already in use"):
+                with benchmark_module._benchmark_workdir_lock(tmp_path, "contender"):
+                    pass
+        finally:
+            holder.terminate()
+            holder.wait(timeout=10)
+
+    def test_inherited_lock_fd_remains_valid_after_parent_exits(
+        self, benchmark_module, tmp_path
+    ):
+        lock_path = tmp_path / ".benchmark.lock"
+        script = textwrap.dedent(
+            """
+            import fcntl
+            import os
+            import subprocess
+            import sys
+
+            path = sys.argv[1]
+            handle = open(path, "a+")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                pass_fds=(handle.fileno(),),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(child.pid, flush=True)
+            """
+        )
+        parent = subprocess.run(
+            [sys.executable, "-c", script, str(lock_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        child_pid = int(parent.stdout.strip())
+        try:
+            with pytest.raises(SystemExit, match="already in use"):
+                with benchmark_module._benchmark_workdir_lock(tmp_path, "contender"):
+                    pass
+        finally:
+            os.kill(child_pid, 15)
+
+    def test_multi_paper_translation_is_always_isolated(
+        self, benchmark_module, tmp_path, monkeypatch
+    ):
+        entries = benchmark_module._load_entries("word2vec,adam")
+        calls = []
+        monkeypatch.setattr(benchmark_module, "_load_env_file", lambda: None)
+        monkeypatch.setattr(
+            benchmark_module, "_env", lambda name, default="": "test-api-key"
+        )
+        monkeypatch.setattr(
+            benchmark_module.subprocess,
+            "call",
+            lambda command, **kwargs: calls.append((command, kwargs)) or 0,
+        )
+
+        class Args:
+            isolate = False
+            force = False
+
+        assert benchmark_module.cmd_translate(entries, tmp_path, Args()) == 0
+        assert len(calls) == 2
+        assert {call[0][call[0].index("--only") + 1] for call in calls} == {
+            "word2vec",
+            "adam",
+        }
+        assert all("--isolate" not in call[0] for call in calls)
+
+    def test_atomic_write_preserves_old_artifact_until_replace(
+        self, benchmark_module, tmp_path, monkeypatch
+    ):
+        destination = tmp_path / "artifact.json"
+        destination.write_text("old", encoding="utf-8")
+        real_replace = benchmark_module.os.replace
+
+        def fail_replace(source, target):
+            assert Path(target) == destination
+            raise OSError("injected publish failure")
+
+        monkeypatch.setattr(benchmark_module.os, "replace", fail_replace)
+        with pytest.raises(OSError, match="injected"):
+            benchmark_module._atomic_write_text(destination, "new")
+        assert destination.read_text(encoding="utf-8") == "old"
+        assert list(tmp_path.glob(".*.tmp")) == []
+        monkeypatch.setattr(benchmark_module.os, "replace", real_replace)
+        benchmark_module._atomic_write_text(destination, "new")
+        assert destination.read_text(encoding="utf-8") == "new"
+
+    @pytest.mark.parametrize("drift_kind", ["engine", "font"])
+    def test_runtime_fingerprint_drift_never_replaces_previous_pdf(
+        self, benchmark_module, tmp_path, monkeypatch, drift_kind
+    ):
+        workdir = tmp_path / "bench"
+        papers = workdir / "papers"
+        translations = workdir / "translations"
+        papers.mkdir(parents=True)
+        translations.mkdir()
+        (papers / "word2vec.pdf").write_bytes(b"%PDF source")
+        output = translations / "word2vec-mono.pdf"
+        output.write_bytes(b"previous-valid-pdf")
+        entries = benchmark_module._load_entries("word2vec")
+
+        monkeypatch.setattr(benchmark_module, "_load_env_file", lambda: None)
+        monkeypatch.setattr(
+            benchmark_module,
+            "_env",
+            lambda name, default="": (
+                "test-api-key" if name == "DEEPSEEK_API_KEY" else default
+            ),
+        )
+        engine_values = iter(["engine-v1", "engine-v2"])
+        font_values = iter(["font-v1", "font-v2"])
+        monkeypatch.setattr(
+            benchmark_module,
+            "_current_engine_fingerprint",
+            (lambda: next(engine_values)) if drift_kind == "engine" else lambda: "engine-v1",
+        )
+        monkeypatch.setattr(
+            benchmark_module,
+            "_current_font_fingerprint",
+            (lambda: next(font_values)) if drift_kind == "font" else lambda: "font-v1",
+        )
+
+        import pdf_zh_translator.pdf_layout as layout_module
+        import pdf_zh_translator.translators as translator_module
+
+        def fake_translate_pdf(*, output_pdf, **_kwargs):
+            output_pdf.write_bytes(b"mixed-runtime-pdf")
+            return SimpleNamespace(page_count=1, translated_blocks=1)
+
+        monkeypatch.setattr(layout_module, "translate_pdf", fake_translate_pdf)
+        monkeypatch.setattr(translator_module, "VendorTranslator", lambda **_kwargs: object())
+        monkeypatch.setattr(
+            translator_module,
+            "CachedTranslator",
+            lambda _vendor, _path: object(),
+        )
+
+        class Args:
+            isolate = False
+            force = True
+
+        assert benchmark_module.cmd_translate(entries, workdir, Args()) == 1
+        assert output.read_bytes() == b"previous-valid-pdf"
+        assert not (translations / "word2vec.timing.json").exists()
+        assert list(translations.glob(".word2vec-mono.*.pdf")) == []
 
     def test_report_aggregates_without_previews(self, benchmark_module, tmp_path):
         workdir = tmp_path / "bench"
