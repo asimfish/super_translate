@@ -169,8 +169,8 @@ class TestProductionRegressions:
         assert codes["display_formula_misaligned"] >= 1
 
         from pdf_zh_translator.page_inspector import (
-            _InkCache,
             _display_alignment_issues,
+            _InkCache,
         )
 
         with fitz.open(original_path) as original, fitz.open(shifted_path) as translated:
