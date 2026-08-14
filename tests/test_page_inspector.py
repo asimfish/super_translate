@@ -26,9 +26,11 @@ from pdf_zh_translator.page_inspector import (
     _edge_cut,
     _figure_graphic_regions,
     _font_size_issues,
+    _line_table_bboxes,
     _mask_coverage,
     _rule_clusters,
     _table_structure_issues,
+    _text_blocks,
     _untranslated_block_issues,
     inspect_translation,
 )
@@ -318,6 +320,130 @@ class TestUntranslatedBlock:
         original.close()
         assert [issue for issue in issues if issue.code == "untranslated_block"]
 
+    def test_sparse_ruled_table_cell_is_not_untranslated_prose(self, tmp_path):
+        prose = (
+            "We compare the model with several strong baselines and report "
+            "every result using exactly the same evaluation protocol."
+        )
+        original = tmp_path / "original-sparse-table.pdf"
+        translated = tmp_path / "translated-sparse-table.pdf"
+        for path in (original, translated):
+            document = fitz.open()
+            page = document.new_page(width=400, height=300)
+            for y in (80, 100, 210, 230):
+                page.draw_line((40, y), (360, y), width=0.5)
+            for x in (40, 200, 360):
+                page.draw_line((x, 80), (x, 230), width=0.5)
+            page.insert_textbox(
+                fitz.Rect(48, 120, 192, 200),
+                prose,
+                fontsize=8,
+            )
+            document.save(path)
+            document.close()
+
+        issues = inspect_translation(original, translated)
+
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_horizontal_only_table_with_tall_rows_is_not_untranslated_prose(
+        self, tmp_path
+    ):
+        prose = (
+            "We compare the model with several strong baselines and report "
+            "every result using exactly the same evaluation protocol."
+        )
+        original = tmp_path / "original-horizontal-table.pdf"
+        translated = tmp_path / "translated-horizontal-table.pdf"
+        for path in (original, translated):
+            document = fitz.open()
+            page = document.new_page(width=400, height=320)
+            page.insert_text(
+                (110, 55),
+                "Table 1: Detailed benchmark results for every evaluation task.",
+                fontsize=8,
+            )
+            for y in (70, 90, 205, 230):
+                page.draw_line((110, y), (290, y), width=0.5)
+            page.insert_textbox(
+                fitz.Rect(118, 105, 282, 195),
+                prose,
+                fontsize=8,
+            )
+            document.save(path)
+            document.close()
+
+        issues = inspect_translation(original, translated)
+
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_open_bottom_table_last_row_is_not_untranslated_prose(self, tmp_path):
+        prose = (
+            "Videos are composed of four different subjects performing seven "
+            "types of daily activities with segmentation masks of hands."
+        )
+        original = tmp_path / "original-open-bottom-table.pdf"
+        translated = tmp_path / "translated-open-bottom-table.pdf"
+        for path in (original, translated):
+            document = fitz.open()
+            page = document.new_page(width=400, height=320)
+            for y in (70, 90, 205):
+                page.draw_line((40, y), (360, y), width=0.5)
+            for x in (40, 120, 360):
+                page.draw_line((x, 70), (x, 205), width=0.5)
+                page.draw_line((x, 205.3), (x, 240), width=0.5)
+            page.insert_textbox(
+                fitz.Rect(128, 210, 352, 238),
+                prose,
+                fontsize=8,
+            )
+            page.insert_text(
+                (40, 258),
+                "Table 2: Segmentation datasets used for evaluation.",
+                fontsize=8,
+            )
+            document.save(path)
+            document.close()
+
+        issues = inspect_translation(original, translated)
+
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
+    @pytest.mark.parametrize(
+        "sample",
+        [
+            (
+                "QUESTION: There are thirty six penguins sunbathing in the snow. "
+                "One third of them jump into the ocean. How many remain?"
+            ),
+            (
+                "Example for combining two unrelated things: The point indicates "
+                "the lizard, but the mask covers the bird as well."
+            ),
+        ],
+    )
+    def test_preserved_labeled_sample_is_not_untranslated_prose(self, sample):
+        original = fitz.open()
+        original_page = original.new_page(width=400, height=300)
+        original_page.insert_textbox(fitz.Rect(40, 80, 360, 150), sample, fontsize=8)
+        translated = fitz.open()
+        translated_page = translated.new_page(width=400, height=300)
+        translated_page.insert_textbox(
+            fitz.Rect(40, 80, 360, 150), sample, fontsize=8
+        )
+
+        issues = _untranslated_block_issues(
+            translated_page,
+            1,
+            original_page=original_page,
+            reference_y=None,
+            preserved_regions=((35.0, 75.0, 365.0, 155.0),),
+        )
+
+        translated.close()
+        original.close()
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
     def test_untranslated_subfigure_caption_near_numbered_caption_is_flagged(
         self, tmp_path
     ):
@@ -374,6 +500,71 @@ class TestUntranslatedBlock:
 
         assert not [issue for issue in issues if issue.code == "untranslated_block"]
 
+    def test_composite_figure_gap_text_is_not_untranslated_prose(self, tmp_path):
+        original = tmp_path / "original-composite-figure.pdf"
+        translated = tmp_path / "translated-composite-figure.pdf"
+        image = b"P6\n16 4\n255\n" + bytes([96, 96, 96]) * 64
+        panel_text = (
+            "Overall mask quality is subjective, and each reviewer must score "
+            "the visible object using the complete annotation guidelines."
+        )
+        for path in (original, translated):
+            document = fitz.open()
+            page = document.new_page(width=400, height=500)
+            for top in (40, 110, 180, 250, 320):
+                page.insert_image(
+                    fitz.Rect(40, top, 360, top + 40),
+                    stream=image,
+                )
+            page.insert_textbox(
+                fitz.Rect(48, 82, 352, 106),
+                panel_text,
+                fontsize=7,
+            )
+            page.insert_text(
+                (40, 382),
+                "Figure 4: Complete annotation guide with visual examples.",
+                fontsize=8,
+            )
+            document.save(path)
+            document.close()
+
+        issues = inspect_translation(original, translated)
+
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_figure_text_block_may_span_adjacent_graphic_regions(self):
+        prose = (
+            "Document one contains classic American literature and describes "
+            "the author. Document two contains another retrieved passage and "
+            "describes the novel in detail."
+        )
+        original = fitz.open()
+        original_page = original.new_page(width=400, height=300)
+        original_page.insert_textbox(fitz.Rect(40, 80, 260, 160), prose, fontsize=8)
+        translated = fitz.open()
+        translated_page = translated.new_page(width=400, height=300)
+        translated_page.insert_textbox(
+            fitz.Rect(40, 80, 260, 160), prose, fontsize=8
+        )
+        block = _text_blocks(translated_page)[0]
+        split = (block.bbox[1] + block.bbox[3]) / 2.0
+
+        issues = _untranslated_block_issues(
+            translated_page,
+            1,
+            original_page=original_page,
+            reference_y=None,
+            graphic_regions=(
+                (block.bbox[0], block.bbox[1], block.bbox[2], split),
+                (block.bbox[0], split, block.bbox[2], block.bbox[3]),
+            ),
+        )
+
+        translated.close()
+        original.close()
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
     def test_labeled_generated_poem_is_not_flagged(self, tmp_path):
         original = tmp_path / "original-poem.pdf"
         translated = tmp_path / "translated-poem.pdf"
@@ -396,6 +587,36 @@ class TestUntranslatedBlock:
 
 
 class TestHelpers:
+    def test_line_table_bbox_extends_through_open_bottom_row(self):
+        class FakePage:
+            rect = SimpleNamespace(width=400.0, height=300.0)
+
+            @staticmethod
+            def find_tables(*, strategy):
+                assert strategy == "lines"
+                return SimpleNamespace(
+                    tables=[
+                        SimpleNamespace(
+                            row_count=8,
+                            col_count=4,
+                            bbox=(40.0, 70.0, 360.0, 205.0),
+                        )
+                    ]
+                )
+
+            @staticmethod
+            def get_drawings():
+                return [
+                    {
+                        "items": [
+                            ("l", fitz.Point(x, 205.2), fitz.Point(x, 240.0))
+                            for x in (120.0, 200.0, 280.0)
+                        ]
+                    }
+                ]
+
+        assert _line_table_bboxes(FakePage()) == [(40.0, 70.0, 360.0, 240.0)]
+
     def test_dominant_size_uses_cjk_body_not_hidden_formula_copy(self):
         from pdf_zh_translator.page_inspector import _Block, _Span
 
@@ -599,6 +820,20 @@ class TestHelpers:
 
         assert _figure_graphic_regions([region], [(caption, "figure")]) == [region]
         assert _figure_graphic_regions([region], [(caption, "table")]) == []
+
+    def test_preserved_figure_regions_do_not_extend_below_caption(self):
+        from pdf_zh_translator.page_inspector import (
+            _preserved_regions_above_figure_captions,
+        )
+
+        caption = (80.0, 100.0, 320.0, 120.0)
+        above = (60.0, 40.0, 340.0, 92.0)
+        body_formula_keepout = (170.0, 132.0, 240.0, 144.0)
+
+        assert _preserved_regions_above_figure_captions(
+            [above, body_formula_keepout],
+            [(caption, "figure")],
+        ) == [above]
 
     @pytest.mark.parametrize(
         "text",

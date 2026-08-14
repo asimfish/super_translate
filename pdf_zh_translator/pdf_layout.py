@@ -5258,7 +5258,9 @@ def _source_looks_like_foreign_example(text: str) -> bool:
 
 
 _VERBATIM_GENERATED_SAMPLE_RE = re.compile(
-    r"\bGenerated\s+(?:Completion|Output|Poem|Sample|Story)\s+\d+\b",
+    r"(?:\bGenerated\s+(?:Completion|Output|Poem|Sample|Story)\s+\d+\b|"
+    r"\b[A-Za-z][A-Za-z0-9.-]{1,30}\s+\d+(?:\.\d+)?[BMKT]?\s+"
+    r"completion\s*:)",
     re.IGNORECASE,
 )
 

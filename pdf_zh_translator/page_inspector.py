@@ -872,6 +872,98 @@ def _rule_clusters(
     ]
 
 
+def _line_table_bboxes(page: object) -> List[BBox]:
+    """Return ruled table boxes that sparse horizontal clustering misses."""
+    try:
+        finder = page.find_tables(strategy="lines")
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        finder = None
+
+    page_area = max(1.0, float(page.rect.width) * float(page.rect.height))
+    page_width = max(1.0, float(page.rect.width))
+    verticals = _page_vertical_lines(page)
+    bboxes: List[BBox] = []
+    for table in (finder.tables if finder is not None else []):
+        if table.row_count < 2 or table.col_count < 2:
+            continue
+        left, top, right, bottom = (float(value) for value in table.bbox)
+        bottom_extensions = [
+            y1
+            for x, y0, y1 in verticals
+            if left - 2.0 <= x <= right + 2.0
+            and -1.0 <= y0 - bottom <= 1.0
+            and y1 > bottom + 2.0
+        ]
+        if len(bottom_extensions) >= 2:
+            bottom = max(bottom, max(bottom_extensions))
+        bbox = (left, top, right, bottom)
+        area = _bbox_area(bbox)
+        if area < 400.0 or area > page_area * 0.85:
+            continue
+        bboxes.append(bbox)
+
+    # Many academic tables intentionally omit vertical rules.  Pair a run of
+    # wide, aligned horizontal rules with its explicit caption instead of
+    # treating every chart grid as a table.
+    rules, _curves = _page_line_art(page)
+    wide_rules = [rule for rule in rules if rule[2] - rule[1] >= page_width * 0.4]
+    groups: List[List[Tuple[float, float, float]]] = []
+    for rule in wide_rules:
+        previous = groups[-1][-1] if groups else None
+        compatible = False
+        if previous is not None:
+            overlap = min(rule[2], previous[2]) - max(rule[1], previous[1])
+            compatible = (
+                rule[0] - previous[0] <= 180.0
+                and overlap >= 0.8 * min(
+                    rule[2] - rule[1],
+                    previous[2] - previous[1],
+                )
+            )
+        if compatible:
+            groups[-1].append(rule)
+        else:
+            groups.append([rule])
+
+    try:
+        captions = [
+            block
+            for block in _text_blocks(page)
+            if re.match(
+                r"^(?:Table|Tab\.|\u8868)\s*\d",
+                " ".join(block.text.split()),
+                re.IGNORECASE,
+            )
+        ]
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        captions = []
+    for group in groups:
+        if len(group) < 3:
+            continue
+        left = min(rule[1] for rule in group)
+        top = group[0][0]
+        right = max(rule[2] for rule in group)
+        bottom = group[-1][0]
+        for caption in captions:
+            horizontal_overlap = min(right, caption.bbox[2]) - max(
+                left, caption.bbox[0]
+            )
+            if horizontal_overlap < 0.4 * min(
+                right - left,
+                caption.bbox[2] - caption.bbox[0],
+            ):
+                continue
+            above_gap = top - caption.bbox[3]
+            below_gap = caption.bbox[1] - bottom
+            if -4.0 <= above_gap <= 70.0:
+                bboxes.append((left, top, right, bottom))
+                break
+            if -4.0 <= below_gap <= 70.0:
+                bboxes.append((left, top, right, max(bottom, caption.bbox[1] - 2.0)))
+                break
+    return bboxes
+
+
 def _rule_is_text_underline(page: object, rule: Tuple[float, float, float]) -> bool:
     """True when the rule underlines a source text span.
 
@@ -971,6 +1063,28 @@ def _figure_graphic_regions(
             # Drawing envelopes often include axis labels or whitespace that
             # reaches into the caption's extracted line box by a few points.
             if -16.0 <= below_gap <= 180.0 or -16.0 <= above_gap <= 80.0:
+                figures.append(region)
+                break
+    return figures
+
+
+def _preserved_regions_above_figure_captions(
+    preserved_regions: Sequence[BBox],
+    caption_kinds: Sequence[Tuple[BBox, str]],
+) -> List[BBox]:
+    """Preserved figure parts above captions, excluding following body math."""
+    figures: List[BBox] = []
+    for region in preserved_regions:
+        rx0, _ry0, rx1, ry1 = region
+        region_width = max(1.0, rx1 - rx0)
+        for (cx0, cy0, cx1, _cy1), kind in caption_kinds:
+            if kind != "figure":
+                continue
+            caption_width = max(1.0, cx1 - cx0)
+            horizontal_overlap = min(rx1, cx1) - max(rx0, cx0)
+            if horizontal_overlap < 0.25 * min(region_width, caption_width):
+                continue
+            if -16.0 <= cy0 - ry1 <= 180.0:
                 figures.append(region)
                 break
     return figures
@@ -1318,8 +1432,10 @@ _PSEUDOCODE_KEYWORD_RE = re.compile(
 
 
 _SAMPLE_LABEL_PREFIX_RE = re.compile(
-    r"^\s*(?:Q|A|Question|Answer|Input|Output|Prompt|Human|Assistant|User|"
-    r"System|Title|Subtitle)\s*[::]"
+    r"^\s*(?:(?:Q|A|Question|Answer|Input|Output|Prompt|Human|Assistant|User|"
+    r"System|Title|Subtitle)\s*[:\uff1a]|"
+    r"Example\s+for\b[^:\uff1a]{0,120}[:\uff1a])",
+    re.IGNORECASE,
 )
 
 
@@ -1426,14 +1542,34 @@ def _untranslated_block_issues(
             text,
             caption_kinds,
         )
+        content_spans = [span for span in block.spans if span.text.strip()]
         if algorithm_regions and any(
             _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
             for region in algorithm_regions
         ):
             continue
-        if not panel_caption and graphic_regions and any(
-            _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
-            for region in graphic_regions
+        graphic_covered_spans = sum(
+            1
+            for span in content_spans
+            if any(
+                region[0] - 2.0
+                <= (span.bbox[0] + span.bbox[2]) / 2.0
+                <= region[2] + 2.0
+                and region[1] - 2.0
+                <= (span.bbox[1] + span.bbox[3]) / 2.0
+                <= region[3] + 2.0
+                for region in graphic_regions
+            )
+        )
+        if not panel_caption and graphic_regions and (
+            any(
+                _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
+                for region in graphic_regions
+            )
+            or (
+                content_spans
+                and graphic_covered_spans >= 0.7 * len(content_spans)
+            )
         ):
             # preserve_graphics_text keeps figure-internal text verbatim by
             # design; English inside a graphic envelope is not a miss.
@@ -1441,7 +1577,6 @@ def _untranslated_block_issues(
         # Table walls fragment into one preserved strip per cell while the
         # extracted block spans whole rows including the gaps, so coverage
         # is judged span by span rather than on the block envelope.
-        content_spans = [span for span in block.spans if span.text.strip()]
         covered_spans = sum(
             1
             for span in content_spans
@@ -1611,9 +1746,16 @@ def inspect_translation(
             translated_page = translated[index]
             page_number = index + 1
             page_regions = preserved_regions.get(index, [])
+            raw_graphic_regions = graphic_regions_by_page.get(index, [])
             page_figure_regions = _figure_graphic_regions(
-                graphic_regions_by_page.get(index, []),
+                raw_graphic_regions,
                 caption_kinds.get(index, []),
+            )
+            page_figure_regions.extend(
+                _preserved_regions_above_figure_captions(
+                    page_regions,
+                    caption_kinds.get(index, []),
+                )
             )
             page_keepouts = keepouts.get(index, [])
             page_captions = caption_bands.get(index, [])
@@ -1652,6 +1794,7 @@ def inspect_translation(
                 table_bands.append(
                     (left, cluster[0][0], right, cluster[-1][0])
                 )
+            table_bands.extend(_line_table_bboxes(translated_page))
 
             issues.extend(
                 _font_size_issues(
@@ -1720,7 +1863,7 @@ def inspect_translation(
                     preserved_regions=page_regions,
                     algorithm_regions=algorithm_regions.get(index, []),
                     caption_kinds=caption_kinds.get(index, []),
-                    graphic_regions=graphic_regions_by_page.get(index, []),
+                    graphic_regions=page_figure_regions,
                 )
             )
     finally:

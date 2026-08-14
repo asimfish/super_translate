@@ -10817,6 +10817,27 @@ class TranslationEchoDetectionTests(unittest.TestCase):
 
         self.assertTrue(_source_unit_is_verbatim_generated_sample(poem, [label, poem]))
 
+    def test_model_completion_block_is_a_verbatim_generated_sample(self):
+        from pdf_zh_translator.pdf_layout import (
+            _source_unit_is_verbatim_generated_sample,
+        )
+
+        completion = TextBlock(
+            page_index=63,
+            bbox=(307.7, 330.1, 487.8, 508.5),
+            text=(
+                "InstructGPT 175B completion: The code above defines a function "
+                "called prime_sieve, which returns all prime numbers."
+            ),
+            font_size=8.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=12,
+        )
+
+        self.assertTrue(
+            _source_unit_is_verbatim_generated_sample(completion, [completion])
+        )
+
     def test_preserved_formula_words_do_not_count_as_source_prose_echo(self):
         from pdf_zh_translator.pdf_layout import (
             _translation_retains_foreign_prose,
