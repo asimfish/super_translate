@@ -2216,6 +2216,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     message=(
                         f"Page {page_idx + 1}: {len(preserved_changed_examples)} preserved "
                         "table/algorithm/metadata region(s) appear translated or altered"
+                        f"; example: {preserved_changed_examples[0]}"
                     ),
                     severity="error",
                 )
@@ -9795,6 +9796,13 @@ def parse_block_lines(
     lines: List[_LineRec] = []
 
     for raw_line in raw_block.get("lines", []):
+        if _line_is_rotated(raw_line):
+            # Rotated text is chart furniture: y-axis titles, sideways table
+            # headers, watermarks. Reflowing it horizontally paints over the
+            # plot and its redaction wipes neighbouring tick labels (BERT
+            # p16 lost 78/80/82 off the accuracy axis). Leave the source
+            # glyphs untouched: neither translated nor erased.
+            continue
         spans = raw_line.get("spans", [])
         line_max_size = 0.0
         non_empty_span_indexes: List[int] = []
@@ -10038,6 +10046,22 @@ def _coalesce_fragmented_same_baseline_lines(lines: Sequence[_LineRec]) -> List[
 # Horizontal span gap (in units of line font size) that separates table cells.
 CELL_GAP_FACTOR = 1.6
 CELL_GAP_MIN = 8.0
+
+
+def _line_is_rotated(raw_line: dict) -> bool:
+    """True when a text line does not run left-to-right.
+
+    PyMuPDF reports the writing direction as a unit vector; horizontal text
+    is (1, 0). Anything with a meaningful vertical component is rotated.
+    """
+    direction = raw_line.get("dir")
+    if not direction or len(direction) < 2:
+        return False
+    try:
+        horizontal, vertical = float(direction[0]), float(direction[1])
+    except (TypeError, ValueError):
+        return False
+    return abs(vertical) > 0.2 or horizontal < 0.8
 
 
 def _split_column_straddling_record(record: _RawBlockRec) -> List[_RawBlockRec]:

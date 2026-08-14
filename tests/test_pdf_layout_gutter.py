@@ -113,3 +113,42 @@ def test_parse_block_lines_preserves_interior_chart_ticks():
     assert record is not None
     assert dropped == []
     assert {line.text for line in record.lines} == {"20", "40", "100"}
+
+
+def test_parse_block_lines_leaves_rotated_chart_text_untouched():
+    raw_block = {
+        "type": 0,
+        "bbox": (80.0, 120.0, 200.0, 260.0),
+        "lines": [
+            {
+                "bbox": (80.0, 120.0, 92.0, 260.0),
+                "dir": (0.0, -1.0),
+                "spans": [
+                    make_span("Accuracy", 80.0, 120.0, 92.0, 180.0),
+                    make_span("78", 80.0, 200.0, 92.0, 212.0, size=6.0),
+                    make_span("80", 80.0, 220.0, 92.0, 232.0, size=6.0),
+                    make_span("82", 80.0, 240.0, 92.0, 252.0, size=6.0),
+                ],
+            },
+            {
+                "bbox": (100.0, 120.0, 200.0, 132.0),
+                "dir": (1.0, 0.0),
+                "spans": [
+                    make_span(
+                        "The model improves accuracy.",
+                        100.0,
+                        120.0,
+                        200.0,
+                        132.0,
+                        size=10.0,
+                    )
+                ],
+            },
+        ],
+    }
+
+    record, dropped = parse_block_lines(raw_block, page_width=612.0)
+
+    assert record is not None
+    assert dropped == []
+    assert [line.text for line in record.lines] == ["The model improves accuracy."]

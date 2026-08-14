@@ -7772,7 +7772,11 @@ class TestTranslationVerification(unittest.TestCase):
 
         original.close()
         translated.close()
-        self.assertTrue(any(issue.code == "preserved_text_changed" for issue in issues))
+        preserved_issue = next(
+            issue for issue in issues if issue.code == "preserved_text_changed"
+        )
+        self.assertIn("; example: ", preserved_issue.message)
+        self.assertTrue(preserved_issue.message.rsplit("; example: ", 1)[-1].strip())
 
     def test_verification_still_flags_untranslated_checklist_prose(self):
         original = fitz.open()
