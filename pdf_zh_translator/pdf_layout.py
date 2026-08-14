@@ -639,8 +639,8 @@ def translate_pdf(
         by_page.setdefault(block.page_index, []).append((block, translated_text))
 
     for page_index in range(document.page_count):
-        candidate_items = _combine_inline_style_translation_items(
-            by_page.get(page_index, [])
+        candidate_items = _combine_list_continuation_translation_items(
+            _combine_inline_style_translation_items(by_page.get(page_index, []))
         )
         page_gutter = gutter_rects.get(page_index, [])
         if not candidate_items and not page_gutter:
@@ -2211,6 +2211,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             )
             source_plain = " ".join(strip_sentinels(source_block.text).split())
             translated_plain = " ".join(translated_unit_text.split())
+            if _looks_like_translated_identifier_payload(translated_plain):
+                continue
             short_structure_echo = (
                 looks_like_academic_structure_heading(source_block, source_plain)
                 and source_plain.casefold() in translated_plain.casefold()
@@ -3074,6 +3076,8 @@ def _looks_like_untranslated_english(text: str) -> bool:
     # model input/output that stays verbatim by design.
     if _looks_like_cjk_sample_label(compact):
         return False
+    if _looks_like_translated_identifier_payload(compact):
+        return False
     prompt_remainder = _without_structured_prompt_lists(compact)
     if (
         prompt_remainder != compact
@@ -3106,6 +3110,28 @@ def _looks_like_untranslated_english(text: str) -> bool:
         return False
     ascii_letters = sum(1 for char in prose_basis if char.isascii() and char.isalpha())
     return ascii_letters / max(len(compact), 1) >= 0.45
+
+
+_IDENTIFIER_PAYLOAD_RE = re.compile(
+    r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+(?:\.[A-Za-z0-9]{2,5})?\b"
+)
+
+
+def _looks_like_translated_identifier_payload(text: str) -> bool:
+    """Allow dataset task IDs and filenames embedded in translated prose."""
+    if len(_CJK_DETECT_RE.findall(text)) < 4:
+        return False
+    identifiers = _IDENTIFIER_PAYLOAD_RE.findall(text)
+    if not identifiers:
+        return False
+    remainder = _IDENTIFIER_PAYLOAD_RE.sub(" ", text)
+    prose_words = [
+        word
+        for word in _ASCII_WORD_DETECT_RE.findall(remainder)
+        if _PROSE_SHAPED_WORD_RE.match(word)
+        and word.lower() not in _MATH_WORDS
+    ]
+    return len(prose_words) <= 3
 
 
 def _contains_untranslated_english_run(text: str) -> bool:
@@ -6608,6 +6634,10 @@ def prepare_translation_units(
         # graphics mode is off.
         display_equation_regions_out=display_equation_regions,
     )
+    piecewise_equation_regions = _piecewise_display_equation_regions(
+        raw_blocks,
+        display_equation_regions,
+    )
     if algorithm_regions_out is not None:
         algorithm_regions_out.clear()
         for page_index, page_algorithm_regions in algorithm_regions.items():
@@ -6618,9 +6648,17 @@ def prepare_translation_units(
             equation_rows_out[page_index] = list(page_rows)
     analyze_graphics = compute_preserved
     graphic_regions = collect_graphic_regions(document) if analyze_graphics else {}
+    paragraph_merge_obstacles: Dict[int, List[BBox]] = {
+        page_index: list(page_regions)
+        for page_index, page_regions in (
+            graphic_regions.items() if preserve_graphics_text else ()
+        )
+    }
+    for page_index, page_rows in piecewise_equation_regions.items():
+        paragraph_merge_obstacles.setdefault(page_index, []).extend(page_rows)
     blocks = merge_paragraph_blocks(
         raw_blocks,
-        graphic_regions_by_page=graphic_regions if preserve_graphics_text else None,
+        graphic_regions_by_page=paragraph_merge_obstacles,
     )
     repeated_headers = _repeated_top_header_texts(blocks, document.page_count)
 
@@ -6683,6 +6721,8 @@ def prepare_translation_units(
             preserved_union.setdefault(page_index, []).extend(page_algorithm_regions)
         for page_index, page_table_regions in equation_table_regions.items():
             preserved_union.setdefault(page_index, []).extend(page_table_regions)
+        for page_index, page_rows in piecewise_equation_regions.items():
+            preserved_union.setdefault(page_index, []).extend(page_rows)
 
         # Mutually overlapping translation candidates would overprint each
         # other's Chinese text; keep their original typesetting and exempt
@@ -6732,6 +6772,15 @@ def prepare_translation_units(
         ):
             skipped += 1
             continue
+        if (
+            block.block_type != "caption"
+            and _block_mostly_inside_preserved_regions(
+                block,
+                piecewise_equation_regions.get(block.page_index, []),
+            )
+        ):
+            skipped += 1
+            continue
         # Table cells that escaped structural classification (e.g. header
         # cells merged as body prose) must stay untranslated whenever the
         # verification layer treats their enclosing envelope as preserved;
@@ -6775,6 +6824,35 @@ def prepare_translation_units(
             continue
         units.append((block, protected, mapping))
     return units, gutter_rects, skipped
+
+
+_PIECEWISE_BRANCH_PREFIX_RE = re.compile(
+    r"^(?:if(?:\s|FORMULA)|otherwise\b|else\b|when(?:\s|FORMULA))",
+    re.IGNORECASE,
+)
+
+
+def _piecewise_display_equation_regions(
+    blocks: Sequence[TextBlock],
+    display_equation_regions: Dict[int, List[BBox]],
+) -> Dict[int, List[BBox]]:
+    """Select formula rows whose natural-language branch labels stay immutable."""
+    selected: Dict[int, List[BBox]] = {}
+    for block in blocks:
+        branch_text = " ".join(
+            SENTINEL_RUN_RE.sub(" FORMULA ", block.text).split()
+        )
+        if not _PIECEWISE_BRANCH_PREFIX_RE.match(branch_text):
+            continue
+        block_area = max(bbox_area(block.bbox), 0.1)
+        for region in display_equation_regions.get(block.page_index, ()):
+            if bbox_intersection_area(block.bbox, region) / block_area < 0.65:
+                continue
+            selected.setdefault(block.page_index, []).append(region)
+    return {
+        page_index: list(dict.fromkeys(page_regions))
+        for page_index, page_regions in selected.items()
+    }
 
 
 def _repeated_top_header_texts(
@@ -7154,6 +7232,8 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
         return True
     if looks_like_translatable_graphic_prose(block, plain):
         return False
+    if _looks_like_prose_grazing_graphic_padding(block, plain, graphic_regions):
+        return False
     if block_overlaps_graphic_region(block.bbox, graphic_regions):
         return True
     if math_heavy_block(block):
@@ -7214,6 +7294,49 @@ def _is_low_font_graphic_content(
         bbox_contains_point(region, center_x, center_y)
         for region in graphic_regions
     )
+
+
+def _looks_like_prose_grazing_graphic_padding(
+    block: TextBlock,
+    plain: str,
+    graphic_regions: Sequence[BBox],
+) -> bool:
+    """Keep a wide prose line translatable when only float padding touches it."""
+    width = max(1.0, block.bbox[2] - block.bbox[0])
+    height = max(1.0, block.bbox[3] - block.bbox[1])
+    if (
+        block.source_lines != 1
+        or block.nowrap
+        or block.font_size <= DIAGRAM_INTERNAL_MAX_FONT_SIZE
+        or width < max(220.0, block.font_size * 22.0)
+        or substantial_prose_word_count(plain) < 10
+        or _looks_like_code_or_symbolic_text(plain)
+        or looks_like_preserved_diagram_label(plain)
+    ):
+        return False
+
+    center_x = (block.bbox[0] + block.bbox[2]) / 2.0
+    center_y = (block.bbox[1] + block.bbox[3]) / 2.0
+    touched = False
+    for region in graphic_regions:
+        intersection = bbox_intersection_area(block.bbox, region)
+        if intersection <= 0.0:
+            continue
+        touched = True
+        if bbox_contains_point(region, center_x, center_y):
+            return False
+        horizontal_overlap = min(block.bbox[2], region[2]) - max(
+            block.bbox[0], region[0]
+        )
+        vertical_overlap = min(block.bbox[3], region[3]) - max(
+            block.bbox[1], region[1]
+        )
+        if (
+            horizontal_overlap < width * 0.75
+            or vertical_overlap > height * 0.48
+        ):
+            return False
+    return touched
 
 
 def looks_like_author_metadata(block: TextBlock, plain: str) -> bool:
@@ -10064,9 +10187,22 @@ def parse_block_lines(
         if not full_text:
             continue
         if is_injection_text(strip_sentinels(full_text)):
-            for _, span in fragments:
-                if "bbox" in span:
-                    dropped_rects.append(tuple(float(x) for x in span["bbox"]))
+            injection_bboxes = [
+                tuple(float(x) for x in span["bbox"])
+                for _, span in fragments
+                if "bbox" in span
+            ]
+            if injection_bboxes:
+                # A poisoned PDF can map extracted injection text to unrelated
+                # visible footer glyphs. Per-glyph redaction then leaves a
+                # misleading half-footer; erase the complete physical line.
+                dropped_rects.append(
+                    raw_line_bbox
+                    if len(raw_line_bbox) == 4
+                    and raw_line_bbox[2] > raw_line_bbox[0]
+                    and raw_line_bbox[3] > raw_line_bbox[1]
+                    else union_bbox(injection_bboxes)
+                )
             continue
         for group in split_line_cells(fragments, line_max_size):
             text = "".join(part for part, _ in group).strip()
@@ -14987,8 +15123,134 @@ def _combine_inline_style_translation_items(
 
 
 _SIBLING_LIST_MARKER_RE = re.compile(
-    r"^\s*(?:[•◦▪●·‣]|\(?\d{1,2}[).]|\(?[a-zA-Z][).]|[-–—*])\s*\S"
+    r"^\s*(?:[•◦▪●·‣]|\(?\d{1,2}[).]|\(?[a-zA-Z][).](?![A-Za-z])|[-–—*])\s*\S"
 )
+
+
+def _combine_list_continuation_translation_items(
+    items: Sequence[Tuple[TextBlock, str]],
+) -> List[Tuple[TextBlock, str]]:
+    """Typeset a wrapped list item as one flow instead of stacked line boxes."""
+
+    def can_append(
+        list_lead: TextBlock,
+        previous: TextBlock,
+        continuation: TextBlock,
+    ) -> bool:
+        lead_plain = " ".join(strip_sentinels(list_lead.text).split()).strip()
+        previous_plain = " ".join(strip_sentinels(previous.text).split()).strip()
+        continuation_plain = " ".join(
+            strip_sentinels(continuation.text).split()
+        ).strip()
+        if (
+            list_lead.page_index != continuation.page_index
+            or list_lead.block_type != "body"
+            or previous.block_type != "body"
+            or continuation.block_type != "body"
+            or list_lead.nowrap
+            or previous.nowrap
+            or continuation.nowrap
+            or list_lead.preserve_position
+            or previous.preserve_position
+            or continuation.preserve_position
+            # List leads are deliberately no_merge during source paragraph
+            # assembly. Here their marker and continuation geometry provide
+            # the stronger evidence needed to build one typesetting flow.
+            or (previous is not list_lead and previous.no_merge)
+            or continuation.no_merge
+            or list_lead.keepout_bboxes
+            or previous.keepout_bboxes
+            or continuation.keepout_bboxes
+            or list_lead.source_math_bboxes
+            or previous.source_math_bboxes
+            or continuation.source_math_bboxes
+            or list_lead.formula_anchors
+            or previous.formula_anchors
+            or continuation.formula_anchors
+            or not _SIBLING_LIST_MARKER_RE.match(lead_plain)
+            or _SIBLING_LIST_MARKER_RE.match(continuation_plain)
+            or re.search(r"[.!?;:\u3002\uff01\uff1f\uff1b\uff1a]\s*$", previous_plain)
+            or abs(list_lead.font_size - continuation.font_size) > 0.75
+        ):
+            return False
+        vertical_gap = continuation.bbox[1] - previous.bbox[3]
+        continuation_indent = continuation.bbox[0] - list_lead.bbox[0]
+        horizontal_overlap = min(previous.bbox[2], continuation.bbox[2]) - max(
+            previous.bbox[0], continuation.bbox[0]
+        )
+        narrower_width = min(
+            previous.bbox[2] - previous.bbox[0],
+            continuation.bbox[2] - continuation.bbox[0],
+        )
+        return bool(
+            -1.5 <= vertical_gap <= max(4.0, list_lead.font_size * 0.5)
+            and -2.0
+            <= continuation_indent
+            <= max(18.0, list_lead.font_size * 2.0)
+            and horizontal_overlap >= narrower_width * 0.65
+        )
+
+    combined: List[Tuple[TextBlock, str]] = []
+    index = 0
+    while index < len(items):
+        lead, lead_translation = items[index]
+        if index + 1 >= len(items) or not can_append(
+            lead,
+            lead,
+            items[index + 1][0],
+        ):
+            combined.append((lead, lead_translation))
+            index += 1
+            continue
+
+        blocks = [lead]
+        translations = [lead_translation]
+        cursor = index + 1
+        while cursor < len(items) and can_append(
+            lead,
+            blocks[-1],
+            items[cursor][0],
+        ):
+            continuation, continuation_translation = items[cursor]
+            blocks.append(continuation)
+            translations.append(continuation_translation)
+            cursor += 1
+
+        source_text = join_lines([block.text for block in blocks])
+        merged = replace(
+            lead,
+            bbox=union_bbox([block.bbox for block in blocks]),
+            text=source_text,
+            source_lines=sum(max(1, block.source_lines) for block in blocks),
+            no_merge=True,
+            redact_bboxes=list(
+                dict.fromkeys(
+                    bbox
+                    for block in blocks
+                    for bbox in (block.redact_bboxes or [block.bbox])
+                )
+            ),
+            bold_terms=tuple(
+                dict.fromkeys(term for block in blocks for term in block.bold_terms)
+            ),
+            source_style_runs=tuple(
+                run for block in blocks for run in block.source_style_runs
+            ),
+            source_line_bboxes=tuple(
+                dict.fromkeys(
+                    bbox for block in blocks for bbox in block.source_line_bboxes
+                )
+            ),
+            preserved_math_placeholders=tuple(
+                range(len(SENTINEL_RUN_RE.findall(source_text)))
+            ),
+        )
+        translated = " ".join(
+            translation.strip() for translation in translations if translation.strip()
+        )
+        combined.append((merged, translated))
+        index = cursor
+    return combined
 
 
 def _sibling_group_item_height(
@@ -15271,7 +15533,34 @@ def _cascade_same_column(first: TextBlock, second: TextBlock) -> bool:
     overlap = min(first.bbox[2], second.bbox[2]) - max(
         first.bbox[0], second.bbox[0]
     )
-    return width_ratio >= 0.55 and overlap >= min(first_width, second_width) * 0.65
+    narrower_width = min(first_width, second_width)
+    if width_ratio >= 0.55 and overlap >= narrower_width * 0.65:
+        return True
+
+    first_plain = " ".join(strip_sentinels(first.text).split()).strip()
+    second_plain = " ".join(strip_sentinels(second.text).split()).strip()
+    continuation_indent = second.bbox[0] - first.bbox[0]
+    if (
+        first.block_type == "body"
+        and second.block_type == "body"
+        and _SIBLING_LIST_MARKER_RE.match(first_plain)
+        and not _SIBLING_LIST_MARKER_RE.match(second_plain)
+        and -2.0 <= continuation_indent <= max(18.0, first.font_size * 2.0)
+        and overlap >= narrower_width * 0.65
+    ):
+        return True
+
+    heading_roles = {"heading", "run_in_heading"}
+    if first.block_type not in heading_roles and second.block_type not in heading_roles:
+        return False
+    if overlap < narrower_width * 0.65:
+        return False
+
+    # A short checklist/appendix heading can be one third the width of the
+    # paragraph below it.  They still share a text stream when their left
+    # edges align, but a page-wide heading must not capture the right column.
+    left_edge_delta = abs(first.bbox[0] - second.bbox[0])
+    return left_edge_delta <= max(40.0, narrower_width * 0.35)
 
 
 def _cascade_item_movable(block: TextBlock) -> bool:
