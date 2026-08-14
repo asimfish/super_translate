@@ -1326,13 +1326,35 @@ def _on_float_side_of_caption(
     return False
 
 
+def _looks_like_subfigure_caption(
+    block_bbox: BBox,
+    text: str,
+    caption_kinds: Sequence[Tuple[BBox, str]],
+) -> bool:
+    """Identify prose panel captions next to the numbered figure caption."""
+    if not re.match(r"^\s*\([a-z]\)\s+[A-Z]", text):
+        return False
+    if len(_STOPWORD_RE.findall(text)) < 2:
+        return False
+    bx0, by0, bx1, by1 = block_bbox
+    for (cx0, cy0, cx1, cy1), kind in caption_kinds:
+        if kind != "figure":
+            continue
+        horizontal_overlap = min(bx1, cx1) - max(bx0, cx0)
+        if horizontal_overlap <= 0:
+            continue
+        if -6.0 <= cy0 - by1 <= 48.0 or -6.0 <= by0 - cy1 <= 48.0:
+            return True
+    return False
+
+
 def _untranslated_block_issues(
     translated_page: object,
     page_number: int,
     *,
     original_page: Optional[object] = None,
     reference_y: Optional[float],
-    table_bands: Sequence[Tuple[float, float]] = (),
+    table_bands: Sequence[BBox] = (),
     preserved_regions: Sequence[BBox] = (),
     algorithm_regions: Sequence[BBox] = (),
     caption_kinds: Sequence[Tuple[BBox, str]] = (),
@@ -1351,17 +1373,42 @@ def _untranslated_block_issues(
     sits on the float side of an adjacent caption (chain-of-thought
     exemplar boxes, dataset table cells, figure-embedded instructions).
     """
-    from .pdf_layout import _is_reference_or_formula_text
+    from .pdf_layout import (
+        _VERBATIM_GENERATED_SAMPLE_RE,
+        _is_reference_or_formula_text,
+    )
 
     issues: List[object] = []
-    original_blocks = _text_blocks(original_page) if original_page is not None else []
+    generated_sample_labels = [
+        source.bbox
+        for source in (_text_blocks(original_page) if original_page is not None else [])
+        if _VERBATIM_GENERATED_SAMPLE_RE.search(" ".join(source.text.split()))
+    ]
     for block in _text_blocks(translated_page):
+        text = " ".join(block.text.split())
+        if not text:
+            continue
+        if _VERBATIM_GENERATED_SAMPLE_RE.search(text):
+            continue
+        if any(
+            min(block.bbox[2], label[2]) - max(block.bbox[0], label[0]) > 0.0
+            and -4.0 <= block.bbox[1] - label[3] <= 520.0
+            for label in generated_sample_labels
+        ):
+            continue
+        words = block.latin_words()
+        stopwords = len(_STOPWORD_RE.findall(text))
+        panel_caption = _looks_like_subfigure_caption(
+            block.bbox,
+            text,
+            caption_kinds,
+        )
         if algorithm_regions and any(
             _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
             for region in algorithm_regions
         ):
             continue
-        if graphic_regions and any(
+        if not panel_caption and graphic_regions and any(
             _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
             for region in graphic_regions
         ):
@@ -1385,14 +1432,14 @@ def _untranslated_block_issues(
             text_head = " ".join(block.text.split())
             if _SAMPLE_LABEL_PREFIX_RE.match(text_head):
                 continue
-            if _on_float_side_of_caption(block.bbox, caption_kinds):
+            if (
+                not panel_caption
+                and stopwords < max(2.0, words / 7.0)
+                and _on_float_side_of_caption(block.bbox, caption_kinds)
+            ):
                 continue
         if reference_y is not None and block.bbox[1] >= reference_y - 4.0:
             continue
-        text = " ".join(block.text.split())
-        if not text:
-            continue
-        words = block.latin_words()
         if words < _UNTRANSLATED_MIN_WORDS:
             continue
         cjk = block.cjk_chars()
@@ -1400,7 +1447,6 @@ def _untranslated_block_issues(
             continue
         if re.match(r"^\s*(Figure|Table|Algorithm)\s+\d", text):
             continue
-        stopwords = len(_STOPWORD_RE.findall(text))
         if stopwords < 2:
             continue
         affiliation_hits = len(_AFFILIATION_RE.findall(text))
@@ -1415,30 +1461,21 @@ def _untranslated_block_issues(
             continue
         if _is_reference_or_formula_text(text):
             continue
-        protected_source_match = False
-        if any(
-            _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
-            for region in preserved_regions
-        ):
-            normalized = re.sub(r"\s+", "", text).casefold()
-            protected_source_match = any(
-                _bbox_overlap_area(block.bbox, source.bbox)
-                > 0.75 * min(_bbox_area(block.bbox), _bbox_area(source.bbox))
-                and re.sub(r"\s+", "", source.text).casefold() == normalized
-                for source in original_blocks
-            )
-        if protected_source_match:
-            continue
         # Rows inside a rendered table grid are preserved cell text, not
         # missed prose.
+        center_x = (block.bbox[0] + block.bbox[2]) / 2.0
         center_y = (block.bbox[1] + block.bbox[3]) / 2.0
-        if any(top - 4.0 <= center_y <= bottom + 4.0 for top, bottom in table_bands):
+        if any(
+            left - 4.0 <= center_x <= right + 4.0
+            and top - 4.0 <= center_y <= bottom + 4.0
+            for left, top, right, bottom in table_bands
+        ):
             continue
         # Keyword-style preserved content (hyperparameter grids, config
         # dumps) is intentionally verbatim. Flowing prose has a much higher
         # stopword density, so it stays flagged even when a mis-detected
         # preserved region covers it.
-        if stopwords < max(2.0, words / 6.0) and any(
+        if not panel_caption and stopwords < max(2.0, words / 7.0) and any(
             _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
             for region in preserved_regions
         ):
@@ -1582,10 +1619,16 @@ def inspect_translation(
             translated_ink = _InkCache(translated_page)
             original_rules, original_curves = _page_line_art(original_page)
             translated_rules, _ = _page_line_art(translated_page)
-            table_bands = [
-                (cluster[0][0], cluster[-1][0])
-                for cluster in _rule_clusters(translated_rules)
-            ]
+            table_bands: List[BBox] = []
+            for cluster in _rule_clusters(translated_rules):
+                left = max(rule[1] for rule in cluster)
+                right = min(rule[2] for rule in cluster)
+                if right <= left:
+                    left = min(rule[1] for rule in cluster)
+                    right = max(rule[2] for rule in cluster)
+                table_bands.append(
+                    (left, cluster[0][0], right, cluster[-1][0])
+                )
 
             issues.extend(
                 _font_size_issues(

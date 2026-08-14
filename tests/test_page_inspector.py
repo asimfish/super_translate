@@ -29,6 +29,7 @@ from pdf_zh_translator.page_inspector import (
     _mask_coverage,
     _rule_clusters,
     _table_structure_issues,
+    _untranslated_block_issues,
     inspect_translation,
 )
 
@@ -196,6 +197,104 @@ class TestUntranslatedBlock:
         codes = Counter(issue.code for issue in issues)
         assert codes["untranslated_block"] >= 1
 
+    def test_citation_rich_untranslated_paragraph_is_flagged(self, tmp_path):
+        prose = (
+            "We take inspiration from Li et al. (2018) and Aghajanyan et al. "
+            "(2020), which show that learned models occupy a low intrinsic "
+            "dimension. We therefore propose a low-rank adaptation method."
+        )
+        original = tmp_path / "original-citations.pdf"
+        translated = tmp_path / "translated-citations.pdf"
+        for path in (original, translated):
+            document = fitz.open()
+            page = document.new_page(width=595, height=842)
+            page.insert_textbox(fitz.Rect(72, 90, 520, 220), prose, fontsize=10)
+            document.save(path)
+            document.close()
+
+        issues = inspect_translation(original, translated)
+
+        assert [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_preserved_region_does_not_hide_running_prose(self):
+        prose = (
+            "We further report segmentation results on the benchmark dataset. "
+            "The dataset contains fine annotations for every evaluation image "
+            "and provides a standard validation split for comparison."
+        )
+        original = fitz.open()
+        original_page = original.new_page(width=595, height=842)
+        original_page.insert_textbox(fitz.Rect(72, 90, 520, 220), prose, fontsize=10)
+        translated = fitz.open()
+        translated_page = translated.new_page(width=595, height=842)
+        translated_page.insert_textbox(fitz.Rect(72, 90, 520, 220), prose, fontsize=10)
+
+        issues = _untranslated_block_issues(
+            translated_page,
+            1,
+            original_page=original_page,
+            reference_y=None,
+            preserved_regions=((65.0, 80.0, 530.0, 230.0),),
+        )
+
+        translated.close()
+        original.close()
+        assert [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_table_in_right_column_does_not_hide_left_column_prose(self):
+        prose = (
+            "In this paper, we propose a compound scaling method that uniformly "
+            "scales network width, depth, and resolution in a principled way."
+        )
+        original = fitz.open()
+        original_page = original.new_page(width=595, height=842)
+        original_page.insert_textbox(fitz.Rect(50, 100, 285, 190), prose, fontsize=10)
+        translated = fitz.open()
+        translated_page = translated.new_page(width=595, height=842)
+        translated_page.insert_textbox(fitz.Rect(50, 100, 285, 190), prose, fontsize=10)
+
+        issues = _untranslated_block_issues(
+            translated_page,
+            1,
+            original_page=original_page,
+            reference_y=None,
+            table_bands=((310.0, 80.0, 550.0, 220.0),),
+        )
+
+        translated.close()
+        original.close()
+        assert [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_untranslated_subfigure_caption_near_numbered_caption_is_flagged(
+        self, tmp_path
+    ):
+        panel_caption = (
+            "(b) Exploring the impact of the filter ratio on model size and "
+            "image classification accuracy across several benchmark settings."
+        )
+        original = tmp_path / "original-subfigure.pdf"
+        translated = tmp_path / "translated-subfigure.pdf"
+        for path in (original, translated):
+            document = fitz.open()
+            page = document.new_page(width=612, height=792)
+            page.draw_rect(fitz.Rect(60, 60, 550, 260))
+            page.insert_textbox(
+                fitz.Rect(310, 195, 535, 250),
+                panel_caption,
+                fontsize=8,
+            )
+            page.insert_text(
+                (190, 275),
+                "Figure 3: Microarchitectural design space exploration.",
+                fontsize=8,
+            )
+            document.save(path)
+            document.close()
+
+        issues = inspect_translation(original, translated)
+
+        assert [issue for issue in issues if issue.code == "untranslated_block"]
+
     def test_verbatim_figure_panel_text_is_not_flagged(self, tmp_path):
         label = (
             "(c) 1x1 Convolutional Filters called Pointwise Convolution "
@@ -215,6 +314,26 @@ class TestUntranslatedBlock:
                 label,
                 fontsize=8,
             )
+            document.save(path)
+            document.close()
+
+        issues = inspect_translation(original, translated)
+
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_labeled_generated_poem_is_not_flagged(self, tmp_path):
+        original = tmp_path / "original-poem.pdf"
+        translated = tmp_path / "translated-poem.pdf"
+        poem = (
+            "The sun was all we had. All is changed. White fields remain. "
+            "Ancient gleams surround the roots. The great dark books of reverie "
+            "follow the labyrinth of the sea."
+        )
+        for path in (original, translated):
+            document = fitz.open()
+            page = document.new_page(width=420, height=520)
+            page.insert_text((50, 70), "-------- Generated Poem 1 --------")
+            page.insert_textbox(fitz.Rect(50, 85, 240, 300), poem, fontsize=9)
             document.save(path)
             document.close()
 

@@ -1010,6 +1010,18 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         self.assertEqual(missing, [])
         self.assertEqual(len(mapping), 2)
 
+    def test_restore_text_expands_nested_placeholders_to_fixed_point(self):
+        restored, missing = restore_text(
+            "translated ⟦0⟧",
+            {
+                0: "prefix ⟦1⟧ suffix",
+                1: "x_{t}",
+            },
+        )
+
+        self.assertEqual(restored, "translated prefix x_{t} suffix")
+        self.assertEqual(missing, [])
+
     def test_parse_block_lines_expands_normal_font_formula_operands(self):
         raw_block = {
             "type": 0,
@@ -7138,6 +7150,149 @@ class TestDetectImageZones(unittest.TestCase):
 
 
 class TestTranslationVerification(unittest.TestCase):
+    def test_citation_rich_body_is_not_a_reference_entry(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_reference_entry_text
+
+        body = (
+            "We take inspiration from Li et al. (2018) and Aghajanyan et al. "
+            "(2020), which show that learned models occupy a low intrinsic "
+            "dimension. We therefore propose a low-rank adaptation method."
+        )
+
+        self.assertFalse(_looks_like_reference_entry_text(body))
+
+        discourse_body = (
+            "Since Bengio et al. (2003) introduced a neural language model, "
+            "neural networks have been widely used in machine translation. "
+            "However, their role was initially limited to reranking."
+        )
+        self.assertFalse(_looks_like_reference_entry_text(discourse_body))
+
+    def test_leading_citation_with_punctuation_remains_body_prose(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_reference_entry_text
+
+        body = (
+            "[2], and pruning, vector quantization, and Huffman coding have "
+            "been proposed in the literature. Another method trains compact "
+            "networks by distilling a larger model."
+        )
+
+        self.assertFalse(_looks_like_reference_entry_text(body))
+
+    def test_reference_continuation_tolerates_figure_blocks_above_entries(self):
+        from pdf_zh_translator.pdf_layout import _page_looks_like_reference_continuation
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        for index, label in enumerate(
+            ("person", "car", "bus", "bicycle", "truck", "chair")
+        ):
+            page.insert_text((72 + index * 48, 100), f"{label}: 0.9{index}")
+        page.insert_textbox(
+            fitz.Rect(36, 620, 275, 760),
+            (
+                "networks for recognition, in ICLR, 2015. "
+                "[4] J. Smith and A. Doe. Selective search. IJCV, 2013. "
+                "[5] P. Brown et al. Region proposals. CVPR, 2014."
+            ),
+            fontsize=8,
+        )
+        page.insert_textbox(
+            fitz.Rect(287, 620, 526, 760),
+            (
+                "[7] J. Long et al. Fully convolutional networks. CVPR, 2015. "
+                "[8] R. Girshick et al. Fast detection. ICCV, 2015."
+            ),
+            fontsize=8,
+        )
+
+        self.assertTrue(_page_looks_like_reference_continuation(page))
+        document.close()
+
+    def test_verification_reports_placeholder_leak(self):
+        from pdf_zh_translator.pdf_layout import _placeholder_leak_issues
+
+        issues = _placeholder_leak_issues(
+            4,
+            "The method updates the cached state.",
+            "该方法更新缓存状态 ⟦3⟧。",
+        )
+
+        self.assertEqual([issue.code for issue in issues], ["placeholder_leak"])
+        self.assertEqual(issues[0].page, 4)
+
+    def test_untranslated_issue_families_are_deduplicated_per_page(self):
+        prose = (
+            "We take inspiration from Li et al. (2018), which shows that the "
+            "learned model occupies a low intrinsic dimension. We therefore "
+            "propose a compact low-rank adaptation method for every layer."
+        )
+        original = fitz.open()
+        page = original.new_page(width=420, height=320)
+        page.insert_textbox(fitz.Rect(40, 70, 380, 180), prose, fontsize=10)
+        translated = fitz.open()
+        translated.insert_pdf(original)
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        untranslated = [
+            issue
+            for issue in issues
+            if issue.code
+            in {
+                "untranslated_block",
+                "untranslated_english",
+                "untranslated_natural_language",
+            }
+        ]
+        self.assertEqual(len(untranslated), 1, untranslated)
+
+    def test_verification_ignores_labeled_generated_poem_samples(self):
+        original = fitz.open()
+        page = original.new_page(width=420, height=520)
+        page.insert_text((50, 70), "-------- Generated Poem 1 --------")
+        poem = (
+            "The sun was all we had. All is changed. White fields remain. "
+            "Ancient gleams surround the roots. The great dark books of reverie "
+            "follow the labyrinth of the sea."
+        )
+        page.insert_textbox(fitz.Rect(50, 85, 240, 300), poem, fontsize=9)
+        translated = fitz.open()
+        translated.insert_pdf(original)
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertFalse(
+            any(
+                issue.code
+                in {
+                    "untranslated_block",
+                    "untranslated_english",
+                    "untranslated_natural_language",
+                }
+                for issue in issues
+            ),
+            issues,
+        )
+
     def test_overlap_detector_exempts_formula_code_and_table_cells(self):
         self.assertTrue(_looks_like_overlap_exempt_text("minT ∈Π(µs,µt)⟨L(Cs(X(m)"))
         self.assertTrue(
@@ -7641,6 +7796,65 @@ class TestTranslationVerification(unittest.TestCase):
             _translation_retains_foreign_prose(
                 block,
                 "该系数由 of the standard deviation of the data distribution 给出。",
+            )
+        )
+
+    def test_source_comparison_allows_named_baseline_with_repeated_of(self):
+        block = TextBlock(
+            page_index=8,
+            bbox=(72.0, 100.0, 500.0, 160.0),
+            text=(
+                "We compare DPO with the Best of 128 baseline and report the "
+                "performance of every method."
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        self.assertFalse(
+            _translation_retains_foreign_prose(
+                block,
+                "我们将 DPO 与 Best of 128 基线比较，并报告每种方法的性能。",
+            )
+        )
+
+    def test_source_comparison_allows_cjk_labeled_verbatim_samples(self):
+        block = TextBlock(
+            page_index=29,
+            bbox=(72.0, 100.0, 500.0, 160.0),
+            text=(
+                "Poor English input: We think that Leslie likes ourselves. "
+                "Good English output: We think that Leslie likes us."
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        self.assertFalse(
+            _translation_retains_foreign_prose(
+                block,
+                "较差的英语输入：We think that Leslie likes ourselves. "
+                "较好的英语输出：We think that Leslie likes us.",
+            )
+        )
+
+    def test_source_comparison_allows_quoted_natural_language_examples(self):
+        block = TextBlock(
+            page_index=11,
+            bbox=(72.0, 100.0, 500.0, 160.0),
+            text=(
+                "The sentence I am in a mocha mood follows the grammar rules, "
+                "and the phrase in a mocha mood supplies context."
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        self.assertFalse(
+            _translation_retains_foreign_prose(
+                block,
+                "句子“I am in a mocha mood”符合语法规则，短语“in a mocha mood”"
+                "提供了语境。",
             )
         )
 
@@ -10357,6 +10571,68 @@ class DetachedInlineScriptTests(unittest.TestCase):
 
 
 class TranslationEchoDetectionTests(unittest.TestCase):
+    def test_source_echo_allows_detached_email_and_url_path_fragments(self):
+        from pdf_zh_translator.pdf_layout import _translation_retains_source_prose_run
+
+        for text in (
+            "thibautlav,gizacard,egrave,glample}@meta.com",
+            "tree/main/projects/OPT/chronicles",
+        ):
+            with self.subTest(text=text):
+                block = TextBlock(
+                    page_index=0,
+                    bbox=(72.0, 100.0, 500.0, 120.0),
+                    text=text,
+                    font_size=8.0,
+                    color=(0.0, 0.0, 0.0),
+                )
+                self.assertFalse(_translation_retains_source_prose_run(block, text))
+
+    def test_source_echo_ignores_unclosed_author_year_citation_tail(self):
+        from pdf_zh_translator.pdf_layout import _translation_retains_source_prose_run
+
+        block = TextBlock(
+            page_index=2,
+            bbox=(72.0, 100.0, 500.0, 180.0),
+            text=(
+                "Robots can generalize to new object instances and new tasks "
+                "(Finn et al., 2017; Levine et al., 2018; Jang et al., 2021; "
+                "Jiang et al., 2022; Liu et al.,"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        translated = (
+            "机器人可以泛化到新的物体实例和任务（Finn et al., 2017; "
+            "Levine et al., 2018; Jang et al., 2021; Jiang et al., 2022; "
+            "Liu et al.,"
+        )
+
+        self.assertFalse(_translation_retains_source_prose_run(block, translated))
+
+    def test_generated_poem_label_marks_adjacent_sample_columns_verbatim(self):
+        from pdf_zh_translator.pdf_layout import (
+            _source_unit_is_verbatim_generated_sample,
+        )
+
+        label = TextBlock(
+            page_index=48,
+            bbox=(90.0, 192.0, 406.0, 200.0),
+            text="-------- Generated Poem 1 -------- Generated Poem 3 --------",
+            font_size=8.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        poem = TextBlock(
+            page_index=48,
+            bbox=(280.0, 208.0, 455.0, 455.0),
+            text="The sun was all we had. All is changed. White fields remain.",
+            font_size=8.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=20,
+        )
+
+        self.assertTrue(_source_unit_is_verbatim_generated_sample(poem, [label, poem]))
+
     def test_preserved_formula_words_do_not_count_as_source_prose_echo(self):
         from pdf_zh_translator.pdf_layout import (
             _translation_retains_foreign_prose,

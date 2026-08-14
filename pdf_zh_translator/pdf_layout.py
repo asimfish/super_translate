@@ -1833,17 +1833,16 @@ _PRESERVED_NUMERIC_TOKEN_RE = re.compile(
 _REFERENCE_ENTRY_RE = re.compile(
     # `\d{1,3}\.(?!\d)` accepts numbered entries ("12. Smith...") but rejects
     # section numbering like "4.2. Conditional diffusion model training".
-    r"^\s*(?:\[\d+\]|\d{1,3}\.(?!\d)|doi:|arxiv:|"
+    r"^\s*(?:\[\d+\]|\d{1,3}\.(?!\d)|(?i:doi|arxiv):|"
     r"[A-Z][A-Za-z'’.-]+(?:\s+(?:et\s+al\.|and|&|[A-Z]\.|"
     r"[A-Z][A-Za-z'’.-]+|,)){0,8}\s+\((?:19|20)\d{2}[a-z]?\))",
-    re.IGNORECASE,
 )
 # A leading citation marker flowing into lowercase prose ("[28] is a
 # robustness-oriented benchmark ...") is a run-in-heading split leftover, not
 # a reference entry. Lowercase surname particles (van/von/de/...) still start
 # genuine entries and must keep the reference-entry shortcut.
 _LEADING_CITATION_PROSE_RE = re.compile(
-    r"^\s*\[\d+\]\s+"
+    r"^\s*\[\d+\]\s*[,;:]?\s+"
     r"(?!(?:van|von|vander|de|del|della|der|den|di|da|dos|das|du|la|le|lo|"
     r"ter|ten|te|el|al|bin|ibn|abu|zur|zum|am|auf|mac|st)\b)"
     r"[a-z]"
@@ -1873,6 +1872,72 @@ _BODY_PROSE_CITATION_CUE_RE = re.compile(
     r"open access version|computer vision foundation)\b",
     re.IGNORECASE,
 )
+_LEADING_DISCOURSE_PROSE_RE = re.compile(
+    r"^\s*(?:although|because|following|given|since|while)\b",
+    re.IGNORECASE,
+)
+
+
+_BODY_UNTRANSLATED_ISSUE_PRIORITY = {
+    "untranslated_english": 0,
+    "untranslated_natural_language": 1,
+    "untranslated_block": 2,
+}
+
+
+def _dedupe_body_untranslated_issues(
+    issues: Sequence[TranslationIssue],
+) -> List[TranslationIssue]:
+    """Keep one body-prose untranslated finding per page.
+
+    The semantic QA and visual inspector inspect the same page through
+    different representations. Reporting both findings inflates the defect
+    count without identifying an additional repair target.
+    """
+    deduped: List[TranslationIssue] = []
+    selected_index: Dict[int, int] = {}
+    for issue in issues:
+        priority = _BODY_UNTRANSLATED_ISSUE_PRIORITY.get(issue.code)
+        if priority is None:
+            deduped.append(issue)
+            continue
+        existing_index = selected_index.get(issue.page)
+        if existing_index is None:
+            selected_index[issue.page] = len(deduped)
+            deduped.append(issue)
+            continue
+        existing = deduped[existing_index]
+        if priority < _BODY_UNTRANSLATED_ISSUE_PRIORITY[existing.code]:
+            deduped[existing_index] = issue
+    return deduped
+
+
+def _placeholder_leak_issues(
+    page: int,
+    source_text: str,
+    translated_text: str,
+) -> List[TranslationIssue]:
+    """Report internal numbered placeholders introduced by translation."""
+    source_placeholders = set(PLACEHOLDER_RE.findall(source_text))
+    leaked_placeholders = sorted(
+        set(PLACEHOLDER_RE.findall(translated_text)) - source_placeholders,
+        key=int,
+    )
+    if not leaked_placeholders:
+        return []
+    return [
+        TranslationIssue(
+            page=page,
+            code="placeholder_leak",
+            message=(
+                f"Page {page}: internal placeholder token(s) leaked into the "
+                f"translated PDF: {', '.join(leaked_placeholders)}"
+            ),
+            severity="error",
+        )
+    ]
+
+
 def verify_translation(original_pdf: Path, translated_pdf: Path) -> List[str]:
     """Verify translated PDF quality. Returns user-readable issue messages."""
     return [issue.message for issue in verify_translation_issues(original_pdf, translated_pdf)]
@@ -1971,6 +2036,13 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             ).append(expand_bbox(unit_block.bbox, 3.0))
         for keepout in unit_block.keepout_bboxes or []:
             keepout_bboxes_by_page.setdefault(unit_block.page_index, []).append(keepout)
+    verbatim_sample_bboxes_by_page: Dict[int, List[BBox]] = {}
+    for unit_page, page_units in translation_units_by_page.items():
+        for unit_block in page_units:
+            if _source_unit_is_verbatim_generated_sample(unit_block, page_units):
+                verbatim_sample_bboxes_by_page.setdefault(unit_page, []).append(
+                    expand_bbox(unit_block.bbox, 2.0)
+                )
     for warning in fragmented_prose_warnings_from_units(source_units):
         match = re.search(r"Page (\d+):", warning)
         page = int(match.group(1)) if match else 0
@@ -1995,6 +2067,9 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         translated_region_entries = _text_entries_from_blocks(trans_blocks)
         orig_text = _text_from_blocks(orig_blocks)
         trans_text = _text_from_blocks(trans_blocks)
+        issues.extend(
+            _placeholder_leak_issues(page_idx + 1, orig_text, trans_text)
+        )
         visual_regions = _visual_regions_for_page(orig_page, blocks=orig_blocks)
         preserved_regions = preserved_regions_by_page.get(page_idx, [])
         preserved_text_regions = _preserved_text_qa_regions(preserved_regions)
@@ -2082,6 +2157,12 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 continue
             if _block_in_reference_section(block, reference_y):
                 continue
+            if _block_overlaps_preserved_regions(
+                block,
+                verbatim_sample_bboxes_by_page.get(page_idx, []),
+                min_total_overlap=0.55,
+            ):
+                continue
             text = _extract_text_from_block(block)
             if _looks_like_untranslated_caption(text):
                 untranslated_caption_examples.append(" ".join(text.split())[:80])
@@ -2118,6 +2199,11 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                     )
 
         for source_block in translation_units_by_page.get(page_idx, []):
+            if _source_unit_is_verbatim_generated_sample(
+                source_block,
+                translation_units_by_page.get(page_idx, []),
+            ):
+                continue
             translated_unit_text = _text_overlapping_region(
                 translated_region_entries,
                 expand_bbox(source_block.bbox, 2.0),
@@ -2541,7 +2627,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
 
     trans_doc.close()
     orig_doc.close()
-    return issues
+    return _dedupe_body_untranslated_issues(issues)
 
 
 def _visual_min_zone_intersects_graphics(
@@ -2859,8 +2945,6 @@ def _overlap_text_entries_from_block(block: dict) -> List[Tuple[BBox, str]]:
 def _is_reference_or_formula_text(text: str) -> bool:
     compact = " ".join(text.split())
     if not compact:
-        return True
-    if _REFERENCE_ENTRY_RE.search(compact):
         return True
     if _looks_like_reference_entry_text(compact):
         return True
@@ -3419,6 +3503,9 @@ def _page_looks_like_reference_continuation(
         return False
 
     reference_like = sum(1 for text in text_blocks if _looks_like_reference_entry_text(text))
+    numbered_entries = sum(len(re.findall(r"\[\d{1,3}\]", text)) for text in text_blocks)
+    if reference_like >= 1 and numbered_entries >= 3:
+        return True
     if reference_like >= 2:
         return True
     return reference_like == 1 and len(text_blocks) <= 4
@@ -3458,6 +3545,7 @@ def _looks_like_reference_entry_text(text: str) -> bool:
     if (
         _REFERENCE_ENTRY_RE.search(compact)
         and not _LEADING_CITATION_PROSE_RE.match(compact)
+        and not _LEADING_DISCOURSE_PROSE_RE.match(compact)
         # Numbered research questions can share a long PDF record with the
         # following citation-heavy prose (RT-2 p7). The leading ``1.`` alone
         # must not turn that whole record into a standalone bibliography.
@@ -4910,7 +4998,12 @@ def _translation_retains_source_prose_run(
         "footer",
     ):
         return False
-    if URL_RE.search(strip_sentinels(block.text)) or URL_RE.search(translated_text):
+    source_plain = strip_sentinels(block.text).strip()
+    if URL_RE.search(source_plain) or URL_RE.search(translated_text):
+        return False
+    if not re.search(r"\s", source_plain) and (
+        "@" in source_plain or source_plain.count("/") >= 2
+    ):
         return False
     # Judge the whole result first: a CJK-dominant translation retaining a
     # short quoted English run (benchmark names, prompt excerpts, glossary
@@ -4966,6 +5059,13 @@ def _translation_retains_source_prose_run(
             CITATION_RE,
         ):
             plain = boundary_re.sub("\n", plain)
+        plain = re.sub(
+            r"(?:\(|（)[^()（）\n]{0,1200}"
+            r"(?:\bet\s+al\.?|\b(?:19|20)\d{2})[^()（）\n]*$",
+            "\n",
+            plain,
+            flags=re.IGNORECASE,
+        )
         return [
             [
                 word
@@ -5061,6 +5161,11 @@ def _residue_comparison_text(text: str) -> str:
     plain = _text_outside_sentinels(text)
     if _CJK_DETECT_RE.search(plain):
         plain = re.sub(r"\([^()\n]{1,180}\)|（[^（）\n]{1,180}）", " ", plain)
+        plain = re.sub(
+            r"“[^“”\n]{1,500}”|‘[^‘’\n]{1,500}’|\"[^\"\n]{1,500}\"",
+            " ",
+            plain,
+        )
     for boundary_re in (
         EMAIL_RE,
         URL_RE,
@@ -5069,6 +5174,7 @@ def _residue_comparison_text(text: str) -> str:
         CITATION_RE,
     ):
         plain = boundary_re.sub(" ", plain)
+    plain = re.sub(r"\bet\s+al\.?", " ", plain, flags=re.IGNORECASE)
     return plain
 
 
@@ -5093,6 +5199,15 @@ def _translation_retains_foreign_prose(
     ):
         return False
     if not _CJK_DETECT_RE.search(translated_text):
+        return False
+    result_plain = " ".join(translated_text.split())
+    if _looks_like_cjk_sample_label(result_plain):
+        return False
+    if (
+        ("→" in result_plain or "->" in result_plain)
+        and re.search(r"(?:格式|示例|样例)[：:]", result_plain)
+        and len(_CJK_DETECT_RE.findall(result_plain)) >= 20
+    ):
         return False
 
     source_words = {
@@ -5131,12 +5246,45 @@ def _translation_retains_foreign_prose(
         residues.append(lowered)
     if any(word in _SINGLE_TOKEN_FOREIGN_RESIDUES for word in residues):
         return True
+    if residues and len(set(residues)) == 1:
+        return False
     return len(residues) >= 2
 
 
 def _source_looks_like_foreign_example(text: str) -> bool:
     words = [word.casefold() for word in _latin_prose_words(_text_outside_sentinels(text))]
     return sum(word in _FRENCH_FUNCTION_WORDS for word in words) >= 3
+
+
+_VERBATIM_GENERATED_SAMPLE_RE = re.compile(
+    r"\bGenerated\s+(?:Completion|Output|Poem|Sample|Story)\s+\d+\b",
+    re.IGNORECASE,
+)
+
+
+def _source_unit_is_verbatim_generated_sample(
+    block: TextBlock,
+    page_units: Sequence[TextBlock],
+) -> bool:
+    """Whether a source unit belongs to a labeled generated-text sample."""
+    source = " ".join(strip_sentinels(block.text).split())
+    if _VERBATIM_GENERATED_SAMPLE_RE.search(source):
+        return True
+    bx0, by0, bx1, _by1 = block.bbox
+    for candidate in page_units:
+        if candidate.page_index != block.page_index:
+            continue
+        label = " ".join(strip_sentinels(candidate.text).split())
+        if not _VERBATIM_GENERATED_SAMPLE_RE.search(label):
+            continue
+        cx0, _cy0, cx1, cy1 = candidate.bbox
+        if min(bx1, cx1) - max(bx0, cx0) <= 0.0:
+            continue
+        # Generated sample grids commonly have one label row followed by a
+        # long poem/story column that occupies most of the remaining page.
+        if -4.0 <= by0 - cy1 <= 520.0:
+            return True
+    return False
 
 
 def _retained_bracketed_natural_language(text: str) -> List[str]:
@@ -13289,6 +13437,13 @@ def restore_text(
         return ""
 
     restored = PLACEHOLDER_RE.sub(swap, translated)
+    for _ in range(len(mapping)):
+        if not PLACEHOLDER_RE.search(restored):
+            break
+        expanded = PLACEHOLDER_RE.sub(swap, restored)
+        if expanded == restored:
+            break
+        restored = expanded
     missing = [index for index in mapping if index not in seen]
     if missing:
         tail = " ".join(restored_fragment(index) for index in missing)

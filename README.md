@@ -2,7 +2,7 @@
 
 > AI-Powered Academic Paper Translation & Reading System
 
-[![Tests](https://img.shields.io/badge/tests-1359%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-1414%20passed-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)]()
 [![Lint](https://img.shields.io/badge/lint-zero%20violations-brightgreen)]()
 [![Python](https://img.shields.io/badge/python-3.10+-blue)]()
@@ -123,7 +123,7 @@ super_translate/
 │   └── static/       # Frontend (HTML, CSS, JS)
 ├── pdf_zh_translator/ # Core translation engine
 ├── docs/             # Deployment guide + Chinese tutorial
-└── tests/            # Test suite (1359 tests)
+└── tests/            # Test suite (1414 tests)
 ```
 
 ## Deployment Notes
@@ -160,7 +160,7 @@ Super Translate targets local / single-machine / small-team use:
 .venv/bin/python -m pytest tests/ --cov=app --cov-report=term-missing
 
 # Lint check
-.venv/bin/ruff check app/ tests/
+.venv/bin/ruff check pdf_zh_translator/ tests/
 
 # Lint the terminology corpus for cross-field conflicts (CI gate)
 .venv/bin/python -m pdf_zh_translator corpus-lint --strict
