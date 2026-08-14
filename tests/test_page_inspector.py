@@ -8,7 +8,7 @@ with its production translation, one page per defect class reported from the
 - inline formula sprites with clipped ascenders (formula_clipped)
 - table header rules rebuilt at wrong offsets (table_structure_mismatch)
 - bold author names overprinting references (reference_overlap, reference_bold_style)
-- displayed equation pushed sideways (display_formula_misaligned)
+- source display equation shifted synthetically (display_formula_misaligned)
 """
 
 from __future__ import annotations
@@ -136,9 +136,62 @@ class TestProductionRegressions:
         assert codes["reference_overlap"] >= 1
         assert codes["reference_bold_style"] >= 1
 
-    def test_display_equation_alignment(self):
-        codes = _codes("otf_p14_display_align")
+    def test_display_equation_alignment(self, tmp_path):
+        original_path = FIXTURES / "otf_p14_display_align.pdf"
+        shifted_path = tmp_path / "otf-p14-formula-shifted.pdf"
+        formula = fitz.Rect(211.8, 395.9, 341.4, 406.3)
+
+        with fitz.open(original_path) as original:
+            formula_pixmap = original[0].get_pixmap(
+                matrix=fitz.Matrix(4.0, 4.0),
+                clip=formula,
+                alpha=False,
+            )
+            shifted = fitz.open()
+            shifted.insert_pdf(original)
+        page = shifted[0]
+        page.add_redact_annot(formula, fill=(1.0, 1.0, 1.0))
+        page.apply_redactions(
+            images=fitz.PDF_REDACT_IMAGE_NONE,
+            graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+        )
+        page.insert_image(
+            fitz.Rect(formula.x0 + 36.0, formula.y0, formula.x1 + 36.0, formula.y1),
+            pixmap=formula_pixmap,
+            overlay=True,
+        )
+        shifted.save(shifted_path)
+        shifted.close()
+
+        codes = Counter(
+            issue.code for issue in inspect_translation(original_path, shifted_path)
+        )
         assert codes["display_formula_misaligned"] >= 1
+
+        from pdf_zh_translator.page_inspector import (
+            _InkCache,
+            _display_alignment_issues,
+        )
+
+        with fitz.open(original_path) as original, fitz.open(shifted_path) as translated:
+            original_ink = _InkCache(original[0])
+            translated_ink = _InkCache(translated[0])
+            assert not _display_alignment_issues(
+                original_ink,
+                translated_ink,
+                1,
+                [tuple(formula)],
+                algorithm_regions=[tuple(formula)],
+            )
+            assert not _display_alignment_issues(
+                original_ink,
+                translated_ink,
+                1,
+                [tuple(formula)],
+                source_role_blocks=[
+                    SimpleNamespace(bbox=tuple(formula), formula_anchors=(formula,))
+                ],
+            )
 
     def test_clean_page_stays_clean(self):
         codes = _codes("otf_p1_clean")

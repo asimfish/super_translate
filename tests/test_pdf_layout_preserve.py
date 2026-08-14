@@ -23,6 +23,7 @@ from pdf_zh_translator.pdf_layout import (
     _demote_unanchorable_math_blocks,
     _equation_table_region_bboxes,
     _expand_single_line_body_bbox,
+    _expand_multiline_block_bbox,
     _expand_standalone_heading_to_column,
     _extract_formula_fragments,
     _float_clip_min_font_size,
@@ -3092,6 +3093,149 @@ class FormulaTailProseTests(unittest.TestCase):
             )
 
         self.assertEqual([item[0].bbox for item in updated], [first.bbox, follower.bbox])
+
+    def test_layout_cascade_wraps_into_free_side_beside_float(self):
+        first = TextBlock(
+            page_index=0,
+            bbox=(40.0, 40.0, 300.0, 60.0),
+            text="first paragraph",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+        follower = TextBlock(
+            page_index=0,
+            bbox=(40.0, 70.0, 185.0, 84.0),
+            text="following paragraph",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+        # The target expansion ends at y=76, while this float starts lower.
+        # It already intersects the movable follower, which has its own wrap
+        # geometry, so the float must not become a global cascade floor.
+        side_float = (190.0, 80.0, 300.0, 110.0)
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        with patch(
+            "pdf_zh_translator.pdf_layout._cascade_required_height",
+            return_value=36.0,
+        ):
+            updated = _cascade_expand_page_items(
+                [(first, "long translated paragraph"), (follower, "following")],
+                font_pack=font_pack,
+                min_font_size=5.0,
+                font_scale=1.0,
+                margin=0.5,
+                page_height=150.0,
+                obstacles=[side_float],
+                float_obstacles=[side_float],
+            )
+
+        expanded, shifted = [item[0] for item in updated]
+        self.assertAlmostEqual(expanded.bbox[3], 76.0)
+        self.assertGreater(shifted.bbox[1], follower.bbox[1])
+        self.assertIn((188.0, 78.0, 302.0, 112.0), expanded.keepout_bboxes)
+
+    def test_layout_cascade_ignores_obstacle_disjoint_from_wrapping_follower(self):
+        first = TextBlock(
+            page_index=0,
+            bbox=(40.0, 40.0, 300.0, 60.0),
+            text="first paragraph",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+        follower = TextBlock(
+            page_index=0,
+            bbox=(40.0, 70.0, 185.0, 84.0),
+            text="following paragraph",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+        right_table_row = (190.0, 80.0, 300.0, 110.0)
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        with patch(
+            "pdf_zh_translator.pdf_layout._cascade_required_height",
+            return_value=36.0,
+        ):
+            updated = _cascade_expand_page_items(
+                [(first, "long translated paragraph"), (follower, "following")],
+                font_pack=font_pack,
+                min_font_size=5.0,
+                font_scale=1.0,
+                margin=0.5,
+                page_height=150.0,
+                obstacles=[right_table_row],
+            )
+
+        expanded, shifted = [item[0] for item in updated]
+        self.assertAlmostEqual(expanded.bbox[3], 76.0)
+        self.assertGreater(shifted.bbox[1], follower.bbox[1])
+
+    def test_multiline_body_borrows_space_above_when_formula_blocks_bottom(self):
+        heading = TextBlock(
+            page_index=0,
+            bbox=(40.0, 40.0, 260.0, 50.0),
+            text="3.1 Overview",
+            font_size=11.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+        )
+        body = TextBlock(
+            page_index=0,
+            bbox=(40.0, 60.0, 260.0, 80.0),
+            text="two-line body",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+        equation = (40.0, 81.0, 260.0, 96.0)
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        with patch(
+            "pdf_zh_translator.pdf_layout.line_block_height",
+            return_value=27.0,
+        ):
+            expanded = _expand_multiline_block_bbox(
+                body,
+                "需要保持正文字号的两行中文段落",
+                [heading, body],
+                font_pack,
+                10.0,
+                0.5,
+                150.0,
+                obstacles=[equation],
+            )
+
+        self.assertEqual(expanded.bbox, (40.0, 52.0, 260.0, 80.0))
+        self.assertEqual(expanded.redact_bboxes, [body.bbox])
 
     def test_layout_cascade_probes_required_height_around_formula_keepouts(self):
         first = TextBlock(
@@ -10121,6 +10265,46 @@ def test_table_region_envelopes_split_side_by_side_tables():
     left = (59.0, 284.0, 281.0, 284.0 + 4 * 9.5 + 8.0)
     right = (309.0, 315.0, 545.0, 315.0 + 3 * 8.5 + 7.0)
     assert regions == [left, right]
+
+
+def test_table_region_does_not_chain_shifted_figure_labels_below_table():
+    """GuidedVLA p28: Figure 11 labels sit shortly below Table XIII.
+
+    Their row overlaps the table's x-span by only about half.  It is a
+    separate right-column component and must not extend the preserved table
+    envelope into the body prose beginning at the same y position.
+    """
+    caption = TextBlock(
+        0,
+        (49.0, 54.0, 563.0, 101.0),
+        "Table XIII: Ablation study on auxiliary loss weights.",
+        9.0,
+        (0.0, 0.0, 0.0),
+        block_type="caption",
+    )
+    table_rows = [
+        TextBlock(
+            0,
+            (158.0, y0, 454.0, y0 + 9.0),
+            "Final 0.001 0.001 94.60 89.00 79.90 87.83",
+            9.0,
+            (0.0, 0.0, 0.0),
+            block_type="table",
+        )
+        for y0 in (112.0, 130.0, 148.0, 175.0)
+    ]
+    figure_header = TextBlock(
+        0,
+        (328.0, 208.0, 556.0, 235.0),
+        "Task Positional generalization Lighting generalization Scene generalization",
+        7.0,
+        (0.0, 0.0, 0.0),
+        block_type="table",
+    )
+
+    assert _table_region_bboxes([caption, *table_rows, figure_header]) == [
+        (49.0, 112.0, 563.0, 184.0)
+    ]
 
 
 def test_borderless_aligned_table_above_caption_is_preserved():

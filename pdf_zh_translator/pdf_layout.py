@@ -892,6 +892,7 @@ def translate_pdf(
                 *preserved_regions.get(page_index, []),
                 *equation_rows.get(page_index, []),
             ],
+            float_obstacles=page_floats,
         )
         source_links = _page_links_for_restore(page)
         redact_original_text(
@@ -7550,6 +7551,15 @@ def collect_text_blocks(
             for record, is_equation in zip(records, equation_flags):
                 if not is_equation:
                     continue
+                if (
+                    _equation_flagged_small_caps_heading_block(
+                        page_index,
+                        record,
+                        is_equation,
+                    )
+                    is not None
+                ):
+                    continue
                 formula_lines_in_record = [
                     line for line in record.lines if not line_is_prose(line)
                 ]
@@ -8642,7 +8652,14 @@ def _split_table_component_columns(component: Sequence[BBox]) -> List[List[BBox]
         row_x0 = min(b[0] for b in row)
         row_x1 = max(b[2] for b in row)
         for cluster in clusters:
-            if min(row_x1, cluster[1]) - max(row_x0, cluster[0]) > 0:
+            overlap = min(row_x1, cluster[1]) - max(row_x0, cluster[0])
+            narrower_width = min(row_x1 - row_x0, cluster[1] - cluster[0])
+            # A small incidental overlap is common when a right-column
+            # figure header starts shortly below a wide table. Requiring a
+            # substantial shared x-band keeps genuine full/short table rows
+            # connected while preventing the figure labels from extending
+            # the caption-anchored table envelope into adjacent body prose.
+            if overlap / max(narrower_width, 1.0) >= 0.60:
                 cluster[0] = min(cluster[0], row_x0)
                 cluster[1] = max(cluster[1], row_x1)
                 cluster[2].extend(row)
@@ -15420,6 +15437,7 @@ def _cascade_expand_page_items(
     margin: float,
     page_height: float,
     obstacles: Sequence[BBox] = (),
+    float_obstacles: Sequence[BBox] = (),
 ) -> List[Tuple[TextBlock, str]]:
     """Grow prose at body scale and carry the deficit down its text column.
 
@@ -15430,6 +15448,7 @@ def _cascade_expand_page_items(
     at fixed floats, equations, captions, preserved blocks, or the page foot.
     """
     updated = list(page_items)
+    float_obstacle_set = set(float_obstacles)
     order = sorted(
         range(len(updated)),
         key=lambda index: (
@@ -15449,6 +15468,32 @@ def _cascade_expand_page_items(
             block.fixed_translation_font_size
             or requested_translation_font_size(block, min_font_size, font_scale)
         )
+        extension_limit = _cascade_extension_limit(block, requested)
+        side_float_keepouts: List[BBox] = []
+        for obstacle in float_obstacles:
+            horizontal_overlap = min(block.bbox[2], obstacle[2]) - max(
+                block.bbox[0], obstacle[0]
+            )
+            free_side = max(
+                obstacle[0] - block.bbox[0],
+                block.bbox[2] - obstacle[2],
+            )
+            if (
+                horizontal_overlap > 0.0
+                and free_side >= 120.0
+                and obstacle[1] < block.bbox[3] + extension_limit + 2.0
+                and obstacle[3] > block.bbox[1]
+            ):
+                side_float_keepouts.append(expand_bbox(obstacle, 2.0))
+        if side_float_keepouts:
+            block = replace(
+                block,
+                keepout_bboxes=list(
+                    dict.fromkeys(
+                        [*(block.keepout_bboxes or []), *side_float_keepouts]
+                    )
+                ),
+            )
         target_height = _cascade_required_height(
             block,
             translated_text,
@@ -15463,7 +15508,7 @@ def _cascade_expand_page_items(
         deficit = target_height - current_height
         if deficit <= 0.6:
             continue
-        deficit = min(deficit, _cascade_extension_limit(block, requested))
+        deficit = min(deficit, extension_limit)
 
         floor = page_floor
         followers: List[int] = []
@@ -15485,6 +15530,57 @@ def _cascade_expand_page_items(
                 obstacle[2] - obstacle[0],
             ) * 0.35:
                 continue
+            target_reaches_obstacle = (
+                obstacle[1] < block.bbox[3] + deficit + 2.0
+            )
+            vertically_relevant_followers = [
+                updated[other_index][0]
+                for other_index in followers
+                if min(updated[other_index][0].bbox[3], obstacle[3])
+                - max(updated[other_index][0].bbox[1], obstacle[1])
+                > 0.0
+            ]
+            followers_are_horizontally_clear = bool(
+                vertically_relevant_followers
+            ) and all(
+                min(follower.bbox[2], obstacle[2])
+                - max(follower.bbox[0], obstacle[0])
+                <= 0.0
+                for follower in vertically_relevant_followers
+            )
+            if not target_reaches_obstacle and followers_are_horizontally_clear:
+                continue
+            if obstacle in float_obstacle_set:
+                free_side = max(
+                    obstacle[0] - block.bbox[0],
+                    block.bbox[2] - obstacle[2],
+                )
+                follower_uses_free_side = False
+                for other_index in followers:
+                    follower = updated[other_index][0]
+                    vertical_overlap = min(follower.bbox[3], obstacle[3]) - max(
+                        follower.bbox[1], obstacle[1]
+                    )
+                    if vertical_overlap <= 0.0:
+                        continue
+                    horizontal_overlap = min(follower.bbox[2], obstacle[2]) - max(
+                        follower.bbox[0], obstacle[0]
+                    )
+                    follower_free_side = max(
+                        obstacle[0] - follower.bbox[0],
+                        follower.bbox[2] - obstacle[2],
+                    )
+                    if horizontal_overlap <= 0.0 or follower_free_side >= 120.0:
+                        follower_uses_free_side = True
+                        break
+                if (
+                    free_side >= 120.0
+                    and (
+                        target_reaches_obstacle
+                        or follower_uses_free_side
+                    )
+                ):
+                    continue
             if obstacle[1] >= block.bbox[3] - 1.0:
                 floor = min(floor, obstacle[1] - 2.0)
 
@@ -15614,7 +15710,7 @@ def _expand_multiline_block_bbox(
     *,
     obstacles: Sequence[BBox] = (),
 ) -> TextBlock:
-    """Grow a multi-line paragraph downward instead of crushing its font.
+    """Grow a multi-line paragraph into adjacent whitespace before shrinking.
 
     Translated Chinese carries first-occurrence English glosses, so body
     paragraphs regularly need one extra wrapped line. With a fixed source
@@ -15623,8 +15719,9 @@ def _expand_multiline_block_bbox(
     gap below is genuinely free, use it first: extend the bbox bottom just
     enough for the natural line count, bounded by neighbouring blocks,
     floats/keepouts, the page bottom margin, and a hard extension cap.
-    Only extends downward so stacked paragraphs can never fight over the
-    same gap (each block's extension is bounded by the next block's top).
+    Downward space is preferred. When a formula or fixed float immediately
+    below closes that path, the block may also borrow the bounded whitespace
+    above it without moving or redacting the preceding item.
     """
     if (
         block.block_type not in {"body", "formula_prose", "list"}
@@ -15701,20 +15798,46 @@ def _expand_multiline_block_bbox(
 
     max_extension = _MULTILINE_EXPAND_MAX_LINES * font_size * 1.3
     new_y1 = min(y0 + needed_height, y1 + max_extension, bottom_limit)
-    if new_y1 <= y1 + 0.6:
+    new_y0 = y0
+    remaining = max(0.0, needed_height - (new_y1 - new_y0))
+    if remaining > 0.6:
+        top_limit = 0.0
+        for other in page_blocks:
+            if other is block or other.page_index != block.page_index:
+                continue
+            horizontal_overlap = min(x1, other.bbox[2]) - max(x0, other.bbox[0])
+            if horizontal_overlap > 0.0 and other.bbox[3] <= y0 + 1.0:
+                top_limit = max(top_limit, other.bbox[3] + 2.0)
+        for obstacle in obstacles:
+            horizontal_overlap = min(x1, obstacle[2]) - max(x0, obstacle[0])
+            if horizontal_overlap > 0.0 and obstacle[3] <= y0 + 1.0:
+                top_limit = max(top_limit, obstacle[3] + 2.0)
+        used_down = max(0.0, new_y1 - y1)
+        upward_capacity = max(0.0, min(y0 - top_limit, max_extension - used_down))
+        new_y0 = y0 - min(remaining, upward_capacity)
+
+    if new_y1 <= y1 + 0.6 and new_y0 >= y0 - 0.6:
         return block
     entered_floats = [
         keepout for keepout in float_keepouts if keepout[1] < new_y1 + 2.0
     ]
+    redact_bboxes = block.redact_bboxes
+    if new_y0 < y0 - 0.1 and redact_bboxes is None:
+        redact_bboxes = [block.bbox]
     if entered_floats:
         return replace(
             block,
-            bbox=(x0, y0, x1, new_y1),
+            bbox=(x0, new_y0, x1, new_y1),
+            redact_bboxes=redact_bboxes,
             keepout_bboxes=list(
                 dict.fromkeys([*(block.keepout_bboxes or []), *entered_floats])
             ),
         )
-    return replace(block, bbox=(x0, y0, x1, new_y1))
+    return replace(
+        block,
+        bbox=(x0, new_y0, x1, new_y1),
+        redact_bboxes=redact_bboxes,
+    )
 
 
 def _expand_single_line_body_bbox(

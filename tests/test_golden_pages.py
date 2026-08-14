@@ -145,6 +145,31 @@ def test_otf_algorithm_float_body_is_not_translated(fixture):
     assert not any("UpdateK" in text or "Updateq" in text for text in texts)
 
 
+@pytest.mark.parametrize(
+    ("fixture", "heading"),
+    [
+        ("otf_p14_algorithm.pdf", "C.1 WITHOUT CONSTRAINS"),
+        ("otf_p15_formula_statement.pdf", "C.2 WITH CONSTRAINS"),
+    ],
+)
+def test_otf_section_heading_is_not_registered_as_display_formula(fixture, heading):
+    from pdf_zh_translator.pdf_layout import prepare_translation_units
+
+    equation_rows = {}
+    with fitz.open(FIXTURES / fixture) as source:
+        prepare_translation_units(
+            source,
+            preserve_graphics_text=True,
+            equation_rows_out=equation_rows,
+        )
+        row_texts = [
+            " ".join(source[0].get_textbox(fitz.Rect(row)).split())
+            for row in equation_rows.get(0, [])
+        ]
+
+    assert not any(heading in text for text in row_texts)
+
+
 def test_otf_academic_labels_and_split_section_headings_keep_structure():
     blocks = _unit_blocks("otf_p3_structure.pdf")
     texts = [
@@ -2115,6 +2140,15 @@ def test_guidedvla_p21_sentence_after_inline_formula_stays_translatable():
     assert block.block_type == "body"
     assert re.search(r"⟦\d+⟧\. We define the soft accuracy", protected)
     assert all("We" not in formula for formula in mapping.values())
+
+
+def test_guidedvla_p28_task_descriptions_stay_translatable():
+    texts = _plain_unit_texts("guidedvla_p28_preserved.pdf")
+
+    task_block = next(text for text in texts if "ALOHA household tasks" in text)
+    assert "(T1) Pick up fruits and vegetables" in task_block
+    assert "(T3) Clean the tabletop" in task_block
+    assert "(T6) Heat the beaker" in task_block
 
 
 class _GuidedVlaP21RunInTranslator(_GoldenStubTranslator):

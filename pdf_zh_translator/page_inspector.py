@@ -79,6 +79,7 @@ _PRESERVED_MIN_AREA = 900.0  # pt^2, skip tiny atoms
 # untranslated_block: latin words needed before a CJK-free block is flagged.
 _UNTRANSLATED_MIN_WORDS = 12
 _DISPLAY_ALIGN_TOLERANCE_PT = 14.0
+_DISPLAY_ALIGN_WINDOW_PAD_PT = 48.0
 
 
 @dataclass(frozen=True)
@@ -1145,13 +1146,35 @@ def _display_alignment_issues(
     translated_ink: _InkCache,
     page_number: int,
     equation_rows: Sequence[BBox],
+    *,
+    algorithm_regions: Sequence[BBox] = (),
+    source_role_blocks: Sequence[object] = (),
 ) -> List[object]:
     issues: List[object] = []
+    page_width = float(original_ink._page.rect.width)
     for row in equation_rows:
-        if _bbox_area(row) < 400.0:
+        row_area = _bbox_area(row)
+        if row_area < 400.0:
             continue
-        source_profile = original_ink.get().centroid_x(row)
-        translated_profile = translated_ink.get().centroid_x(row)
+        if any(
+            _bbox_overlap_area(row, region) >= row_area * 0.80
+            for region in algorithm_regions
+        ):
+            continue
+        if any(
+            getattr(block, "formula_anchors", ())
+            and _bbox_overlap_area(row, block.bbox) >= row_area * 0.80
+            for block in source_role_blocks
+        ):
+            continue
+        observation_window = (
+            max(0.0, row[0] - _DISPLAY_ALIGN_WINDOW_PAD_PT),
+            row[1],
+            min(page_width, row[2] + _DISPLAY_ALIGN_WINDOW_PAD_PT),
+            row[3],
+        )
+        source_profile = original_ink.get().centroid_x(observation_window)
+        translated_profile = translated_ink.get().centroid_x(observation_window)
         if source_profile is None or translated_profile is None:
             continue
         drift = abs(source_profile - translated_profile)
@@ -1675,6 +1698,8 @@ def inspect_translation(
                     translated_ink,
                     page_number,
                     equation_rows.get(index, []),
+                    algorithm_regions=algorithm_regions.get(index, []),
+                    source_role_blocks=source_role_blocks.get(index, ()),
                 )
             )
             issues.extend(

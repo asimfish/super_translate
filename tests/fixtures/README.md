@@ -16,8 +16,10 @@ the same page from the translated PDF exhibiting the defect. Used by
   (`table_structure_mismatch`)
 - `otf_p11_12_refs`: references pages 11-12; bold author names overprint the
   translated entry (`reference_overlap`, `reference_bold_style`)
-- `otf_p14_display_align`: appendix display equation shifted 36pt sideways
-  (`display_formula_misaligned`)
+- `otf_p14_display_align`: source appendix page used to synthesize a 36pt
+  display-equation shift at test runtime (`display_formula_misaligned`). The
+  archived translated page is not the oracle: its formulas are aligned, and
+  the former warning came from misclassifying the translated `C.1` heading.
 - `otf_p1_clean`: title page with no known defects (negative control)
 
 Regenerate with `tmp/inspect_prod/make_fixtures.py` from the production
