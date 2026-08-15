@@ -17716,16 +17716,21 @@ def _expand_multiline_block_bbox(
         + margin * 2.0
     )
     height = y1 - y0
-    if needed_height <= height + 0.1:
-        unresolved_keepouts = _unresolved_formula_keepouts(block)
-        if block.formula_anchors and unresolved_keepouts and not translated_text_fits(
+    unresolved_keepouts = _unresolved_formula_keepouts(block)
+    needs_keepout_expansion = bool(
+        block.formula_anchors
+        and unresolved_keepouts
+        and not translated_text_fits(
             block=block,
             text=translated_text,
             font_pack=font_pack,
             font_size=font_size,
             min_font_size=font_size,
             margin=margin,
-        ):
+        )
+    )
+    if needed_height <= height + 0.1:
+        if needs_keepout_expansion:
             # The first baseline can graze a tall formula that belongs to the
             # following physical row. A sub-line upward nudge often restores
             # the full body size; shrinking an entire paragraph by 1pt is a
@@ -17764,7 +17769,9 @@ def _expand_multiline_block_bbox(
                 ):
                     return shifted
                 shift += 0.25
-        return block
+        else:
+            return block
+        needed_height = height + 0.25
 
     # Any lower neighbour bounds the extension, including neighbours whose
     # bbox interleaves ours by a few points (ascender/descender overlap in
@@ -17811,8 +17818,8 @@ def _expand_multiline_block_bbox(
     new_y1 = min(y0 + needed_height, y1 + max_extension, bottom_limit)
     new_y0 = y0
     remaining = max(0.0, needed_height - (new_y1 - new_y0))
-    if remaining > 0.6:
-        top_limit = 0.0
+    top_limit = 0.0
+    if remaining > 0.6 or needs_keepout_expansion:
         for other in page_blocks:
             if other is block or other.page_index != block.page_index:
                 continue
@@ -17823,9 +17830,39 @@ def _expand_multiline_block_bbox(
             horizontal_overlap = min(x1, obstacle[2]) - max(x0, obstacle[0])
             if horizontal_overlap > 0.0 and obstacle[3] <= y0 + 1.0:
                 top_limit = max(top_limit, obstacle[3] + 2.0)
+    if remaining > 0.6:
         used_down = max(0.0, new_y1 - y1)
         upward_capacity = max(0.0, min(y0 - top_limit, max_extension - used_down))
         new_y0 = y0 - min(remaining, upward_capacity)
+
+    if needs_keepout_expansion:
+        available_down = max(0.0, bottom_limit - y1)
+        available_up = max(0.0, y0 - top_limit)
+        extension_limit = min(max_extension, available_down + available_up)
+        extension = max(0.25, (new_y1 - y1) + (y0 - new_y0))
+        keepout_fit_found = False
+        while extension <= extension_limit + 1e-6:
+            down = min(extension, available_down)
+            up = min(max(0.0, extension - down), available_up)
+            candidate = replace(
+                block,
+                bbox=(x0, y0 - up, x1, y1 + down),
+            )
+            if translated_text_fits(
+                block=candidate,
+                text=translated_text,
+                font_pack=font_pack,
+                font_size=font_size,
+                min_font_size=font_size,
+                margin=margin,
+            ):
+                new_y0 = y0 - up
+                new_y1 = y1 + down
+                keepout_fit_found = True
+                break
+            extension += 0.25
+        if not keepout_fit_found:
+            return block
 
     if new_y1 <= y1 + 0.6 and new_y0 >= y0 - 0.6:
         return block

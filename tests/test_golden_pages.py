@@ -2210,6 +2210,123 @@ def test_fact_piecewise_branch_does_not_absorb_following_prose():
     assert not paragraph.casefold().startswith("if fail")
 
 
+def test_fact_inline_formula_paragraph_expands_before_font_shrink():
+    from dataclasses import replace
+
+    from pdf_zh_translator.pdf_layout import (
+        _expand_multiline_block_bbox,
+        build_font_pack,
+        prepare_translation_units,
+        requested_translation_font_size,
+        strip_sentinels,
+        translated_text_fits,
+    )
+
+    source = fitz.open(FIXTURES / "fact_p5_piecewise_prose.pdf")
+    equation_rows = {}
+    units, _, _ = prepare_translation_units(
+        source,
+        preserve_graphics_text=True,
+        equation_rows_out=equation_rows,
+    )
+    blocks = [block for block, _, _ in units]
+    block = next(
+        block
+        for block in blocks
+        if "Failure-aware value targets" in strip_sentinels(block.text)
+    )
+    translation = (
+        "失败感知的价值目标。我们将成功的演示记为⟦0⟧，失败的轨迹记为。"
+        "每个回合都标注了其最终结果，对于失败的回合，还标注了失败发生的起始点。"
+        "我们将式（3）实例化为以动作为条件的进度目标："
+    )
+    block = replace(
+        block,
+        translated_bold_prefix_chars=len("失败感知的价值目标。"),
+    )
+    font_pack = build_font_pack(None, [])
+    requested_size = requested_translation_font_size(block, 5.0, 0.92)
+
+    assert not translated_text_fits(
+        block,
+        translation,
+        font_pack,
+        requested_size,
+        requested_size,
+        0.8,
+    )
+    expanded = _expand_multiline_block_bbox(
+        block,
+        translation,
+        blocks,
+        font_pack,
+        requested_size,
+        0.8,
+        source[0].rect.height,
+        obstacles=equation_rows[0],
+    )
+    source.close()
+
+    assert expanded.bbox[1] < block.bbox[1]
+    assert translated_text_fits(
+        expanded,
+        translation,
+        font_pack,
+        requested_size,
+        requested_size,
+        0.8,
+    )
+
+
+def test_fact_inline_formula_paragraph_renders_at_body_scale(tmp_path):
+    class _FactPageTranslator(_GoldenStubTranslator):
+        def translate_batch(self, texts):
+            fallback = super().translate_batch(texts)
+            outputs = []
+            for source, default in zip(texts, fallback):
+                compact = " ".join(source.split())
+                if compact == "Failure-aware value targets.":
+                    outputs.append("失败感知的价值目标。")
+                elif compact.startswith("We denote successful demonstrations by"):
+                    outputs.append(
+                        "我们将成功的演示记为⟦0⟧，失败的轨迹记为。"
+                        "每个回合都标注了其最终结果，对于失败的回合，还标注了失败发生的起始点。"
+                        "我们将式（3）实例化为以动作为条件的进度目标："
+                    )
+                else:
+                    outputs.append(default)
+            return outputs
+
+    input_pdf = FIXTURES / "fact_p5_piecewise_prose.pdf"
+    output_pdf = tmp_path / "fact-p5-body-scale.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=_FactPageTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    with fitz.open(output_pdf) as output:
+        target_spans = [
+            span
+            for span in _page_spans(output[0])
+            if re.search(r"[一-鿿]", span["text"])
+            and 88.0 <= float(span["bbox"][1]) <= 133.0
+        ]
+    assert target_spans
+    assert min(float(span["size"]) for span in target_spans) >= 8.96
+
+    issues = verify_translation_issues(input_pdf, output_pdf)
+    target_drift = []
+    for issue in issues:
+        if issue.severity != "error" or issue.code != "font_size_drift":
+            continue
+        match = re.search(r"\by=([0-9.]+)", issue.message)
+        if match and 88.0 <= float(match.group(1)) <= 133.0:
+            target_drift.append(issue)
+    assert not target_drift
+
+
 def test_guidedvla_p21_sentence_after_inline_formula_stays_translatable():
     from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
 
