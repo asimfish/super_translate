@@ -198,6 +198,50 @@ source.save(
 )
 ```
 
+## Robustness page-6 table-note fixtures
+
+- Title: *Robustness Begins Before Policy Execution: State and Instruction
+  Canonicalization for Compact Vision-Language-Action Policies*
+- Venue: anonymous submission
+- Source: production upload; no public source URL is declared in the supplied
+  PDF.
+- Source PDF SHA256:
+  `85b677b6fc4a98c1b3b261ecefab11972bf4d3a643a5bf4bbf4afecebe372eda`
+- Failed translated PDF SHA256:
+  `095966b0fe419a21f60092420146342df7d0a011a53a7f0904ca103ef54d8307`
+- Extracted page: PDF page 6
+- Source fixture SHA256:
+  `22bc8baa8691c7eb30bc0b15aac13e1dcb5079b5d8ea7ae4eb4717cf6d1bef5e`
+- Paired translated fixture SHA256:
+  `4ccf12809417e517df9b656707e7b313cc06253b0ddd14067f680d525a059a37`
+- License: not declared in the supplied PDF. These single-page excerpts are
+  retained solely as regression fixtures for internal layout QA and should
+  not be redistributed independently of this test purpose.
+- Test purpose: Table 1 stores its last two result rows and the prose footnote
+  in one source text object that crosses the final booktabs rule. The payload
+  is intentionally preserved, while QA must not misclassify it as an
+  untranslated body paragraph.
+
+Reproduce the fixtures while retaining the page content streams:
+
+```python
+import fitz
+
+for source_path, output_path in (
+    ("Robustness.pdf", "tests/fixtures/robustness_p6_table_note.pdf"),
+    (
+        "Robustness-translated-failed.pdf",
+        "tests/fixtures/robustness_p6_table_note_translated.pdf",
+    ),
+):
+    source = fitz.open(source_path)
+    fixture = fitz.open()
+    fixture.insert_pdf(source, from_page=5, to_page=5)
+    fixture.save(output_path, garbage=4, deflate=True, clean=False)
+    fixture.close()
+    source.close()
+```
+
 ## Price layout fixtures
 
 - Title: *The Price of Algorithmic Monoculture in Congestion-Sensitive Routing*

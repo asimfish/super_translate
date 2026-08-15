@@ -226,6 +226,12 @@ MATH_TRIGGER = (
     "\U0001d400-\U0001d7ff"  # mathematical alphanumerics
 )
 MATH_TOKEN_RE = re.compile(r"\S*[%s]\S*" % MATH_TRIGGER)
+_ATTACHED_MATH_PROSE_SUFFIX_RE = re.compile(
+    r"^(?P<formula>\S*[%s])"
+    r"(?P<prose>such|where|when|then|therefore|hence)"
+    r"(?P<trailing>[,.;:]?)$" % MATH_TRIGGER,
+    re.IGNORECASE,
+)
 
 # Bold bit in PyMuPDF span flags.
 FLAG_BOLD = 16
@@ -705,6 +711,75 @@ def _redistribute_duplicated_cross_page_translations(
     return adjusted, redistributed
 
 
+def _move_orphaned_cross_column_translation_connectors(
+    units: Sequence[TranslationUnit],
+    cleaned_results: Sequence[Tuple[str, List[int]]],
+) -> Tuple[List[Tuple[str, List[int]]], int]:
+    """Move a translated conjunction to its same-page continuation column.
+
+    Two-column PDFs can split one sentence after an English conjunction at
+    the bottom of the left column. Providers then translate the two source
+    objects independently, leaving a one-word CJK conjunction as the final
+    glyph in that column. Move only that conjunction to the front of the
+    geometrically unambiguous lowercase continuation in the next column.
+    """
+    adjusted = list(cleaned_results)
+    moved = 0
+    connector_by_source = {
+        "and": ("并且", "以及", "与", "和", "及", "且", "并"),
+        "or": ("或者", "或"),
+    }
+    for index in range(len(units) - 1):
+        previous = units[index][0]
+        following = units[index + 1][0]
+        previous_source = " ".join(
+            strip_sentinels(previous.text).split()
+        ).strip()
+        following_source = " ".join(
+            strip_sentinels(following.text).split()
+        ).strip()
+        source_connector = re.search(r"\b(and|or)\s*$", previous_source, re.I)
+        if (
+            source_connector is None
+            or previous.page_index != following.page_index
+            or previous.block_type not in {"body", "formula_prose"}
+            or following.block_type not in {"body", "formula_prose"}
+            or not re.match(r"^[a-z]", following_source)
+            or following.bbox[0] < previous.bbox[2] + 12.0
+            or previous.bbox[1] - following.bbox[1]
+            < max(60.0, min(previous.font_size, following.font_size) * 6.0)
+        ):
+            continue
+
+        previous_translation, previous_missing = adjusted[index]
+        following_translation, following_missing = adjusted[index + 1]
+        stripped_previous = previous_translation.rstrip()
+        connector = next(
+            (
+                candidate
+                for candidate in connector_by_source[
+                    source_connector.group(1).casefold()
+                ]
+                if stripped_previous.endswith(candidate)
+            ),
+            None,
+        )
+        if (
+            connector is None
+            or len(stripped_previous) <= len(connector)
+            or not following_translation.strip()
+            or following_translation.lstrip().startswith(connector)
+        ):
+            continue
+        prefix = stripped_previous[: -len(connector)].rstrip()
+        continuation = f"{connector}{following_translation.lstrip()}"
+        adjusted[index] = (prefix, previous_missing)
+        adjusted[index + 1] = (continuation, following_missing)
+        moved += 1
+
+    return adjusted, moved
+
+
 def translate_pdf(
     input_pdf: Path,
     output_pdf: Path,
@@ -892,6 +967,18 @@ def translate_pdf(
         warnings.append(
             "Redistributed %d duplicated cross-page translation(s) at body size"
             % redistributed_cross_page
+        )
+
+    cleaned_results, moved_cross_column_connectors = (
+        _move_orphaned_cross_column_translation_connectors(
+            units,
+            cleaned_results,
+        )
+    )
+    if moved_cross_column_connectors:
+        warnings.append(
+            "Moved %d orphaned connector(s) to the continuation column"
+            % moved_cross_column_connectors
         )
 
     by_page: Dict[int, List[Tuple[TextBlock, str]]] = {}
@@ -5795,11 +5882,11 @@ _FOREIGN_RESIDUE_WORDS = frozenset(
     (
         "an and are as at be been being by for from had has have he her hers "
         "him his in is it its of on or our she that the their them they this "
-        "to was we were with you your added said"
+        "to was we were with you your added said such"
     ).split()
 ) | _FRENCH_FUNCTION_WORDS
 _SINGLE_TOKEN_FOREIGN_RESIDUES = frozenset(
-    "he her hers him his its she their them they we you your added said".split()
+    "he her hers him his its she their them they we you your added said such".split()
 )
 
 
@@ -15529,6 +15616,12 @@ def protect_text(text: str) -> Tuple[str, Dict[int, str]]:
         # Never re-stash text containing existing placeholders.
         if "\u27e6" in token or "\u27e7" in token:
             return token
+        attached_prose = _ATTACHED_MATH_PROSE_SUFFIX_RE.fullmatch(token)
+        if attached_prose is not None:
+            formula = attached_prose.group("formula")
+            prose = attached_prose.group("prose")
+            trailing = attached_prose.group("trailing")
+            return f"{stash(formula)} {prose}{trailing}"
         return stash(token)
 
     protected = SENTINEL_RUN_RE.sub(stash_sentinel_run, text)

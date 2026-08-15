@@ -108,6 +108,10 @@ GOLDEN_PAGES = [
     # tall definition body must stay verbatim while its caption and the
     # following Implementation Details section remain translatable.
     "roboguardian_p5_booktabs_table.pdf",
+    # Robustness p6: two result rows and their prose footnote share one source
+    # text object below a booktabs rule. The entire table payload stays
+    # verbatim without becoming a false untranslated-body error.
+    "robustness_p6_table_note.pdf",
     # Price p2/p5: parallel header cells belong to the preserved table, even
     # when the table is borderless or only its body rows were preclassified.
     "price_p2_parallel_table_headers.pdf",
@@ -246,6 +250,20 @@ def test_price_preserved_table_cells_are_not_reported_as_untranslated_prose(
     )
 
 
+def test_robustness_table_note_is_not_reported_as_untranslated_body():
+    from pdf_zh_translator.page_inspector import inspect_translation
+
+    source = FIXTURES / "robustness_p6_table_note.pdf"
+    translated = FIXTURES / "robustness_p6_table_note_translated.pdf"
+    issues = inspect_translation(source, translated)
+
+    assert not any(
+        issue.code == "untranslated_block"
+        and "Task index" in issue.message
+        for issue in issues
+    )
+
+
 def test_evicoord_cross_column_references_are_one_bibliography_region():
     from pdf_zh_translator.page_inspector import inspect_translation
 
@@ -292,6 +310,39 @@ def test_evicoord_algorithm_reference_paragraph_remains_translatable():
     assert any("Traceability is claim-type specific" in text for text in texts)
 
 
+def test_evicoord_cross_column_connector_moves_to_continuation_column():
+    from pdf_zh_translator.pdf_layout import (
+        _move_orphaned_cross_column_translation_connectors,
+        strip_sentinels,
+    )
+
+    blocks = _unit_blocks("evicoord_p3_algorithm_reference_prose.pdf")
+    first = next(
+        block
+        for block in blocks
+        if "pairwise admissibility and" in strip_sentinels(block.text)
+    )
+    continuation = next(
+        block
+        for block in blocks
+        if strip_sentinels(block.text).startswith("same-target incompatibility")
+    )
+    units = [(first, "", {}), (continuation, "", {})]
+    translated = [
+        ("定义成对可接受性与", []),
+        ("同目标不兼容。我们要求严重冲突成对对称。", []),
+    ]
+
+    adjusted, moved = _move_orphaned_cross_column_translation_connectors(
+        units,
+        translated,
+    )
+
+    assert moved == 1
+    assert adjusted[0][0] == "定义成对可接受性"
+    assert adjusted[1][0].startswith("与同目标不兼容")
+
+
 def test_price_mixed_heading_body_block_uses_role_local_font_size():
     from pdf_zh_translator.page_inspector import inspect_translation
 
@@ -327,6 +378,45 @@ def test_price_short_formula_connectors_are_reported_when_left_in_english():
         issue.code == "untranslated_block"
         and any(token in issue.message for token in ("is", "Writing", "to"))
         for issue in issues
+    )
+
+
+def test_price_formula_placeholder_excludes_attached_such_connector():
+    from pdf_zh_translator.pdf_layout import protect_text, strip_sentinels
+
+    block = next(
+        block
+        for block in _unit_blocks("price_p3_formula_connectors.pdf")
+        if "such that for every" in strip_sentinels(block.text)
+    )
+    protected, mapping = protect_text(block.text)
+
+    assert "such that for every" in protected
+    assert all("such" not in fragment.casefold() for fragment in mapping.values())
+
+
+def test_price_single_such_residue_is_rejected_by_source_comparison():
+    from pdf_zh_translator.pdf_layout import (
+        SENTINEL_CLOSE,
+        SENTINEL_OPEN,
+        TextBlock,
+        _translation_retains_foreign_prose,
+    )
+
+    block = TextBlock(
+        page_index=2,
+        bbox=(53.8, 589.6, 294.0, 600.7),
+        text=(
+            f"then there exists{SENTINEL_OPEN}D_0 < infinity{SENTINEL_CLOSE} "
+            "such that the inequality holds for all demands"
+        ),
+        font_size=9.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    assert _translation_retains_foreign_prose(
+        block,
+        "则存在 D_0 < infinity such，使得该不等式对所有需求成立。",
     )
 
 

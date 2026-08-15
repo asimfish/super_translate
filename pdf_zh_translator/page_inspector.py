@@ -1874,7 +1874,20 @@ def _untranslated_block_issues(
             continue
         # Rows inside a rendered table grid are preserved cell text, not
         # missed prose.
-        if any(
+        attached_preserved_table_note = bool(
+            content_spans
+            and covered_spans >= 0.7 * len(content_spans)
+            and not panel_caption
+            and _on_float_side_of_caption(block.bbox, caption_kinds)
+            and any(
+                min(block.bbox[2], right) - max(block.bbox[0], left)
+                >= 0.8 * max(1.0, block.bbox[2] - block.bbox[0])
+                and top - 4.0 <= block.bbox[1] <= bottom + 4.0
+                and block.bbox[3] - bottom <= 40.0
+                for left, top, right, bottom in table_bands
+            )
+        )
+        if attached_preserved_table_note or any(
             left - 4.0 <= center_x <= right + 4.0
             and top - 4.0 <= center_y <= bottom + 4.0
             for left, top, right, bottom in table_bands
