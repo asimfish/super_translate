@@ -352,6 +352,27 @@ def _median(values: Sequence[float]) -> float:
     return (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
+def _dominant_span_size_in_bbox(block: _Block, bbox: BBox) -> float:
+    """Return the dominant visible span size inside one source style role."""
+    overlapping: List[_Span] = []
+    for span in block.spans:
+        span_area = _bbox_area(span.bbox)
+        if span_area <= 0.0:
+            continue
+        if _bbox_overlap_area(span.bbox, bbox) < 0.45 * span_area:
+            continue
+        overlapping.append(span)
+    cjk_spans = [span for span in overlapping if _CJK_HAN_RE.search(span.text)]
+    measured_spans = cjk_spans or overlapping
+    weights: Dict[float, int] = {}
+    for span in measured_spans:
+        size = round(float(span.size), 2)
+        weights[size] = weights.get(size, 0) + max(len(span.text.strip()), 1)
+    if not weights:
+        return 0.0
+    return max(weights, key=lambda size: (weights[size], size))
+
+
 def _font_size_issues(
     original_page: object,
     translated_page: object,
@@ -390,6 +411,7 @@ def _font_size_issues(
         best_overlap = 0.0
         best_score = 0.0
         expected = 0.0
+        expected_bbox: Optional[BBox] = None
         for source in source_role_blocks:
             source_bbox = tuple(float(value) for value in source.bbox)
             overlap = _bbox_overlap_area(block.bbox, source_bbox)
@@ -403,6 +425,7 @@ def _font_size_issues(
                 best_score = score
                 best_overlap = overlap
                 expected = float(source.font_size)
+                expected_bbox = source_bbox
         for source in original_blocks:
             overlap = _bbox_overlap_area(block.bbox, source.bbox)
             if overlap <= 0.25 * area:
@@ -415,8 +438,13 @@ def _font_size_issues(
                 best_score = score
                 best_overlap = overlap
                 expected = source.dominant_size()
+                expected_bbox = source.bbox
         if best_overlap <= 0.25 * area or expected <= 0:
             continue
+        if expected_bbox is not None:
+            role_local_size = _dominant_span_size_in_bbox(block, expected_bbox)
+            if role_local_size > 0.0:
+                size = role_local_size
         candidates.append((block, size, expected))
 
     if len(candidates) < 3:
@@ -1345,6 +1373,40 @@ def _display_alignment_issues(
 # ---------------------------------------------------------------------------
 
 
+def _reference_region_bboxes(
+    page: object,
+    reference_y: Optional[float],
+) -> List[BBox]:
+    """Map a bibliography start through the page's column reading order."""
+    if reference_y is None:
+        return []
+    width = float(page.rect.width)
+    height = float(page.rect.height)
+    if reference_y <= 0.0:
+        return [(0.0, 0.0, width, height)]
+
+    heading_bbox: Optional[BBox] = None
+    for block in _text_blocks(page):
+        compact = " ".join(block.text.split()).rstrip(":：")
+        if re.match(r"^(?:references|bibliography|参考文献)$", compact, re.IGNORECASE):
+            heading_bbox = block.bbox
+            break
+    if heading_bbox is None:
+        return [(0.0, reference_y - 4.0, width, height)]
+
+    midpoint = width / 2.0
+    heading_center = (heading_bbox[0] + heading_bbox[2]) / 2.0
+    narrow_heading = heading_bbox[2] - heading_bbox[0] < width * 0.45
+    if narrow_heading and heading_center < midpoint - width * 0.08:
+        return [
+            (0.0, reference_y - 4.0, midpoint, height),
+            (midpoint, 0.0, width, height),
+        ]
+    if narrow_heading and heading_center > midpoint + width * 0.08:
+        return [(midpoint, reference_y - 4.0, width, height)]
+    return [(0.0, reference_y - 4.0, width, height)]
+
+
 def _reference_issues(
     original_page: object,
     translated_page: object,
@@ -1356,9 +1418,15 @@ def _reference_issues(
     issues: List[object] = []
 
     def reference_spans(page: object) -> List[_Span]:
+        reference_regions = _reference_region_bboxes(page, reference_y)
         page_spans: List[_Span] = []
         for page_block in _text_blocks(page):
-            if page_block.bbox[1] < reference_y - 4.0:
+            center_x = (page_block.bbox[0] + page_block.bbox[2]) / 2.0
+            center_y = (page_block.bbox[1] + page_block.bbox[3]) / 2.0
+            if not any(
+                left <= center_x <= right and top <= center_y <= bottom
+                for left, top, right, bottom in reference_regions
+            ):
                 continue
             page_spans.extend(
                 span for span in page_block.spans if span.text.strip()
@@ -1439,7 +1507,17 @@ def _reference_issues(
         "bold" in span.font.lower()
         and len(_CJK_HAN_RE.findall(span.text)) + len(span.text.strip()) >= 6
         for block in _text_blocks(original_page)
-        if block.bbox[1] >= reference_y - 4.0
+        if any(
+            left
+            <= (block.bbox[0] + block.bbox[2]) / 2.0
+            <= right
+            and top
+            <= (block.bbox[1] + block.bbox[3]) / 2.0
+            <= bottom
+            for left, top, right, bottom in _reference_region_bboxes(
+                original_page, reference_y
+            )
+        )
         for span in block.spans
     )
     if not original_has_bold:
@@ -1615,6 +1693,7 @@ def _untranslated_block_issues(
     *,
     original_page: Optional[object] = None,
     reference_y: Optional[float],
+    reference_regions: Sequence[BBox] = (),
     table_bands: Sequence[BBox] = (),
     preserved_regions: Sequence[BBox] = (),
     algorithm_regions: Sequence[BBox] = (),
@@ -1760,7 +1839,16 @@ def _untranslated_block_issues(
                 and _on_float_side_of_caption(block.bbox, caption_kinds)
             ):
                 continue
-        if reference_y is not None and block.bbox[1] >= reference_y - 4.0:
+        center_x = (block.bbox[0] + block.bbox[2]) / 2.0
+        center_y = (block.bbox[1] + block.bbox[3]) / 2.0
+        if any(
+            left <= center_x <= right and top <= center_y <= bottom
+            for left, top, right, bottom in reference_regions
+        ) or (
+            not reference_regions
+            and reference_y is not None
+            and block.bbox[1] >= reference_y - 4.0
+        ):
             continue
         if words < _UNTRANSLATED_MIN_WORDS and not short_formula_prose:
             continue
@@ -1786,8 +1874,6 @@ def _untranslated_block_issues(
             continue
         # Rows inside a rendered table grid are preserved cell text, not
         # missed prose.
-        center_x = (block.bbox[0] + block.bbox[2]) / 2.0
-        center_y = (block.bbox[1] + block.bbox[3]) / 2.0
         if any(
             left - 4.0 <= center_x <= right + 4.0
             and top - 4.0 <= center_y <= bottom + 4.0
@@ -1821,6 +1907,86 @@ def _untranslated_block_issues(
     return issues
 
 
+_RESIDUAL_SOURCE_PROSE_CUE_RE = re.compile(
+    r"^(?:and|are|be|being|for|from|is|or|that|then|to|was|were|where|which|with|writing)$",
+    re.IGNORECASE,
+)
+
+
+def _residual_source_prose_issues(
+    original_page: object,
+    translated_page: object,
+    page_number: int,
+    source_role_blocks: Sequence[object],
+    *,
+    excluded_regions: Sequence[BBox] = (),
+) -> List[object]:
+    """Flag source prose objects that survived redaction at the same position."""
+    prose_regions = [
+        tuple(float(value) for value in region)
+        for block in source_role_blocks
+        for region in getattr(block, "source_prose_bboxes", ())
+    ]
+    if not prose_regions:
+        return []
+
+    source_spans = [span for block in _text_blocks(original_page) for span in block.spans]
+    translated_spans = [
+        span for block in _text_blocks(translated_page) for span in block.spans
+    ]
+    issues: List[object] = []
+    seen: set[Tuple[str, int, int]] = set()
+    for source_span in source_spans:
+        text = " ".join(source_span.text.split()).strip()
+        words = _LATIN_WORD_RE.findall(text)
+        if not words or _CJK_HAN_RE.search(text):
+            continue
+        if not _RESIDUAL_SOURCE_PROSE_CUE_RE.fullmatch(text):
+            continue
+        center_x = (source_span.bbox[0] + source_span.bbox[2]) / 2.0
+        center_y = (source_span.bbox[1] + source_span.bbox[3]) / 2.0
+        if any(
+            left - 1.0 <= center_x <= right + 1.0
+            and top - 1.0 <= center_y <= bottom + 1.0
+            for left, top, right, bottom in excluded_regions
+        ):
+            continue
+        if not any(
+            left - 0.5 <= center_x <= right + 0.5
+            and top - 0.5 <= center_y <= bottom + 0.5
+            for left, top, right, bottom in prose_regions
+        ):
+            continue
+        duplicate = next(
+            (
+                candidate
+                for candidate in translated_spans
+                if " ".join(candidate.text.split()).strip() == text
+                and all(
+                    abs(first - second) <= 0.35
+                    for first, second in zip(candidate.bbox, source_span.bbox)
+                )
+                and candidate.font == source_span.font
+            ),
+            None,
+        )
+        if duplicate is None:
+            continue
+        key = (text.casefold(), round(center_x), round(center_y))
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append(
+            _issue(
+                page_number,
+                "untranslated_block",
+                "Source prose remained verbatim at "
+                f"x={center_x:.1f}, y={center_y:.1f}: {text[:120]}",
+            )
+        )
+    return issues
+
+
 # ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
@@ -1851,6 +2017,7 @@ def inspect_translation(
         preserved_regions: Dict[int, List[BBox]] = {}
         equation_rows: Dict[int, List[BBox]] = {}
         algorithm_regions: Dict[int, List[BBox]] = {}
+        structural_table_regions: Dict[int, List[BBox]] = {}
         caption_bands: Dict[int, List[BBox]] = {}
         keepouts: Dict[int, List[BBox]] = {}
         source_role_blocks: Dict[int, List[object]] = {}
@@ -1861,6 +2028,7 @@ def inspect_translation(
                 preserved_regions_out=preserved_regions,
                 equation_rows_out=equation_rows,
                 algorithm_regions_out=algorithm_regions,
+                table_regions_out=structural_table_regions,
             )
         except TypeError:
             units, _gutters, _skipped = prepare_translation_units(
@@ -1954,6 +2122,11 @@ def inspect_translation(
                     (left, cluster[0][0], right, cluster[-1][0])
                 )
             table_bands.extend(_line_table_bboxes(translated_page))
+            table_bands.extend(structural_table_regions.get(index, ()))
+            reference_regions = _reference_region_bboxes(
+                original_page,
+                reference_y,
+            )
 
             issues.extend(
                 _font_size_issues(
@@ -2018,11 +2191,27 @@ def inspect_translation(
                     page_number,
                     original_page=original_page,
                     reference_y=reference_y,
+                    reference_regions=reference_regions,
                     table_bands=table_bands,
                     preserved_regions=page_regions,
                     algorithm_regions=algorithm_regions.get(index, []),
                     caption_kinds=caption_kinds.get(index, []),
                     graphic_regions=page_figure_regions,
+                )
+            )
+            issues.extend(
+                _residual_source_prose_issues(
+                    original_page,
+                    translated_page,
+                    page_number,
+                    source_role_blocks.get(index, ()),
+                    excluded_regions=[
+                        *reference_regions,
+                        *table_bands,
+                        *page_regions,
+                        *algorithm_regions.get(index, ()),
+                        *page_figure_regions,
+                    ],
                 )
             )
     finally:

@@ -104,6 +104,22 @@ GOLDEN_PAGES = [
     # FACT p5: the trailing `if fail` branch of display equation (6) must not
     # absorb the following value-target explanation into protected math.
     "fact_p5_piecewise_prose.pdf",
+    # RoboGuardian p5: a booktabs-style table with a short header row and a
+    # tall definition body must stay verbatim while its caption and the
+    # following Implementation Details section remain translatable.
+    "roboguardian_p5_booktabs_table.pdf",
+    # Price p2/p5: parallel header cells belong to the preserved table, even
+    # when the table is borderless or only its body rows were preclassified.
+    "price_p2_parallel_table_headers.pdf",
+    "price_p3_formula_connectors.pdf",
+    "price_p5_parallel_table_headers.pdf",
+    # EviCoord p8: references start at the bottom of the left column and
+    # continue from the top of the right column. Both columns are one
+    # bibliography range even though the right-column entries have smaller y.
+    "evicoord_p8_cross_column_references.pdf",
+    # EviCoord p3: a paragraph beginning "Algorithm 1 implements" is a
+    # reference to the next-page float, not pseudocode to preserve verbatim.
+    "evicoord_p3_algorithm_reference_prose.pdf",
     "guidedvla_p21_formula.pdf",
     # GuidedVLA p6: a full-width chart caption must not make the left text
     # column full-width or hide the analysis prose immediately below it.
@@ -138,6 +154,180 @@ def _plain_unit_texts(fixture):
         " ".join(strip_sentinels(block.text).split())
         for block in _unit_blocks(fixture)
     ]
+
+
+def test_roboguardian_booktabs_table_is_preserved_without_hiding_following_prose():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units
+
+    fixture = "roboguardian_p5_booktabs_table.pdf"
+    blocks = _unit_blocks(fixture)
+    texts = [" ".join(block.text.split()) for block in blocks]
+
+    assert any(text.startswith("Table 2: Evaluation metrics") for text in texts)
+    assert not any("Task Success Rate (TSR)" in text for text in texts)
+    assert not any("Context and Execution Cost" in text for text in texts)
+    assert any("Implementation Details" in text for text in texts)
+    assert any("All embodiments use the same pipeline" in text for text in texts)
+    implementation_heading = next(
+        block for block in blocks if "Implementation Details" in block.text
+    )
+    assert implementation_heading.block_type == "heading"
+    assert implementation_heading.bold
+    assert "All embodiments use the same pipeline" not in implementation_heading.text
+
+    preserved = {}
+    with fitz.open(FIXTURES / fixture) as source:
+        prepare_translation_units(
+            source,
+            preserve_graphics_text=True,
+            preserved_regions_out=preserved,
+        )
+
+    assert any(
+        x0 <= 318.5 and x1 >= 553.0 and y0 <= 124.0 and y1 >= 260.0
+        for x0, y0, x1, y1 in preserved.get(0, [])
+    )
+
+
+@pytest.mark.parametrize(
+    ("fixture", "protected_text", "translatable_text"),
+    [
+        (
+            "price_p2_parallel_table_headers.pdf",
+            ("Symbol or metric", "Demand for OD pair"),
+            ("Recommendation policies", "Two-Link Capacity-Trap Analysis"),
+        ),
+        (
+            "price_p5_parallel_table_headers.pdf",
+            (
+                "Policy family Mechanism Interpretation",
+                "Draw one perturbed edge-weight model",
+                "Component Parameters varied or recorded",
+                "Network families Two-link traps",
+                "Recommendation structure Deterministic",
+                "Greedy marginal cost Sequentially assign flow",
+            ),
+            ("Table 2: Recommendation policies", "Results"),
+        ),
+    ],
+)
+def test_price_parallel_table_headers_follow_preserved_table_body(
+    fixture, protected_text, translatable_text
+):
+    texts = _plain_unit_texts(fixture)
+
+    for phrase in protected_text:
+        assert not any(phrase in text for text in texts)
+    for phrase in translatable_text:
+        assert any(phrase in text for text in texts)
+
+
+@pytest.mark.parametrize(
+    ("fixture", "protected_phrase"),
+    [
+        ("price_p2_parallel_table_headers.pdf", "Demand for OD pair"),
+        (
+            "price_p5_parallel_table_headers.pdf",
+            "Draw one perturbed edge-weight model",
+        ),
+    ],
+)
+def test_price_preserved_table_cells_are_not_reported_as_untranslated_prose(
+    fixture, protected_phrase
+):
+    from pdf_zh_translator.page_inspector import inspect_translation
+
+    path = FIXTURES / fixture
+    issues = inspect_translation(path, path)
+
+    assert not any(
+        issue.code == "untranslated_block" and protected_phrase in issue.message
+        for issue in issues
+    )
+
+
+def test_evicoord_cross_column_references_are_one_bibliography_region():
+    from pdf_zh_translator.page_inspector import inspect_translation
+
+    source = FIXTURES / "evicoord_p8_cross_column_references.pdf"
+    translated = FIXTURES / "evicoord_p8_cross_column_references_translated.pdf"
+    issues = inspect_translation(source, translated)
+
+    assert not any(
+        issue.code == "untranslated_block"
+        and "x=321.2, y=143.1" in issue.message
+        for issue in issues
+    )
+
+
+def test_evicoord_algorithm_reference_paragraph_remains_translatable():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    algorithm_regions = {}
+    with fitz.open(FIXTURES / "evicoord_p3_algorithm_reference_prose.pdf") as source:
+        units, _, _ = prepare_translation_units(
+            source,
+            preserve_graphics_text=True,
+            algorithm_regions_out=algorithm_regions,
+        )
+
+    paragraph = next(
+        block
+        for block, _, _ in units
+        if "Algorithm 1 implements the protocol" in block.text
+    )
+    assert paragraph.block_type == "body"
+    assert not any(
+        y0 <= (paragraph.bbox[1] + paragraph.bbox[3]) / 2.0 <= y1
+        and x0 <= (paragraph.bbox[0] + paragraph.bbox[2]) / 2.0 <= x1
+        for x0, y0, x1, y1 in algorithm_regions.get(0, ())
+    )
+    texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+    ]
+    assert not any(text.startswith("Pr") and "clean" in text for text in texts)
+    assert not any("Bad" in text and "Schema" in text for text in texts)
+    assert any("EviCoord is a rule-specified feasible policy" in text for text in texts)
+    assert any("Traceability is claim-type specific" in text for text in texts)
+
+
+def test_price_mixed_heading_body_block_uses_role_local_font_size():
+    from pdf_zh_translator.page_inspector import inspect_translation
+
+    source = FIXTURES / "price_p2_parallel_table_headers.pdf"
+    translated = FIXTURES / "price_p2_heading_body_translated.pdf"
+    issues = inspect_translation(source, translated)
+
+    assert not [issue for issue in issues if issue.code == "font_size_drift"]
+
+
+def test_price_formula_connectors_stay_in_continuous_prose_units():
+    texts = _plain_unit_texts("price_p3_formula_connectors.pdf")
+
+    assert any("split cost is" in text for text in texts)
+    assert any(
+        text.startswith("Writing") and "the high-demand coefficient is" in text
+        for text in texts
+    )
+    assert any(
+        "fallback flow to" in text and "Then" in text
+        for text in texts
+    )
+
+
+def test_price_short_formula_connectors_are_reported_when_left_in_english():
+    from pdf_zh_translator.page_inspector import inspect_translation
+
+    source = FIXTURES / "price_p3_formula_connectors.pdf"
+    translated = FIXTURES / "price_p3_formula_connectors_translated.pdf"
+    issues = inspect_translation(source, translated)
+
+    assert any(
+        issue.code == "untranslated_block"
+        and any(token in issue.message for token in ("is", "Writing", "to"))
+        for issue in issues
+    )
 
 
 @pytest.mark.parametrize("fixture", ["otf_p5_algorithm.pdf", "otf_p14_algorithm.pdf"])

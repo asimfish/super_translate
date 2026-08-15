@@ -164,6 +164,213 @@ source.save(
 )
 ```
 
+## `roboguardian_p5_booktabs_table.pdf`
+
+- Title: *RoboGuardian: Fault-Aware Execution and Memory Maintenance for
+  Embodied Agent Harness Frameworks*
+- Venue: DAI 2026 submission
+- Source: production upload; no public source URL is declared in the supplied
+  PDF.
+- Source PDF SHA256: `59a97dff659346f7705065e7d0960943efe62b1a0443758feea1a81f1e6c1324`
+- Extracted page: PDF page 5
+- Fixture SHA256: `c059663f5ea9083b82c6b4488230ffc8eb9169daab5ebd7e9a299c37ef845368`
+- License: not declared in the supplied PDF. This single-page excerpt is
+  retained solely as a regression fixture for internal layout QA and should
+  not be redistributed independently of this test purpose.
+- Test purpose: Table 2 uses three booktabs horizontal rules: the top and
+  header rules are only 13.6pt apart, while the definition rows extend 143.4pt
+  to the bottom rule. The table content must remain verbatim, its caption must
+  translate, and the fused `3.6 Implementation Details` heading plus following
+  prose must remain translation units.
+
+Reproduce the fixture while retaining the original page content streams:
+
+```python
+import fitz
+
+source = fitz.open("RoboGuardian.pdf")
+source.select([4])
+source.save(
+    "tests/fixtures/roboguardian_p5_booktabs_table.pdf",
+    garbage=4,
+    deflate=True,
+    clean=False,
+)
+```
+
+## Price layout fixtures
+
+- Title: *The Price of Algorithmic Monoculture in Congestion-Sensitive Routing*
+- Venue: anonymous submission
+- Source: production upload; no public source URL is declared in the supplied
+  PDF.
+- Source PDF SHA256: `c659ddda106981b5ec29e0d16c7e06114fe329e208367c77547d460726051d38`
+- Extracted pages: PDF pages 2, 3, and 5
+- Fixture SHA256 (page 2):
+  `11e011cf453e8bb750326063936ee35426c21312d6181247b327f20885064252`
+- Fixture SHA256 (page 5):
+  `522ff8eeb481f1340a19b3c846a2f6a4534531ba1a948073112f020d9cb04fb5`
+- Fixture SHA256 (page 3):
+  `00c962e002c093c80ac5fb02178e1385342c6e2c9737b919c9d63b483b5e238f`
+- Paired failed page-2 translation fixture:
+  `price_p2_heading_body_translated.pdf`
+- Failed translation PDF SHA256:
+  `c8c17e4e1557e5702453e4818516d911011fc5edc8b1f9f784a2e05dd83714ca`
+- Paired fixture SHA256:
+  `2a1dca6fadc6663bebdb52c138f522bd82faf77577106fa32ae5f4f8ada409d0`
+- Paired failed page-3 translation fixture:
+  `price_p3_formula_connectors_translated.pdf`
+- Failed full replay SHA256:
+  `c0ce5529ff3b173963a19331ef23e8f3df9c41d71045a08db5289039729794b1`
+- Paired page-3 fixture SHA256:
+  `9b67d414dc5bb8576fb8054e5951e98e247fae40dc3cb3c88fdfb0e941fb330e`
+- License: not declared in the supplied PDF. These single-page excerpts are
+  retained solely as regression fixtures for internal layout QA and should
+  not be redistributed independently of this test purpose.
+- Test purpose: table bodies were preserved while their parallel header cells
+  (`Symbol or metric`, `Policy family`, and `Component`) remained translation
+  units. That produced half-translated tables and false untranslated-prose QA
+  errors. The failed page-2 translation also merges a correctly sized 10.91pt
+  heading and 8.33pt body line into one extracted text block; font QA must
+  compare spans within each source role rather than assign the body's dominant
+  size to the heading. Captions and body sections around tables still translate.
+  Page 3 captures prose fragmented around display and inline formulas: `is`,
+  `Writing`, and `to` must remain owned by continuous translatable prose instead
+  of surviving as isolated English text in the output.
+
+Reproduce the fixtures:
+
+```python
+import fitz
+
+source = fitz.open("Price-of-Algorithmic-Monoculture.pdf")
+for page, name in (
+    (1, "price_p2_parallel_table_headers.pdf"),
+    (2, "price_p3_formula_connectors.pdf"),
+    (4, "price_p5_parallel_table_headers.pdf"),
+):
+    fixture = fitz.open()
+    fixture.insert_pdf(source, from_page=page, to_page=page)
+    fixture.save(f"tests/fixtures/{name}", garbage=4, deflate=True)
+    fixture.close()
+```
+
+Reproduce the paired failed page-2 translation fixture:
+
+```python
+import fitz
+
+source = fitz.open("Price-of-Algorithmic-Monoculture-translated-failed.pdf")
+fixture = fitz.open()
+fixture.insert_pdf(source, from_page=1, to_page=1)
+fixture.save(
+    "tests/fixtures/price_p2_heading_body_translated.pdf",
+    garbage=4,
+    deflate=True,
+    clean=False,
+)
+```
+
+Reproduce the paired failed page-3 translation fixture from the current replay:
+
+```python
+import fitz
+
+source = fitz.open("Price-of-Algorithmic-Monoculture-translated-failed.pdf")
+fixture = fitz.open()
+fixture.insert_pdf(source, from_page=2, to_page=2)
+fixture.save(
+    "tests/fixtures/price_p3_formula_connectors_translated.pdf",
+    garbage=4,
+    deflate=True,
+    clean=False,
+)
+```
+
+## `evicoord_p8_cross_column_references.pdf`
+
+- Title: *EviCoord: A Domain-Adaptable Evidence-State Coordination Protocol
+  for Multi-Agent AI-for-Science*
+- Venue: DAI 2026 submission
+- Source: production upload; no public source URL is declared in the supplied
+  PDF.
+- Source PDF SHA256: `54c07d5fba5325c06e05829e632506237212fc9c3f997554d17a1760b0767f5e`
+- Extracted page: PDF page 8
+- Fixture SHA256:
+  `6b309c9efed12c169f1ad82095b4938c20fd8308dde99a130ed9dd1d7c21feb9`
+- Paired failed translation fixture:
+  `evicoord_p8_cross_column_references_translated.pdf`
+- Failed translation PDF SHA256:
+  `c47279bf8e68d62626a6c7a3d4fd7a1bb97624c673516f6a6ad0aff81194d953`
+- Paired fixture SHA256:
+  `e8fe8f97d6b5601df0effd07cd005c88ed6a80da573284dc2a96f57f60a549de`
+- License: not declared in the supplied PDF. This single-page excerpt is
+  retained solely as a regression fixture for internal layout QA and should
+  not be redistributed independently of this test purpose.
+- Test purpose: the References heading starts near the bottom of the left
+  column, while entries continue at the top of the right column. The QA
+  bibliography range must follow two-column reading order instead of treating
+  the heading y-coordinate as a page-wide lower bound.
+
+Reproduce the fixture:
+
+```bash
+pdfseparate -f 8 -l 8 EviCoord.pdf evicoord-page-%d.pdf
+mv evicoord-page-8.pdf tests/fixtures/evicoord_p8_cross_column_references.pdf
+```
+
+Reproduce the paired failed translation fixture while preserving the page's
+text fragmentation:
+
+```python
+import fitz
+
+source = fitz.open("EviCoord-translated-failed.pdf")
+fixture = fitz.open()
+fixture.insert_pdf(source, from_page=7, to_page=7)
+fixture.save(
+    "tests/fixtures/evicoord_p8_cross_column_references_translated.pdf",
+    garbage=4,
+    deflate=True,
+    clean=False,
+)
+```
+
+## `evicoord_p3_algorithm_reference_prose.pdf`
+
+- Title: *EviCoord: A Domain-Adaptable Evidence-State Coordination Protocol
+  for Multi-Agent AI-for-Science*
+- Venue: DAI 2026 submission
+- Source: production upload; no public source URL is declared in the supplied
+  PDF.
+- Source PDF SHA256: `54c07d5fba5325c06e05829e632506237212fc9c3f997554d17a1760b0767f5e`
+- Extracted page: PDF page 3
+- Fixture SHA256:
+  `382946042241b9503cef8c2a99a5125e8f960658faf6162ae1491f5f5faeedfd`
+- License: not declared in the supplied PDF. This single-page excerpt is
+  retained solely as a regression fixture for internal layout QA and should
+  not be redistributed independently of this test purpose.
+- Test purpose: section 3.3 begins with the prose sentence `Algorithm 1
+  implements the protocol used in our evaluation.` The sentence references a
+  float on the next page and must translate; it is not itself an algorithm
+  title or pseudocode region.
+
+Reproduce the fixture:
+
+```python
+import fitz
+
+source = fitz.open("EviCoord.pdf")
+fixture = fitz.open()
+fixture.insert_pdf(source, from_page=2, to_page=2)
+fixture.save(
+    "tests/fixtures/evicoord_p3_algorithm_reference_prose.pdf",
+    garbage=4,
+    deflate=True,
+    clean=False,
+)
+```
+
 ```python
 import fitz
 src = fitz.open("tests/fixtures/otf_production_acceptance_full.pdf")

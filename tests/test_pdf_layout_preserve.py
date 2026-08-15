@@ -3874,6 +3874,43 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertNotIn("LEFT", extracted)
         self.assertNotIn("RIGHT", extracted)
 
+    def test_fixed_inline_math_is_cut_out_of_a_mixed_line_redaction(self):
+        document = fitz.open()
+        page = document.new_page(width=300, height=160)
+        page.insert_text((40.0, 60.0), "LEFT", fontsize=10.0)
+        page.insert_text((140.0, 60.0), "x", fontsize=10.0)
+        page.insert_text((200.0, 60.0), "RIGHT", fontsize=10.0)
+        left_bbox = tuple(page.search_for("LEFT")[0])
+        formula_bbox = tuple(page.search_for("x")[0])
+        right_bbox = tuple(page.search_for("RIGHT")[0])
+        mixed_line_bbox = (
+            left_bbox[0],
+            min(left_bbox[1], formula_bbox[1], right_bbox[1]),
+            right_bbox[2],
+            max(left_bbox[3], formula_bbox[3], right_bbox[3]),
+        )
+        block = TextBlock(
+            page_index=0,
+            bbox=mixed_line_bbox,
+            text=f"Proposition 2. LEFT {SENTINEL_OPEN}x{SENTINEL_CLOSE} RIGHT",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            redact_bboxes=[mixed_line_bbox],
+            source_line_bboxes=(mixed_line_bbox,),
+            source_math_bboxes=(formula_bbox,),
+            source_math_atom_bboxes=(formula_bbox,),
+            formula_anchors=(formula_bbox,),
+        )
+
+        redact_original_text(page, [block], margin=0.1)
+        extracted = page.get_text()
+
+        document.close()
+        self.assertIn("x", extracted)
+        self.assertNotIn("LEFT", extracted)
+        self.assertNotIn("RIGHT", extracted)
+
     def test_overlapping_formula_continuations_form_one_render_flow(self):
         from pdf_zh_translator.pdf_layout import (
             _combine_formula_continuation_translation_items,
@@ -6750,19 +6787,19 @@ class PreservedRegionUnitFilterTests(unittest.TestCase):
         )
         envelope = (54.9, 100.0, 541.8, 273.0)
 
-        # First call (classification-time promotion) sees no envelope — the
-        # real-world ordering gap — while the final preserved-union pass does.
+        # The classification-time adjacency and component scans see no
+        # envelope; the final preserved-union pass does.
         with unittest.mock.patch.object(
             pdf_layout,
             "_table_region_bboxes",
-            side_effect=[[], [envelope]],
+            side_effect=[[], [], [envelope]],
         ) as mock_regions:
             units, _, _ = pdf_layout.prepare_translation_units(
                 document,
                 preserve_graphics_text=True,
             )
         document.close()
-        self.assertEqual(mock_regions.call_count, 2)
+        self.assertEqual(mock_regions.call_count, 3)
 
         texts = [" ".join(strip_sentinels(source).split()) for _, source, _ in units]
         self.assertFalse(any("segmented point clouds" in text for text in texts))
