@@ -553,6 +553,35 @@ def test_gears_architecture_inline_formulas_render_in_continuous_flow(tmp_path):
     assert not [issue for issue in issues if issue.severity == "error"]
 
 
+def test_gears_production_page5_formula_paragraph_keeps_body_scale(tmp_path):
+    source_pdf = FIXTURES / "gears_p5_production_font_drift.pdf"
+    output_pdf = tmp_path / "gears-p5-production-body-scale.pdf"
+    translate_pdf(
+        input_pdf=source_pdf,
+        output_pdf=output_pdf,
+        translator=_GearsProductionFontTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    with fitz.open(output_pdf) as output:
+        target_spans = [
+            span
+            for span in _page_spans(output[0])
+            if re.search(r"[一-鿿]", span["text"])
+            and 525.0 <= float(span["bbox"][1]) <= 595.0
+        ]
+    assert target_spans
+    assert min(float(span["size"]) for span in target_spans) >= 8.96
+
+    issues = verify_translation_issues(source_pdf, output_pdf)
+    assert not [
+        issue
+        for issue in issues
+        if issue.severity == "error"
+        and issue.code in {"font_size_drift", "raster_ink_overlap"}
+    ]
+
+
 def test_gears_inline_formula_prefix_reflows_with_its_sentence():
     blocks = _unit_blocks("gears_p6_inline_formulas.pdf")
     formula_prefix = next(
@@ -1733,6 +1762,43 @@ class _GearsPage5LayoutTranslator(_GoldenStubTranslator):
                     "融合颈部⟦4⟧。给定RGB图像⟦0⟧，ViT骨干网络提取多尺度特征"
                     "⟦1⟧⟦2⟧，共来自四个层级。"
                 )
+            else:
+                outputs.append(default)
+        return outputs
+
+
+class _GearsProductionFontTranslator(_GoldenStubTranslator):
+    """Return the wording that exposed the production page-bottom shrink."""
+
+    def translate_batch(self, texts):
+        fallback = super().translate_batch(texts)
+        outputs = []
+        for source, default in zip(texts, fallback):
+            compact = " ".join(source.split())
+            if compact.startswith("Unlike textures and lighting"):
+                markers = re.findall(r"⟦\d+⟧", source)
+                assert len(markers) == 1
+                outputs.append(
+                    "与纹理和光照不同，深度和表面朝向等几何属性能够在仿真与现实之间自然"
+                    f"迁移{markers[0]}。本文利用这一不变性，对预训练的视觉基础模型进行"
+                    "微调，使其从单目红绿蓝（RGB）图像中联合预测深度和表面法线，并利用"
+                    "仿真环境免费提供的特权标注。联合预测与跨任务一致性约束相结合，迫使"
+                    "编码器内化场景的三维结构，而非依赖领域特定的外观线索。"
+                )
+            elif compact == "Architecture.":
+                outputs.append("架构。")
+            elif compact.startswith("We build upon Depth Anything V2 Small"):
+                markers = re.findall(r"⟦\d+⟧", source)
+                assert len(markers) == 4
+                outputs.append(
+                    "本文基于深度任意模型第二版小型版本（Depth Anything V2 Small）"
+                    f"{markers[0]}，该模型将DINOv2视觉Transformer（ViT）骨干网络与"
+                    "密集预测Transformer（DPT）融合颈部相结合"
+                    f"{markers[1]}。给定一幅RGB图像{markers[2]}，ViT骨干网络提取"
+                    f"多尺度特征{markers[3]}"
+                )
+            elif compact == "from four":
+                outputs.append("来自四个")
             else:
                 outputs.append(default)
         return outputs

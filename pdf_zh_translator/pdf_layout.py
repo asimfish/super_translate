@@ -1169,6 +1169,123 @@ def _clear_adjacent_formula_ink_overlaps(
             )
         return ink_cache[index]
 
+    # A translated formula-bearing paragraph near the bottom of a column can
+    # need one more line while a detached formula suffix prevents growth below.
+    # Source bboxes are too conservative for the upper boundary: the preceding
+    # Chinese paragraph often paints substantially less ink than its English
+    # source hull. Borrow only that measured whitespace, and accept the move
+    # only when the paragraph fits at its requested size and both ink envelopes
+    # remain clear.
+    for index, ((block, text), centered) in enumerate(
+        zip(list(adjusted), centered_flags)
+    ):
+        if (
+            index == 0
+            or centered
+            or block.nowrap
+            or block.preserve_position
+            or block.block_type not in {"body", "formula_prose"}
+            or not block.formula_anchors
+            or _uses_fixed_source_math(block)
+            or block.bbox[1] < float(page_rect.height) * 0.55
+        ):
+            continue
+
+        block_width = max(1.0, block.bbox[2] - block.bbox[0])
+        detached_suffix = any(
+            suffix.block_type == "formula_prose"
+            and not suffix.formula_anchors
+            and suffix.source_lines == 1
+            and suffix.bbox[0] >= block.bbox[0] + block_width * 0.60
+            and suffix.bbox[2] <= block.bbox[2] + 1.0
+            and min(block.bbox[3], suffix.bbox[3])
+            - max(block.bbox[1], suffix.bbox[1])
+            > 0.0
+            for suffix, _ in adjusted[index + 1 :]
+        )
+        if not detached_suffix:
+            continue
+
+        requested_size = requested_translation_font_size(
+            block,
+            min_font_size,
+            font_scale,
+        )
+        if translated_text_fits(
+            block,
+            text,
+            font_pack,
+            requested_size,
+            requested_size,
+            margin,
+            centered,
+        ):
+            continue
+
+        preceding_inks: List[BBox] = []
+        for previous_index in range(index):
+            previous = adjusted[previous_index][0]
+            overlap = min(block.bbox[2], previous.bbox[2]) - max(
+                block.bbox[0],
+                previous.bbox[0],
+            )
+            previous_width = max(1.0, previous.bbox[2] - previous.bbox[0])
+            if overlap / min(block_width, previous_width) < 0.65:
+                continue
+            previous_ink = ink_bbox(previous_index)
+            if previous_ink is None or previous_ink[1] >= block.bbox[1]:
+                continue
+            preceding_inks.append(previous_ink)
+        if not preceding_inks:
+            continue
+
+        previous_ink_bottom = max(candidate[3] for candidate in preceding_inks)
+        max_shift = min(
+            max(0.0, block.bbox[1] - previous_ink_bottom + requested_size),
+            requested_size * 2.5,
+        )
+        if max_shift < 0.25:
+            continue
+
+        x0, y0, x1, y1 = block.bbox
+        shift = 0.25
+        while shift <= max_shift + 1e-6:
+            candidate = replace(
+                block,
+                bbox=(x0, y0 - shift, x1, y1),
+                redact_bboxes=list(block.redact_bboxes or [block.bbox]),
+            )
+            if not translated_text_fits(
+                candidate,
+                text,
+                font_pack,
+                requested_size,
+                requested_size,
+                margin,
+                centered,
+            ):
+                shift += 0.25
+                continue
+            candidate_ink = _translated_block_ink_bbox(
+                candidate,
+                text,
+                page_rect=page_rect,
+                font_pack=font_pack,
+                font_size=requested_size,
+                min_font_size=requested_size,
+                margin=margin,
+                centered=centered,
+                source_document=source_document,
+            )
+            if (
+                candidate_ink is not None
+                and candidate_ink[1] >= previous_ink_bottom + 1.0
+            ):
+                adjusted[index] = (candidate, text)
+                ink_cache.pop(index, None)
+                break
+            shift += 0.25
+
     for index, ((block, text), centered) in enumerate(
         zip(list(adjusted), centered_flags)
     ):

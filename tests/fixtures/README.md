@@ -99,6 +99,38 @@ fixture.save(
 )
 ```
 
+## `gears_p5_production_font_drift.pdf`
+
+- Title: *GEARS: Seeing Geometry, Diffusing Actions for Zero-Shot Sim-to-Real Dexterous Manipulation*
+- Venue: ECCV 2026 submission
+- Source: production upload
+- Source PDF SHA256: `423d7ecc266d0dcc802655df9966666230454e14874897b00e68502a97b2acbe`
+- Extracted page: PDF page 5
+- Fixture SHA256: `e5e7bf04f87420780a69ffc43965fc72e8b4a669b99bfa708607c6818bf3c238`
+- License: not declared in the supplied PDF. This single-page excerpt is
+  retained solely as a regression fixture for internal layout QA and should
+  not be redistributed independently of this test purpose.
+- Test purpose: the page-bottom `Architecture.` run-in paragraph contains two
+  inline formulas and a detached formula suffix. The production translation
+  must borrow whitespace left by the translated paragraph above instead of
+  shrinking from 9.17pt to 7.67pt.
+
+Reproduce the fixture from the production upload while retaining the original
+page content streams and text grouping:
+
+```python
+import fitz
+
+source = fitz.open("GEARS.pdf")
+source.select([4])
+source.save(
+    "tests/fixtures/gears_p5_production_font_drift.pdf",
+    garbage=4,
+    deflate=True,
+    clean=False,
+)
+```
+
 ```python
 import fitz
 src = fitz.open("tests/fixtures/otf_production_acceptance_full.pdf")
