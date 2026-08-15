@@ -335,6 +335,65 @@ class TranslatorParsingTests(unittest.TestCase):
             self.assertIn("译:", translated[0])
             self.assertEqual(cached.placeholder_fallbacks, [])
 
+    def test_prose_segment_recovery_batches_marker_free_runs(self):
+        source = (
+            "First explanation ⟦0⟧ links the model to ⟦1⟧ under assumptions"
+        )
+
+        class RecordsRecoveryBatches(Translator):
+            def __init__(self):
+                self.calls = []
+
+            def translate_batch(self, texts):
+                self.calls.append(list(texts))
+                if any("⟦" in text for text in texts):
+                    return ["翻译丢失占位符" for _ in texts]
+                return ["译:" + text for text in texts]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wrapped = RecordsRecoveryBatches()
+            cached = CachedTranslator(wrapped, Path(tmpdir) / "cache.jsonl")
+
+            translated = cached.translate_batch([source])
+
+            self.assertTrue(placeholders_preserved(source, translated[0]))
+            marker_free_calls = [
+                call for call in wrapped.calls if call and "⟦" not in "".join(call)
+            ]
+            self.assertEqual(
+                marker_free_calls,
+                [["First explanation", "links the model to", "under assumptions"]],
+            )
+
+    def test_quality_retry_echo_recovers_via_prose_segments(self):
+        source = (
+            "Our theorem implies that sparse gradients make the summation "
+            "term smaller than its upper bound ⟦0⟧ ⟦1⟧."
+        )
+
+        class EchoesMarkersTranslatesPlain(Translator):
+            quality_retry = False
+
+            def translate_batch(self, texts):
+                return [
+                    text
+                    if self.quality_retry or "⟦" in text
+                    else "已翻译的公式解释"
+                    for text in texts
+                ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "cache.jsonl"
+            cached = CachedTranslator(EchoesMarkersTranslatesPlain(), cache_file)
+            cached.quality_retry = True
+
+            translated = cached.translate_batch([source])
+
+            self.assertNotEqual(translated, [source])
+            self.assertTrue(placeholders_preserved(source, translated[0]))
+            self.assertIn("已翻译的公式解释", translated[0])
+            self.assertEqual(cached.placeholder_fallbacks, [])
+
     def test_marker_dense_block_recovers_via_split_translation(self):
         """Object-Centric p6 regression: a long block with 15 placeholders
         mangled markers in every full-block call; translating it in two

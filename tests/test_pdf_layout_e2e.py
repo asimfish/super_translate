@@ -383,12 +383,14 @@ class _RetryingStubTranslator:
     def __init__(self):
         self.calls: list[list[str]] = []
         self.block_types: list[str] = []
+        self.block_type_calls: list[list[str]] = []
         self.quality_retry = False
         self.quality_retry_calls: list[bool] = []
 
     def translate_batch(self, texts):
         batch = list(texts)
         self.calls.append(batch)
+        self.block_type_calls.append(list(self.block_types))
         self.quality_retry_calls.append(self.quality_retry)
         outputs = []
         first_call = len(self.calls) == 1
@@ -721,6 +723,7 @@ def test_translate_pdf_preserves_formula_image_and_translates_caption(tmp_path):
     assert report.translated_blocks >= 4
     assert len(translator.calls) == 2
     assert translator.quality_retry_calls == [False, True]
+    assert translator.block_type_calls[1] == ["foreign_example"]
     assert translator.quality_retry is False
     assert "The proposed method" not in translated_text
     assert "Figure 1:" not in translated_text
@@ -1487,3 +1490,54 @@ def test_single_separator_multiline_table_with_caption_below_is_preserved(tmp_pa
     assert "错误翻译" not in translated_text
     assert "表3" in translated_text
     assert "附录说明了评估过程" in translated_text
+
+
+def test_translate_pdf_repairs_stubborn_english_phrase_after_body_retry(tmp_path):
+    phrase = "The model should translate this natural language example completely"
+    input_pdf = tmp_path / "stubborn-source.pdf"
+    source = fitz.open()
+    page = source.new_page(width=612, height=792)
+    page.insert_text((72, 80), "1 Evaluation", fontsize=12)
+    page.insert_textbox(
+        fitz.Rect(72, 110, 540, 180),
+        f"We evaluate a quoted prompt. The example is \"{phrase}\" in this section.",
+        fontsize=10,
+    )
+    source.save(input_pdf)
+    source.close()
+
+    class _StubbornExampleTranslator:
+        def __init__(self):
+            self.block_types = []
+            self.quality_retry = False
+            self.calls = []
+
+        def translate_batch(self, texts):
+            self.calls.append(list(texts))
+            outputs = []
+            for text in texts:
+                if text == phrase:
+                    outputs.append("模型应完整翻译该自然语言示例")
+                elif phrase in text:
+                    outputs.append(f"本文评估一个引用提示，其中仍有\"{phrase}\"。")
+                elif text.startswith("1 Evaluation"):
+                    outputs.append("1 评估")
+                else:
+                    outputs.append("中文译文")
+            return outputs
+
+    translator = _StubbornExampleTranslator()
+    output_pdf = tmp_path / "stubborn-translated.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=translator,
+        preserve_graphics_text=True,
+    )
+
+    translated = fitz.open(output_pdf)
+    translated_text = translated[0].get_text("text")
+    translated.close()
+    assert phrase not in translated_text
+    assert "模型应完整翻译该自然语言示例" in translated_text
+    assert any(batch == [phrase] for batch in translator.calls)

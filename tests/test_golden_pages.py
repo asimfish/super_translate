@@ -851,6 +851,79 @@ def test_formula_visual_qa_falls_back_when_foreign_ink_trim_erases_formula(monke
     assert not [issue for issue in issues if issue.code == "formula_visible_ink_mismatch"]
 
 
+def test_formula_visual_qa_compares_sprite_alpha_not_nearby_page_text(monkeypatch):
+    from pdf_zh_translator import pdf_layout
+    from pdf_zh_translator.pdf_layout import (
+        SENTINEL_CLOSE,
+        SENTINEL_OPEN,
+        TextBlock,
+        _formula_visible_ink_issues,
+        _insert_source_formula_raster,
+        build_font_pack,
+        char_width,
+        pick_font_alias,
+        register_font_pack,
+    )
+
+    source = fitz.open()
+    source_page = source.new_page(width=300, height=180)
+    source_page.insert_text((82, 76), "x in R^d", fontsize=12)
+    source_span = source_page.get_text("dict")["blocks"][0]["lines"][0]["spans"][0]
+    source_bbox = tuple(float(value) for value in source_span["bbox"])
+
+    translated = fitz.open()
+    translated_page = translated.new_page(width=300, height=180)
+    target_bbox = (45.0, 92.0, 45.0 + source_bbox[2] - source_bbox[0], 114.0)
+    _insert_source_formula_raster(
+        translated_page,
+        source,
+        0,
+        source_bbox,
+        (source_bbox,),
+        target_bbox,
+    )
+    # The page-level clip contains translated prose beside the transparent
+    # sprite.  It is not part of the embedded formula image and must not make
+    # an otherwise exact source sprite fail visual QA.
+    translated_page.insert_text((43, 113), "nearby translated prose", fontsize=9)
+    font_pack = build_font_pack(None, [])
+    register_font_pack(translated_page, font_pack)
+    fonts = font_pack.fonts_for(False)
+    semantic = "x∈R^{d}"
+    hidden_x = target_bbox[0] + 2.0
+    for char in semantic:
+        translated_page.insert_text(
+            (hidden_x, 108),
+            char,
+            fontname=pick_font_alias(char, fonts),
+            fontsize=7,
+            render_mode=3,
+        )
+        hidden_x += char_width(char, fonts, 7)
+    block = TextBlock(
+        page_index=0,
+        bbox=(70.0, 45.0, 240.0, 90.0),
+        text=f"{SENTINEL_OPEN}{semantic}{SENTINEL_CLOSE}",
+        font_size=12.0,
+        color=(0.0, 0.0, 0.0),
+        formula_anchors=(source_bbox,),
+        source_math_atom_groups=((source_bbox,),),
+        source_prose_bboxes=(),
+    )
+    monkeypatch.setattr(pdf_layout, "_formula_ink_similarity", lambda *_args: 0.2)
+
+    issues = _formula_visible_ink_issues(
+        source_page,
+        translated_page,
+        [block],
+        1,
+    )
+    source.close()
+    translated.close()
+
+    assert not [issue for issue in issues if issue.code == "formula_visible_ink_mismatch"]
+
+
 def test_otf_empirical_measure_formula_uses_complete_selectable_sum():
     from pdf_zh_translator.pdf_layout import _semantic_inline_formula_text
 

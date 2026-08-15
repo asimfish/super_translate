@@ -28,6 +28,7 @@ from pdf_zh_translator.page_inspector import (
     _font_size_issues,
     _line_table_bboxes,
     _mask_coverage,
+    _reference_issues,
     _rule_clusters,
     _table_structure_issues,
     _text_blocks,
@@ -36,6 +37,40 @@ from pdf_zh_translator.page_inspector import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _reference_pair_page(*, overlap: bool) -> fitz.Document:
+    document = fitz.open()
+    page = document.new_page(width=300, height=180)
+    page.insert_text((40, 60), "Proceedings of The 6th", fontsize=10)
+    page.insert_text(
+        (70, 65 if overlap else 82),
+        "Proceedings of Machine Learning",
+        fontsize=10,
+    )
+    return document
+
+
+def test_reference_overlap_ignores_source_native_tight_lines():
+    original = _reference_pair_page(overlap=True)
+    translated = _reference_pair_page(overlap=True)
+
+    issues = _reference_issues(original[0], translated[0], 1, 0.0)
+
+    assert not [issue for issue in issues if issue.code == "reference_overlap"]
+    translated.close()
+    original.close()
+
+
+def test_reference_overlap_still_reports_translation_added_collision():
+    original = _reference_pair_page(overlap=False)
+    translated = _reference_pair_page(overlap=True)
+
+    issues = _reference_issues(original[0], translated[0], 1, 0.0)
+
+    assert [issue for issue in issues if issue.code == "reference_overlap"]
+    translated.close()
+    original.close()
 
 
 def test_font_size_pairs_against_source_semantic_role_before_raw_pdf_block():
@@ -201,6 +236,43 @@ class TestProductionRegressions:
 
 
 class TestUntranslatedBlock:
+    def test_short_formula_explanation_left_in_english_is_flagged(self):
+        raw_page = {
+            "blocks": [
+                {
+                    "type": 0,
+                    "bbox": (105.0, 639.4, 180.2, 653.1),
+                    "lines": [
+                        {
+                            "spans": [
+                                {
+                                    "text": "SGD, where ",
+                                    "font": "Times-Roman",
+                                    "size": 9.7,
+                                    "bbox": (105.0, 640.3, 152.4, 652.0),
+                                },
+                                {
+                                    "text": "bar theta_t = 1",
+                                    "font": "CMMI10",
+                                    "size": 9.7,
+                                    "bbox": (154.3, 639.4, 180.2, 653.1),
+                                },
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+        page = SimpleNamespace(get_text=lambda _kind: raw_page)
+
+        issues = _untranslated_block_issues(
+            page,
+            9,
+            reference_y=None,
+        )
+
+        assert [issue for issue in issues if issue.code == "untranslated_block"]
+
     @staticmethod
     def _build_pair(tmp_path: Path) -> tuple[Path, Path]:
         english = (
@@ -295,6 +367,61 @@ class TestUntranslatedBlock:
         translated.close()
         original.close()
         assert [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_preserved_aligned_parameter_rows_are_not_untranslated_prose(self):
+        original = fitz.open()
+        original_page = original.new_page(width=400, height=300)
+        translated = fitz.open()
+        translated_page = translated.new_page(width=400, height=300)
+        rows = (
+            ("Encoder dimension", "256"),
+            ("MLP dimension", "512"),
+            ("Latent state dimension", "512"),
+            ("Task embedding dimension", "96"),
+            ("Number of Q functions", "5"),
+            ("Number of reward bins", "101"),
+        )
+        for page in (original_page, translated_page):
+            for index, (label, value) in enumerate(rows):
+                y = 80 + index * 12
+                page.insert_text((60, y), label, fontsize=9)
+                page.insert_text((220, y), value, fontsize=9)
+
+        translated_block = _text_blocks(translated_page)[0]
+        issues = _untranslated_block_issues(
+            translated_page,
+            27,
+            original_page=original_page,
+            reference_y=None,
+            preserved_regions=tuple(span.bbox for span in translated_block.spans),
+        )
+
+        translated.close()
+        original.close()
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_first_page_author_order_note_is_not_untranslated_prose(self):
+        note = (
+            "Google DeepMind. Authors listed in alphabetical order, with "
+            "contributions listed in Appendix A."
+        )
+        original = fitz.open()
+        original_page = original.new_page(width=595, height=842)
+        original_page.insert_text((62, 270), note, fontsize=8)
+        translated = fitz.open()
+        translated_page = translated.new_page(width=595, height=842)
+        translated_page.insert_text((62, 270), note, fontsize=8)
+
+        issues = _untranslated_block_issues(
+            translated_page,
+            1,
+            original_page=original_page,
+            reference_y=None,
+        )
+
+        translated.close()
+        original.close()
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
 
     def test_table_in_right_column_does_not_hide_left_column_prose(self):
         prose = (
@@ -420,6 +547,14 @@ class TestUntranslatedBlock:
                 "Example for combining two unrelated things: The point indicates "
                 "the lizard, but the mask covers the bird as well."
             ),
+            (
+                "Context → Article: Informal conversation is an important part "
+                "of daily life and this dataset example stays verbatim."
+            ),
+            (
+                "Target Completion → The truth is that the model may emit more "
+                "than one valid answer for this benchmark example."
+            ),
         ],
     )
     def test_preserved_labeled_sample_is_not_untranslated_prose(self, sample):
@@ -438,6 +573,38 @@ class TestUntranslatedBlock:
             original_page=original_page,
             reference_y=None,
             preserved_regions=((35.0, 75.0, 365.0, 155.0),),
+        )
+
+        translated.close()
+        original.close()
+        assert not [issue for issue in issues if issue.code == "untranslated_block"]
+
+    def test_formatted_dataset_payload_split_from_label_is_not_untranslated(self):
+        payload = (
+            "Article: Informal conversation is an important part of daily life, "
+            "and the complete benchmark passage remains verbatim in this sample."
+        )
+        original = fitz.open()
+        original_page = original.new_page(width=612, height=792)
+        translated = fitz.open()
+        translated_page = translated.new_page(width=612, height=792)
+        for page in (original_page, translated_page):
+            page.draw_line((72, 80), (540, 80), width=0.5)
+            page.draw_line((72, 150), (540, 150), width=0.5)
+            page.insert_text((78, 104), "Context ->", fontsize=8)
+            page.insert_textbox(fitz.Rect(180, 88, 532, 142), payload, fontsize=8)
+            page.insert_text(
+                (185, 168),
+                "Figure G.31: Formatted dataset example for RTE",
+                fontsize=8,
+            )
+
+        issues = _untranslated_block_issues(
+            translated_page,
+            1,
+            original_page=original_page,
+            reference_y=None,
+            preserved_regions=((72.0, 80.0, 540.0, 150.0),),
         )
 
         translated.close()
@@ -587,6 +754,20 @@ class TestUntranslatedBlock:
 
 
 class TestHelpers:
+    def test_line_table_bbox_detects_captioned_two_rule_table(self):
+        document = fitz.open()
+        page = document.new_page(width=400, height=300)
+        page.insert_text((40, 60), "Table 25: Few-shot prompt exemplars", fontsize=9)
+        page.draw_line((40, 70), (360, 70), width=0.5)
+        page.insert_text((45, 95), "Prompt for StrategyQA", fontsize=9)
+        page.insert_text((45, 125), "Question: Do hamsters provide food?", fontsize=9)
+        page.insert_text((45, 155), "Answer: Hamsters are prey animals.", fontsize=9)
+        page.draw_line((40, 240), (360, 240), width=0.5)
+
+        assert _line_table_bboxes(page) == [(40.0, 70.0, 360.0, 240.0)]
+
+        document.close()
+
     def test_line_table_bbox_extends_through_open_bottom_row(self):
         class FakePage:
             rect = SimpleNamespace(width=400.0, height=300.0)

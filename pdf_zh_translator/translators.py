@@ -177,12 +177,43 @@ class CachedTranslator(Translator):
         (markers intact) and are reported via ``placeholder_fallbacks``.
         """
         translations = list(self.wrapped.translate_batch(chunk))
+        fallback_indexes: set = set()
+        quality_echo_indexes = [
+            index
+            for index, (source, translation) in enumerate(zip(chunk, translations))
+            if self.quality_retry
+            and len(
+                re.findall(
+                    r"[A-Za-z]{2,}",
+                    _CACHE_PLACEHOLDER_RE.sub(" ", source),
+                )
+            )
+            >= 6
+            and not re.search(r"[一-鿿]", translation)
+        ]
+        for index in quality_echo_indexes:
+            recovered = self._translate_via_prose_segments(chunk[index])
+            if recovered is None and self.quality_retry:
+                # Some suppliers over-apply the strict retry instruction and
+                # echo marker-adjacent text even after markers are removed.
+                # Retry only the isolated prose with the base translation
+                # prompt, then restore strict mode for the remaining blocks.
+                self.quality_retry = False
+                try:
+                    recovered = self._translate_via_prose_segments(chunk[index])
+                finally:
+                    self.quality_retry = True
+            if recovered is not None:
+                translations[index] = recovered
+                continue
+            translations[index] = chunk[index]
+            fallback_indexes.add(index)
+            self.placeholder_fallbacks.append(chunk[index])
         invalid_indexes = [
             index
             for index, (source, translation) in enumerate(zip(chunk, translations))
             if not placeholders_preserved(source, translation)
         ]
-        fallback_indexes: set = set()
         for index in invalid_indexes:
             retried = self.wrapped.translate_batch([chunk[index]])
             if len(retried) == 1 and placeholders_preserved(chunk[index], retried[0]):
@@ -226,17 +257,24 @@ class CachedTranslator(Translator):
         markers = _CACHE_PLACEHOLDER_RE.findall(text)
         if not markers:
             return None
-        segments = _CACHE_PLACEHOLDER_RE.split(text)
-        translated_segments: List[str] = []
-        for segment in segments:
-            segment = segment.strip()
-            if len(segment) < 2 or not re.search(r"[A-Za-z]", segment):
-                translated_segments.append(segment)
-                continue
-            translated = self.wrapped.translate_batch([segment])
-            if len(translated) != 1 or not translated[0].strip():
+        translated_segments = [
+            segment.strip() for segment in _CACHE_PLACEHOLDER_RE.split(text)
+        ]
+        prose_indexes = [
+            index
+            for index, segment in enumerate(translated_segments)
+            if len(segment) >= 2 and re.search(r"[A-Za-z]", segment)
+        ]
+        if prose_indexes:
+            translated_prose = self.wrapped.translate_batch(
+                [translated_segments[index] for index in prose_indexes]
+            )
+            if len(translated_prose) != len(prose_indexes) or any(
+                not segment.strip() for segment in translated_prose
+            ):
                 return None
-            translated_segments.append(translated[0].strip())
+            for index, translated in zip(prose_indexes, translated_prose):
+                translated_segments[index] = translated.strip()
         parts: List[str] = []
         for position, segment in enumerate(translated_segments):
             if segment:

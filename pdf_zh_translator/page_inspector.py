@@ -926,9 +926,10 @@ def _line_table_bboxes(page: object) -> List[BBox]:
             groups.append([rule])
 
     try:
+        page_blocks = _text_blocks(page)
         captions = [
             block
-            for block in _text_blocks(page)
+            for block in page_blocks
             if re.match(
                 r"^(?:Table|Tab\.|\u8868)\s*\d",
                 " ".join(block.text.split()),
@@ -936,7 +937,36 @@ def _line_table_bboxes(page: object) -> List[BBox]:
             )
         ]
     except (AttributeError, RuntimeError, TypeError, ValueError):
+        page_blocks = []
         captions = []
+    for top_rule, bottom_rule in zip(wide_rules, wide_rules[1:]):
+        top, left, top_right = top_rule
+        bottom, bottom_left, right = bottom_rule
+        if not 20.0 <= bottom - top <= 520.0:
+            continue
+        if abs(left - bottom_left) > 8.0 or abs(top_right - right) > 8.0:
+            continue
+        left = min(left, bottom_left)
+        right = max(top_right, right)
+        anchors = [
+            caption
+            for caption in captions
+            if caption.bbox[0] < right
+            and caption.bbox[2] > left
+            and (
+                -4.0 <= top - caption.bbox[3] <= 70.0
+                or -4.0 <= caption.bbox[1] - bottom <= 70.0
+            )
+        ]
+        cell_blocks = [
+            block
+            for block in page_blocks
+            if block not in captions
+            and left <= (block.bbox[0] + block.bbox[2]) / 2.0 <= right
+            and top <= (block.bbox[1] + block.bbox[3]) / 2.0 <= bottom
+        ]
+        if anchors and len(cell_blocks) >= 3:
+            bboxes.append((left, top, right, bottom))
     for group in groups:
         if len(group) < 3:
             continue
@@ -1324,14 +1354,49 @@ def _reference_issues(
     if reference_y is None:
         return []
     issues: List[object] = []
+
+    def reference_spans(page: object) -> List[_Span]:
+        page_spans: List[_Span] = []
+        for page_block in _text_blocks(page):
+            if page_block.bbox[1] < reference_y - 4.0:
+                continue
+            page_spans.extend(
+                span for span in page_block.spans if span.text.strip()
+            )
+        return page_spans[:400]
+
+    original_spans = reference_spans(original_page)
     spans: List[_Span] = []
-    for block in _text_blocks(translated_page):
-        if block.bbox[1] < reference_y - 4.0:
-            continue
-        for span in block.spans:
-            if span.text.strip():
-                spans.append(span)
-    spans = spans[:400]
+    spans.extend(reference_spans(translated_page))
+
+    def same_source_span(candidate: _Span, source: _Span) -> bool:
+        if candidate.text.strip() != source.text.strip():
+            return False
+        return all(
+            abs(float(candidate.bbox[index]) - float(source.bbox[index])) <= 2.0
+            for index in range(4)
+        )
+
+    def source_has_same_overlap(first: _Span, second: _Span) -> bool:
+        for source_index, source_first in enumerate(original_spans):
+            for source_second in original_spans[source_index + 1 :]:
+                same_order = same_source_span(first, source_first) and same_source_span(
+                    second, source_second
+                )
+                reverse_order = same_source_span(first, source_second) and same_source_span(
+                    second, source_first
+                )
+                if not (same_order or reverse_order):
+                    continue
+                source_width = min(source_first.bbox[2], source_second.bbox[2]) - max(
+                    source_first.bbox[0], source_second.bbox[0]
+                )
+                source_height = min(source_first.bbox[3], source_second.bbox[3]) - max(
+                    source_first.bbox[1], source_second.bbox[1]
+                )
+                if source_width > 5.0 and source_height > 4.5:
+                    return True
+        return False
 
     overlap_reported = 0
     for i in range(len(spans)):
@@ -1348,6 +1413,8 @@ def _reference_issues(
             if first.text.strip() == second.text.strip():
                 continue
             if len(first.text.strip()) < 4 or len(second.text.strip()) < 4:
+                continue
+            if source_has_same_overlap(first, second):
                 continue
             issues.append(
                 _issue(
@@ -1407,6 +1474,10 @@ _STOPWORD_RE = re.compile(
     r"\b(?:the|is|are|was|were|of|and|to|in|for|with|that|this|which|from|by)\b",
     re.IGNORECASE,
 )
+_SHORT_FORMULA_PROSE_CUE_RE = re.compile(
+    r"\b(?:where|with|such\s+that|for\s+any|denotes?|represents?|is|are)\b",
+    re.IGNORECASE,
+)
 _AFFILIATION_RE = re.compile(
     r"University|Institute|Institution|School|Sch\.|Laboratory|Lab\b|"
     r"Department|Dept\.|College|Academy|Corresponding|Email|@|"
@@ -1434,9 +1505,60 @@ _PSEUDOCODE_KEYWORD_RE = re.compile(
 _SAMPLE_LABEL_PREFIX_RE = re.compile(
     r"^\s*(?:(?:Q|A|Question|Answer|Input|Output|Prompt|Human|Assistant|User|"
     r"System|Title|Subtitle)\s*[:\uff1a]|"
+    r"(?:Context|Target\s+Completion)\s*(?:→|->|\?)|"
     r"Example\s+for\b[^:\uff1a]{0,120}[:\uff1a])",
     re.IGNORECASE,
 )
+_AUTHOR_NOTE_RE = re.compile(
+    r"\b(?:authors?\s+(?:are\s+)?listed|author(?:s|ship)?\s+order|"
+    r"alphabetical\s+order|equal(?:ly)?\s+contribut(?:ed|ion|ions)?|"
+    r"contributions?\s+(?:are\s+)?listed)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_aligned_preserved_rows(block: _Block) -> bool:
+    """Recognize borderless parameter and formula-description tables."""
+    spans = [span for span in block.spans if span.text.strip()]
+    rows: List[List[_Span]] = []
+    for span in sorted(
+        spans,
+        key=lambda item: ((item.bbox[1] + item.bbox[3]) / 2.0, item.bbox[0]),
+    ):
+        center_y = (span.bbox[1] + span.bbox[3]) / 2.0
+        for row in rows:
+            row_center = _median(
+                [(item.bbox[1] + item.bbox[3]) / 2.0 for item in row]
+            )
+            if abs(center_y - row_center) <= 2.5:
+                row.append(span)
+                break
+        else:
+            rows.append([span])
+    if len(rows) < 4 or re.search(r"[.!?](?:\s|$)", block.text):
+        return False
+
+    structural_rows = 0
+    for row in rows:
+        ordered = sorted(row, key=lambda item: item.bbox[0])
+        gaps = [
+            (ordered[index + 1].bbox[0] - ordered[index].bbox[2], index)
+            for index in range(len(ordered) - 1)
+        ]
+        if not gaps:
+            continue
+        largest_gap, split_index = max(gaps)
+        if largest_gap < 12.0:
+            continue
+        value_spans = ordered[split_index + 1 :]
+        value_text = "".join(span.text for span in value_spans)
+        if not (
+            re.search(r"\d|[=<>▷τλ%]", value_text)
+            or any(_MATH_FONT_RE.search(span.font) for span in value_spans)
+        ):
+            continue
+        structural_rows += 1
+    return structural_rows >= max(4, int(len(rows) * 0.6))
 
 
 def _on_float_side_of_caption(
@@ -1514,15 +1636,22 @@ def _untranslated_block_issues(
     """
     from .pdf_layout import (
         _VERBATIM_GENERATED_SAMPLE_RE,
+        _formatted_dataset_example_region_bboxes,
         _is_reference_or_formula_text,
     )
 
     issues: List[object] = []
+    source_blocks = _text_blocks(original_page) if original_page is not None else []
     generated_sample_labels = [
         source.bbox
-        for source in (_text_blocks(original_page) if original_page is not None else [])
+        for source in source_blocks
         if _VERBATIM_GENERATED_SAMPLE_RE.search(" ".join(source.text.split()))
     ]
+    formatted_dataset_regions = (
+        _formatted_dataset_example_region_bboxes(original_page, source_blocks)
+        if original_page is not None
+        else []
+    )
     for block in _text_blocks(translated_page):
         text = " ".join(block.text.split())
         if not text:
@@ -1537,12 +1666,45 @@ def _untranslated_block_issues(
             continue
         words = block.latin_words()
         stopwords = len(_STOPWORD_RE.findall(text))
+        cjk = block.cjk_chars()
+        math_chars = sum(
+            len(span.text.strip())
+            for span in block.spans
+            if _MATH_FONT_RE.search(span.font)
+        )
+        total_chars = sum(len(span.text.strip()) for span in block.spans)
+        short_formula_prose = bool(
+            cjk == 0
+            and 2 <= words < _UNTRANSLATED_MIN_WORDS
+            and math_chars >= 1
+            and total_chars
+            and math_chars / total_chars <= 0.85
+            and _SHORT_FORMULA_PROSE_CUE_RE.search(text)
+        )
         panel_caption = _looks_like_subfigure_caption(
             block.bbox,
             text,
             caption_kinds,
         )
         content_spans = [span for span in block.spans if span.text.strip()]
+        formatted_sample_spans = sum(
+            1
+            for span in content_spans
+            if any(
+                region[0] - 2.0
+                <= (span.bbox[0] + span.bbox[2]) / 2.0
+                <= region[2] + 2.0
+                and region[1] - 2.0
+                <= (span.bbox[1] + span.bbox[3]) / 2.0
+                <= region[3] + 2.0
+                for region in formatted_dataset_regions
+            )
+        )
+        if (
+            content_spans
+            and formatted_sample_spans >= 0.7 * len(content_spans)
+        ):
+            continue
         if algorithm_regions and any(
             _bbox_overlap_area(block.bbox, region) > 0.6 * _bbox_area(block.bbox)
             for region in algorithm_regions
@@ -1590,6 +1752,8 @@ def _untranslated_block_issues(
             text_head = " ".join(block.text.split())
             if _SAMPLE_LABEL_PREFIX_RE.match(text_head):
                 continue
+            if _looks_like_aligned_preserved_rows(block):
+                continue
             if (
                 not panel_caption
                 and stopwords < max(2.0, words / 7.0)
@@ -1598,14 +1762,15 @@ def _untranslated_block_issues(
                 continue
         if reference_y is not None and block.bbox[1] >= reference_y - 4.0:
             continue
-        if words < _UNTRANSLATED_MIN_WORDS:
+        if words < _UNTRANSLATED_MIN_WORDS and not short_formula_prose:
             continue
-        cjk = block.cjk_chars()
         if cjk >= max(4, words // 8):
             continue
         if re.match(r"^\s*(Figure|Table|Algorithm)\s+\d", text):
             continue
-        if stopwords < 2:
+        if stopwords < 2 and not short_formula_prose:
+            continue
+        if page_number == 1 and _AUTHOR_NOTE_RE.search(text):
             continue
         affiliation_hits = len(_AFFILIATION_RE.findall(text))
         if affiliation_hits >= 2 or (page_number == 1 and affiliation_hits >= 1):
@@ -1617,7 +1782,7 @@ def _untranslated_block_issues(
             continue
         if len(_EXAMPLE_LABEL_RE.findall(text)) >= 2:
             continue
-        if _is_reference_or_formula_text(text):
+        if _is_reference_or_formula_text(text) and not short_formula_prose:
             continue
         # Rows inside a rendered table grid are preserved cell text, not
         # missed prose.
@@ -1638,13 +1803,7 @@ def _untranslated_block_issues(
             for region in preserved_regions
         ):
             continue
-        math_chars = sum(
-            len(span.text.strip())
-            for span in block.spans
-            if _MATH_FONT_RE.search(span.font)
-        )
-        total_chars = sum(len(span.text.strip()) for span in block.spans)
-        if total_chars and math_chars / total_chars > 0.4:
+        if total_chars and math_chars / total_chars > 0.4 and not short_formula_prose:
             continue
         issues.append(
             _issue(

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import fitz
+import pytest
 
 from pdf_zh_translator.pdf_layout import (
     SENTINEL_CLOSE,
@@ -682,6 +683,44 @@ class PreserveOriginalBlockTests(unittest.TestCase):
             )
         )
 
+    def test_translates_code_example_lead_in_grazing_box_top(self):
+        block = TextBlock(
+            page_index=21,
+            bbox=(100.6, 350.1, 426.7, 361.0),
+            text="Here’s an example of how to make a GET request using the JS HTTP API:",
+            font_size=10.91,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+        )
+
+        self.assertFalse(
+            should_preserve_original_block(
+                block,
+                [(88.6, 355.3, 503.9, 498.9)],
+            )
+        )
+
+    def test_translates_formula_prose_when_placeholders_touch_words(self):
+        block = TextBlock(
+            page_index=2,
+            bbox=(329.2, 311.7, 553.5, 323.5),
+            text=(
+                "We denote the domain of the image"
+                f"{SENTINEL_OPEN}I_i{SENTINEL_CLOSE} with"
+                f"{SENTINEL_OPEN}I(I_i) ={SENTINEL_CLOSE}"
+            ),
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+        )
+
+        self.assertFalse(
+            should_preserve_original_block(
+                block,
+                [(16.0, 0.0, 612.0, 387.1)],
+            )
+        )
+
     def test_preserves_prompt_title_centered_inside_graphic_region(self):
         block = TextBlock(
             page_index=20,
@@ -1353,7 +1392,6 @@ class FormulaBridgedRunInHeadingTests(unittest.TestCase):
         self.assertEqual(merged.keepout_bboxes, [formula])
         self.assertFalse(merged.preserve_position)
 
-
 class ListContinuationTranslationItemTests(unittest.TestCase):
     def test_wrapped_bullet_is_typeset_as_one_translation_item(self):
         lead = TextBlock(
@@ -1508,6 +1546,26 @@ class ListContinuationTranslationItemTests(unittest.TestCase):
 
 
 class FormulaExplanationExtractionTests(unittest.TestCase):
+    def test_explicit_formula_prose_with_natural_language_is_translatable(self):
+        from pdf_zh_translator.pdf_layout import _looks_like_translatable_formula_prose_block
+
+        block = TextBlock(
+            page_index=0,
+            bbox=(105.0, 343.0, 490.0, 372.0),
+            text=(
+                ". AdaGrad corresponds to a version of Adam with "
+                f"{SENTINEL_OPEN}beta_1=0{SENTINEL_CLOSE} and an annealed version"
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="formula_prose",
+            source_lines=2,
+            no_merge=True,
+            source_math_bboxes=((300.0, 350.0, 360.0, 368.0),),
+        )
+
+        self.assertTrue(_looks_like_translatable_formula_prose_block(block))
+
     def test_where_glued_to_variable_with_corresponds_is_prose(self):
         prose_prefix = (49.0, 94.1, 73.3, 104.1)
         formula = (73.3, 93.9, 193.2, 105.4)
@@ -1565,6 +1623,40 @@ class TableDetectionTests(unittest.TestCase):
 
         self.assertEqual(block.block_type, "body")
         self.assertFalse(block.preserve_position)
+
+    def test_parallel_subfigure_explanations_are_classified_as_captions(self):
+        left = TextBlock(
+            page_index=7,
+            bbox=(112.1, 229.4, 295.9, 248.5),
+            text="(a) Exploring the impact of the squeeze ratio on model size and accuracy.",
+            font_size=8.97,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+        right = TextBlock(
+            page_index=7,
+            bbox=(305.9, 229.6, 497.4, 248.7),
+            text=(
+                "(b) Exploring the impact of the ratio of 3x3 filters in expand "
+                f"layers ({SENTINEL_OPEN}pct_{{3x3}}{SENTINEL_CLOSE}) on model "
+                "size and accuracy."
+            ),
+            font_size=8.97,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+
+        classify_blocks(
+            [left, right],
+            7,
+            792.0,
+            [(6.7, 1.8, 602.7, 304.1)],
+        )
+
+        self.assertEqual(left.block_type, "caption")
+        self.assertEqual(right.block_type, "caption")
+        self.assertTrue(left.should_translate)
+        self.assertTrue(right.should_translate)
 
     def test_academic_structure_heading_is_not_promoted_to_equation_table(self):
         for text in (
@@ -1702,6 +1794,35 @@ class TableDetectionTests(unittest.TestCase):
         self.assertEqual(hyperparameters.block_type, "body")
         self.assertTrue(hyperparameters.should_translate)
 
+    def test_side_by_side_prose_is_not_promoted_to_equation_table(self):
+        paragraph = TextBlock(
+            page_index=4,
+            bbox=(55.1, 111.2, 290.7, 145.2),
+            text=(
+                "In this paper, we propose a new compound scaling method, "
+                "which uses a compound coefficient to uniformly scale network "
+                "width, depth, and resolution in a principled way:"
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+        )
+
+        _promote_equation_table_neighbor_blocks(
+            [paragraph],
+            [
+                (313.9, 108.3, 330.6, 115.9),
+                (365.9, 108.3, 392.8, 115.9),
+                (320.9, 118.2, 323.5, 125.8),
+                (375.4, 116.1, 382.9, 126.2),
+                (320.3, 131.0, 324.1, 138.6),
+                (365.7, 131.0, 393.0, 138.6),
+            ],
+        )
+
+        self.assertEqual(paragraph.block_type, "body")
+        self.assertTrue(paragraph.should_translate)
+
     def test_handedit_long_rubric_cell_inside_table_is_preserved(self):
         rubric_cell = TextBlock(
             page_index=23,
@@ -1771,6 +1892,57 @@ class TableDetectionTests(unittest.TestCase):
 
         self.assertEqual(long_cell.block_type, "table")
         self.assertFalse(long_cell.should_translate)
+
+    def test_long_prose_crossing_only_part_of_table_band_stays_body(self):
+        previous_caption = TextBlock(
+            page_index=10,
+            bbox=(50.1, 340.6, 545.1, 371.9),
+            text="Table 11: Detection results on the validation set.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+        owning_caption = TextBlock(
+            page_index=10,
+            bbox=(308.9, 451.1, 545.1, 482.0),
+            text="Table 12: Results on the ImageNet detection dataset.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+        table_anchor = TextBlock(
+            page_index=10,
+            bbox=(334.8, 421.5, 519.2, 443.6),
+            text="conv5 3x3 512 7x7 2048",
+            font_size=8.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="table",
+            should_translate=False,
+        )
+        paragraph = TextBlock(
+            page_index=10,
+            bbox=(50.1, 394.0, 286.4, 451.8),
+            text=(
+                "We select two adjacent scales from the pyramid following the "
+                "standard setup. RoI pooling and subsequent layers are performed "
+                "on both feature maps, which are merged by maxout. Multi-scale "
+                "testing improves the final average precision by over two points."
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=5,
+        )
+
+        blocks = [previous_caption, owning_caption, table_anchor, paragraph]
+        self.assertEqual(
+            _table_region_bboxes(blocks),
+            [(308.9, 421.5, 545.1, 443.6)],
+        )
+
+        _promote_table_component_blocks(blocks)
+
+        self.assertEqual(paragraph.block_type, "body")
+        self.assertTrue(paragraph.should_translate)
 
     def test_cap_sat_training_header_is_detected_as_table(self):
         record = _RawBlockRec(
@@ -2549,6 +2721,112 @@ class FormulaTailProseTests(unittest.TestCase):
             _formula_markers_form_atom(tau_minus, exponent_one, "")
         )
 
+    def test_completion_blank_formula_follows_trailing_article_inline(self):
+        prose_bbox = (157.0, 652.4, 406.4, 662.4)
+        formula_bbox = (437.2, 652.1, 452.8, 662.4)
+        prose = _LineRec(
+            text="George bought some baseball equipment, a ball, a glove, and a",
+            bbox=prose_bbox,
+            spans=[
+                _span(
+                    "George bought some baseball equipment, a ball, a glove, and a",
+                    prose_bbox,
+                    font="NimbusRomNo9L-Regu",
+                )
+            ],
+            prose_bboxes=[prose_bbox],
+        )
+        formula = _LineRec(
+            text=(
+                f"{SENTINEL_OPEN}.{SENTINEL_CLOSE}"
+                f"{SENTINEL_OPEN}→{SENTINEL_CLOSE}"
+            ),
+            bbox=formula_bbox,
+            spans=[_span(". →", formula_bbox, font="CMSY10")],
+            math_bboxes=[formula_bbox],
+            math_run_bboxes=[formula_bbox],
+        )
+
+        segments = segments_from_record(
+            11,
+            _RawBlockRec(lines=[prose, formula]),
+            equation_record=False,
+        )
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn(".→", strip_sentinels(segments[0].text))
+        self.assertEqual(segments[0].source_math_bboxes, (formula_bbox,))
+
+    def test_completion_blank_rule_joins_formula_sprite(self):
+        from pdf_zh_translator.pdf_layout import (
+            _attach_blank_completion_rule_vectors,
+        )
+
+        formula_bbox = (437.2, 652.1, 452.8, 662.4)
+        formula = f"{SENTINEL_OPEN}.→{SENTINEL_CLOSE}"
+        block = TextBlock(
+            page_index=11,
+            bbox=(157.0, 652.1, 452.8, 662.4),
+            text=f"baseball equipment, a ball, a glove, and a {formula}",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_math_bboxes=(formula_bbox,),
+            source_math_atom_bboxes=(formula_bbox,),
+            source_math_atom_groups=((formula_bbox,),),
+        )
+
+        class FakePage:
+            def get_drawings(self):
+                return [
+                    {
+                        "rect": SimpleNamespace(
+                            x0=408.9,
+                            y0=661.37,
+                            x1=437.25,
+                            y1=661.37,
+                        )
+                    }
+                ]
+
+        _attach_blank_completion_rule_vectors(FakePage(), [block])
+
+        self.assertEqual(
+            block.source_math_bboxes,
+            ((408.9, 652.1, 452.8, 662.4),),
+        )
+        rule_atom = (408.9, 660.87, 437.25, 661.87)
+        self.assertIn(rule_atom, block.source_math_atom_bboxes)
+        self.assertIn(rule_atom, block.source_math_atom_groups[0])
+
+    def test_completion_rule_overlay_erases_old_vector_position(self):
+        from pdf_zh_translator.pdf_layout import (
+            _erase_reflowed_formula_vector_decorations,
+        )
+
+        document = fitz.open()
+        page = document.new_page(width=200, height=120)
+        page.draw_line((40, 60), (100, 60), color=(0.0, 0.0, 0.0), width=0.5)
+        vector_atom = (40.0, 59.5, 100.0, 60.5)
+        block = TextBlock(
+            page_index=0,
+            bbox=(30.0, 40.0, 130.0, 80.0),
+            text=f"example {SENTINEL_OPEN}.→{SENTINEL_CLOSE}",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_math_atom_bboxes=(vector_atom,),
+        )
+
+        _erase_reflowed_formula_vector_decorations(page, [block])
+
+        pixmap = page.get_pixmap(
+            matrix=fitz.Matrix(3.0, 3.0),
+            clip=fitz.Rect(39.0, 58.5, 101.0, 61.5),
+            colorspace=fitz.csGRAY,
+            alpha=False,
+        )
+        document.close()
+        self.assertGreater(min(pixmap.samples), 245)
+
     def test_handedit_multiline_inline_formula_keeps_trailing_prose(self):
         prefix = _line(
             f"requested embodiment. Denote {SENTINEL_OPEN}{{(Iref{SENTINEL_CLOSE}",
@@ -2988,6 +3266,35 @@ class FormulaTailProseTests(unittest.TestCase):
 
         self.assertIsNone(bridge)
 
+    def test_can_be_shown_formula_tower_is_merged_through_then_tail(self):
+        from pdf_zh_translator.pdf_layout import _formula_bridge_sequence_end
+
+        lead = _line(
+            "We rearrange the equation and use Young's inequality, "
+            f"{SENTINEL_OPEN}a <= b{SENTINEL_CLOSE}. Also, it can be",
+            (105.0, 429.0, 490.0, 447.0),
+        )
+        shown = _line(
+            f"shown that {SENTINEL_OPEN}sqrt(v){SENTINEL_CLOSE}",
+            (105.0, 438.0, 190.0, 474.0),
+        )
+        tower = _line(
+            f"{SENTINEL_OPEN}sum_j beta^j g_j / sqrt(z){SENTINEL_CLOSE}",
+            (159.0, 435.0, 300.0, 482.0),
+        )
+        tail = _line(
+            f"{SENTINEL_OPEN}bound{SENTINEL_CLOSE} and beta <= beta. Then",
+            (300.0, 444.0, 455.0, 466.0),
+        )
+        records = [
+            _RawBlockRec(lines=[lead]),
+            _RawBlockRec(lines=[shown]),
+            _RawBlockRec(lines=[tower]),
+            _RawBlockRec(lines=[tail]),
+        ]
+
+        self.assertEqual(_formula_bridge_sequence_end(records, 0), 3)
+
     def test_formula_keepouts_do_not_pin_captured_source_math(self):
         formula_bboxes = tuple(
             (100.0 + index * 12.0, 100.0, 108.0 + index * 12.0, 112.0)
@@ -3035,6 +3342,571 @@ class FormulaTailProseTests(unittest.TestCase):
 
         self.assertTrue(_uses_fixed_source_math(block))
 
+    def test_multiline_formula_token_keeps_only_its_math_atoms(self):
+        first_hull = (243.0, 317.0, 364.0, 358.0)
+        second_hull = (456.0, 329.0, 469.0, 340.0)
+        first_atoms = (
+            (243.0, 329.0, 273.0, 340.0),
+            (320.0, 317.0, 343.0, 358.0),
+            (340.0, 328.0, 364.0, 342.0),
+        )
+        second_atoms = ((456.0, 329.0, 469.0, 340.0),)
+        block = TextBlock(
+            page_index=0,
+            bbox=(105.0, 311.0, 490.0, 382.0),
+            text=(
+                "AdaGrad updates parameters as "
+                f"{SENTINEL_OPEN}theta update{SENTINEL_CLOSE}; choose "
+                f"{SENTINEL_OPEN}beta_2{SENTINEL_CLOSE}."
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=4,
+            source_line_bboxes=(
+                (105.0, 311.0, 490.0, 322.0),
+                (243.0, 317.0, 364.0, 358.0),
+                (105.0, 366.0, 490.0, 377.0),
+            ),
+            source_math_bboxes=(first_hull, second_hull),
+            formula_anchors=(first_hull, second_hull),
+        )
+        block.source_math_atom_groups = (first_atoms, second_atoms)
+
+        tokens = _tokenize_translation_with_formula_clips(block.text, block)
+        formula_tokens = [token for token in tokens if token.kind == "formula"]
+
+        self.assertEqual(len(formula_tokens), 2)
+        self.assertEqual(formula_tokens[0].source_atom_bboxes, first_atoms)
+        self.assertEqual(formula_tokens[1].source_atom_bboxes, second_atoms)
+
+    def test_formula_sprite_masks_foreign_text_inside_its_source_hull(self):
+        from pdf_zh_translator.pdf_layout import _formula_atom_masked_pixmap
+
+        source = fitz.open()
+        page = source.new_page(width=300, height=160)
+        page.insert_text((60.0, 50.0), "FOREIGN", fontsize=10.0)
+        page.insert_text((120.0, 82.0), "x", fontsize=10.0)
+        foreign_bbox = tuple(page.search_for("FOREIGN")[0])
+        formula_bbox = tuple(page.search_for("x")[0])
+        source_rect = (50.0, 35.0, 150.0, 90.0)
+        zoom = 4.0
+
+        pixmap = _formula_atom_masked_pixmap(
+            source,
+            0,
+            source_rect,
+            (formula_bbox,),
+            zoom,
+        )
+
+        def alpha_count(bbox):
+            x0 = max(0, int(bbox[0] * zoom) - pixmap.x)
+            y0 = max(0, int(bbox[1] * zoom) - pixmap.y)
+            x1 = min(pixmap.width, int(bbox[2] * zoom + 0.999) - pixmap.x)
+            y1 = min(pixmap.height, int(bbox[3] * zoom + 0.999) - pixmap.y)
+            samples = pixmap.samples
+            return sum(
+                samples[(row * pixmap.width + column) * pixmap.n + pixmap.n - 1]
+                for row in range(y0, y1)
+                for column in range(x0, x1)
+            )
+
+        self.assertEqual(alpha_count(foreign_bbox), 0)
+        self.assertGreater(alpha_count(formula_bbox), 0)
+        source.close()
+
+    def test_formula_sprite_subtracts_prose_inside_oversized_atom_bbox(self):
+        from pdf_zh_translator.pdf_layout import _formula_atom_masked_pixmap
+
+        source = fitz.open()
+        page = source.new_page(width=300, height=160)
+        page.insert_text((120.0, 48.0), "x", fontsize=10.0)
+        page.insert_text((112.0, 72.0), "prose", fontsize=10.0)
+        formula_bbox = tuple(page.search_for("x")[0])
+        prose_bbox = tuple(page.search_for("prose")[0])
+        oversized_atom = (
+            min(formula_bbox[0], prose_bbox[0]),
+            formula_bbox[1],
+            max(formula_bbox[2], prose_bbox[2]),
+            prose_bbox[3],
+        )
+        source_rect = (105.0, 32.0, 155.0, 80.0)
+        zoom = 4.0
+
+        pixmap = _formula_atom_masked_pixmap(
+            source,
+            0,
+            source_rect,
+            (oversized_atom,),
+            zoom,
+            (prose_bbox,),
+        )
+
+        def alpha_count(bbox):
+            x0 = max(0, int(bbox[0] * zoom) - pixmap.x)
+            y0 = max(0, int(bbox[1] * zoom) - pixmap.y)
+            x1 = min(pixmap.width, int(bbox[2] * zoom + 0.999) - pixmap.x)
+            y1 = min(pixmap.height, int(bbox[3] * zoom + 0.999) - pixmap.y)
+            samples = pixmap.samples
+            return sum(
+                samples[(row * pixmap.width + column) * pixmap.n + pixmap.n - 1]
+                for row in range(y0, y1)
+                for column in range(x0, x1)
+            )
+
+        self.assertGreater(alpha_count(formula_bbox), 0)
+        self.assertEqual(alpha_count(prose_bbox), 0)
+        source.close()
+
+    def test_formula_atoms_are_emitted_as_one_masked_sprite(self):
+        from pdf_zh_translator.pdf_layout import emit_tokens
+
+        source = fitz.open()
+        source.new_page(width=300, height=160)
+        target = fitz.open()
+        target_page = target.new_page(width=300, height=160)
+        target_page.insert_font(fontname="helv")
+        atom_bboxes = (
+            (140.0, 48.0, 150.0, 62.0),
+            (151.0, 44.0, 165.0, 65.0),
+        )
+        token = _Token(
+            "formula",
+            "x/y",
+            width=35.0,
+            source_bbox=(100.0, 35.0, 220.0, 78.0),
+            source_atom_bboxes=atom_bboxes,
+            source_page=0,
+            source_size=10.0,
+        )
+        font = fitz.Font("helv")
+
+        with patch(
+            "pdf_zh_translator.pdf_layout._insert_source_formula_raster"
+        ) as insert_formula:
+            emit_tokens(
+                target_page,
+                [token],
+                [(font, "helv")],
+                10.0,
+                (0.0, 0.0, 0.0),
+                40.0,
+                60.0,
+                {},
+                [(font, "helv")],
+                source,
+            )
+
+        self.assertEqual(insert_formula.call_count, 1)
+        self.assertEqual(insert_formula.call_args.args[4], atom_bboxes)
+        target.close()
+        source.close()
+
+    def test_formula_restore_combines_prose_exclusions_from_all_slots(self):
+        from pdf_zh_translator.pdf_layout import _restore_redacted_formula_atoms
+
+        atom = (149.0, 438.0, 159.0, 474.0)
+        first_prose = (105.0, 429.0, 490.0, 441.0)
+        second_prose = (372.0, 444.0, 389.0, 458.0)
+        blocks = [
+            TextBlock(
+                0,
+                first_prose,
+                "lead",
+                9.7,
+                (0.0, 0.0, 0.0),
+                source_prose_bboxes=(first_prose,),
+                redaction_formula_restore_groups=((atom,),),
+            ),
+            TextBlock(
+                0,
+                second_prose,
+                "and",
+                9.7,
+                (0.0, 0.0, 0.0),
+                source_prose_bboxes=(second_prose,),
+                redaction_formula_restore_groups=((atom,),),
+            ),
+        ]
+
+        with patch(
+            "pdf_zh_translator.pdf_layout._insert_source_formula_raster"
+        ) as insert_formula:
+            restored = _restore_redacted_formula_atoms(
+                object(), object(), 0, blocks
+            )
+
+        self.assertEqual(restored, 1)
+        self.assertEqual(
+            insert_formula.call_args.kwargs["exclude_bboxes"],
+            (first_prose, second_prose),
+        )
+
+    def test_short_academic_formula_lead_remains_translatable(self):
+        from pdf_zh_translator.pdf_layout import (
+            _looks_like_translatable_formula_prose_block,
+        )
+
+        formula = (176.0, 60.0, 220.0, 78.0)
+        block = TextBlock(
+            page_index=0,
+            bbox=(100.0, 60.0, 220.0, 78.0),
+            text=f"Lemma 10.4. Let {SENTINEL_OPEN}gamma{SENTINEL_CLOSE}",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            no_merge=False,
+            source_math_bboxes=(formula,),
+        )
+
+        assert _looks_like_translatable_formula_prose_block(block)
+
+    def test_side_by_side_academic_formula_fragments_share_one_layout_flow(self):
+        from pdf_zh_translator.pdf_layout import (
+            _combine_academic_formula_statement_translation_items,
+            _uses_fixed_source_math,
+        )
+
+        first_formula = (176.0, 108.0, 210.0, 132.0)
+        second_formula = (246.0, 110.0, 300.0, 134.0)
+        items = [
+            (
+                TextBlock(
+                    0,
+                    (105.0, 108.0, 210.0, 132.0),
+                    f"Lemma 10.4. Let {SENTINEL_OPEN}gamma{SENTINEL_CLOSE}",
+                    9.7,
+                    (0.0, 0.0, 0.0),
+                    source_lines=2,
+                    source_line_bboxes=((105.0, 108.0, 210.0, 120.0),),
+                    source_math_bboxes=(first_formula,),
+                    formula_anchors=(first_formula,),
+                ),
+                f"引理10.4。设{SENTINEL_OPEN}gamma{SENTINEL_CLOSE}",
+            ),
+            (
+                TextBlock(
+                    0,
+                    (212.0, 110.0, 338.0, 134.0),
+                    f". For {SENTINEL_OPEN}condition{SENTINEL_CLOSE} that satisfy",
+                    9.7,
+                    (0.0, 0.0, 0.0),
+                    source_lines=1,
+                    block_type="formula_prose",
+                    preserve_position=True,
+                    source_line_bboxes=((212.0, 110.0, 338.0, 122.0),),
+                    source_math_bboxes=(second_formula,),
+                    formula_anchors=(second_formula,),
+                ),
+                f"。对于{SENTINEL_OPEN}condition{SENTINEL_CLOSE}满足",
+            ),
+            (
+                TextBlock(
+                    0,
+                    (340.0, 110.0, 410.0, 122.0),
+                    "and bounded",
+                    9.7,
+                    (0.0, 0.0, 0.0),
+                    source_lines=1,
+                    block_type="formula_prose",
+                    preserve_position=True,
+                ),
+                "且有界",
+            ),
+            (
+                TextBlock(
+                    0,
+                    (160.0, 124.0, 300.0, 138.0),
+                    ", the following inequality holds",
+                    9.7,
+                    (0.0, 0.0, 0.0),
+                    source_lines=1,
+                    block_type="formula_prose",
+                    preserve_position=True,
+                ),
+                "，以下不等式成立",
+            ),
+        ]
+
+        combined = _combine_academic_formula_statement_translation_items(items)
+
+        assert len(combined) == 1
+        merged, translation = combined[0]
+        assert merged.bbox == (105.0, 108.0, 410.0, 138.0)
+        assert merged.formula_anchors == (first_formula, second_formula)
+        assert "且有界" in translation
+        assert _uses_fixed_source_math(merged)
+
+    def test_fixed_multiline_math_redacts_prose_inside_formula_hull(self):
+        document = fitz.open()
+        page = document.new_page(width=300, height=160)
+        page.insert_text((40.0, 60.0), "LEFT", fontsize=10.0)
+        page.insert_text((140.0, 60.0), "x", fontsize=10.0)
+        page.insert_text((200.0, 60.0), "RIGHT", fontsize=10.0)
+        left_bbox = tuple(page.search_for("LEFT")[0])
+        formula_bbox = tuple(page.search_for("x")[0])
+        right_bbox = tuple(page.search_for("RIGHT")[0])
+        formula_hull = (35.0, 45.0, 260.0, 75.0)
+        block = TextBlock(
+            page_index=0,
+            bbox=formula_hull,
+            text=(
+                "Theorem 1. LEFT "
+                f"{SENTINEL_OPEN}x{SENTINEL_CLOSE} RIGHT"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            redact_bboxes=[left_bbox, formula_bbox, right_bbox],
+            source_line_bboxes=(formula_hull,),
+            source_math_bboxes=(formula_hull,),
+            formula_anchors=(formula_hull,),
+        )
+        # A multiline formula's run hull can geometrically contain adjacent
+        # prose. Only its actual math spans are exempt from redaction.
+        block.source_math_atom_bboxes = (formula_bbox,)
+
+        redact_original_text(page, [block], margin=0.1)
+        extracted = page.get_text()
+
+        document.close()
+        self.assertIn("x", extracted)
+        self.assertNotIn("LEFT", extracted)
+        self.assertNotIn("RIGHT", extracted)
+
+    def test_overlapping_formula_continuations_form_one_render_flow(self):
+        from pdf_zh_translator.pdf_layout import (
+            _combine_formula_continuation_translation_items,
+        )
+
+        blocks = [
+            TextBlock(
+                page_index=0,
+                bbox=(105.0, 311.0, 490.0, 358.0),
+                text=(
+                    "AdaGrad updates parameters as "
+                    f"{SENTINEL_OPEN}theta update{SENTINEL_CLOSE} to be"
+                ),
+                font_size=9.7,
+                color=(0.0, 0.0, 0.0),
+                bold_prefix=True,
+                translated_bold_prefix_chars=8,
+                source_math_bboxes=((243.0, 317.0, 364.0, 358.0),),
+                formula_anchors=((243.0, 317.0, 364.0, 358.0),),
+            ),
+            TextBlock(
+                page_index=0,
+                bbox=(105.0, 337.0, 383.0, 382.0),
+                text=(
+                    "infinitesimally close to one, then "
+                    f"{SENTINEL_OPEN}limit{SENTINEL_CLOSE}"
+                ),
+                font_size=9.7,
+                color=(0.0, 0.0, 0.0),
+                source_math_bboxes=((269.0, 337.0, 362.0, 382.0),),
+                formula_anchors=((269.0, 337.0, 362.0, 382.0),),
+            ),
+            TextBlock(
+                page_index=0,
+                bbox=(105.0, 343.0, 490.0, 372.0),
+                text=(
+                    ". AdaGrad corresponds to Adam with "
+                    f"{SENTINEL_OPEN}beta_1 = 0{SENTINEL_CLOSE}"
+                ),
+                font_size=9.7,
+                color=(0.0, 0.0, 0.0),
+                block_type="formula_prose",
+                preserve_position=True,
+                no_merge=True,
+                source_math_bboxes=((189.0, 355.0, 219.0, 366.0),),
+                formula_anchors=((189.0, 355.0, 219.0, 366.0),),
+            ),
+        ]
+        items = list(
+            zip(
+                blocks,
+                (
+                    "AdaGrad 按公式更新参数，令其",
+                    "从下方无限接近 1，则",
+                    "。AdaGrad 对应于 beta_1 为 0 的 Adam。",
+                ),
+            )
+        )
+
+        combined = _combine_formula_continuation_translation_items(items)
+
+        self.assertEqual(len(combined), 1)
+        merged, translated = combined[0]
+        self.assertEqual(len(merged.formula_anchors), 3)
+        self.assertEqual(merged.translated_bold_prefix_chars, 8)
+        self.assertIn("无限接近", translated)
+        self.assertEqual(merged.bbox, (105.0, 311.0, 490.0, 382.0))
+
+    def test_overlapping_proof_leadin_joins_formula_keepout_continuation(self):
+        from pdf_zh_translator.pdf_layout import (
+            _combine_formula_continuation_translation_items,
+        )
+
+        leadin = TextBlock(
+            page_index=0,
+            bbox=(105.0, 200.5, 222.4, 212.2),
+            text="Proof. Under the assumption,",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((105.0, 200.5, 222.4, 212.2),),
+        )
+        continuation = TextBlock(
+            page_index=0,
+            bbox=(105.0, 200.5, 490.3, 225.4),
+            text=(
+                ". We can expand the last term in the summation using "
+                "the update rules in Algorithm 1,"
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="formula_prose",
+            preserve_position=True,
+            keepout_bboxes=((227.4, 189.7, 298.9, 220.3),),
+            source_line_bboxes=(
+                (299.0, 200.5, 490.3, 213.6),
+                (105.0, 213.7, 252.3, 225.4),
+            ),
+        )
+
+        combined = _combine_formula_continuation_translation_items(
+            [
+                (leadin, "证明。在该假设下，"),
+                (continuation, "我们可以利用算法 1 的更新规则展开求和末项，"),
+            ]
+        )
+
+        self.assertEqual(len(combined), 1)
+        merged, translated = combined[0]
+        self.assertFalse(merged.preserve_position)
+        self.assertEqual(merged.bbox, continuation.bbox)
+        self.assertIn("展开求和末项", translated)
+        self.assertEqual(merged.keepout_bboxes, list(continuation.keepout_bboxes))
+
+    def test_fixed_version_prefix_joins_wrapped_body_continuation(self):
+        from pdf_zh_translator.pdf_layout import (
+            _combine_formula_continuation_translation_items,
+        )
+
+        version_tail = TextBlock(
+            page_index=0,
+            bbox=(108.0, 173.4, 504.2, 194.3),
+            text=(
+                ". Added GPT-3 results. Added evaluation datasets. "
+                "Added ablations for"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            block_type="formula_prose",
+            preserve_position=True,
+            no_merge=True,
+            keepout_bboxes=[(107.6, 173.0, 146.9, 183.3)],
+        )
+        continuation = TextBlock(
+            page_index=0,
+            bbox=(108.0, 195.1, 504.4, 216.1),
+            text="Commonsense and Symbolic Reasoning. Added raw results.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            block_type="body",
+        )
+
+        combined = _combine_formula_continuation_translation_items(
+            [
+                (version_tail, "。新增评估数据集，并针对"),
+                (continuation, "常识与符号推理进行消融实验。新增原始结果。"),
+            ]
+        )
+
+        self.assertEqual(len(combined), 1)
+        merged, translated = combined[0]
+        self.assertEqual(merged.bbox, (108.0, 173.4, 504.4, 216.1))
+        self.assertFalse(merged.preserve_position)
+        self.assertEqual(merged.keepout_bboxes, version_tail.keepout_bboxes)
+        self.assertIn("常识与符号推理", translated)
+
+    def test_compact_nowrap_connector_joins_formula_prose_sentence(self):
+        from pdf_zh_translator.pdf_layout import (
+            _combine_formula_continuation_translation_items,
+        )
+
+        formula = (356.1, 429.6, 429.2, 447.5)
+        sentence = TextBlock(
+            page_index=0,
+            bbox=(105.0, 429.3, 490.3, 474.3),
+            text=(
+                "We can rearrange the equation and use Young's inequality "
+                f"{SENTINEL_OPEN}a squared{SENTINEL_CLOSE}"
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_math_bboxes=(formula,),
+            formula_anchors=(formula,),
+        )
+        connector = TextBlock(
+            page_index=0,
+            bbox=(372.2, 444.7, 389.1, 457.8),
+            text="and",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="formula_prose",
+            nowrap=True,
+            preserve_position=True,
+            keepout_bboxes=[
+                (322.2, 446.1, 372.2, 462.9),
+                (389.1, 446.1, 428.9, 464.4),
+            ],
+        )
+
+        combined = _combine_formula_continuation_translation_items(
+            [(sentence, "我们重排该公式，"), (connector, "并且")]
+        )
+
+        self.assertEqual(len(combined), 1)
+        merged, translated = combined[0]
+        self.assertFalse(merged.nowrap)
+        self.assertFalse(merged.preserve_position)
+        self.assertIn("并且", translated)
+
+    def test_right_edge_nowrap_connector_stays_with_next_formula_row(self):
+        from pdf_zh_translator.pdf_layout import (
+            _combine_formula_continuation_translation_items,
+        )
+
+        sentence = TextBlock(
+            page_index=0,
+            bbox=(105.0, 446.3, 490.3, 496.6),
+            text=(
+                "The summation can be smaller than "
+                f"{SENTINEL_OPEN}upper bound{SENTINEL_CLOSE}"
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            formula_anchors=((355.1, 460.4, 404.7, 477.2),),
+        )
+        connector = TextBlock(
+            page_index=0,
+            bbox=(469.9, 458.9, 490.3, 470.6),
+            text="and",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="formula_prose",
+            nowrap=True,
+            preserve_position=True,
+            keepout_bboxes=[(464.3, 460.6, 469.9, 470.3)],
+        )
+
+        combined = _combine_formula_continuation_translation_items(
+            [(sentence, "该求和项可能更小，"), (connector, "并且")]
+        )
+
+        self.assertEqual(len(combined), 2)
+
     def test_tiny_anchored_math_layout_demotes_to_inline_sprites(self):
         block = TextBlock(
             page_index=0,
@@ -3065,6 +3937,43 @@ class FormulaTailProseTests(unittest.TestCase):
         with patch(
             "pdf_zh_translator.pdf_layout._formula_anchored_layout",
             return_value=(4.0, False, []),
+        ):
+            updated = _demote_unanchorable_math_blocks(
+                [(block, block.text)],
+                [False],
+                font_pack=font_pack,
+                min_font_size=5.0,
+                font_scale=1.0,
+                margin=0.5,
+            )
+
+        self.assertTrue(updated[0][0].flow_inline_math)
+
+    def test_academic_math_demotes_when_anchoring_shrinks_body_over_twelve_percent(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(40.0, 40.0, 260.0, 86.0),
+            text=f"Theorem 1. result {SENTINEL_OPEN}x{SENTINEL_CLOSE}",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+            source_line_bboxes=((40.0, 40.0, 260.0, 86.0),),
+            source_math_bboxes=((120.0, 56.0, 150.0, 68.0),),
+            formula_anchors=((120.0, 56.0, 150.0, 68.0),),
+        )
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        with patch(
+            "pdf_zh_translator.pdf_layout._formula_anchored_layout",
+            return_value=(8.65, False, []),
         ):
             updated = _demote_unanchorable_math_blocks(
                 [(block, block.text)],
@@ -3244,6 +4153,66 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertAlmostEqual(shifted.bbox[3], 91.1)
         self.assertAlmostEqual(shifted.bbox[1] - expanded.bbox[3], 3.5)
         self.assertEqual(untouched.bbox, other_column.bbox)
+
+    def test_layout_cascade_shifts_short_same_left_body_follower(self):
+        """GPT-3 p42: short contribution rows still belong to the full column."""
+        first = TextBlock(
+            page_index=0,
+            bbox=(40.0, 40.0, 300.0, 60.0),
+            text="long contribution paragraph",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+        wide_follower = TextBlock(
+            page_index=0,
+            bbox=(40.0, 70.0, 300.0, 82.0),
+            text="another contribution",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        short_follower = TextBlock(
+            page_index=0,
+            bbox=(40.0, 90.0, 130.0, 102.0),
+            text="short contribution",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        with patch(
+            "pdf_zh_translator.pdf_layout._sibling_group_item_height",
+            side_effect=lambda block, *_args: 44.0 if block is first else 10.0,
+        ):
+            updated = _cascade_expand_page_items(
+                [
+                    (first, "第一段需要额外两行"),
+                    (wide_follower, "第二段"),
+                    (short_follower, "短句段落"),
+                ],
+                font_pack=font_pack,
+                min_font_size=5.0,
+                font_scale=1.0,
+                margin=0.5,
+                page_height=150.0,
+            )
+
+        expanded, shifted_wide, shifted_short = [item[0] for item in updated]
+        self.assertGreater(shifted_wide.bbox[1], wide_follower.bbox[1])
+        self.assertGreater(shifted_short.bbox[1], short_follower.bbox[1])
+        self.assertGreaterEqual(
+            shifted_short.bbox[1],
+            shifted_wide.bbox[3] + 1.5,
+        )
+        self.assertLess(expanded.bbox[3], shifted_wide.bbox[1])
 
     def test_layout_cascade_expands_heading_and_shifts_body_at_role_size(self):
         heading = TextBlock(
@@ -3607,6 +4576,104 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(expanded.bbox, (40.0, 52.0, 260.0, 80.0))
         self.assertEqual(expanded.redact_bboxes, [body.bbox])
 
+    def test_multiline_body_already_in_bottom_margin_can_extend_toward_edge(self):
+        heading = TextBlock(
+            page_index=0,
+            bbox=(287.4, 710.5, 377.9, 722.4),
+            text="5 Conclusion",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+        )
+        body = TextBlock(
+            page_index=0,
+            bbox=(287.1, 727.4, 526.2, 749.4),
+            text="two-line conclusion fragment",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+        )
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        with patch(
+            "pdf_zh_translator.pdf_layout.line_block_height",
+            return_value=26.0,
+        ):
+            expanded = _expand_multiline_block_bbox(
+                body,
+                "需要保持正文字号的页底结论段落",
+                [heading, body],
+                font_pack,
+                10.0,
+                0.5,
+                774.0,
+            )
+
+        self.assertGreater(expanded.bbox[3], body.bbox[3])
+        self.assertLessEqual(expanded.bbox[3], 764.0)
+
+    def test_multiline_body_nudges_up_to_keep_full_size_above_formula(self):
+        body = TextBlock(
+            page_index=0,
+            bbox=(40.0, 60.0, 260.0, 84.0),
+            text=f"body {SENTINEL_OPEN}x{SENTINEL_CLOSE}",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            formula_anchors=((200.0, 61.0, 215.0, 72.0),),
+            keepout_bboxes=[(120.0, 70.0, 180.0, 88.0)],
+        )
+        previous = TextBlock(
+            page_index=0,
+            bbox=(40.0, 40.0, 260.0, 52.0),
+            text="previous",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        def fits_after_nudge(block, **_kwargs):
+            return block.bbox[1] <= 58.5
+
+        with (
+            patch(
+                "pdf_zh_translator.pdf_layout.line_block_height",
+                return_value=15.0,
+            ),
+            patch(
+                "pdf_zh_translator.pdf_layout.translated_text_fits",
+                side_effect=fits_after_nudge,
+            ),
+        ):
+            shifted = _expand_multiline_block_bbox(
+                body,
+                "需要保持正文字号的中文段落",
+                [previous, body],
+                font_pack,
+                10.0,
+                0.5,
+                150.0,
+            )
+
+        assert shifted.bbox == (40.0, 58.5, 260.0, 82.5)
+        assert shifted.redact_bboxes == body.redact_bboxes
+
     def test_layout_cascade_probes_required_height_around_formula_keepouts(self):
         first = TextBlock(
             page_index=0,
@@ -3934,14 +5001,33 @@ class FormulaTailProseTests(unittest.TestCase):
             )
         )
 
-    def test_formula_anchor_alignment_requires_exact_count(self):
+    def test_formula_anchor_alignment_rejects_unrelated_count_mismatch(self):
         anchors = (
             (100.0, 100.0, 110.0, 110.0),
-            (112.0, 100.0, 122.0, 110.0),
+            (180.0, 130.0, 190.0, 140.0),
         )
 
         self.assertEqual(_align_formula_anchors(anchors, 2), anchors)
         self.assertEqual(_align_formula_anchors(anchors, 1), ())
+
+    def test_formula_anchor_alignment_merges_split_inline_script_run(self):
+        anchors = (
+            (105.0, 452.6, 219.5, 472.0),
+            (249.2, 452.6, 260.4, 463.6),
+            (256.2, 458.5, 259.1, 465.3),
+            (390.2, 453.7, 419.2, 470.5),
+        )
+
+        aligned = _align_formula_anchors(anchors, 3)
+
+        self.assertEqual(
+            aligned,
+            (
+                anchors[0],
+                (249.2, 452.6, 260.4, 465.3),
+                anchors[3],
+            ),
+        )
 
     def test_formula_anchor_absorbs_adjacent_leading_root_operator(self):
         radicand = (457.6, 458.6, 477.0, 468.6)
@@ -4002,6 +5088,41 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertTrue(any(token.kind == "formula" for token in tokens))
         self.assertFalse(
             any(token.kind == "word" and "_{" in token.text for token in tokens)
+        )
+
+    def test_formula_tokenizer_rebinds_anchors_after_translation_reorders_formulas(self):
+        ith = f"{SENTINEL_OPEN}i^{{th}}{SENTINEL_CLOSE}"
+        vector = f"{SENTINEL_OPEN}theta_t in R^{{d}}{SENTINEL_CLOSE}"
+        scalar = f"{SENTINEL_OPEN}theta^{{*}}_{{i}}{SENTINEL_CLOSE}"
+        anchors = (
+            (100.0, 100.0, 112.0, 112.0),
+            (180.0, 100.0, 216.0, 120.0),
+            (260.0, 100.0, 274.0, 114.0),
+        )
+        atom_groups = tuple((anchor,) for anchor in anchors)
+        block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 90.0, 300.0, 130.0),
+            text=f"the {ith} dimension of {vector}; subtract {scalar}",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            formula_anchors=anchors,
+            source_math_atom_groups=atom_groups,
+        )
+
+        tokens = _tokenize_translation_with_formula_clips(
+            f"向量 {vector} 的第 {ith} 维；减去 {scalar}",
+            block,
+        )
+        formulas = [token for token in tokens if token.kind == "formula"]
+
+        self.assertEqual(
+            [token.source_bbox for token in formulas],
+            [anchors[1], anchors[0], anchors[2]],
+        )
+        self.assertEqual(
+            [token.source_atom_bboxes for token in formulas],
+            [atom_groups[1], atom_groups[0], atom_groups[2]],
         )
 
     def test_formula_tokenizer_falls_back_to_visible_text_when_anchors_mismatch(self):
@@ -5136,13 +6257,20 @@ class FormulaStampClipTests(unittest.TestCase):
         self.assertGreaterEqual(trimmed_first[1], span_bottom)
         self.assertEqual(trimmed_second, clip)
 
-    def test_formula_scale_caps_tall_clip_to_line_height(self):
+    def test_formula_scale_preserves_normal_inline_script_height(self):
         from pdf_zh_translator.pdf_layout import _formula_clip_scale
 
         scale = _formula_clip_scale((0.0, 0.0, 20.0, 20.0), 10.0, 10.0)
 
-        self.assertAlmostEqual(scale, 0.8)
-        self.assertLessEqual(20.0 * scale, 16.0)
+        self.assertAlmostEqual(scale, 1.0)
+
+    def test_formula_scale_caps_true_formula_tower_to_two_lines(self):
+        from pdf_zh_translator.pdf_layout import _formula_clip_scale
+
+        scale = _formula_clip_scale((0.0, 0.0, 20.0, 30.0), 10.0, 10.0)
+
+        self.assertAlmostEqual(scale, 2.0 / 3.0)
+        self.assertLessEqual(30.0 * scale, 20.0)
 
 
 class OverlappingUnitPreservationTests(unittest.TestCase):
@@ -5298,6 +6426,34 @@ class OverlappingUnitPreservationTests(unittest.TestCase):
         flagged = _overlapping_translation_block_bboxes(
             [first, second, nested, continuation]
         )
+
+        self.assertEqual(flagged, [])
+
+    def test_formula_rows_compare_translatable_redaction_ink(self):
+        """Adam p5: adjacent formula prose has overlapping line hulls, while
+        the English spans that will actually be replaced do not overlap."""
+        from pdf_zh_translator.pdf_layout import _overlapping_translation_block_bboxes
+
+        first = TextBlock(
+            page_index=0,
+            bbox=(105.0, 336.0, 383.0, 382.0),
+            text="The limit remains finite for sparse gradients FORMULA.",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((105.0, 336.0, 362.0, 381.0),),
+            redact_bboxes=[(105.0, 336.0, 205.0, 348.0)],
+        )
+        second = TextBlock(
+            page_index=0,
+            bbox=(105.0, 342.0, 490.0, 408.0),
+            text="AdaGrad corresponds to an annealed adaptive update FORMULA.",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((105.0, 353.0, 490.0, 371.0),),
+            redact_bboxes=[(300.0, 353.0, 490.0, 365.0)],
+        )
+
+        flagged = _overlapping_translation_block_bboxes([first, second])
 
         self.assertEqual(flagged, [])
 
@@ -6013,6 +7169,90 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0].source_lines, 13)
         self.assertIn("theoretical compute latency", merged[0].text)
+
+    def test_sentence_final_statement_does_not_absorb_multiline_display_formula(self):
+        statement = TextBlock(
+            page_index=0,
+            bbox=(105.0, 347.0, 490.0, 405.0),
+            text=(
+                "Theorem 4.1 gives the following guarantee for all "
+                f"{SENTINEL_OPEN}T >= 1{SENTINEL_CLOSE}."
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=4,
+            source_math_bboxes=((400.0, 388.0, 440.0, 405.0),),
+        )
+        display_formula = TextBlock(
+            page_index=0,
+            bbox=(189.0, 406.0, 203.0, 443.0),
+            text=f"{SENTINEL_OPEN}sum_i^d{SENTINEL_CLOSE}",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_math_bboxes=((189.0, 406.0, 203.0, 443.0),),
+        )
+
+        merged = merge_paragraph_blocks([statement, display_formula])
+
+        self.assertEqual(len(merged), 2)
+
+    def test_formula_prose_does_not_absorb_multiline_formula_continuation(self):
+        explanation = TextBlock(
+            page_index=0,
+            bbox=(105.0, 343.0, 490.0, 372.0),
+            text=(
+                ". AdaGrad corresponds to a version of Adam with "
+                f"{SENTINEL_OPEN}beta_1=0{SENTINEL_CLOSE} and an annealed version"
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="formula_prose",
+            source_lines=2,
+            no_merge=True,
+            source_math_bboxes=((300.0, 350.0, 360.0, 368.0),),
+        )
+        display_formula = TextBlock(
+            page_index=0,
+            bbox=(105.0, 363.0, 285.0, 407.0),
+            text=(
+                f", namely {SENTINEL_OPEN}alpha_t = alpha t^-1/2{SENTINEL_CLOSE}"
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_math_bboxes=((150.0, 363.0, 285.0, 407.0),),
+        )
+
+        merged = merge_paragraph_blocks([explanation, display_formula])
+
+        self.assertEqual(len(merged), 2)
+
+    def test_multiline_display_formula_does_not_absorb_following_sentence(self):
+        display_formula = TextBlock(
+            page_index=0,
+            bbox=(189.0, 406.0, 203.0, 443.0),
+            text=f"{SENTINEL_OPEN}sum_i^d{SENTINEL_CLOSE}",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_math_bboxes=((189.0, 406.0, 203.0, 443.0),),
+        )
+        explanation = TextBlock(
+            page_index=0,
+            bbox=(105.0, 446.0, 490.0, 497.0),
+            text=(
+                "Our Theorem 4.1 implies that sparse gradients make the "
+                "summation term smaller than its upper bound."
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+        )
+
+        merged = merge_paragraph_blocks([display_formula, explanation])
+
+        self.assertEqual(len(merged), 2)
 
     def test_does_not_merge_narrow_fixed_width_table_cells(self):
         blocks = [
@@ -6997,6 +8237,69 @@ class TestClassifyBlocks(unittest.TestCase):
         self.assertEqual(block.block_type, "body")
         self.assertTrue(block.should_translate)
 
+    def test_long_reference_shaped_prose_without_heading_stays_body(self):
+        import pdf_zh_translator.pdf_layout as layout
+
+        cases = (
+            (
+                "Taori et al. (2020) is a recent comprehensive study moving "
+                "towards quantifying natural distribution shifts. They measure "
+                "performance across multiple datasets and analyze how accuracy "
+                "changes under new test distributions. "
+            ),
+            (
+                "1. The cost of increasing model alignment is modest relative "
+                "to pretraining. The cost of collecting our data and compute for "
+                "training runs is a fraction of the original model budget. The "
+                "conference report was published in Proceedings 2020. "
+            ),
+            (
+                "NELL NELL is a dataset extracted from the knowledge graph "
+                "introduced in (Carlson et al., 2010). A knowledge graph is a "
+                "set of entities connected with directed labeled relations. We "
+                "report the same dataset protocol at ICLR 2016. "
+            ),
+        )
+        for index, prefix in enumerate(cases):
+            with self.subTest(index=index):
+                block = self._make_block(
+                    prefix * 5,
+                    bbox=(108.0, 153.9, 504.0, 520.0),
+                    page=5,
+                )
+                block.source_lines = 18
+                layout._bibliography_seen.clear()
+                layout._bibliography_ended = False
+                layout._bibliography_heading_size = 0.0
+
+                classify_blocks([block], 5, 792, [])
+
+                self.assertEqual(block.block_type, "body")
+                self.assertTrue(block.should_translate)
+
+    def test_long_multi_numbered_reference_without_heading_is_preserved(self):
+        import pdf_zh_translator.pdf_layout as layout
+
+        entries = " ".join(
+            f"[{index}] A. Author and B. Writer. Reference title {index}. "
+            f"Proceedings of Example Conference, 20{index:02d}."
+            for index in range(1, 9)
+        )
+        block = self._make_block(
+            entries,
+            bbox=(108.0, 153.9, 504.0, 620.0),
+            page=5,
+        )
+        block.source_lines = 24
+        layout._bibliography_seen.clear()
+        layout._bibliography_ended = False
+        layout._bibliography_heading_size = 0.0
+
+        classify_blocks([block], 5, 792, [])
+
+        self.assertEqual(block.block_type, "bibliography")
+        self.assertFalse(block.should_translate)
+
     def test_hyperparameter_2048_is_not_misread_as_reference_year(self):
         from pdf_zh_translator.pdf_layout import _looks_like_reference_entry_text
 
@@ -7113,6 +8416,20 @@ class TestClassifyBlocks(unittest.TestCase):
                 "J. Snoek, H. Larochelle, and R.P. Adams."
             )
         )
+        # BERT p10: the entry title wraps onto the next line, leaving only
+        # authors and the publication year on the first physical line.
+        self.assertTrue(
+            _looks_like_reference_author_line(
+                "Z. Chen, H. Zhang, X. Zhang, and L. Zhao. 2018."
+            )
+        )
+        # EfficientNet p9: the author list itself wraps, and the final author
+        # shares a physical line with the start of the entry title.
+        self.assertTrue(
+            _looks_like_reference_author_line(
+                "D. W., and Belhumeur, P. N. Birdsnap: Large-scale"
+            )
+        )
         # Appendix headings keep terminating the references range.
         self.assertFalse(
             _looks_like_reference_author_line("A. Additional Experiments")
@@ -7122,6 +8439,12 @@ class TestClassifyBlocks(unittest.TestCase):
         )
         self.assertFalse(
             _looks_like_reference_author_line("B. Convergence Analysis.")
+        )
+        self.assertFalse(
+            _looks_like_reference_author_line("A. Additional Experiments 2024.")
+        )
+        self.assertFalse(
+            _looks_like_reference_author_line("D. Wide Models: Ablation")
         )
 
     def test_references_and_notes_heading_starts_bibliography(self):
@@ -9595,6 +10918,26 @@ if __name__ == "__main__":
 
 
 class PreservedCollisionSkipTests(unittest.TestCase):
+    def test_title_expansion_adds_cjk_height_without_widening_redaction(self):
+        source_bbox = (67.7, 89.9, 529.2, 104.3)
+        title = TextBlock(
+            page_index=0,
+            bbox=source_bbox,
+            text="EfficientNet: Rethinking Model Scaling",
+            font_size=14.35,
+            color=(0.0, 0.0, 0.0),
+            block_type="title",
+            bold=True,
+        )
+
+        expanded = expand_heading_bbox(title)
+
+        self.assertEqual(expanded.bbox[0], source_bbox[0])
+        self.assertEqual(expanded.bbox[2], source_bbox[2])
+        self.assertLess(expanded.bbox[1], source_bbox[1])
+        self.assertGreater(expanded.bbox[3], source_bbox[3])
+        self.assertEqual(expanded.redact_bboxes, [source_bbox])
+
     def test_heading_expansion_keeps_original_redaction_bbox(self):
         source_bbox = (155.3, 352.0, 235.1, 362.1)
         label = TextBlock(
@@ -9863,6 +11206,76 @@ class PreservedCollisionSkipTests(unittest.TestCase):
 
         self.assertEqual(flagged, [candidate.bbox])
 
+    def test_formula_dense_block_with_granular_redacts_ignores_formula_ink(self):
+        """Adam p4: a formula-heavy paragraph must not be frozen merely
+        because its broad hull encloses a preserved formula continuation."""
+        from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved
+
+        candidate = TextBlock(
+            page_index=0,
+            bbox=(105.0, 347.0, 490.0, 497.0),
+            text=(
+                "Our theorem implies sparse bounded gradients "
+                "\ue000x\ue001 \ue000y\ue001 \ue000z\ue001 \ue000w\ue001."
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=((105.0, 347.0, 490.0, 497.0),),
+            redact_bboxes=[
+                (105.0, 347.0, 300.0, 360.0),
+                (220.0, 458.0, 340.0, 470.0),
+            ],
+        )
+        preserved_formula_ink = (470.0, 459.0, 490.0, 471.0)
+
+        flagged = _candidate_bboxes_colliding_with_preserved(
+            [candidate], [preserved_formula_ink]
+        )
+
+        self.assertEqual(flagged, [])
+
+    def test_math_fragment_preserves_line_ink_instead_of_full_hull(self):
+        from pdf_zh_translator.pdf_layout import _preserved_block_regions
+
+        fragment = TextBlock(
+            page_index=0,
+            bbox=(140.0, 459.0, 490.0, 510.0),
+            text="and \ue000T\ue001\ue000v\ue001 \ue000<\ue001\ue000G\ue001",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_line_bboxes=(
+                (470.0, 459.0, 490.0, 471.0),
+                (140.0, 474.0, 203.0, 510.0),
+                (203.0, 466.0, 211.0, 482.0),
+            ),
+        )
+
+        self.assertEqual(
+            _preserved_block_regions(fragment),
+            list(fragment.source_line_bboxes),
+        )
+
+    def test_equation_fragment_prefers_exact_math_atoms_over_line_hull(self):
+        from pdf_zh_translator.pdf_layout import _preserved_block_regions
+
+        atoms = (
+            (139.5, 474.1, 145.2, 483.8),
+            (146.7, 473.9, 152.0, 510.0),
+            (203.3, 465.6, 211.4, 482.4),
+        )
+        fragment = TextBlock(
+            page_index=0,
+            bbox=(139.5, 465.6, 211.4, 510.0),
+            text="\ue000T\ue001\ue000v\ue001 \ue000<\ue001\ue000G\ue001",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="body",
+            source_line_bboxes=((139.5, 465.6, 211.4, 510.0),),
+            source_math_atom_bboxes=atoms,
+        )
+
+        self.assertEqual(_preserved_block_regions(fragment), list(atoms))
+
 
 class CaptionInsideEnvelopeTests(unittest.TestCase):
     def test_caption_anchoring_table_envelope_is_still_translated(self):
@@ -10076,6 +11489,187 @@ class FormulaKeepoutQaExemptionTests(unittest.TestCase):
 
 
 class PreservedLineKeepoutAttachmentTests(unittest.TestCase):
+    def test_anchored_formula_prose_slots_do_not_merge_back_together(self):
+        from pdf_zh_translator.pdf_layout import (
+            _promote_equation_table_neighbor_blocks,
+        )
+
+        lead = TextBlock(
+            page_index=0,
+            bbox=(105.0, 429.0, 490.0, 447.0),
+            text="It can be",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="formula_prose",
+            no_merge=True,
+            flow_inline_math=True,
+        )
+        anchored = TextBlock(
+            page_index=0,
+            bbox=(105.0, 444.0, 147.0, 456.0),
+            text="shown that",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="formula_prose",
+            nowrap=True,
+            no_merge=True,
+            preserve_position=True,
+            flow_inline_math=True,
+        )
+
+        self.assertFalse(can_merge_blocks(lead, anchored))
+        _promote_equation_table_neighbor_blocks(
+            [lead, anchored],
+            [(149.0, 438.0, 455.0, 482.0)],
+        )
+        self.assertEqual(lead.block_type, "formula_prose")
+        self.assertTrue(lead.should_translate)
+        self.assertEqual(anchored.block_type, "formula_prose")
+        self.assertTrue(anchored.should_translate)
+
+    def test_run_in_academic_label_promotes_formula_statement_body(self):
+        from pdf_zh_translator.pdf_layout import (
+            _looks_like_translatable_formula_prose_block,
+            _promote_run_in_academic_statement_bodies,
+            should_preserve_original_block,
+        )
+
+        heading = TextBlock(
+            page_index=0,
+            bbox=(104.9, 208.2, 158.5, 220.0),
+            text="Lemma 10.2.",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="run_in_heading",
+            no_merge=True,
+        )
+        formula = (235.1, 223.8, 360.2, 244.4)
+        statement = TextBlock(
+            page_index=0,
+            bbox=(158.5, 208.2, 391.0, 244.4),
+            text=(
+                "If a function is convex, then for all points "
+                f"{SENTINEL_OPEN}f(y) >= f(x) + gradient{SENTINEL_CLOSE}"
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_line_bboxes=(
+                (158.5, 208.2, 391.0, 228.5),
+                formula,
+            ),
+            source_math_bboxes=(formula,),
+        )
+
+        _promote_run_in_academic_statement_bodies([heading, statement])
+
+        self.assertEqual(statement.block_type, "formula_prose")
+        self.assertTrue(statement.no_merge)
+        self.assertTrue(statement.should_translate)
+        self.assertFalse(statement.preserve_position)
+        self.assertTrue(_looks_like_translatable_formula_prose_block(statement))
+        self.assertFalse(should_preserve_original_block(statement, []))
+
+    def test_academic_label_does_not_promote_separate_following_paragraph(self):
+        from pdf_zh_translator.pdf_layout import (
+            _promote_run_in_academic_statement_bodies,
+        )
+
+        heading = TextBlock(
+            page_index=0,
+            bbox=(104.9, 208.2, 158.5, 220.0),
+            text="Lemma 10.2.",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="run_in_heading",
+        )
+        paragraph = TextBlock(
+            page_index=0,
+            bbox=(105.0, 247.9, 490.3, 270.2),
+            text=(
+                "The above lemma gives the required upper bound "
+                f"{SENTINEL_OPEN}R_T{SENTINEL_CLOSE}."
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_math_bboxes=((300.0, 248.0, 320.0, 260.0),),
+        )
+
+        _promote_run_in_academic_statement_bodies([heading, paragraph])
+
+        self.assertEqual(paragraph.block_type, "body")
+        self.assertFalse(paragraph.no_merge)
+
+    def test_display_formula_ending_statement_stops_before_next_paragraph(self):
+        formula = (235.1, 223.8, 360.2, 244.4)
+        statement = TextBlock(
+            page_index=0,
+            bbox=(158.5, 208.2, 391.0, 244.4),
+            text=(
+                "If a function is convex, then for all points "
+                f"{SENTINEL_OPEN}f(y) >= f(x) + gradient{SENTINEL_CLOSE}"
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_line_bboxes=(
+                (158.5, 208.2, 391.0, 228.5),
+                formula,
+            ),
+            source_math_bboxes=(formula,),
+        )
+        following = TextBlock(
+            page_index=0,
+            bbox=(105.0, 247.9, 490.3, 270.2),
+            text=(
+                "The above lemma can be used to upper bound the regret and "
+                "construct the proof of the main theorem."
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_line_bboxes=(
+                (105.0, 247.9, 490.3, 259.5),
+                (105.0, 258.5, 381.2, 270.2),
+            ),
+        )
+
+        self.assertFalse(can_merge_blocks(statement, following))
+
+    def test_inline_formula_prefix_continuing_prose_is_not_preserved_as_display_math(self):
+        prose = _line(
+            "The method has been shown to improve the convergence of standard",
+            (105.0, 629.6, 490.3, 641.3),
+        )
+        prose.prose_bboxes = [prose.bbox]
+        prose_bbox = (105.0, 640.3, 152.4, 652.0)
+        formula_bbox = (154.3, 639.4, 180.2, 653.1)
+        mixed = _LineRec(
+            text=(
+                f"SGD, where {SENTINEL_OPEN}bar theta_t = 1{SENTINEL_CLOSE}"
+            ),
+            bbox=(105.0, 639.4, 180.2, 653.1),
+            spans=[
+                _span("SGD, where", prose_bbox),
+                _span("bar theta_t = 1", formula_bbox, font="CMMI10"),
+            ],
+            prose_bboxes=[prose_bbox],
+            math_bboxes=[formula_bbox],
+            math_run_bboxes=[formula_bbox],
+        )
+
+        segments = segments_from_record(
+            0,
+            _RawBlockRec(lines=[prose, mixed]),
+            equation_record=False,
+        )
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("SGD, where", strip_sentinels(segments[0].text))
+        self.assertIn(mixed.bbox, segments[0].redact_bboxes or [])
+        self.assertIn(formula_bbox, segments[0].source_math_bboxes)
+
     def test_display_equation_line_attaches_to_adjacent_segments(self):
         """A preserved equation line separating two prose runs must be
         registered as a keepout even when segment bboxes don't touch it."""
@@ -10768,6 +12362,217 @@ def test_captioned_horizontal_rule_table_has_preserved_envelope():
     ]
 
 
+def test_horizontal_rule_tables_split_at_intervening_caption():
+    from pdf_zh_translator.pdf_layout import _vector_table_region_bboxes
+
+    class FakePage:
+        def get_drawings(self):
+            return [
+                {"rect": SimpleNamespace(x0=108.0, y0=y, x1=516.0, y1=y)}
+                for y in (150.0, 182.0, 214.0, 246.0, 330.0, 362.0, 394.0, 426.0)
+            ]
+
+    captions = [
+        TextBlock(
+            0,
+            (108.0, y, 505.0, y + 25.0),
+            f"Table {number}: Detection results on the test set.",
+            9.0,
+            (0.0, 0.0, 0.0),
+            block_type="caption",
+        )
+        for number, y in ((3, 116.0), (4, 296.0))
+    ]
+    rows = [
+        TextBlock(
+            0,
+            (112.0, y, 512.0, y + 20.0),
+            f"row {index}",
+            9.0,
+            (0.0, 0.0, 0.0),
+        )
+        for index, y in enumerate((154.0, 186.0, 218.0, 334.0, 366.0, 398.0), start=1)
+    ]
+
+    assert _vector_table_region_bboxes(FakePage(), [*captions, *rows]) == [
+        (108.0, 150.0, 516.0, 246.0),
+        (108.0, 330.0, 516.0, 426.0),
+    ]
+
+
+def test_captioned_two_rule_table_has_preserved_envelope():
+    from pdf_zh_translator.pdf_layout import _vector_table_region_bboxes
+
+    class FakePage:
+        def get_drawings(self):
+            return [
+                {"rect": SimpleNamespace(x0=108.0, y0=y, x1=516.0, y1=y)}
+                for y in (150.0, 362.0)
+            ]
+
+    caption = TextBlock(
+        0,
+        (108.0, 116.0, 505.0, 141.0),
+        "Table 25: Few-shot exemplars for a chain-of-thought prompt.",
+        9.0,
+        (0.0, 0.0, 0.0),
+        block_type="caption",
+    )
+    rows = [
+        TextBlock(
+            0,
+            (112.0, y, 512.0, y + 20.0),
+            text,
+            9.0,
+            (0.0, 0.0, 0.0),
+        )
+        for y, text in (
+            (154.0, "Prompt for StrategyQA"),
+            (186.0, "Question: Do hamsters provide food for any animals?"),
+            (218.0, "Answer: Hamsters are prey animals."),
+        )
+    ]
+
+    assert _vector_table_region_bboxes(FakePage(), [caption, *rows]) == [
+        (108.0, 150.0, 516.0, 362.0)
+    ]
+
+
+def test_two_rule_fallback_does_not_split_vertical_table_grid():
+    from pdf_zh_translator.pdf_layout import _vector_table_region_bboxes
+
+    class FakePage:
+        def get_drawings(self):
+            return [
+                {"rect": SimpleNamespace(x0=108.0, y0=150.0, x1=516.0, y1=150.0)},
+                {"rect": SimpleNamespace(x0=108.0, y0=362.0, x1=516.0, y1=362.0)},
+                {"rect": SimpleNamespace(x0=300.0, y0=150.0, x1=300.0, y1=160.0)},
+                {"rect": SimpleNamespace(x0=300.0, y0=160.0, x1=300.0, y1=170.0)},
+                {"rect": SimpleNamespace(x0=300.0, y0=170.0, x1=300.0, y1=180.0)},
+            ]
+
+    caption = TextBlock(
+        0,
+        (108.0, 116.0, 505.0, 141.0),
+        "Table 3: Detection results on the test set.",
+        9.0,
+        (0.0, 0.0, 0.0),
+        block_type="caption",
+    )
+    rows = [
+        TextBlock(
+            0,
+            (112.0, y, 512.0, y + 20.0),
+            f"row {index}",
+            9.0,
+            (0.0, 0.0, 0.0),
+        )
+        for index, y in enumerate((154.0, 186.0, 218.0), start=1)
+    ]
+
+    assert _vector_table_region_bboxes(FakePage(), [caption, *rows]) == []
+
+
+def test_formatted_dataset_examples_preserve_rule_bounded_payloads():
+    from pdf_zh_translator.pdf_layout import (
+        _formatted_dataset_example_region_bboxes,
+    )
+
+    class FakePage:
+        def get_drawings(self):
+            return [
+                {"rect": SimpleNamespace(x0=72.0, y0=y, x1=540.0, y1=y)}
+                for y in (
+                    80.6,
+                    135.6,
+                    150.7,
+                    194.8,
+                    259.7,
+                    274.8,
+                )
+            ]
+
+    captions = [
+        TextBlock(
+            0,
+            (206.5, 159.1, 405.5, 169.1),
+            "Figure G.31: Formatted dataset example for RTE",
+            10.0,
+            (0.0, 0.0, 0.0),
+        ),
+        TextBlock(
+            0,
+            (206.4, 283.2, 405.6, 293.3),
+            "Figure G.32: Formatted dataset example for WiC",
+            10.0,
+            (0.0, 0.0, 0.0),
+        ),
+    ]
+
+    assert _formatted_dataset_example_region_bboxes(FakePage(), captions) == [
+        (72.0, 80.6, 540.0, 150.7),
+        (72.0, 194.8, 540.0, 274.8),
+    ]
+
+
+@pytest.mark.parametrize(
+    "caption_text",
+    [
+        "Figure 43: Model samples on a prompt cherry-picked to show "
+        "instruction following behavior.",
+        "Figure 11: Complete instructions given to labelers for evaluating "
+        "model outputs for toxicity.",
+        "Figure 14: Winogender: prompting, examples, and dataset features.",
+    ],
+)
+def test_model_sample_figures_preserve_rule_bounded_payloads(caption_text):
+    from pdf_zh_translator.pdf_layout import (
+        _formatted_dataset_example_region_bboxes,
+    )
+
+    class FakePage:
+        def get_drawings(self):
+            return [
+                {"rect": SimpleNamespace(x0=112.0, y0=y, x1=500.0, y1=y)}
+                for y in (72.0, 332.0)
+            ]
+
+    caption = TextBlock(
+        0,
+        (108.0, 340.0, 504.0, 365.0),
+        caption_text,
+        10.0,
+        (0.0, 0.0, 0.0),
+    )
+
+    assert _formatted_dataset_example_region_bboxes(FakePage(), [caption]) == [
+        (112.0, 72.0, 500.0, 332.0)
+    ]
+
+
+def test_ordinary_figure_does_not_preserve_horizontal_rules_as_sample():
+    from pdf_zh_translator.pdf_layout import (
+        _formatted_dataset_example_region_bboxes,
+    )
+
+    class FakePage:
+        def get_drawings(self):
+            return [
+                {"rect": SimpleNamespace(x0=72.0, y0=y, x1=540.0, y1=y)}
+                for y in (80.0, 150.0)
+            ]
+
+    caption = TextBlock(
+        0,
+        (180.0, 160.0, 430.0, 172.0),
+        "Figure 3: Training loss curves for all models.",
+        10.0,
+        (0.0, 0.0, 0.0),
+    )
+
+    assert _formatted_dataset_example_region_bboxes(FakePage(), [caption]) == []
+
+
 def test_tall_formula_keepout_is_not_vertically_trimmed_as_adjacent_line():
     """Cross-line operators are handled by block-level horizontal splitting."""
     from pdf_zh_translator.pdf_layout import (
@@ -10808,6 +12613,144 @@ def test_tall_formula_keepout_splits_block_redaction_around_operator():
     assert len(block.redact_bboxes) == 2
     assert block.redact_bboxes[0][2] < 310.3
     assert block.redact_bboxes[1][0] > 320.8
+
+
+def test_stale_formula_descent_restores_atoms_instead_of_leaving_prose_island():
+    from pdf_zh_translator.pdf_layout import (
+        _attach_formula_keepouts,
+        _LineRec,
+        _trim_redacts_against_block_keepouts,
+    )
+
+    prose = (183.28, 358.64, 317.65, 370.32)
+    radical = (287.55, 329.73, 303.26, 373.61)
+    radical_atoms = [
+        (287.55, 329.73, 295.63, 346.55),
+        (295.73, 337.43, 301.12, 373.61),
+        (295.63, 337.64, 300.33, 347.34),
+        (300.33, 341.28, 303.26, 348.06),
+    ]
+    formula_line = _LineRec(
+        text="formula",
+        bbox=radical,
+        spans=[],
+        math_bboxes=radical_atoms,
+        math_run_bboxes=[radical],
+    )
+    block = TextBlock(
+        0,
+        prose,
+        "dimension of the parameter vector",
+        9.7,
+        (0.0, 0.0, 0.0),
+        redact_bboxes=[prose],
+    )
+
+    _attach_formula_keepouts([block], [formula_line])
+    _trim_redacts_against_block_keepouts([block])
+
+    assert block.redact_bboxes == [prose]
+    assert block.redaction_formula_restore_groups == (tuple(radical_atoms),)
+
+
+def test_stale_formula_descent_at_one_point_nine_lines_is_restored():
+    from pdf_zh_translator.pdf_layout import _trim_redacts_against_block_keepouts
+
+    prose = (429.17, 429.27, 490.32, 440.95)
+    keepout = (469.12, 406.99, 481.79, 443.17)
+    atoms = (
+        (469.22, 406.99, 474.61, 443.17),
+        (469.12, 407.20, 473.82, 416.90),
+        (473.82, 410.84, 481.79, 417.62),
+    )
+    block = TextBlock(
+        0,
+        prose,
+        "Also, it can be",
+        9.7,
+        (0.0, 0.0, 0.0),
+        redact_bboxes=[prose],
+        keepout_bboxes=[keepout],
+        keepout_formula_atom_groups=(atoms,),
+    )
+
+    _trim_redacts_against_block_keepouts([block])
+
+    assert block.redact_bboxes == [prose]
+    assert block.redaction_formula_restore_groups == (atoms,)
+
+
+def test_owned_formula_run_is_not_attached_as_an_external_keepout():
+    from pdf_zh_translator.pdf_layout import _attach_formula_keepouts, _LineRec
+
+    formula = (150.0, 438.0, 430.0, 482.0)
+    atom = (155.0, 442.0, 170.0, 458.0)
+    block = TextBlock(
+        0,
+        (105.0, 429.0, 490.0, 482.0),
+        f"shown that {SENTINEL_OPEN}formula{SENTINEL_CLOSE}",
+        9.7,
+        (0.0, 0.0, 0.0),
+        source_math_bboxes=(formula,),
+        source_math_atom_bboxes=(atom,),
+    )
+    line = _LineRec(
+        text=f"{SENTINEL_OPEN}formula{SENTINEL_CLOSE}",
+        bbox=formula,
+        spans=[],
+        math_bboxes=[atom],
+        math_run_bboxes=[formula],
+    )
+
+    _attach_formula_keepouts([block], [line])
+
+    assert not block.keepout_bboxes
+    assert not block.keepout_formula_atom_groups
+
+
+def test_anchored_formula_prose_slot_restores_both_adjacent_formulas():
+    from pdf_zh_translator.pdf_layout import _attach_formula_keepouts, _LineRec
+
+    left = (322.2, 446.1, 372.2, 462.9)
+    right = (389.1, 446.1, 428.9, 464.4)
+    left_atom = (360.0, 447.0, 372.2, 458.0)
+    right_atom = (389.1, 447.0, 401.0, 458.0)
+    slot = TextBlock(
+        0,
+        (372.2, 444.7, 389.1, 457.8),
+        "and",
+        9.7,
+        (0.0, 0.0, 0.0),
+        nowrap=True,
+        no_merge=True,
+        block_type="formula_prose",
+        preserve_position=True,
+        flow_inline_math=True,
+        source_prose_bboxes=((372.2, 444.7, 389.1, 457.8),),
+    )
+    formula_lines = [
+        _LineRec(
+            text=f"{SENTINEL_OPEN}left{SENTINEL_CLOSE}",
+            bbox=left,
+            spans=[],
+            math_bboxes=[left_atom],
+            math_run_bboxes=[left],
+        ),
+        _LineRec(
+            text=f"{SENTINEL_OPEN}right{SENTINEL_CLOSE}",
+            bbox=right,
+            spans=[],
+            math_bboxes=[right_atom],
+            math_run_bboxes=[right],
+        ),
+    ]
+
+    _attach_formula_keepouts([slot], formula_lines)
+
+    assert slot.redaction_formula_restore_groups == (
+        (left_atom,),
+        (right_atom,),
+    )
 
 
 class JustifiedWordFragmentTests(unittest.TestCase):
@@ -10948,6 +12891,138 @@ class DetachedInlineScriptTests(unittest.TestCase):
             2,
         )
 
+    def test_formula_bridge_records_rejoin_prose_tail_after_math_tower(self):
+        start_formula = (180.0, 100.0, 280.0, 126.0)
+        start = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=(
+                        "The basic version updates parameters as "
+                        f"{SENTINEL_OPEN}theta update{SENTINEL_CLOSE}. "
+                        "Note that if we choose beta to be"
+                    ),
+                    bbox=(50.0, 100.0, 300.0, 126.0),
+                    spans=[_span("theta update", start_formula, font="CMMI10")],
+                    prose_bboxes=[(50.0, 100.0, 178.0, 112.0)],
+                    math_bboxes=[start_formula],
+                    math_run_bboxes=[start_formula],
+                )
+            ]
+        )
+        first_math = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}alpha_t=alpha/sqrt(t){SENTINEL_CLOSE}",
+                    bbox=(50.0, 120.0, 190.0, 150.0),
+                    spans=[
+                        _span(
+                            "alpha_t=alpha/sqrt(t)",
+                            (50.0, 120.0, 190.0, 150.0),
+                            font="CMMI10",
+                        )
+                    ],
+                    math_bboxes=[(50.0, 120.0, 190.0, 150.0)],
+                    math_run_bboxes=[(50.0, 120.0, 190.0, 150.0)],
+                )
+            ]
+        )
+        second_math = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}theta_t=theta-update{SENTINEL_CLOSE}",
+                    bbox=(190.0, 118.0, 300.0, 152.0),
+                    spans=[
+                        _span(
+                            "theta_t=theta-update",
+                            (190.0, 118.0, 300.0, 152.0),
+                            font="CMMI10",
+                        )
+                    ],
+                    math_bboxes=[(190.0, 118.0, 300.0, 152.0)],
+                    math_run_bboxes=[(190.0, 118.0, 300.0, 152.0)],
+                )
+            ]
+        )
+        tail_formula = (50.0, 140.0, 145.0, 168.0)
+        tail = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=(
+                        f"{SENTINEL_OPEN}theta update{SENTINEL_CLOSE}. Note that this direct "
+                        "correspondence does not hold without bias correction and can "
+                        "otherwise lead to infinitely large parameter updates."
+                    ),
+                    bbox=(50.0, 140.0, 300.0, 180.0),
+                    spans=[_span("theta update", tail_formula, font="CMMI10")],
+                    prose_bboxes=[(146.0, 140.0, 300.0, 180.0)],
+                    math_bboxes=[tail_formula],
+                    math_run_bboxes=[tail_formula],
+                )
+            ]
+        )
+
+        records = _merge_wrapped_formula_continuation_records(
+            [start, first_math, second_math, tail]
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertTrue(records[0].detached_inline_scripts)
+        blocks = segments_from_record(0, records[0], equation_record=False)
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(blocks[0].flow_inline_math)
+        self.assertIn("Note that this direct correspondence", strip_sentinels(blocks[0].text))
+
+    def test_short_derivation_rejoins_formula_only_terminal_records(self):
+        start = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=(
+                        "This result can be obtained by using Theorem 4.1 and "
+                        f"{SENTINEL_OPEN}sum gradient{SENTINEL_CLOSE}"
+                    ),
+                    bbox=(50.0, 100.0, 280.0, 126.0),
+                    spans=[_span("sum gradient", (220.0, 100.0, 280.0, 126.0), font="CMMI10")],
+                    prose_bboxes=[(50.0, 100.0, 218.0, 112.0)],
+                    math_bboxes=[(220.0, 100.0, 280.0, 126.0)],
+                    math_run_bboxes=[(220.0, 100.0, 280.0, 126.0)],
+                )
+            ]
+        )
+        middle = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=(
+                        f"{SENTINEL_OPEN}T{SENTINEL_CLOSE}. Thus, "
+                        f"{SENTINEL_OPEN}limit ratio{SENTINEL_CLOSE}"
+                    ),
+                    bbox=(250.0, 110.0, 300.0, 138.0),
+                    spans=[_span("limit ratio", (270.0, 110.0, 300.0, 138.0), font="CMMI10")],
+                    prose_bboxes=[(258.0, 118.0, 270.0, 130.0)],
+                    math_bboxes=[(250.0, 110.0, 257.0, 126.0), (270.0, 110.0, 300.0, 138.0)],
+                    math_run_bboxes=[(250.0, 110.0, 257.0, 126.0), (270.0, 110.0, 300.0, 138.0)],
+                )
+            ]
+        )
+        terminal = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}=0.{SENTINEL_CLOSE}",
+                    bbox=(50.0, 132.0, 90.0, 148.0),
+                    spans=[_span("=0.", (50.0, 132.0, 90.0, 148.0), font="CMMI10")],
+                    math_bboxes=[(50.0, 132.0, 90.0, 148.0)],
+                    math_run_bboxes=[(50.0, 132.0, 90.0, 148.0)],
+                )
+            ]
+        )
+
+        records = _merge_wrapped_formula_continuation_records([start, middle, terminal])
+
+        self.assertEqual(len(records), 1)
+        blocks = segments_from_record(0, records[0], equation_record=False)
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(blocks[0].flow_inline_math)
+        self.assertIn("Thus", strip_sentinels(blocks[0].text))
+
     def test_long_prose_paragraph_recovers_wide_formula_continuation(self):
         lines = [
             _line(
@@ -11014,6 +13089,82 @@ class DetachedInlineScriptTests(unittest.TestCase):
         blocks = segments_from_record(0, _RawBlockRec(lines=lines), equation_record=False)
 
         self.assertFalse(any(block.flow_inline_math for block in blocks))
+
+    def test_academic_statement_reflows_interleaved_formula_rows_as_one_paragraph(self):
+        prose_bbox = (50.0, 100.0, 300.0, 112.0)
+        first_formula = (230.0, 100.0, 300.0, 114.0)
+        wide_formula = (50.0, 114.0, 280.0, 132.0)
+        math_fragment = (180.0, 130.0, 205.0, 139.0)
+        tail_formula = (50.0, 140.0, 95.0, 152.0)
+        lines = [
+            _line(
+                "The previous paragraph ends with a running average coefficient.",
+                (50.0, 84.0, 300.0, 96.0),
+            ),
+            _LineRec(
+                text=(
+                    "Theorem 4.1. Assume that the objective has bounded gradients "
+                    f"{SENTINEL_OPEN}norm(g_t) <= G{SENTINEL_CLOSE}"
+                ),
+                bbox=(50.0, 100.0, 300.0, 114.0),
+                spans=[
+                    _span(
+                        "Theorem 4.1. Assume that the objective has bounded gradients ",
+                        prose_bbox,
+                    ),
+                    _span("norm(g_t) <= G", first_formula, font="CMMI10"),
+                ],
+                prose_bboxes=[prose_bbox],
+                math_bboxes=[first_formula],
+                math_run_bboxes=[first_formula],
+            ),
+            _LineRec(
+                text=(
+                    f"{SENTINEL_OPEN}norm(x_m-x_n) <= D{SENTINEL_CLOSE} "
+                    "for any "
+                    f"{SENTINEL_OPEN}m,n in 1,...,T{SENTINEL_CLOSE}, and "
+                    f"{SENTINEL_OPEN}beta_1,beta_2 in [0,1){SENTINEL_CLOSE} satisfy"
+                ),
+                bbox=(50.0, 114.0, 300.0, 132.0),
+                spans=[_span("formula row", wide_formula, font="CMMI10")],
+                prose_bboxes=[
+                    (140.0, 114.0, 175.0, 126.0),
+                    (220.0, 114.0, 242.0, 126.0),
+                    (270.0, 114.0, 300.0, 126.0),
+                ],
+                math_bboxes=[
+                    (50.0, 114.0, 138.0, 132.0),
+                    (176.0, 114.0, 218.0, 132.0),
+                    (243.0, 114.0, 268.0, 132.0),
+                ],
+                math_run_bboxes=[wide_formula],
+            ),
+            _LineRec(
+                text=f"{SENTINEL_OPEN}beta_2{SENTINEL_CLOSE}",
+                bbox=math_fragment,
+                spans=[_span("beta_2", math_fragment, size=7.0, font="CMMI7")],
+                math_bboxes=[math_fragment],
+                math_run_bboxes=[math_fragment],
+            ),
+            _LineRec(
+                text=f"Let {SENTINEL_OPEN}alpha_t=alpha/sqrt(t){SENTINEL_CLOSE}.",
+                bbox=tail_formula,
+                spans=[_span("alpha_t=alpha/sqrt(t)", tail_formula, font="CMMI10")],
+                prose_bboxes=[(50.0, 140.0, 68.0, 152.0)],
+                math_bboxes=[tail_formula],
+                math_run_bboxes=[tail_formula],
+            ),
+        ]
+
+        blocks = segments_from_record(0, _RawBlockRec(lines=lines), equation_record=False)
+
+        self.assertEqual(len(blocks), 2)
+        theorem = blocks[1]
+        self.assertTrue(theorem.flow_inline_math)
+        self.assertIsNone(theorem.keepout_bboxes)
+        self.assertIn("for any", strip_sentinels(theorem.text))
+        self.assertIn("satisfy", strip_sentinels(theorem.text))
+        self.assertGreaterEqual(len(theorem.source_math_bboxes), 3)
 
     def test_detached_subscripts_rejoin_one_reflowable_paragraph(self):
         raw_block = {
@@ -11276,6 +13427,29 @@ class TranslationEchoDetectionTests(unittest.TestCase):
 
         self.assertFalse(_translation_retains_source_prose_run(block, translated))
 
+    def test_hyphenated_model_ids_do_not_count_as_source_prose_echo(self):
+        from pdf_zh_translator.pdf_layout import _translation_retains_source_prose_run
+
+        block = TextBlock(
+            page_index=3,
+            bbox=(108.0, 475.0, 506.0, 605.0),
+            text=(
+                "We evaluate five large language models. The first is GPT-3, "
+                "for which we use text-ada-001, text-babbage-001, "
+                "text-curie-001, and text-davinci-002."
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="body",
+        )
+        translated = (
+            "我们评估五个大语言模型。第一个是 GPT-3，使用 text-ada-001、"
+            "text-babbage-001、text-curie-001 和 text-davinci-002。"
+        )
+
+        self.assertFalse(_translation_retains_source_prose_run(block, translated))
+
     def test_english_run_outside_gloss_is_still_flagged(self):
         from pdf_zh_translator.pdf_layout import _translation_retains_source_prose_run
 
@@ -11297,6 +13471,81 @@ class TranslationEchoDetectionTests(unittest.TestCase):
         )
 
         self.assertTrue(_translation_retains_source_prose_run(block, contaminated))
+
+    def test_long_source_example_inside_cjk_dominant_translation_is_flagged(self):
+        from pdf_zh_translator.pdf_layout import _translation_retains_source_prose_run
+
+        source_example = (
+            "Alice was friends with Bob. Alice went to visit her friend"
+        )
+        block = TextBlock(
+            page_index=11,
+            bbox=(72.0, 100.0, 500.0, 260.0),
+            text=(
+                "The few-shot setting frames the task as a cloze test. We use "
+                f"the following fill-in-the-blank format: {source_example}. "
+                "When presented this way, the model achieves strong accuracy."
+            ),
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="body",
+        )
+        translated = (
+            "小样本设置将任务构建为完形填空测试，使模型能够从示例中推断需要补全的词。"
+            "本文采用如下填空格式，并在该设置下取得较高准确率。"
+            "实验结果表明，模型规模增大时，小样本性能持续提高，且方法优于零样本设置。"
+            f"{source_example}."
+        )
+
+        self.assertTrue(_translation_retains_source_prose_run(block, translated))
+
+    def test_retained_source_prose_phrases_split_around_formula_sentinels(self):
+        from pdf_zh_translator.pdf_layout import _retained_source_prose_phrases
+
+        first = "Alice was friends with Bob. Alice went to visit her friend"
+        second = "Bob George bought some baseball equipment, a ball, and a glove"
+        block = TextBlock(
+            page_index=11,
+            bbox=(72.0, 100.0, 500.0, 260.0),
+            text=f"The fill-in format is {first} . -> {second} before evaluation.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="body",
+        )
+        translated = (
+            f"填空格式为：{first} "
+            "\ue000. ->\ue001"
+            f" {second}，随后进行评估。"
+        )
+
+        self.assertEqual(
+            _retained_source_prose_phrases(block, translated),
+            [first, second],
+        )
+
+    def test_retained_source_prose_phrases_exclude_parenthetical_gloss(self):
+        from pdf_zh_translator.pdf_layout import _retained_source_prose_phrases
+
+        gloss = "offline goal conditioned reinforcement learning benchmark"
+        block = TextBlock(
+            page_index=7,
+            bbox=(72.0, 100.0, 500.0, 180.0),
+            text=f"We evaluate the {gloss} across challenging tasks.",
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            should_translate=True,
+            block_type="body",
+        )
+
+        self.assertEqual(
+            _retained_source_prose_phrases(
+                block,
+                f"本文评估离线目标条件强化学习（{gloss}）。",
+            ),
+            [],
+        )
 
     def test_short_academic_heading_echo_is_flagged(self):
         block = TextBlock(
@@ -11573,6 +13822,177 @@ class DisplayEquationRowTests(unittest.TestCase):
         )
 
         self.assertTrue(any("target is normalized" in block.text for block in segments))
+
+    def test_prose_slots_around_inline_math_before_formula_tower_are_translated(self):
+        """Adam p12: prose sharing a record with a radical must not disappear."""
+        lead = (105.0, 398.7, 172.5, 410.4)
+        inline_math = (172.5, 400.4, 199.7, 410.1)
+        suffix = (199.7, 398.7, 236.3, 410.4)
+        radical = (238.7, 389.6, 248.4, 425.8)
+        record = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=(
+                        f"The base case for{SENTINEL_OPEN}T = 1{SENTINEL_CLOSE}, "
+                        "we have"
+                    ),
+                    bbox=(105.0, 398.7, 236.3, 410.4),
+                    spans=[
+                        {
+                            "text": "The base case for",
+                            "bbox": lead,
+                            "size": 9.7,
+                            "font": "Times-Roman",
+                            "flags": 4,
+                            "color": 0,
+                        },
+                        {
+                            "text": "T = 1",
+                            "bbox": inline_math,
+                            "size": 9.7,
+                            "font": "CMMI10",
+                            "flags": 6,
+                            "color": 0,
+                        },
+                        {
+                            "text": ", we have",
+                            "bbox": suffix,
+                            "size": 9.7,
+                            "font": "Times-Roman",
+                            "flags": 4,
+                            "color": 0,
+                        },
+                    ],
+                    prose_bboxes=[lead, suffix],
+                    math_bboxes=[inline_math],
+                    math_run_bboxes=[inline_math],
+                ),
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}sqrt{SENTINEL_CLOSE}",
+                    bbox=radical,
+                    spans=[
+                        {
+                            "text": "sqrt",
+                            "bbox": radical,
+                            "size": 9.7,
+                            "font": "CMEX10",
+                            "flags": 4,
+                            "color": 0,
+                        }
+                    ],
+                    math_bboxes=[radical],
+                    math_run_bboxes=[radical],
+                ),
+            ]
+        )
+
+        segments = segments_from_record(11, record, equation_record=True)
+
+        self.assertEqual(
+            [strip_sentinels(segment.text).strip() for segment in segments],
+            ["The base case for", ", we have"],
+        )
+        self.assertTrue(all(segment.block_type == "formula_prose" for segment in segments))
+        self.assertTrue(all(segment.preserve_position for segment in segments))
+        self.assertTrue(all(radical in (segment.keepout_bboxes or []) for segment in segments))
+
+    def test_short_equation_sentence_connectors_are_translated(self):
+        """Adam p12/p14: short prose at formula boundaries is not formula ink."""
+
+        def mixed_line(parts, y0):
+            spans = []
+            prose_bboxes = []
+            math_bboxes = []
+            math_run_bboxes = []
+            cursor = 105.0
+            annotated = []
+            for text, is_math in parts:
+                width = max(12.0, len(text) * 5.0)
+                bbox = (cursor, y0, cursor + width, y0 + 11.7)
+                spans.append(
+                    {
+                        "text": text,
+                        "bbox": bbox,
+                        "size": 9.7,
+                        "font": "CMMI10" if is_math else "Times-Roman",
+                        "flags": 6 if is_math else 4,
+                        "color": 0,
+                    }
+                )
+                if is_math:
+                    annotated.append(f"{SENTINEL_OPEN}{text}{SENTINEL_CLOSE}")
+                    math_bboxes.append(bbox)
+                    math_run_bboxes.append(bbox)
+                else:
+                    annotated.append(text)
+                    prose_bboxes.append(bbox)
+                cursor += width
+            return _LineRec(
+                text="".join(annotated),
+                bbox=(105.0, y0, cursor, y0 + 11.7),
+                spans=spans,
+                prose_bboxes=prose_bboxes,
+                math_bboxes=math_bboxes,
+                math_run_bboxes=math_run_bboxes,
+            )
+
+        record = _RawBlockRec(
+            lines=[
+                mixed_line([("From,", False), ("x=y", True)], 100.0),
+                mixed_line([("x", True), (" satisfy", False)], 115.0),
+                mixed_line([("x<1", True), (". Let", False), ("a=b", True)], 130.0),
+                mixed_line([("x-y", True), (" term,", False)], 145.0),
+            ]
+        )
+
+        segments = segments_from_record(11, record, equation_record=True)
+
+        self.assertEqual(
+            [strip_sentinels(segment.text).strip() for segment in segments],
+            ["From,", "satisfy", ". Let", "term,"],
+        )
+        self.assertTrue(all(segment.block_type == "formula_prose" for segment in segments))
+        self.assertTrue(all(segment.no_merge for segment in segments))
+        self.assertTrue(all(segment.nowrap for segment in segments))
+
+    def test_short_formula_label_without_sentence_punctuation_stays_preserved(self):
+        """An upright short label is not enough evidence that formula text is prose."""
+        math_bbox = (105.0, 100.0, 135.0, 111.7)
+        label_bbox = (135.0, 100.0, 160.0, 111.7)
+        line = _LineRec(
+            text=f"{SENTINEL_OPEN}x={SENTINEL_CLOSE}value",
+            bbox=(105.0, 100.0, 160.0, 111.7),
+            spans=[
+                {
+                    "text": "x=",
+                    "bbox": math_bbox,
+                    "size": 9.7,
+                    "font": "CMMI10",
+                    "flags": 6,
+                    "color": 0,
+                },
+                {
+                    "text": "value",
+                    "bbox": label_bbox,
+                    "size": 9.7,
+                    "font": "Times-Roman",
+                    "flags": 4,
+                    "color": 0,
+                },
+            ],
+            prose_bboxes=[label_bbox],
+            math_bboxes=[math_bbox],
+            math_run_bboxes=[math_bbox],
+        )
+
+        self.assertEqual(
+            segments_from_record(
+                0,
+                _RawBlockRec(lines=[line]),
+                equation_record=True,
+            ),
+            [],
+        )
 
     def test_where_clause_on_numbered_equation_row_stays_preserved(self):
         """MCF p3 eq (1): the 'where U(a,b) = {...}' clause shares the visual
