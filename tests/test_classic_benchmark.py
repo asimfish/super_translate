@@ -110,6 +110,31 @@ class TestHarness:
         with pytest.raises(SystemExit):
             benchmark_module._load_entries("not-a-paper")
 
+    def test_load_entries_accepts_an_explicit_manifest(
+        self, benchmark_module, tmp_path
+    ):
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "layout_axes": ["two_column"],
+                    "papers": [
+                        {
+                            "id": "held_out",
+                            "arxiv_id": "",
+                            "title": "Held-out paper",
+                            "tags": ["two_column"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        entries = benchmark_module._load_entries("held_out", manifest)
+
+        assert [entry.id for entry in entries] == ["held_out"]
+
     def test_evaluation_cache_is_bound_to_pdf_and_qa_fingerprints(
         self, benchmark_module, tmp_path
     ):
@@ -389,6 +414,7 @@ class TestHarness:
         class Args:
             isolate = False
             force = False
+            manifest = tmp_path / "held-out-manifest.json"
 
         assert benchmark_module.cmd_translate(entries, tmp_path, Args()) == 0
         assert len(calls) == 2
@@ -397,6 +423,10 @@ class TestHarness:
             "adam",
         }
         assert all("--isolate" not in call[0] for call in calls)
+        assert all(
+            call[0][call[0].index("--manifest") + 1] == str(Args.manifest)
+            for call in calls
+        )
 
     def test_atomic_write_preserves_old_artifact_until_replace(
         self, benchmark_module, tmp_path, monkeypatch

@@ -87,8 +87,10 @@ class Entry:
     tags: tuple
 
 
-def _load_entries(only: str | None) -> list[Entry]:
-    data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+def _load_entries(
+    only: str | None, manifest: Path = MANIFEST
+) -> list[Entry]:
+    data = json.loads(manifest.read_text(encoding="utf-8"))
     entries = [
         Entry(
             id=item["id"],
@@ -478,6 +480,8 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
                 entry.id,
                 "--workdir",
                 str(workdir),
+                "--manifest",
+                str(getattr(args, "manifest", MANIFEST)),
             ]
             if args.force:
                 cmd.append("--force")
@@ -998,9 +1002,8 @@ def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
 
     evaluated = len(reports)
     strict_passes = sum(bool(report.get("strict_pass")) for report in reports.values())
-    manifest_axes = set(
-        json.loads(MANIFEST.read_text(encoding="utf-8"))["layout_axes"]
-    )
+    manifest = Path(getattr(args, "manifest", MANIFEST))
+    manifest_axes = set(json.loads(manifest.read_text(encoding="utf-8"))["layout_axes"])
     missing_axes = sorted(manifest_axes - covered_axes) if require_all_axes else []
     failures: list[str] = []
     if evaluated < min_evaluated:
@@ -1054,6 +1057,12 @@ def main() -> int:
     )
     parser.add_argument("--only", help="comma-separated paper ids")
     parser.add_argument("--workdir", type=Path, default=DEFAULT_WORKDIR)
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=MANIFEST,
+        help="paper manifest (defaults to benchmarks/classic20/manifest.json)",
+    )
     parser.add_argument("--force", action="store_true", help="redo cached steps")
     parser.add_argument(
         "--isolate",
@@ -1074,7 +1083,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    entries = _load_entries(args.only)
+    entries = _load_entries(args.only, args.manifest)
     args.workdir.mkdir(parents=True, exist_ok=True)
     handler = {
         "fetch": cmd_fetch,
