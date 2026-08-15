@@ -582,6 +582,36 @@ def test_gears_production_page5_formula_paragraph_keeps_body_scale(tmp_path):
     ]
 
 
+def test_gears_cross_page_duplicate_translation_is_distributed_once(tmp_path):
+    source_pdf = FIXTURES / "gears_p13_p14_cross_page_duplicate.pdf"
+    output_pdf = tmp_path / "gears-cross-page-translation.pdf"
+    translate_pdf(
+        input_pdf=source_pdf,
+        output_pdf=output_pdf,
+        translator=_GearsCrossPageDuplicateTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    with fitz.open(output_pdf) as output:
+        page_13_spans = [
+            span
+            for span in _page_spans(output[0])
+            if re.search(r"[一-鿿]", span["text"])
+            and float(span["bbox"][1]) >= 565.0
+        ]
+        page_13_text = output[0].get_text("text")
+        page_14_text = output[1].get_text("text")
+
+    assert page_13_spans
+    assert min(float(span["size"]) for span in page_13_spans) >= 8.96
+    page_13_tail = "".join(span["text"] for span in page_13_spans)
+    assert "".join(page_13_tail.split()).endswith("编码器")
+    combined = "".join((page_13_text + page_14_text).split())
+    assert combined.count("（1）感知") == 1
+    assert combined.count("显式的接触条件门控机制可能缓解此问题") == 1
+    assert "（1）感知" not in "".join(page_14_text.split())
+
+
 def test_gears_inline_formula_prefix_reflows_with_its_sentence():
     blocks = _unit_blocks("gears_p6_inline_formulas.pdf")
     formula_prefix = next(
@@ -1799,6 +1829,35 @@ class _GearsProductionFontTranslator(_GoldenStubTranslator):
                 )
             elif compact == "from four":
                 outputs.append("来自四个")
+            else:
+                outputs.append(default)
+        return outputs
+
+
+class _GearsCrossPageDuplicateTranslator(_GoldenStubTranslator):
+    """Reproduce a provider expanding both sides of a page break."""
+
+    _FULL_FAILURE_TRANSLATION = (
+        "（1）感知：在接近训练边界的极端物体姿态下，编码器低估了烧杯边缘的深度"
+        "不连续性，导致抓取开口判断失误。同一物体在中等姿态下可被可靠抓取，这表明"
+        "训练渲染中的视点多样性（而非监督信号）是瓶颈所在。（2）控制：在双手交接"
+        "任务中，左手偶尔在右手建立稳定抓取之前就释放。双手共享单一动作块，因此"
+        "释放时机必须从数据中隐式学习；显式的接触条件门控机制可能缓解此问题。"
+    )
+
+    def translate_batch(self, texts):
+        fallback = super().translate_batch(texts)
+        outputs = []
+        for source, default in zip(texts, fallback):
+            compact = " ".join(source.split())
+            if compact == "Failure analysis.":
+                outputs.append("失败分析。")
+            elif compact.startswith("We observe two failure modes"):
+                outputs.append("我们观察到两种失败模式，其根本原因各不相同。")
+            elif compact.startswith("(1) Perception: at extreme object poses"):
+                outputs.append(self._FULL_FAILURE_TRANSLATION)
+            elif compact.startswith("underestimates depth discontinuities"):
+                outputs.append(self._FULL_FAILURE_TRANSLATION)
             else:
                 outputs.append(default)
         return outputs

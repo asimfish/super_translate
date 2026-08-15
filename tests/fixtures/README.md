@@ -131,6 +131,38 @@ source.save(
 )
 ```
 
+## `gears_p13_p14_cross_page_duplicate.pdf`
+
+- Title: *GEARS: Seeing Geometry, Diffusing Actions for Zero-Shot Sim-to-Real Dexterous Manipulation*
+- Venue: ECCV 2026 submission
+- Source: production upload
+- Source PDF SHA256: `423d7ecc266d0dcc802655df9966666230454e14874897b00e68502a97b2acbe`
+- Extracted pages: PDF pages 13-14
+- Fixture SHA256: `37e0170ddeefded7e38ece9e7a30b305f0a3330c2d822b0ddbc42252c3cb1653`
+- License: not declared in the supplied PDF. This two-page excerpt is
+  retained solely as a regression fixture for internal layout QA and should
+  not be redistributed independently of this test purpose.
+- Test purpose: the failure-analysis paragraph starts on the final source line
+  of page 13 and resumes below a float on page 14. A provider returned the
+  complete paragraph for both fragments, duplicating the translation and
+  shrinking the first copy from 9.17pt to 4.20pt.
+
+Reproduce the fixture while retaining the original page content streams and
+cross-page paragraph boundary:
+
+```python
+import fitz
+
+source = fitz.open("GEARS.pdf")
+source.select([12, 13])
+source.save(
+    "tests/fixtures/gears_p13_p14_cross_page_duplicate.pdf",
+    garbage=4,
+    deflate=True,
+    clean=False,
+)
+```
+
 ```python
 import fitz
 src = fitz.open("tests/fixtures/otf_production_acceptance_full.pdf")

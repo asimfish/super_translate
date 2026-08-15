@@ -478,6 +478,189 @@ def open_pdf_detached(pdf_path: Path) -> object:
     return fitz.open(stream=Path(pdf_path).read_bytes(), filetype="pdf")
 
 
+def _redistribute_duplicated_cross_page_translations(
+    document: object,
+    units: Sequence[TranslationUnit],
+    cleaned_results: Sequence[Tuple[str, List[int]]],
+    *,
+    font_pack: FontPack,
+    min_font_size: float,
+    font_scale: float,
+    margin: float,
+) -> Tuple[List[Tuple[str, List[int]]], int]:
+    """Split one duplicated translation across a genuine page break.
+
+    Providers sometimes complete an unfinished page-bottom sentence from
+    context, then return the same complete translation for the continuation
+    unit on the next page. Rendering both copies shrinks the first into a
+    single source line and duplicates the paragraph. The exact duplicate is a
+    strong ownership signal: retain one copy and distribute it according to
+    the two source boxes' full-size capacity.
+    """
+    adjusted = list(cleaned_results)
+    used_continuations: set[int] = set()
+    redistributed = 0
+
+    for index, ((block, _, _), (translated, missing)) in enumerate(
+        zip(units, adjusted)
+    ):
+        source_plain = " ".join(strip_sentinels(block.text).split()).strip()
+        page_height = float(document[block.page_index].rect.height)
+        normalized_translation = "".join(translated.split())
+        if (
+            block.block_type not in {"body", "formula_prose"}
+            or block.nowrap
+            or block.preserve_position
+            or block.formula_anchors
+            or sentinel_char_count(block.text)
+            or sentinel_char_count(translated)
+            or sentence_final_text(source_plain)
+            or page_height - block.bbox[3] > max(36.0, block.font_size * 4.0)
+            or len(normalized_translation) < 50
+            or not _CJK_DETECT_RE.search(translated)
+        ):
+            continue
+
+        continuation_index: Optional[int] = None
+        for candidate_index in range(index + 1, len(units)):
+            if candidate_index in used_continuations:
+                continue
+            continuation = units[candidate_index][0]
+            if continuation.page_index > block.page_index + 1:
+                break
+            if continuation.page_index != block.page_index + 1:
+                continue
+            continuation_plain = " ".join(
+                strip_sentinels(continuation.text).split()
+            ).strip()
+            candidate_translation = adjusted[candidate_index][0]
+            horizontal_overlap = min(block.bbox[2], continuation.bbox[2]) - max(
+                block.bbox[0], continuation.bbox[0]
+            )
+            narrower_width = min(
+                block.bbox[2] - block.bbox[0],
+                continuation.bbox[2] - continuation.bbox[0],
+            )
+            if (
+                continuation.block_type not in {"body", "formula_prose"}
+                or continuation.nowrap
+                or continuation.preserve_position
+                or continuation.formula_anchors
+                or sentinel_char_count(continuation.text)
+                or sentinel_char_count(candidate_translation)
+                or not re.match(r"^[a-z]", continuation_plain)
+                or horizontal_overlap < max(1.0, narrower_width) * 0.65
+                or "".join(candidate_translation.split()) != normalized_translation
+            ):
+                continue
+            continuation_index = candidate_index
+            break
+        if continuation_index is None:
+            continue
+
+        continuation = units[continuation_index][0]
+        first_size = requested_translation_font_size(
+            block,
+            min_font_size,
+            font_scale,
+        )
+        continuation_size = requested_translation_font_size(
+            continuation,
+            min_font_size,
+            font_scale,
+        )
+        if translated_text_fits(
+            block,
+            translated,
+            font_pack,
+            first_size,
+            first_size,
+            margin,
+        ):
+            continue
+
+        low = 1
+        high = len(translated) - 1
+        split_at = 0
+        while low <= high:
+            midpoint = (low + high) // 2
+            prefix = translated[:midpoint].rstrip()
+            if prefix and translated_text_fits(
+                block,
+                prefix,
+                font_pack,
+                first_size,
+                first_size,
+                margin,
+            ):
+                split_at = midpoint
+                low = midpoint + 1
+            else:
+                high = midpoint - 1
+        try:
+            from pdf_zh_translator.corpus import get_relevant_terms
+
+            trailing_terms = get_relevant_terms([source_plain[-160:]], max_terms=20)
+        except Exception:
+            trailing_terms = {}
+        for english, chinese in sorted(
+            trailing_terms.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            if not re.search(
+                rf"\b{re.escape(english.casefold())}[\s.,;:()]*$",
+                source_plain.casefold(),
+            ):
+                continue
+            term_start = translated.rfind(chinese, 0, split_at + 1)
+            if term_start < 0:
+                continue
+            term_boundary = term_start + len(chinese)
+            if translated_text_fits(
+                block,
+                translated[:term_boundary].rstrip(),
+                font_pack,
+                first_size,
+                first_size,
+                margin,
+            ):
+                split_at = term_boundary
+                break
+        while (
+            1 < split_at < len(translated)
+            and translated[split_at - 1].isascii()
+            and translated[split_at - 1].isalnum()
+            and translated[split_at].isascii()
+            and translated[split_at].isalnum()
+        ):
+            split_at -= 1
+        if split_at <= 0:
+            continue
+
+        prefix = translated[:split_at].rstrip()
+        suffix = translated[split_at:].lstrip()
+        if not prefix or not suffix or not translated_text_fits(
+            continuation,
+            suffix,
+            font_pack,
+            continuation_size,
+            continuation_size,
+            margin,
+        ):
+            continue
+
+        adjusted[index] = (prefix, missing)
+        adjusted[continuation_index] = (
+            suffix,
+            adjusted[continuation_index][1],
+        )
+        used_continuations.add(continuation_index)
+        redistributed += 1
+
+    return adjusted, redistributed
+
+
 def translate_pdf(
     input_pdf: Path,
     output_pdf: Path,
@@ -649,6 +832,23 @@ def translate_pdf(
                 translator.quality_retry = False
             if hasattr(translator, "block_types"):
                 translator.block_types = block_types
+
+    cleaned_results, redistributed_cross_page = (
+        _redistribute_duplicated_cross_page_translations(
+            document,
+            units,
+            cleaned_results,
+            font_pack=font_pack,
+            min_font_size=min_font_size,
+            font_scale=font_scale,
+            margin=margin,
+        )
+    )
+    if redistributed_cross_page:
+        warnings.append(
+            "Redistributed %d duplicated cross-page translation(s) at body size"
+            % redistributed_cross_page
+        )
 
     by_page: Dict[int, List[Tuple[TextBlock, str]]] = {}
     for (block, _, _), (translated_text, missing) in zip(units, cleaned_results):
