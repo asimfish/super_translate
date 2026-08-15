@@ -252,6 +252,110 @@ class FontRoleConsistencyTests(unittest.TestCase):
             [issue for issue in issues if issue.code == "font_role_bold_spill"]
         )
 
+    def test_short_structural_label_is_not_reported_as_bold_spill(self):
+        source_blocks = [
+            TextBlock(
+                page_index=0,
+                bbox=(20.0, 100.0, 70.0, 110.0),
+                text="Filename:",
+                font_size=10.0,
+                color=(0.0, 0.0, 0.0),
+                bold=True,
+                block_type="run_in_heading",
+            ),
+            TextBlock(
+                page_index=0,
+                bbox=(10.0, 111.0, 260.0, 135.0),
+                text="Task: Close the box.",
+                font_size=10.0,
+                color=(0.0, 0.0, 0.0),
+                source_lines=2,
+                source_line_bboxes=((10.0, 111.0, 260.0, 135.0),),
+                block_type="body",
+                bold_prefix=True,
+            ),
+        ]
+        spans = [
+            {
+                "text": "任务：",
+                "bbox": (10.0, 112.0, 38.0, 124.0),
+                "origin": (10.0, 122.0),
+                "size": 9.2,
+                "font": "HiraginoSansGB-W6",
+                "flags": 16,
+            },
+            {
+                "text": "关闭盒子。",
+                "bbox": (40.0, 112.0, 90.0, 124.0),
+                "origin": (40.0, 122.0),
+                "size": 9.2,
+                "font": "STSongti-SC-Regular",
+                "flags": 4,
+            },
+        ]
+
+        class Page:
+            def get_text(self, _kind):
+                return {"blocks": [{"type": 0, "lines": [{"spans": spans}]}]}
+
+        issues = _font_role_consistency_issues(source_blocks, Page(), 1)
+
+        self.assertFalse(
+            [issue for issue in issues if issue.code == "font_role_bold_spill"]
+        )
+
+    def test_bold_label_plus_body_is_still_reported_as_bold_spill(self):
+        source_blocks = [
+            TextBlock(
+                page_index=0,
+                bbox=(20.0, 100.0, 70.0, 110.0),
+                text="Filename:",
+                font_size=10.0,
+                color=(0.0, 0.0, 0.0),
+                bold=True,
+                block_type="run_in_heading",
+            ),
+            TextBlock(
+                page_index=0,
+                bbox=(10.0, 111.0, 260.0, 135.0),
+                text="Task: Close the box.",
+                font_size=10.0,
+                color=(0.0, 0.0, 0.0),
+                source_lines=2,
+                source_line_bboxes=((10.0, 111.0, 260.0, 135.0),),
+                block_type="body",
+                bold_prefix=True,
+            ),
+        ]
+        spans = [
+            {
+                "text": "任务：关闭盒子。",
+                "bbox": (10.0, 112.0, 90.0, 124.0),
+                "origin": (10.0, 122.0),
+                "size": 9.2,
+                "font": "HiraginoSansGB-W6",
+                "flags": 16,
+            },
+            {
+                "text": "成功度量：",
+                "bbox": (92.0, 112.0, 150.0, 124.0),
+                "origin": (92.0, 122.0),
+                "size": 9.2,
+                "font": "STSongti-SC-Regular",
+                "flags": 4,
+            },
+        ]
+
+        class Page:
+            def get_text(self, _kind):
+                return {"blocks": [{"type": 0, "lines": [{"spans": spans}]}]}
+
+        issues = _font_role_consistency_issues(source_blocks, Page(), 1)
+
+        self.assertTrue(
+            [issue for issue in issues if issue.code == "font_role_bold_spill"]
+        )
+
     def test_cascaded_heading_is_matched_below_intruding_body_text(self):
         source_blocks = [
             TextBlock(
@@ -970,6 +1074,35 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         self.assertTrue(any(token.text == "MemoryWAM" and token.bold for token in tokens))
         self.assertTrue(any(token.text == "显" and not token.bold for token in tokens))
 
+    def test_short_leading_bold_label_is_segmented_before_its_body(self):
+        from pdf_zh_translator.pdf_layout import (
+            _source_style_translation_plan,
+            extract_bold_terms,
+        )
+
+        source = "Task: Slide the block to the square target."
+        terms = extract_bold_terms(["Task"], source)
+        block = TextBlock(
+            page_index=0,
+            bbox=(0.0, 0.0, 240.0, 24.0),
+            text=source,
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            starts_bold=True,
+            bold_terms=terms,
+            bold_prefix=True,
+        )
+
+        requests, roles, plans = _source_style_translation_plan(
+            SimpleNamespace(supports_source_style_segments=True),
+            [(block, source, {})],
+        )
+
+        self.assertEqual(terms, ("Task",))
+        self.assertEqual(requests, ["Task:", "Slide the block to the square target."])
+        self.assertEqual(roles, ["run_in_heading", "body"])
+        self.assertEqual(plans, [(0, 2)])
+
     def test_heading_requests_larger_translation_font(self):
         block = TextBlock(
             page_index=0,
@@ -1035,6 +1168,43 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         exported_text = "\n".join(block.text for block, _, _ in units)
         self.assertIn("A. Prompt", exported_text)
         self.assertIn("We use a conversational structure to prompt the model.", exported_text)
+        self.assertNotIn("Smith et al. Learning representations.", exported_text)
+
+    def test_prepare_units_translates_author_contributions_after_references(self):
+        document = fitz.open()
+        page = document.new_page(width=360, height=360)
+        page.insert_text((30, 40), "References", fontsize=12)
+        page.insert_text((30, 70), "[1] Smith et al. Learning representations. 2024.")
+        page = document.new_page(width=360, height=360)
+        page.insert_text((90, 40), "AUTHOR CONTRIBUTIONS", fontsize=10)
+        page.insert_text(
+            (30, 70),
+            "The first three authors contributed equally to the project.",
+        )
+        page.insert_text(
+            (30, 105),
+            "IX. PERTURBATION FACTORS SELECTION RATIONALE",
+            fontsize=10,
+        )
+        page.insert_text(
+            (30, 135),
+            "We study diverse robot datasets and scene perturbations.",
+        )
+
+        units, _, _ = prepare_translation_units(document)
+
+        document.close()
+        exported_text = "\n".join(block.text for block, _, _ in units)
+        self.assertIn("AUTHOR CONTRIBUTIONS", exported_text)
+        self.assertIn(
+            "The first three authors contributed equally to the project.",
+            exported_text,
+        )
+        self.assertIn("IX. PERTURBATION FACTORS SELECTION RATIONALE", exported_text)
+        self.assertIn(
+            "We study diverse robot datasets and scene perturbations.",
+            exported_text,
+        )
         self.assertNotIn("Smith et al. Learning representations.", exported_text)
 
     def test_parse_block_lines_merges_cross_line_inline_formula_tail(self):
@@ -3295,6 +3465,37 @@ class FormulaTailProseTests(unittest.TestCase):
 
         self.assertEqual(_formula_bridge_sequence_end(records, 0), 3)
 
+    def test_formula_bridge_does_not_jump_to_the_next_page_column(self):
+        from pdf_zh_translator.pdf_layout import _formula_bridge_sequence_end
+
+        lead = _line(
+            "For the structured model "
+            f"{SENTINEL_OPEN}M=(S,A){SENTINEL_CLOSE}, "
+            "the associated value function lattice is defined with",
+            (54.0, 590.0, 298.0, 632.0),
+        )
+        list_formula = _line(
+            f"{SENTINEL_OPEN}X={{x_1, x_2}}{SENTINEL_CLOSE}",
+            (64.0, 627.0, 298.0, 711.0),
+        )
+        display_formula = _line(
+            f"{SENTINEL_OPEN}V(s)=min_a R(s,a){SENTINEL_CLOSE}",
+            (118.0, 716.0, 235.0, 739.0),
+        )
+        next_column_caption = _line(
+            "Figure 3 shows the value lattice for a simple example with "
+            f"{SENTINEL_OPEN}U{SENTINEL_CLOSE} and assigns values to every state.",
+            (313.0, 189.0, 558.0, 225.0),
+        )
+        records = [
+            _RawBlockRec(lines=[lead]),
+            _RawBlockRec(lines=[list_formula]),
+            _RawBlockRec(lines=[display_formula]),
+            _RawBlockRec(lines=[next_column_caption]),
+        ]
+
+        self.assertIsNone(_formula_bridge_sequence_end(records, 0))
+
     def test_formula_keepouts_do_not_pin_captured_source_math(self):
         formula_bboxes = tuple(
             (100.0 + index * 12.0, 100.0, 108.0 + index * 12.0, 112.0)
@@ -3740,6 +3941,51 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(merged.translated_bold_prefix_chars, 8)
         self.assertIn("无限接近", translated)
         self.assertEqual(merged.bbox, (105.0, 311.0, 490.0, 382.0))
+
+    def test_formula_continuation_does_not_cross_run_in_field_boundary(self):
+        from pdf_zh_translator.pdf_layout import (
+            _combine_formula_continuation_translation_items,
+        )
+
+        filename = TextBlock(
+            page_index=0,
+            bbox=(321.9, 340.3, 481.6, 350.6),
+            text="Filename: Close_Laptop_Lid.py",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            bold_prefix=True,
+            bold_terms=("Filename",),
+        )
+        task = TextBlock(
+            page_index=0,
+            bbox=(312.0, 352.9, 563.0, 386.8),
+            text=(
+                "Task: Close the laptop lid. Success Metric: The handle is "
+                f"at least {SENTINEL_OPEN}60 degrees{SENTINEL_CLOSE} away."
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            bold_prefix=True,
+            translated_bold_prefix_chars=3,
+            bold_terms=("Task", "Success Metric"),
+            source_math_bboxes=((500.0, 360.0, 530.0, 380.0),),
+            formula_anchors=((500.0, 360.0, 530.0, 380.0),),
+        )
+
+        combined = _combine_formula_continuation_translation_items(
+            [
+                (filename, "文件名：Close_Laptop_Lid.py"),
+                (
+                    task,
+                    f"任务：合上笔记本电脑盖。成功度量：至少相差"
+                    f"{SENTINEL_OPEN}60 degrees{SENTINEL_CLOSE}。",
+                ),
+            ]
+        )
+
+        self.assertEqual(len(combined), 2)
+        self.assertEqual(combined[0][0].bold_terms, ("Filename",))
+        self.assertEqual(combined[1][0].translated_bold_prefix_chars, 3)
 
     def test_overlapping_proof_leadin_joins_formula_keepout_continuation(self):
         from pdf_zh_translator.pdf_layout import (
@@ -8063,8 +8309,15 @@ class TestClassifyBlocks(unittest.TestCase):
 
         self.assertFalse(_looks_like_appendix_heading("H. Wallach,"))
         self.assertFalse(_looks_like_appendix_heading("A. Beygelzimer,"))
+        self.assertFalse(_looks_like_appendix_heading("I. Goodfellow,"))
         self.assertTrue(_looks_like_appendix_heading("A Proofs"))
         self.assertTrue(_looks_like_appendix_heading("B Additional Experiments"))
+        self.assertTrue(_looks_like_appendix_heading("AUTHOR CONTRIBUTIONS"))
+        self.assertTrue(
+            _looks_like_appendix_heading(
+                "IX. PERTURBATION FACTORS SELECTION RATIONALE"
+            )
+        )
 
     def test_paper_checklist_ends_bibliography(self):
         """The NeurIPS checklist follows References; its heading must end the
@@ -9340,6 +9593,26 @@ class TestTranslationVerification(unittest.TestCase):
             )
         )
 
+    def test_untranslated_detector_ignores_translated_filename_payload(self):
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "文件名：slide_block_to_target.py"
+            )
+        )
+        self.assertFalse(
+            _looks_like_untranslated_english(
+                "文件路径：tasks/long_horizon/place_wine_at_rack_location.py"
+            )
+        )
+
+    def test_untranslated_detector_still_flags_prose_after_filename_label(self):
+        self.assertTrue(
+            _looks_like_untranslated_english(
+                "文件名：The proposed model improves retrieval quality substantially "
+                "across multiple manipulation tasks."
+            )
+        )
+
     def test_untranslated_detector_ignores_preserved_prompt_code_in_chinese(self):
         self.assertFalse(
             _looks_like_untranslated_english(
@@ -9975,6 +10248,55 @@ class TestTranslationVerification(unittest.TestCase):
         translated.close()
         self.assertTrue(any("untranslated English" in issue for issue in issues))
         self.assertFalse(any("2 block" in issue for issue in issues))
+
+    def test_verification_ignores_preserved_filename_after_translated_label(self):
+        from unittest.mock import patch
+
+        original = fitz.open()
+        original_page = original.new_page(width=300, height=180)
+        original_page.insert_text(
+            (30, 60),
+            "Filename: slide_block_to_target.py",
+            fontsize=10,
+        )
+
+        translated = fitz.open()
+        translated_page = translated.new_page(width=300, height=180)
+        translated_page.insert_font(
+            fontname="cjkbody", fontfile="data/fonts/SongtiSC-Regular.ttf"
+        )
+        translated_page.insert_text(
+            (30, 60),
+            "文件名：slide_block_to_target.py",
+            fontsize=10,
+            fontname="cjkbody",
+        )
+        source_block = TextBlock(
+            page_index=0,
+            bbox=(30.0, 45.0, 220.0, 65.0),
+            text="Filename: slide_block_to_target.py",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_path = Path(tmpdir) / "orig.pdf"
+            translated_path = Path(tmpdir) / "zh.pdf"
+            original.save(original_path)
+            translated.save(translated_path)
+            with patch(
+                "pdf_zh_translator.pdf_layout.prepare_translation_units",
+                return_value=([(source_block, source_block.text, {})], {}, 1),
+            ):
+                issues = verify_translation_issues(original_path, translated_path)
+
+        original.close()
+        translated.close()
+        self.assertFalse(
+            any(issue.code == "untranslated_english" for issue in issues)
+        )
 
     def test_overlap_qa_ignores_lines_inside_preserved_table_region(self):
         from unittest.mock import patch

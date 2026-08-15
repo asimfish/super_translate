@@ -2263,7 +2263,10 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             )
             source_plain = " ".join(strip_sentinels(source_block.text).split())
             translated_plain = " ".join(translated_unit_text.split())
-            if _looks_like_translated_identifier_payload(translated_plain):
+            if (
+                _looks_like_cjk_file_payload(translated_plain)
+                or _looks_like_translated_identifier_payload(translated_plain)
+            ):
                 continue
             short_structure_echo = (
                 looks_like_academic_structure_heading(source_block, source_plain)
@@ -3099,6 +3102,11 @@ _PROSE_SHAPED_WORD_RE = re.compile(r"^[A-Z]?[a-z]{1,}$")
 _CONDITIONAL_PROB_RE = re.compile(r"\([^()]*\|[^()]*\)")
 _CJK_SAMPLE_LABEL_RE = re.compile(r"^[\u4e00-\u9fff][^：:]{0,11}[：:]")
 _CJK_SAMPLE_LABEL_KEYWORD_RE = re.compile(r"英语|英文|原文|提示|示例|样例|输入|输出")
+_CJK_FILE_PAYLOAD_RE = re.compile(
+    r"^(?:文件名|文件路径|路径)\s*[：:]\s*"
+    r"(?P<payload>[A-Za-z0-9_.@~+\\/\-]+)$",
+    re.IGNORECASE,
+)
 
 
 def _looks_like_cjk_sample_label(text: str) -> bool:
@@ -3114,6 +3122,19 @@ def _looks_like_cjk_sample_label(text: str) -> bool:
     return bool(_CJK_SAMPLE_LABEL_KEYWORD_RE.search(match.group(0)))
 
 
+def _looks_like_cjk_file_payload(text: str) -> bool:
+    """A translated filename/path label followed by one verbatim payload."""
+    match = _CJK_FILE_PAYLOAD_RE.fullmatch(text)
+    if match is None:
+        return False
+    payload = match.group("payload")
+    return bool(
+        "/" in payload
+        or "\\" in payload
+        or re.search(r"\.[A-Za-z0-9]{1,8}$", payload)
+    )
+
+
 def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 35 or _is_reference_or_formula_text(compact):
@@ -3127,6 +3148,8 @@ def _looks_like_untranslated_english(text: str) -> bool:
     # A CJK-labelled sample field ("较差的英语输入：Please provide ...") quotes
     # model input/output that stays verbatim by design.
     if _looks_like_cjk_sample_label(compact):
+        return False
+    if _looks_like_cjk_file_payload(compact):
         return False
     if _looks_like_translated_identifier_payload(compact):
         return False
@@ -3850,6 +3873,17 @@ def _span_uses_bold_weight(span: dict) -> bool:
     )
 
 
+def _span_is_short_structural_label(span: dict) -> bool:
+    """True for an expected translated label such as ``任务：``."""
+    text = " ".join(str(span.get("text", "")).split()).strip()
+    if not text or not re.search(r"[:：]$", text):
+        return False
+    label = text.rstrip(":：").strip()
+    if not label or len(label) > 24 or re.search(r"[。！？.!?]", label):
+        return False
+    return len(re.findall(r"[\u3400-\u9fff]", label)) <= 8
+
+
 def _page_cjk_spans(page: object) -> List[dict]:
     return [
         span
@@ -4104,7 +4138,12 @@ def _font_role_consistency_issues(
             for heading in run_in_blocks
         )
         unexpected_bold = [
-            span for span in role_spans if _span_uses_bold_weight(span)
+            span
+            for span in role_spans
+            if _span_uses_bold_weight(span)
+            and not (
+                block.bold_prefix and _span_is_short_structural_label(span)
+            )
         ]
         if unexpected_bold and not block.bold and has_run_in_predecessor:
             bbox = unexpected_bold[0]["bbox"]
@@ -7427,6 +7466,13 @@ _REFERENCES_HEADING_RE = re.compile(
 )
 _APPENDIX_HEADING_RE = re.compile(r"^(?:appendix\b|appendix[A-Z0-9])", re.IGNORECASE)
 _APPENDIX_LETTER_HEADING_RE = re.compile(r"^[A-Z]\.?\s+(.+)$")
+_POST_BIBLIOGRAPHY_SECTION_RE = re.compile(
+    r"^(?:author contributions?|contributor statements?|"
+    r"supplementary materials?|additional materials?|"
+    r"the [A-Z0-9][A-Z0-9 \-]{1,50} appendix)$",
+    re.IGNORECASE,
+)
+_ROMAN_SECTION_HEADING_RE = re.compile(r"^[IVXLCDM]{1,6}\.\s+(.+)$")
 
 
 def _looks_like_appendix_heading(text: str, source_lines: int = 1) -> bool:
@@ -7437,6 +7483,14 @@ def _looks_like_appendix_heading(text: str, source_lines: int = 1) -> bool:
         return True
     if source_lines > 2 or len(compact) > 80:
         return False
+    if _POST_BIBLIOGRAPHY_SECTION_RE.fullmatch(compact):
+        return True
+    roman_match = _ROMAN_SECTION_HEADING_RE.match(compact)
+    if roman_match:
+        heading = roman_match.group(1).strip()
+        words = _PROSE_WORD_RE.findall(heading)
+        if words and len(words) <= 12 and heading.upper() == heading:
+            return True
     # Wrapped editor-name fragments inside reference entries ("H. Wallach,")
     # match the "<letter>. <title>" shape; headings never end mid-list.
     if compact.endswith((",", ";")):
@@ -8381,6 +8435,12 @@ def _formula_bridge_sequence_end(
     sequence_bottom = first.bbox[3]
     for candidate_index in range(start + 1, min(len(records), start + 8)):
         candidate = records[candidate_index]
+        # PDF object order commonly finishes the left column before jumping
+        # back to the top of the right column. That jump is not a continued
+        # formula tower even when the left-column lead happens to end in
+        # "with" and the next-column caption contains inline math.
+        if candidate.bbox[1] < first.bbox[1] - 12.0:
+            break
         if candidate.bbox[1] > sequence_bottom + 12.0:
             break
         if any(line_looks_like_section_heading(line) for line in candidate.lines):
@@ -14530,11 +14590,19 @@ def extract_bold_terms(fragments: Sequence[str], block_text: str) -> Tuple[str, 
             # Single common words are noisy; short enumerated method names
             # (Real, ZKW, pns, lemon) are explicit local bold hints.
             words = _PROSE_WORD_RE.findall(candidate)
+            leading_colon_label = bool(
+                re.match(
+                    rf"^{re.escape(candidate)}\s*[:：]",
+                    plain,
+                    re.IGNORECASE,
+                )
+            )
             if (
                 len(words) == 1
                 and len(candidate) < 6
                 and "-" not in candidate
                 and method_match is None
+                and not leading_colon_label
             ):
                 continue
             if candidate not in plain:
@@ -16609,6 +16677,10 @@ def _combine_formula_continuation_translation_items(
             or following.block_type not in {"body", "formula_prose"}
             or previous.nowrap
             or (following.nowrap and not embedded_following_connector)
+            # A leading bold label starts a new semantic field (for example,
+            # ``Task:`` after ``Filename:``). A formula in that field must
+            # not pull the preceding field into one style range.
+            or following.bold_prefix
             or previous.flow_inline_math
             or following.flow_inline_math
             or (
