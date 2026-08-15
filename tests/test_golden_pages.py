@@ -582,13 +582,17 @@ def test_gears_production_page5_formula_paragraph_keeps_body_scale(tmp_path):
     ]
 
 
-def test_gears_cross_page_duplicate_translation_is_distributed_once(tmp_path):
+@pytest.mark.parametrize("continuation_mode", ["duplicate", "suffix"])
+def test_gears_cross_page_duplicate_translation_is_distributed_once(
+    tmp_path,
+    continuation_mode,
+):
     source_pdf = FIXTURES / "gears_p13_p14_cross_page_duplicate.pdf"
     output_pdf = tmp_path / "gears-cross-page-translation.pdf"
     translate_pdf(
         input_pdf=source_pdf,
         output_pdf=output_pdf,
-        translator=_GearsCrossPageDuplicateTranslator(),
+        translator=_GearsCrossPageDuplicateTranslator(continuation_mode),
         preserve_graphics_text=True,
     )
 
@@ -1844,6 +1848,10 @@ class _GearsCrossPageDuplicateTranslator(_GoldenStubTranslator):
         "任务中，左手偶尔在右手建立稳定抓取之前就释放。双手共享单一动作块，因此"
         "释放时机必须从数据中隐式学习；显式的接触条件门控机制可能缓解此问题。"
     )
+    _CONTINUATION_TRANSLATION = _FULL_FAILURE_TRANSLATION.split("编码器", 1)[1]
+
+    def __init__(self, continuation_mode="duplicate"):
+        self.continuation_mode = continuation_mode
 
     def translate_batch(self, texts):
         fallback = super().translate_batch(texts)
@@ -1857,7 +1865,11 @@ class _GearsCrossPageDuplicateTranslator(_GoldenStubTranslator):
             elif compact.startswith("(1) Perception: at extreme object poses"):
                 outputs.append(self._FULL_FAILURE_TRANSLATION)
             elif compact.startswith("underestimates depth discontinuities"):
-                outputs.append(self._FULL_FAILURE_TRANSLATION)
+                outputs.append(
+                    self._CONTINUATION_TRANSLATION
+                    if self.continuation_mode == "suffix"
+                    else self._FULL_FAILURE_TRANSLATION
+                )
             else:
                 outputs.append(default)
         return outputs

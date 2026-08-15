@@ -143,9 +143,10 @@ source.save(
   retained solely as a regression fixture for internal layout QA and should
   not be redistributed independently of this test purpose.
 - Test purpose: the failure-analysis paragraph starts on the final source line
-  of page 13 and resumes below a float on page 14. A provider returned the
-  complete paragraph for both fragments, duplicating the translation and
-  shrinking the first copy from 9.17pt to 4.20pt.
+  of page 13 and resumes below a float on page 14. Providers returned either
+  the complete paragraph for both fragments or the complete paragraph for the
+  first fragment plus the correct suffix for the continuation. Both responses
+  duplicated page-14 content and shrank page 13 from 9.17pt to 4.20pt.
 
 Reproduce the fixture while retaining the original page content streams and
 cross-page paragraph boundary:

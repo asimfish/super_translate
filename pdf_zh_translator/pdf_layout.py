@@ -491,11 +491,12 @@ def _redistribute_duplicated_cross_page_translations(
     """Split one duplicated translation across a genuine page break.
 
     Providers sometimes complete an unfinished page-bottom sentence from
-    context, then return the same complete translation for the continuation
-    unit on the next page. Rendering both copies shrinks the first into a
-    single source line and duplicates the paragraph. The exact duplicate is a
-    strong ownership signal: retain one copy and distribute it according to
-    the two source boxes' full-size capacity.
+    context, then return either the same complete translation or its correct
+    suffix for the continuation unit on the next page. Rendering both copies
+    shrinks the first into a single source line and duplicates the paragraph.
+    Exact duplication or strict long-suffix overlap is a strong ownership
+    signal: retain one copy and distribute it according to the two source
+    boxes' full-size capacity.
     """
     adjusted = list(cleaned_results)
     used_continuations: set[int] = set()
@@ -522,6 +523,7 @@ def _redistribute_duplicated_cross_page_translations(
             continue
 
         continuation_index: Optional[int] = None
+        continuation_owned_suffix = False
         for candidate_index in range(index + 1, len(units)):
             if candidate_index in used_continuations:
                 continue
@@ -534,6 +536,16 @@ def _redistribute_duplicated_cross_page_translations(
                 strip_sentinels(continuation.text).split()
             ).strip()
             candidate_translation = adjusted[candidate_index][0]
+            candidate_clean = candidate_translation.strip()
+            candidate_normalized = "".join(candidate_clean.split())
+            exact_duplicate = candidate_normalized == normalized_translation
+            strict_suffix_overlap = bool(
+                candidate_clean
+                and translated.rstrip().endswith(candidate_clean)
+                and len(candidate_normalized) >= 50
+                and len(normalized_translation) - len(candidate_normalized) >= 4
+                and len(candidate_normalized) / len(normalized_translation) >= 0.50
+            )
             horizontal_overlap = min(block.bbox[2], continuation.bbox[2]) - max(
                 block.bbox[0], continuation.bbox[0]
             )
@@ -550,10 +562,11 @@ def _redistribute_duplicated_cross_page_translations(
                 or sentinel_char_count(candidate_translation)
                 or not re.match(r"^[a-z]", continuation_plain)
                 or horizontal_overlap < max(1.0, narrower_width) * 0.65
-                or "".join(candidate_translation.split()) != normalized_translation
+                or not (exact_duplicate or strict_suffix_overlap)
             ):
                 continue
             continuation_index = candidate_index
+            continuation_owned_suffix = strict_suffix_overlap
             break
         if continuation_index is None:
             continue
@@ -577,6 +590,37 @@ def _redistribute_duplicated_cross_page_translations(
             first_size,
             margin,
         ):
+            continue
+
+        if continuation_owned_suffix:
+            continuation_text = adjusted[continuation_index][0].strip()
+            prefix = translated.rstrip()[: -len(continuation_text)].rstrip()
+            if (
+                prefix
+                and translated_text_fits(
+                    block,
+                    prefix,
+                    font_pack,
+                    first_size,
+                    first_size,
+                    margin,
+                )
+                and translated_text_fits(
+                    continuation,
+                    continuation_text,
+                    font_pack,
+                    continuation_size,
+                    continuation_size,
+                    margin,
+                )
+            ):
+                adjusted[index] = (prefix, missing)
+                adjusted[continuation_index] = (
+                    continuation_text,
+                    adjusted[continuation_index][1],
+                )
+                used_continuations.add(continuation_index)
+                redistributed += 1
             continue
 
         low = 1
