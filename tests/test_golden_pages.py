@@ -101,6 +101,9 @@ GOLDEN_PAGES = [
     # GuidedVLA p15: piecewise `if` / `otherwise` labels are part of the
     # display equation and must not merge into the following prose.
     "guidedvla_p15_piecewise.pdf",
+    # FACT p5: the trailing `if fail` branch of display equation (6) must not
+    # absorb the following value-target explanation into protected math.
+    "fact_p5_piecewise_prose.pdf",
     "guidedvla_p21_formula.pdf",
     # GuidedVLA p6: a full-width chart caption must not make the left text
     # column full-width or hide the analysis prose immediately below it.
@@ -2196,6 +2199,15 @@ def test_guidedvla_piecewise_condition_labels_stay_out_of_translation_units(fixt
         "smoothing parameter" in text or "final objective" in text
         for text in plain
     )
+
+
+def test_fact_piecewise_branch_does_not_absorb_following_prose():
+    texts = _plain_unit_texts("fact_p5_piecewise_prose.pdf")
+
+    paragraph = next(text for text in texts if "uniform progress reward" in text)
+    assert paragraph.startswith("where 1fail")
+    assert "lower action-conditioned progress target" in paragraph
+    assert not paragraph.casefold().startswith("if fail")
 
 
 def test_guidedvla_p21_sentence_after_inline_formula_stays_translatable():

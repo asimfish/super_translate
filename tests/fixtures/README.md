@@ -69,6 +69,36 @@ shasum -a 256 tests/fixtures/otf_production_acceptance_full.pdf
   scale; raw Noto CJK font-file metrics previously forced it to 6.9pt
   (production defect).
 
+## `fact_p5_piecewise_prose.pdf`
+
+- Title: *FACT: Failure-Aware Causal Training for World-Action Models*
+- Venue: CoRL 2026 submission
+- Source: production upload; the PDF identifies https://fact-wam.github.io
+- Source PDF SHA256: `49bbd09c992531c9b07a777cfc2a80d0f7c32a0cff3a9855f8a51c4d981c8553`
+- Extracted page: PDF page 5
+- Fixture SHA256: `344333dc741488632393dd49142238ecac246ee1c89dbfd08411f71ffa7f7da3`
+- License: not declared in the supplied PDF. This single-page excerpt is
+  retained solely as a regression fixture for internal layout QA and should
+  not be redistributed independently of this test purpose.
+- Test purpose: display equation (6) ends with a detached `if fail` branch.
+  The branch must remain protected math without absorbing the following
+  `where ... In our experiments ...` prose paragraph and causing a leak.
+
+Reproduce the fixture from the production upload:
+
+```python
+import fitz
+
+source = fitz.open("FACT.pdf")
+fixture = fitz.open()
+fixture.insert_pdf(source, from_page=4, to_page=4)
+fixture.save(
+    "tests/fixtures/fact_p5_piecewise_prose.pdf",
+    garbage=3,
+    deflate=True,
+)
+```
+
 ```python
 import fitz
 src = fitz.open("tests/fixtures/otf_production_acceptance_full.pdf")

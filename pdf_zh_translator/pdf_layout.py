@@ -7261,9 +7261,33 @@ def _piecewise_display_equation_regions(
             continue
         block_area = max(bbox_area(block.bbox), 0.1)
         for region in display_equation_regions.get(block.page_index, ()):
-            if bbox_intersection_area(block.bbox, region) / block_area < 0.65:
+            coverage = bbox_intersection_area(block.bbox, region) / block_area
+            vertical_gap = max(
+                block.bbox[1] - region[3],
+                region[1] - block.bbox[3],
+                0.0,
+            )
+            horizontal_overlap = max(
+                min(block.bbox[2], region[2]) - max(block.bbox[0], region[0]),
+                0.0,
+            )
+            detached_short_branch = (
+                coverage < 0.65
+                and vertical_gap <= 2.5
+                and horizontal_overlap / max(block.bbox[2] - block.bbox[0], 0.1)
+                >= 0.8
+                and block.source_lines <= 1
+                and substantial_prose_word_count(branch_text) <= 4
+            )
+            if coverage < 0.65 and not detached_short_branch:
                 continue
+            block.block_type = "equation"
+            block.should_translate = False
+            block.preserve_position = True
+            block.no_merge = True
+            block.nowrap = True
             selected.setdefault(block.page_index, []).append(region)
+            break
     return {
         page_index: list(dict.fromkeys(page_regions))
         for page_index, page_regions in selected.items()
