@@ -39,3 +39,13 @@ to the browser, and are passed to the isolated translation worker through stdin
 instead of the durable worker specification. Translation jobs persist their
 credential owner scope so restart recovery preserves tenant ownership. Provider
 base URLs are server-controlled. See [ADR-0002](adr/0002-user-scoped-provider-credentials.md).
+
+## Resumable PDF uploads
+
+PDFs of 8 MiB or more use a tenant-bound resumable protocol. The browser sends
+4 MiB chunks with SHA256 digests, persists the upload ID locally, and asks the
+server which chunks are already durable after a retry. Completion verifies the
+whole PDF, serializes concurrent completion across processes, and deduplicates
+by tenant plus content hash. A lost proxy response can therefore be retried
+without creating another paper. Incomplete sessions expire after 24 hours. See
+[ADR-0003](adr/0003-resumable-pdf-upload.md).

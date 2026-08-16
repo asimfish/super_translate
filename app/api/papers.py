@@ -12,14 +12,23 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import LOCAL_ACCESS_SCOPE, get_request_access_scope
@@ -40,6 +49,7 @@ from app.models.paper import (
     TranslationStatus,
     generate_job_id,
 )
+from app.models.pdf_upload_session import PdfUploadSession
 from app.services.library import (
     cleanup_output_dir,
     delete_paper_files,
@@ -54,6 +64,10 @@ from app.services.quality_agent import (
     create_quality_agent,
     has_retranslatable_error,
     issue_fingerprint,
+)
+from app.services.resumable_uploads import (
+    FilesystemChunkUploadStore,
+    UploadValidationError,
 )
 from app.services.translation_recovery import (
     current_engine_revision,
@@ -221,6 +235,55 @@ class PaperListResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class UploadInitRequest(BaseModel):
+    """Metadata used to create a durable resumable upload session."""
+
+    filename: str
+    file_size: int
+    tags: str = ""
+    client_upload_id: str | None = None
+
+    @field_validator("filename")
+    @classmethod
+    def validate_filename(cls, value: str) -> str:
+        value = Path(value).name.strip()
+        if not value.lower().endswith(".pdf"):
+            raise ValueError("Only PDF files are accepted")
+        if not value or len(value) > 500:
+            raise ValueError("Invalid PDF filename")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def validate_upload_tags(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) > _MAX_TAGS_LEN:
+            raise ValueError(f"Tags must be {_MAX_TAGS_LEN} characters or less")
+        return value
+
+    @field_validator("client_upload_id")
+    @classmethod
+    def validate_client_upload_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{32}", value):
+            raise ValueError("Invalid client upload ID")
+        return value
+
+
+class UploadSessionResponse(BaseModel):
+    """Client-visible state for one resumable upload."""
+
+    upload_id: str
+    filename: str
+    file_size: int
+    chunk_size: int
+    chunk_count: int
+    uploaded_chunks: list[int]
+    paper_id: str | None = None
 
 
 class TranslationJobResponse(BaseModel):
@@ -610,6 +673,112 @@ async def _get_paper_or_404(
     return paper
 
 
+def _upload_store() -> FilesystemChunkUploadStore:
+    return FilesystemChunkUploadStore()
+
+
+async def _get_upload_or_404(
+    upload_id: str,
+    db: AsyncSession,
+    access_scope: str,
+) -> PdfUploadSession:
+    result = await db.execute(
+        select(PdfUploadSession).where(
+            PdfUploadSession.id == upload_id,
+            PdfUploadSession.access_scope == access_scope,
+        )
+    )
+    upload = result.scalar_one_or_none()
+    if upload is None:
+        raise HTTPException(404, "Upload session not found")
+    return upload
+
+
+async def _upload_response(
+    upload: PdfUploadSession,
+    store: FilesystemChunkUploadStore,
+) -> UploadSessionResponse:
+    chunks = await asyncio.to_thread(
+        store.uploaded_chunks,
+        upload.id,
+        upload.chunk_count,
+    )
+    return UploadSessionResponse(
+        upload_id=upload.id,
+        filename=upload.original_filename,
+        file_size=upload.file_size,
+        chunk_size=upload.chunk_size,
+        chunk_count=upload.chunk_count,
+        uploaded_chunks=chunks,
+        paper_id=upload.paper_id,
+    )
+
+
+def _expected_chunk_size(upload: PdfUploadSession, index: int) -> int:
+    if index < 0 or index >= upload.chunk_count:
+        raise HTTPException(400, "Invalid chunk index")
+    if index == upload.chunk_count - 1:
+        return upload.file_size - index * upload.chunk_size
+    return upload.chunk_size
+
+
+async def _cleanup_stale_uploads(
+    db: AsyncSession,
+    access_scope: str,
+    store: FilesystemChunkUploadStore,
+) -> None:
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        seconds=max(60, settings.resumable_upload_ttl_seconds)
+    )
+    result = await db.execute(
+        select(PdfUploadSession.id).where(
+            PdfUploadSession.access_scope == access_scope,
+            PdfUploadSession.paper_id.is_(None),
+            PdfUploadSession.updated_at < cutoff,
+        )
+    )
+    stale_ids = list(result.scalars())
+    if not stale_ids:
+        return
+    await db.execute(delete(PdfUploadSession).where(PdfUploadSession.id.in_(stale_ids)))
+    await db.commit()
+    for upload_id in stale_ids:
+        await asyncio.to_thread(store.cleanup_session, upload_id)
+
+
+async def _prepare_paper_record(
+    *,
+    access_scope: str,
+    original_filename: str,
+    stored_path: Path,
+    tags: str,
+) -> Paper:
+    (page_count, file_size), title = await asyncio.gather(
+        asyncio.to_thread(get_pdf_info, stored_path),
+        asyncio.to_thread(extract_title_from_pdf, stored_path),
+    )
+    return Paper(
+        access_scope=access_scope,
+        title=title,
+        original_filename=original_filename,
+        stored_filename=stored_path.name,
+        file_size=file_size,
+        page_count=page_count,
+        tags=tags,
+    )
+
+
+async def _prepare_safe_preview(paper: Paper, stored_path: Path) -> None:
+    try:
+        safe_path = await asyncio.to_thread(safe_pdf_for_use, stored_path)
+        if safe_path != stored_path.resolve():
+            logger.info("Prepared safe PDF preview for uploaded paper %s", paper.id)
+    except Exception:
+        # The source PDF and database record are already durable. Preview
+        # sanitization can be retried on first view and must not report upload failure.
+        logger.exception("Deferred safe preview preparation for paper %s", paper.id)
+
+
 @router.get("/")
 async def list_papers(
     db: Annotated[AsyncSession, Depends(get_session)],
@@ -695,6 +864,195 @@ async def list_papers(
     return PaperListResponse(papers=paper_responses, total=total, offset=offset, limit=limit)
 
 
+@router.post("/uploads/init")
+async def initialize_resumable_upload(
+    payload: UploadInitRequest,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
+) -> UploadSessionResponse:
+    """Create durable state before the client starts sending bounded chunks."""
+    if payload.file_size <= 0:
+        raise HTTPException(400, "Empty PDF file")
+    if payload.file_size > settings.max_upload_size:
+        max_mb = settings.max_upload_size // (1024 * 1024)
+        raise HTTPException(400, f"File too large (max {max_mb}MB)")
+    if settings.resumable_upload_chunk_size <= 0:
+        raise HTTPException(500, "Resumable upload is misconfigured")
+
+    store = _upload_store()
+    if payload.client_upload_id:
+        existing = await db.get(PdfUploadSession, payload.client_upload_id)
+        if existing is not None:
+            same_upload = (
+                existing.access_scope == access_scope
+                and existing.original_filename == payload.filename
+                and existing.file_size == payload.file_size
+                and existing.tags == payload.tags
+            )
+            if not same_upload:
+                raise HTTPException(409, "Upload ID is already in use")
+            return await _upload_response(existing, store)
+    await _cleanup_stale_uploads(db, access_scope, store)
+    incomplete = await db.scalar(
+        select(func.count())
+        .select_from(PdfUploadSession)
+        .where(
+            PdfUploadSession.access_scope == access_scope,
+            PdfUploadSession.paper_id.is_(None),
+        )
+    )
+    if int(incomplete or 0) >= max(1, settings.max_incomplete_uploads_per_user):
+        raise HTTPException(429, "Too many incomplete uploads; retry or wait for expiry")
+
+    upload = PdfUploadSession(
+        id=payload.client_upload_id,
+        access_scope=access_scope,
+        original_filename=payload.filename,
+        tags=payload.tags,
+        file_size=payload.file_size,
+        chunk_size=min(settings.resumable_upload_chunk_size, payload.file_size),
+    )
+    db.add(upload)
+    await db.commit()
+    await db.refresh(upload)
+    return await _upload_response(upload, store)
+
+
+@router.get("/uploads/{upload_id}")
+async def get_resumable_upload(
+    upload_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
+) -> UploadSessionResponse:
+    upload = await _get_upload_or_404(upload_id, db, access_scope)
+    return await _upload_response(upload, _upload_store())
+
+
+@router.put("/uploads/{upload_id}/chunks/{index}")
+async def upload_resumable_chunk(
+    upload_id: str,
+    index: int,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
+) -> UploadSessionResponse:
+    upload = await _get_upload_or_404(upload_id, db, access_scope)
+    if upload.paper_id:
+        return await _upload_response(upload, _upload_store())
+    expected_hash = request.headers.get("X-Chunk-SHA256", "")
+    store = _upload_store()
+    try:
+        await store.write_chunk(
+            upload.id,
+            index,
+            _expected_chunk_size(upload, index),
+            expected_hash,
+            request.stream(),
+        )
+    except UploadValidationError as exc:
+        raise HTTPException(400, str(exc)) from None
+    upload.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    await db.commit()
+    await db.refresh(upload)
+    return await _upload_response(upload, store)
+
+
+@router.post("/uploads/{upload_id}/complete")
+async def complete_resumable_upload(
+    upload_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
+) -> PaperResponse:
+    """Verify, deduplicate, and atomically register a completed PDF upload."""
+    upload = await _get_upload_or_404(upload_id, db, access_scope)
+    store = _upload_store()
+    session_lock = await asyncio.to_thread(store.acquire_lock, f"session:{upload.id}")
+    assembled_path = settings.papers_path / f".upload-{upload.id}-{uuid.uuid4().hex}.part"
+    stored_path: Path | None = None
+    content_lock = None
+    try:
+        await db.refresh(upload)
+        if upload.paper_id:
+            paper = await _get_paper_or_404(upload.paper_id, db, access_scope)
+            return _paper_to_response(paper, has_original=True)
+
+        content_sha256 = await asyncio.to_thread(
+            store.assemble_pdf,
+            upload.id,
+            upload.chunk_count,
+            upload.file_size,
+            assembled_path,
+        )
+        content_lock = await asyncio.to_thread(
+            store.acquire_lock,
+            f"content:{access_scope}:{content_sha256}",
+        )
+        duplicate = await db.scalar(
+            select(Paper)
+            .join(PdfUploadSession, PdfUploadSession.paper_id == Paper.id)
+            .where(
+                PdfUploadSession.access_scope == access_scope,
+                PdfUploadSession.content_sha256 == content_sha256,
+                PdfUploadSession.file_size == upload.file_size,
+                PdfUploadSession.paper_id.is_not(None),
+                Paper.access_scope == access_scope,
+            )
+            .order_by(PdfUploadSession.created_at.asc())
+        )
+        if duplicate is not None:
+            upload.content_sha256 = content_sha256
+            upload.paper_id = duplicate.id
+            upload.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
+            assembled_path.unlink(missing_ok=True)
+            await asyncio.to_thread(store.cleanup_session, upload.id)
+            return _paper_to_response(duplicate, has_original=True)
+
+        stored_path = settings.papers_path / generate_stored_filename(
+            upload.original_filename
+        )
+        await asyncio.to_thread(os.replace, assembled_path, stored_path)
+        paper = await _prepare_paper_record(
+            access_scope=access_scope,
+            original_filename=upload.original_filename,
+            stored_path=stored_path,
+            tags=upload.tags,
+        )
+        db.add(paper)
+        await db.flush()
+        upload.content_sha256 = content_sha256
+        upload.paper_id = paper.id
+        upload.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        await db.commit()
+        await db.refresh(paper)
+        await asyncio.to_thread(store.cleanup_session, upload.id)
+        await _prepare_safe_preview(paper, stored_path)
+        return _paper_to_response(paper, has_original=True)
+    except UploadValidationError as exc:
+        await db.rollback()
+        assembled_path.unlink(missing_ok=True)
+        if stored_path is not None:
+            stored_path.unlink(missing_ok=True)
+        raise HTTPException(400, str(exc)) from None
+    except HTTPException:
+        await db.rollback()
+        assembled_path.unlink(missing_ok=True)
+        if stored_path is not None:
+            stored_path.unlink(missing_ok=True)
+        raise
+    except Exception:
+        await db.rollback()
+        assembled_path.unlink(missing_ok=True)
+        if stored_path is not None:
+            stored_path.unlink(missing_ok=True)
+        logger.exception("Failed to complete resumable upload %s", upload.id)
+        raise HTTPException(500, "Failed to complete uploaded PDF") from None
+    finally:
+        if content_lock is not None:
+            await asyncio.to_thread(store.release_lock, content_lock)
+        await asyncio.to_thread(store.release_lock, session_lock)
+
+
 @router.post("/upload")
 async def upload_paper(
     db: Annotated[AsyncSession, Depends(get_session)],
@@ -742,24 +1100,16 @@ async def upload_paper(
         raise HTTPException(400, "Empty PDF file")
 
     try:
-        (page_count, file_size), title = await asyncio.gather(
-            asyncio.to_thread(get_pdf_info, stored_path),
-            asyncio.to_thread(extract_title_from_pdf, stored_path),
+        paper = await _prepare_paper_record(
+            access_scope=access_scope,
+            original_filename=file.filename,
+            stored_path=stored_path,
+            tags=tags,
         )
     except Exception:
         stored_path.unlink(missing_ok=True)
         logger.exception("Error processing uploaded PDF")
         raise HTTPException(500, "Failed to process uploaded PDF") from None
-
-    paper = Paper(
-        access_scope=access_scope,
-        title=title,
-        original_filename=file.filename,
-        stored_filename=stored_path.name,
-        file_size=file_size,
-        page_count=page_count,
-        tags=tags,
-    )
     db.add(paper)
     try:
         await db.commit()
@@ -770,9 +1120,7 @@ async def upload_paper(
         raise HTTPException(500, "Failed to save paper record") from None
     await db.refresh(paper)
 
-    safe_path = await asyncio.to_thread(safe_pdf_for_use, stored_path)
-    if safe_path != stored_path.resolve():
-        logger.info("Prepared safe PDF preview for uploaded paper %s", paper.id)
+    await _prepare_safe_preview(paper, stored_path)
 
     return _paper_to_response(paper, has_original=True)
 

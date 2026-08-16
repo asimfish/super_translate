@@ -4,6 +4,17 @@ let papers = [];
 let currentPaper = null;
 let selectedFiles = [];
 let selectedFileKeys = new Set();
+const RESUMABLE_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
+const RESUMABLE_UPLOAD_STORAGE_KEY = 'paperChinaPendingUploads';
+function loadPendingUploadSessions() {
+  try {
+    const entries = JSON.parse(localStorage.getItem(RESUMABLE_UPLOAD_STORAGE_KEY) || '[]');
+    return new Map(Array.isArray(entries) ? entries : []);
+  } catch {
+    return new Map();
+  }
+}
+const pendingUploadSessions = loadPendingUploadSessions();
 let searchTimer = null;
 let translationPollId = null;
 let translationPollPaperId = null;
@@ -146,7 +157,8 @@ const api = {
       });
       xhr.addEventListener('load', () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText));
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch { reject(new Error('服务器返回了无效的上传结果，请重试')); }
         } else {
           try { reject(new Error(JSON.parse(xhr.responseText).detail || 'Upload failed')); }
           catch { reject(new Error('Upload failed')); }
@@ -158,6 +170,63 @@ const api = {
       if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.send(form);
     });
+  },
+  async initResumableUpload(file, tags = '', uploadId = '') {
+    const res = await apiFetch('/api/papers/uploads/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: file.name,
+        file_size: file.size,
+        tags,
+        client_upload_id: uploadId || null,
+      }),
+    });
+    if (!res.ok) throw new Error(await errorDetail(res, '无法初始化分片上传'));
+    return res.json();
+  },
+  async getResumableUpload(uploadId) {
+    const res = await apiFetch(`/api/papers/uploads/${encodeURIComponent(uploadId)}`);
+    if (!res.ok) {
+      const error = new Error(await errorDetail(res, '上传会话已失效'));
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  },
+  uploadResumableChunk(uploadId, index, chunk, sha256, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) onProgress(e.loaded);
+      });
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch { reject(new Error('服务器返回了无效的分片结果')); }
+        } else {
+          try { reject(new Error(JSON.parse(xhr.responseText).detail || '分片上传失败')); }
+          catch { reject(new Error(`分片上传失败 (${xhr.status || '网络中断'})`)); }
+        }
+      });
+      xhr.addEventListener('error', () => reject(new Error('网络中断')));
+      xhr.addEventListener('timeout', () => reject(new Error('分片上传超时')));
+      xhr.open('PUT', `/api/papers/uploads/${encodeURIComponent(uploadId)}/chunks/${index}`);
+      xhr.timeout = 60_000;
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.setRequestHeader('X-Chunk-SHA256', sha256);
+      const token = getApiToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.send(chunk);
+    });
+  },
+  async completeResumableUpload(uploadId) {
+    const res = await apiFetch(
+      `/api/papers/uploads/${encodeURIComponent(uploadId)}/complete`,
+      { method: 'POST' }
+    );
+    if (!res.ok) throw new Error(await errorDetail(res, '无法完成分片上传'));
+    return res.json();
   },
   async getPaper(id) {
     const res = await apiFetch(`/api/papers/${id}`);
@@ -524,6 +593,125 @@ function goToPage(page) {
 }
 
 // === Upload ===
+function savePendingUploadSessions() {
+  localStorage.setItem(
+    RESUMABLE_UPLOAD_STORAGE_KEY,
+    JSON.stringify(Array.from(pendingUploadSessions.entries()))
+  );
+}
+
+function createUploadId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Hex(blob) {
+  if (!crypto?.subtle) throw new Error('当前页面不支持安全分片校验，请使用 HTTPS 访问');
+  const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function uploadChunkWithRetry(uploadId, index, chunk, onProgress) {
+  const sha256 = await sha256Hex(chunk);
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await api.uploadResumableChunk(
+        uploadId,
+        index,
+        chunk,
+        sha256,
+        onProgress
+      );
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, 400 * (2 ** (attempt - 1))));
+      }
+    }
+  }
+  throw lastError || new Error('分片上传失败');
+}
+
+async function completeUploadWithRetry(uploadId) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await api.completeResumableUpload(uploadId);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+      }
+    }
+  }
+  throw lastError || new Error('无法确认上传结果');
+}
+
+async function getOrCreateResumableUpload(file, tags) {
+  const key = uploadFileKey(file);
+  let uploadId = pendingUploadSessions.get(key) || '';
+  if (uploadId) {
+    try {
+      const existing = await api.getResumableUpload(uploadId);
+      if (existing.filename === file.name && existing.file_size === file.size) return existing;
+      pendingUploadSessions.delete(key);
+      savePendingUploadSessions();
+      uploadId = '';
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      pendingUploadSessions.delete(key);
+      savePendingUploadSessions();
+      uploadId = '';
+    }
+  }
+  if (!uploadId) {
+    uploadId = createUploadId();
+    pendingUploadSessions.set(key, uploadId);
+    savePendingUploadSessions();
+  }
+  return api.initResumableUpload(file, tags, uploadId);
+}
+
+async function uploadPaperResumable(file, tags, onProgress) {
+  const key = uploadFileKey(file);
+  const session = await getOrCreateResumableUpload(file, tags);
+  if (session.paper_id) {
+    const paper = await completeUploadWithRetry(session.upload_id);
+    pendingUploadSessions.delete(key);
+    savePendingUploadSessions();
+    onProgress(1);
+    return paper;
+  }
+
+  const uploaded = new Set(session.uploaded_chunks || []);
+  const chunkLength = index => Math.min(
+    session.chunk_size,
+    file.size - index * session.chunk_size
+  );
+  let completedBytes = Array.from(uploaded).reduce(
+    (total, index) => total + chunkLength(index),
+    0
+  );
+  onProgress(completedBytes / file.size);
+  for (let index = 0; index < session.chunk_count; index++) {
+    if (uploaded.has(index)) continue;
+    const start = index * session.chunk_size;
+    const chunk = file.slice(start, start + session.chunk_size);
+    await uploadChunkWithRetry(session.upload_id, index, chunk, sentBytes => {
+      onProgress(Math.min(1, (completedBytes + sentBytes) / file.size));
+    });
+    completedBytes += chunk.size;
+    onProgress(Math.min(1, completedBytes / file.size));
+  }
+
+  const paper = await completeUploadWithRetry(session.upload_id);
+  pendingUploadSessions.delete(key);
+  savePendingUploadSessions();
+  onProgress(1);
+  return paper;
+}
+
 function initDropZone() {
   const zone = document.getElementById('drop-zone');
   if (!zone) return;
@@ -590,7 +778,12 @@ function renderFileList() {
 
 function removeFile(index) {
   const removed = selectedFiles.splice(index, 1)[0];
-  if (removed) selectedFileKeys.delete(uploadFileKey(removed));
+  if (removed) {
+    const key = uploadFileKey(removed);
+    selectedFileKeys.delete(key);
+    pendingUploadSessions.delete(key);
+    savePendingUploadSessions();
+  }
   if (selectedFiles.length === 0) {
     cancelUpload();
   } else {
@@ -599,6 +792,8 @@ function removeFile(index) {
 }
 
 function cancelUpload() {
+  for (const file of selectedFiles) pendingUploadSessions.delete(uploadFileKey(file));
+  savePendingUploadSessions();
   selectedFiles = [];
   selectedFileKeys.clear();
   document.getElementById('drop-zone').classList.remove('hidden');
@@ -625,6 +820,7 @@ async function doUpload() {
 
   let success = 0;
   let failed = 0;
+  const failedFiles = [];
   const total = filesToUpload.length;
 
   for (let i = 0; i < total; i++) {
@@ -634,12 +830,18 @@ async function doUpload() {
     status.textContent = `上传中 (${i + 1}/${total}): ${file.name}`;
 
     try {
-      await api.uploadPaperWithProgress(file, tags, pct => {
+      const upload = file.size >= RESUMABLE_UPLOAD_THRESHOLD
+        ? uploadPaperResumable
+        : (smallFile, smallTags, onProgress) => (
+            api.uploadPaperWithProgress(smallFile, smallTags, onProgress)
+          );
+      await upload(file, tags, pct => {
         fill.style.width = `${Math.round(pct * 100)}%`;
       });
       success++;
     } catch (e) {
       failed++;
+      failedFiles.push(file);
       toastError(`${file.name} 上传失败: ${e.message}`);
     }
   }
@@ -647,10 +849,22 @@ async function doUpload() {
   fill.style.width = '100%';
   fill.style.background = failed > 0 ? 'var(--warning)' : 'var(--success)';
   status.textContent = `完成！${success} 篇成功${failed > 0 ? `，${failed} 篇失败` : ''}`;
-  toastSuccess(`上传完成：${success} 篇成功${failed > 0 ? `，${failed} 篇失败` : ''}`);
-  selectedFiles = [];
-  selectedFileKeys.clear();
-  setTimeout(() => showLibrary(), 1000);
+  if (success > 0) {
+    toastSuccess(`上传完成：${success} 篇成功${failed > 0 ? `，${failed} 篇待重试` : ''}`);
+  }
+  selectedFiles = failedFiles;
+  selectedFileKeys = new Set(failedFiles.map(uploadFileKey));
+  if (failedFiles.length > 0) {
+    setTimeout(() => {
+      prog.classList.add('hidden');
+      document.getElementById('drop-zone').classList.remove('hidden');
+      document.getElementById('upload-preview').classList.remove('hidden');
+      renderFileList();
+    }, 800);
+  } else {
+    selectedFileKeys.clear();
+    setTimeout(() => showLibrary(), 1000);
+  }
   uploading = false;
 }
 

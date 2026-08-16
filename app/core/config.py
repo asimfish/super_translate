@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     papers_dir: Path = Path("data/papers")
     translations_dir: Path = Path("data/translations")
+    resumable_uploads_dir: Path = Path("data/upload_sessions")
     db_path: Path = Path("data/paper_china.db")
 
     # "native" uses the in-house pdf_zh_translator engine (equation-safe layout,
@@ -54,6 +55,9 @@ class Settings(BaseSettings):
     # Upload limits
     max_upload_size: int = 100 * 1024 * 1024  # 100MB
     upload_chunk_size: int = 1024 * 1024  # 1MB
+    resumable_upload_chunk_size: int = 4 * 1024 * 1024  # 4MB, proxy-safe
+    resumable_upload_ttl_seconds: int = 24 * 60 * 60
+    max_incomplete_uploads_per_user: int = 20
 
     # Translation concurrency
     max_concurrent_translations: int = 1
@@ -110,6 +114,11 @@ class Settings(BaseSettings):
         """Get the translations storage directory path."""
         return self.base_dir / self.translations_dir
 
+    @property
+    def resumable_uploads_path(self) -> Path:
+        """Get the durable resumable-upload directory path."""
+        return self.base_dir / self.resumable_uploads_dir
+
     model_config = {"env_prefix": "PAPER_CHINA_", "env_file": ".env"}
 
 
@@ -120,4 +129,5 @@ def ensure_dirs() -> None:
     """Ensure all required directories exist."""
     settings.papers_path.mkdir(parents=True, exist_ok=True)
     settings.translations_path.mkdir(parents=True, exist_ok=True)
+    settings.resumable_uploads_path.mkdir(parents=True, exist_ok=True)
     (settings.base_dir / settings.data_dir).mkdir(parents=True, exist_ok=True)

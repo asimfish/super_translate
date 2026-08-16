@@ -95,6 +95,9 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 | `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` | `1800` | Global timeout for each translation run |
 | `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `1` | Max concurrent translation jobs |
 | `PAPER_CHINA_TRANSLATION_CONCURRENCY` | `4` | Parallel supplier requests within one translation (lower to `1` for rate-limited API keys) |
+| `PAPER_CHINA_MAX_UPLOAD_SIZE` | `104857600` | Maximum PDF size in bytes |
+| `PAPER_CHINA_RESUMABLE_UPLOAD_CHUNK_SIZE` | `4194304` | Proxy-safe resumable upload chunk size in bytes |
+| `PAPER_CHINA_RESUMABLE_UPLOAD_TTL_SECONDS` | `86400` | Lifetime of an incomplete upload session |
 | `PAPER_CHINA_API_TOKEN` | — | Optional bearer token for `/api/*` requests |
 | `PAPER_CHINA_WORKSPACE_TOKENS` | — | Optional comma/newline-separated `workspace:token` entries for lightweight per-workspace isolation |
 | `PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE` | `false` | Allow remote API access without token |

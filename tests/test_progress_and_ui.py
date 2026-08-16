@@ -9,8 +9,9 @@ import time
 from pathlib import Path
 from urllib.request import urlopen
 
+import fitz
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 from app.api.papers import _format_duration
 
@@ -544,7 +545,117 @@ def test_upload_view_stages_files_until_user_confirms_upload():
     assert "document.getElementById('drop-zone').classList.remove('hidden');" in js
     assert "const filesToUpload = [...selectedFiles];" in js
     assert "`确认上传 ${selectedFiles.length} 篇`" in js
+    assert "RESUMABLE_UPLOAD_THRESHOLD" in js
+    assert "/api/papers/uploads/init" in js
+    assert "crypto.subtle.digest('SHA-256'" in js
+    assert "uploadChunkWithRetry" in js
+    assert "selectedFiles = failedFiles;" in js
+    assert "pendingUploadSessions" in js
     assert ".upload-queue-header" in css
+
+
+@pytest.mark.e2e
+def test_large_upload_recovers_when_completion_response_is_lost(tmp_path):
+    """A committed upload must survive a dropped proxy response without duplication."""
+    pdf_path = tmp_path / "large-proxy-test.pdf"
+    with fitz.open() as document:
+        page = document.new_page()
+        page.insert_text((72, 72), "Proxy-safe resumable upload")
+        document.save(pdf_path)
+    with pdf_path.open("ab") as output:
+        output.write((b"%" + b"x" * 1022 + b"\n") * (9 * 1024))
+        output.write(b"%%EOF\n")
+    assert pdf_path.stat().st_size > 8 * 1024 * 1024
+
+    port = _available_port()
+    base_url = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PAPER_CHINA_BASE_DIR": str(tmp_path / "upload-server"),
+            "PAPER_CHINA_DB_PATH": "paper-china.db",
+            "PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE": "true",
+        }
+    )
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(f"{base_url}/health", timeout=1) as response:
+                if response.status == 200:
+                    break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        server.terminate()
+        raise AssertionError("Upload E2E server did not become ready")
+
+    completion_attempts = 0
+    chunk_sizes: list[int] = []
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
+
+            def observe_request(request):
+                if request.method == "PUT" and "/chunks/" in request.url:
+                    chunk_sizes.append(len(request.post_data_buffer or b""))
+
+            def drop_first_completion(route):
+                nonlocal completion_attempts
+                completion_attempts += 1
+                if completion_attempts == 1:
+                    response = route.fetch()
+                    assert response.ok
+                    response.dispose()
+                    route.abort("failed")
+                    return
+                route.continue_()
+
+            page.on("request", observe_request)
+            page.route("**/api/papers/uploads/*/complete", drop_first_completion)
+            page.goto(base_url, wait_until="domcontentloaded")
+            page.locator('[data-action="show-upload"]').first.click()
+            page.set_input_files("#file-input", str(pdf_path))
+            page.click("#btn-do-upload")
+            expect(page.locator("#upload-status")).to_contain_text("完成", timeout=90_000)
+            listing = page.evaluate(
+                "async () => (await fetch('/api/papers/?offset=0&limit=50')).json()"
+            )
+            pending = page.evaluate(
+                "localStorage.getItem('paperChinaPendingUploads') || '[]'"
+            )
+            page.screenshot(path=str(tmp_path / "resumable-upload.png"), full_page=True)
+            browser.close()
+
+        assert completion_attempts >= 2
+        assert len(chunk_sizes) == 3
+        assert max(chunk_sizes) <= 4 * 1024 * 1024
+        assert listing["total"] == 1
+        assert len(listing["papers"]) == 1
+        assert json.loads(pending) == []
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
 
 
 def test_reader_renders_pdf_text_layer_for_selection():

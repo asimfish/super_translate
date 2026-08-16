@@ -150,7 +150,8 @@ retried from the UI.
 |---------|-------------|
 | `401 Invalid or missing API token` | UI/token mismatch. Re-enter the token from `.env` in the browser prompt. |
 | `403 Remote API access requires PAPER_CHINA_API_TOKEN` | You exposed the app publicly without a token. Set `PAPER_CHINA_API_TOKEN` and restart. |
-| Upload fails at ~100MB | `PAPER_CHINA_MAX_UPLOAD_SIZE` (bytes) and the `request_body max_size` in `Caddyfile` both cap uploads. |
+| Upload fails at ~100MB | `PAPER_CHINA_MAX_UPLOAD_SIZE` (bytes) and the `request_body max_size` in `Caddyfile` both cap uploads. Keep `PAPER_CHINA_RESUMABLE_UPLOAD_CHUNK_SIZE` below every proxy's per-request limit. |
+| A large upload is interrupted | Select the same local file again and retry. The browser/server resume from the last SHA256-verified chunk; incomplete sessions expire after `PAPER_CHINA_RESUMABLE_UPLOAD_TTL_SECONDS`. |
 | `No CJK font available` | The image should include `fonts-noto-cjk`; if you built a custom image, install it or set `PDF_ZH_FONT_FILE`. |
 | Translation fails immediately with missing key | Open **API 设置** and configure the selected provider for the current account. |
 | HTTP 429 from the translation provider | Set `PAPER_CHINA_TRANSLATION_CONCURRENCY=1` and keep `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS=1`. |
