@@ -33,7 +33,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -126,10 +125,46 @@ def _load_entries(
     return entries
 
 
-def _http_get(url: str, *, timeout: int = 120) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+def _http_get(url: str, *, timeout: int = 120, attempts: int = 3) -> bytes:
+    """Download with a wall-clock deadline, not a per-socket read timeout."""
+    last_error = "request was not attempted"
+    candidates = [url]
+    if url.startswith("https://arxiv.org/"):
+        candidates.insert(0, url.replace("https://arxiv.org/", "https://export.arxiv.org/", 1))
+    for attempt in range(1, max(1, attempts) + 1):
+        request_url = candidates[(attempt - 1) % len(candidates)]
+        command = [
+            "curl",
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--user-agent",
+            _USER_AGENT,
+            "--connect-timeout",
+            str(min(20, timeout)),
+            "--max-time",
+            str(timeout),
+            request_url,
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                timeout=timeout + 5,
+            )
+            return result.stdout
+        except subprocess.TimeoutExpired:
+            last_error = f"total request timeout after {timeout}s"
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or b"").decode("utf-8", "replace").strip()
+            last_error = detail or f"curl exited rc={exc.returncode}"
+        except OSError as exc:
+            raise RuntimeError(f"cannot execute curl: {exc}") from exc
+        if attempt < attempts:
+            time.sleep(min(4.0, 0.5 * (2 ** (attempt - 1))))
+    raise RuntimeError(f"download failed after {attempts} attempts: {last_error}")
 
 
 def _run_with_pdf_open_retry(operation, *args, attempts: int = 3):

@@ -83,6 +83,26 @@ class TestManifest:
 
 
 class TestHarness:
+    def test_http_get_retries_with_a_total_process_timeout(
+        self, benchmark_module, monkeypatch
+    ):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            return subprocess.CompletedProcess(command, 0, stdout=b"payload", stderr=b"")
+
+        monkeypatch.setattr(benchmark_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(benchmark_module.time, "sleep", lambda _delay: None)
+        assert benchmark_module._http_get(
+            "https://arxiv.org/pdf/fixture", timeout=10, attempts=2
+        ) == b"payload"
+        assert len(calls) == 2
+        assert all("--max-time" in command for command, _kwargs in calls)
+        assert all(kwargs["timeout"] == 15 for _command, kwargs in calls)
+
     def test_actionable_warning_fails_strict_evaluation(self, benchmark_module):
         warning = SimpleNamespace(
             page=4,
