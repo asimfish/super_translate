@@ -52,6 +52,23 @@ _TRANSIENT_PDF_OPEN_MARKERS = (
     "cannot open document",
 )
 
+_ACTIONABLE_WARNING_CODES = frozenset(
+    {
+        "font_size_drift",
+        "font_role_heading_mismatch",
+        "text_overlap",
+        "raster_ink_overlap",
+        "formula_changed",
+        "formula_clipped",
+        "formula_visible_ink_mismatch",
+        "display_formula_misaligned",
+        "table_structure_mismatch",
+        "untranslated_english",
+        "untranslated_natural_language",
+        "untranslated_block",
+    }
+)
+
 _LICENSE_RE = re.compile(
     r"https?://(?:arxiv\.org/licenses|creativecommons\.org/(?:licenses|publicdomain))/[a-z0-9./-]+"
 )
@@ -128,6 +145,24 @@ def _run_with_pdf_open_retry(operation, *args, attempts: int = 3):
                 raise
             time.sleep(0.25 * (2**attempt))
     raise AssertionError("unreachable")
+
+
+def _is_actionable_warning(issue: object) -> bool:
+    if getattr(issue, "severity", "warning") != "warning":
+        return False
+    code = str(getattr(issue, "code", ""))
+    return code in _ACTIONABLE_WARNING_CODES or code.startswith("preserved_")
+
+
+def _actionable_warning_count(issues: list[object]) -> int:
+    return sum(_is_actionable_warning(issue) for issue in issues)
+
+
+def _strict_evaluation(issues: list[object], visual_score: float) -> bool:
+    has_error = any(
+        getattr(issue, "severity", "warning") == "error" for issue in issues
+    )
+    return not has_error and not _actionable_warning_count(issues) and visual_score >= 0.55
 
 
 def _paths(workdir: Path) -> dict:
@@ -293,6 +328,66 @@ def _git_commit() -> str:
         return "unknown"
 
 
+def _translation_config(args) -> dict:
+    qa_max_passes = max(4, int(getattr(args, "qa_max_passes", 4)))
+    return {
+        "quality": str(getattr(args, "quality", "quality")),
+        "qa_mode": str(getattr(args, "qa_mode", "iterative")),
+        "qa_max_passes": qa_max_passes,
+        "preserve_graphics_text": True,
+        "source_lang": "en",
+        "target_lang": "zh",
+    }
+
+
+def _round_metadata(entries: list[Entry], manifest: Path, args) -> dict:
+    return {
+        "schema_version": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "manifest": str(manifest.resolve()),
+        "manifest_sha256": _sha256_file(manifest),
+        "paper_ids": [entry.id for entry in entries],
+        "engine_commit": _git_commit(),
+        "engine_fingerprint": _engine_fingerprint(),
+        "qa_commit": _git_commit(),
+        "qa_fingerprint": _qa_fingerprint(),
+        "font_fingerprint": _font_fingerprint(),
+        "translation_model": _env("DEEPSEEK_MODEL", "deepseek-v4-pro"),
+        "translation_config": _translation_config(args),
+    }
+
+
+def _ensure_round_metadata(
+    entries: list[Entry], workdir: Path, manifest: Path, args
+) -> dict:
+    path = workdir / "round.json"
+    expected = _round_metadata(entries, manifest, args)
+    if not path.exists():
+        _atomic_write_text(
+            path, json.dumps(expected, ensure_ascii=False, indent=2) + "\n"
+        )
+        return expected
+    current = json.loads(path.read_text(encoding="utf-8"))
+    stable_fields = (
+        "manifest_sha256",
+        "paper_ids",
+        "engine_commit",
+        "engine_fingerprint",
+        "qa_commit",
+        "qa_fingerprint",
+        "font_fingerprint",
+        "translation_model",
+        "translation_config",
+    )
+    drift = [field for field in stable_fields if current.get(field) != expected.get(field)]
+    if drift:
+        raise SystemExit(
+            "benchmark round provenance changed; use a new workdir: "
+            + ", ".join(drift)
+        )
+    return current
+
+
 def _evaluation_cache_matches(
     report: dict,
     source: Path,
@@ -304,7 +399,7 @@ def _evaluation_cache_matches(
     source_sha256 = _sha256_file(source)
     translated_sha256 = _sha256_file(translated)
     matches = (
-        report.get("schema_version") == 2
+        report.get("schema_version") in {2, 3}
         and report.get("source_sha256") == source_sha256
         and report.get("translated_sha256") == translated_sha256
         and report.get("qa_fingerprint") == _qa_fingerprint()
@@ -328,8 +423,9 @@ def _translation_provenance(
         timing = json.loads(timing_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         timing = {}
+    schema_version = timing.get("schema_version")
     if (
-        timing.get("schema_version") != 2
+        schema_version not in {2, 3}
         or timing.get("source_sha256") != source_sha256
         or timing.get("translated_sha256") != translated_sha256
     ):
@@ -339,12 +435,15 @@ def _translation_provenance(
             "translation_model": "unknown",
             "font_fingerprint": "unknown",
         }
-    return {
+    provenance = {
         "engine_fingerprint": str(timing.get("engine_fingerprint") or "unknown"),
         "engine_commit": str(timing.get("engine_commit") or "unknown"),
         "translation_model": str(timing.get("translation_model") or "unknown"),
         "font_fingerprint": str(timing.get("font_fingerprint") or "unknown"),
     }
+    if schema_version == 3:
+        provenance["translation_config"] = timing.get("translation_config") or {}
+    return provenance
 
 
 def _translation_cache_matches(
@@ -352,6 +451,7 @@ def _translation_cache_matches(
     source: Path,
     translated: Path,
     model: str,
+    translation_config: dict | None = None,
 ) -> bool:
     if not source.exists() or not translated.exists():
         return False
@@ -360,11 +460,14 @@ def _translation_cache_matches(
         _sha256_file(source),
         _sha256_file(translated),
     )
-    return (
+    matches = (
         provenance["engine_fingerprint"] == _engine_fingerprint()
         and provenance["translation_model"] == model
         and provenance["font_fingerprint"] == _font_fingerprint()
     )
+    if translation_config is not None:
+        matches = matches and provenance.get("translation_config") == translation_config
+    return matches
 
 
 def _block_cache_path(translations_dir: Path, paper_id: str, model: str) -> Path:
@@ -458,6 +561,152 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name) or os.environ.get(f"PAPER_CHINA_{name}") or default
 
 
+def _run_isolated_translation_process(
+    command: list[str],
+    *,
+    pass_fds: tuple[int, ...],
+    max_attempts: int,
+    timeout_seconds: float,
+    heartbeat_seconds: float,
+    batch_deadline: float | None,
+    on_event,
+) -> dict:
+    """Run one paper in a bounded process and retain retry diagnostics."""
+    attempts = max(1, max_attempts)
+    heartbeat = max(0.1, heartbeat_seconds)
+    last_error = "translation process did not start"
+    for attempt in range(1, attempts + 1):
+        started = time.monotonic()
+        on_event({"status": "running", "attempt": attempt})
+        process = subprocess.Popen(command, pass_fds=pass_fds)
+        timed_out = False
+        while True:
+            return_code = process.poll()
+            if return_code is not None:
+                break
+            now = time.monotonic()
+            deadline = started + max(1.0, timeout_seconds)
+            if batch_deadline is not None:
+                deadline = min(deadline, batch_deadline)
+            if now >= deadline:
+                timed_out = True
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                return_code = process.returncode if process.returncode is not None else -9
+                break
+            on_event(
+                {
+                    "status": "running",
+                    "attempt": attempt,
+                    "elapsed_seconds": round(now - started, 1),
+                }
+            )
+            time.sleep(min(heartbeat, max(0.1, deadline - now)))
+
+        if return_code == 0:
+            result = {"status": "completed", "attempt": attempt, "return_code": 0}
+            on_event(result)
+            return result
+        last_error = (
+            f"translation timed out after {timeout_seconds:.0f}s"
+            if timed_out
+            else f"translation subprocess exited rc={return_code}"
+        )
+        if attempt < attempts:
+            on_event(
+                {
+                    "status": "retrying",
+                    "attempt": attempt,
+                    "error": last_error,
+                }
+            )
+            continue
+        result = {
+            "status": "failed",
+            "attempt": attempt,
+            "return_code": return_code,
+            "error": last_error,
+        }
+        on_event(result)
+        return result
+    raise AssertionError("unreachable")
+
+
+def _qa_issue_score(issues: list[object]) -> tuple[int, int, int]:
+    errors = sum(
+        getattr(issue, "severity", "warning") == "error" for issue in issues
+    )
+    return errors, _actionable_warning_count(issues), len(issues)
+
+
+def _run_iterative_quality_qa(
+    source: Path, translated: Path, *, max_passes: int
+) -> dict:
+    """Run bounded deterministic QA and keep a layout fix only if it improves."""
+    from app.services.layout_fix import fix_translated_layout
+    from app.services.quality_agent import QualityAction, create_quality_agent
+    from pdf_zh_translator.pdf_layout import verify_translation_issues
+
+    quality_agent = create_quality_agent()
+    history: list[dict] = []
+    attempted: set[str] = set()
+    passes = max(1, max_passes)
+    issues: list[object] = []
+    for pass_index in range(1, passes + 1):
+        issues = _run_with_pdf_open_retry(
+            verify_translation_issues, source, translated
+        )
+        plan = quality_agent.plan(issues)
+        fingerprint = hashlib.sha256(
+            "\n".join(
+                sorted(
+                    f"{getattr(issue, 'severity', 'warning')}|"
+                    f"{getattr(issue, 'code', 'unknown')}|"
+                    f"{getattr(issue, 'page', 0)}|"
+                    f"{getattr(issue, 'message', '')}"
+                    for issue in issues
+                )
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        record = {
+            "pass": pass_index,
+            "issue_count": len(issues),
+            "error_count": _qa_issue_score(issues)[0],
+            "actionable_warning_count": _qa_issue_score(issues)[1],
+            "action": plan.action.value,
+            "issue_fingerprint": fingerprint,
+        }
+        history.append(record)
+        if _strict_evaluation(issues, 1.0):
+            break
+        if plan.action is not QualityAction.REPAIR_LAYOUT or fingerprint in attempted:
+            break
+        attempted.add(fingerprint)
+        snapshot = translated.read_bytes()
+        before_score = _qa_issue_score(issues)
+        if not fix_translated_layout(translated):
+            break
+        candidate = _run_with_pdf_open_retry(
+            verify_translation_issues, source, translated
+        )
+        if _qa_issue_score(candidate) >= before_score:
+            _atomic_write_bytes(translated, snapshot)
+            record["repair"] = "rolled_back_no_improvement"
+            break
+        record["repair"] = "accepted"
+        issues = candidate
+    return {
+        "mode": "iterative",
+        "max_passes": passes,
+        "passes_run": len(history),
+        "status": "passed" if _strict_evaluation(issues, 1.0) else "needs_review",
+        "history": history,
+    }
+
+
 def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
     _load_env_file()
     api_key = _env("DEEPSEEK_API_KEY")
@@ -471,6 +720,20 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
         # papers in-process (long 40+ paper runs segfault around paper ~34),
         # so bound each translation to a fresh interpreter.
         failures = 0
+        batch_started = time.monotonic()
+        batch_timeout = float(getattr(args, "batch_timeout_seconds", 43200))
+        batch_deadline = batch_started + max(1.0, batch_timeout)
+        state_path = workdir / "batch-state.json"
+        state = {
+            "schema_version": 1,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "status": "running",
+            "papers": {entry.id: {"status": "queued", "attempt": 0} for entry in entries},
+        }
+        _atomic_write_text(
+            state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n"
+        )
         for entry in entries:
             cmd = [
                 sys.executable,
@@ -485,15 +748,52 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
             ]
             if args.force:
                 cmd.append("--force")
+            cmd += [
+                "--quality",
+                str(getattr(args, "quality", "quality")),
+                "--qa-mode",
+                str(getattr(args, "qa_mode", "iterative")),
+                "--qa-max-passes",
+                str(max(4, int(getattr(args, "qa_max_passes", 4)))),
+            ]
             inherited_fd = os.environ.get(_LOCK_FD_ENV)
             pass_fds = (int(inherited_fd),) if inherited_fd else ()
-            rc = subprocess.call(cmd, pass_fds=pass_fds)
-            if rc != 0:
+
+            def record_event(event: dict) -> None:
+                state["papers"][entry.id] = {
+                    **state["papers"][entry.id],
+                    **event,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                state["updated_at"] = datetime.now(timezone.utc).isoformat()
+                _atomic_write_text(
+                    state_path,
+                    json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                )
+
+            result = _run_isolated_translation_process(
+                cmd,
+                pass_fds=pass_fds,
+                max_attempts=int(getattr(args, "translation_attempts", 3)),
+                timeout_seconds=float(
+                    getattr(args, "translation_timeout_seconds", 3600)
+                ),
+                heartbeat_seconds=float(getattr(args, "heartbeat_seconds", 15)),
+                batch_deadline=batch_deadline,
+                on_event=record_event,
+            )
+            if result["status"] != "completed":
                 failures += 1
                 print(
-                    f"translate {entry.id}: subprocess exited rc={rc}",
+                    f"translate {entry.id}: {result['error']}",
                     file=sys.stderr,
                 )
+        state["status"] = "failed" if failures else "completed"
+        state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        state["updated_at"] = state["finished_at"]
+        _atomic_write_text(
+            state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n"
+        )
         return 1 if failures else 0
 
     from pdf_zh_translator.pdf_layout import translate_pdf
@@ -503,6 +803,7 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
     paths["translations"].mkdir(parents=True, exist_ok=True)
     model = _env("DEEPSEEK_MODEL", "deepseek-v4-pro")
     failures = 0
+    translation_config = _translation_config(args)
     for entry in entries:
         source = paths["papers"] / f"{entry.id}.pdf"
         if not source.exists():
@@ -512,7 +813,9 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
         mono = paths["translations"] / f"{entry.id}-mono.pdf"
         timing_path = paths["translations"] / f"{entry.id}.timing.json"
         if mono.exists() and not args.force:
-            if _translation_cache_matches(timing_path, source, mono, model):
+            if _translation_cache_matches(
+                timing_path, source, mono, model, translation_config
+            ):
                 print(f"translate {entry.id}: cached")
                 continue
             print(f"translate {entry.id}: stale translation, retranslating")
@@ -539,6 +842,7 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
         os.close(handle)
         temporary_mono = Path(temporary_name)
         temporary_mono.unlink()
+        started_at = datetime.now(timezone.utc).isoformat()
         started = time.time()
         try:
             report = translate_pdf(
@@ -558,6 +862,11 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
                 raise RuntimeError(
                     "font pack changed during translation; refusing mixed-layout artifact"
                 )
+            qa_preflight = _run_iterative_quality_qa(
+                source,
+                temporary_mono,
+                max_passes=translation_config["qa_max_passes"],
+            )
             translated_sha256 = _sha256_file(temporary_mono)
             os.replace(temporary_mono, mono)
         except Exception as exc:
@@ -571,11 +880,12 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
             timing_path,
             json.dumps(
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "id": entry.id,
                     "seconds": round(elapsed, 1),
                     "pages": report.page_count,
                     "translated_blocks": report.translated_blocks,
+                    "started_at": started_at,
                     "finished_at": datetime.now(timezone.utc).isoformat(),
                     "source_sha256": _sha256_file(source),
                     "translated_sha256": translated_sha256,
@@ -583,6 +893,10 @@ def cmd_translate(entries: list[Entry], workdir: Path, args) -> int:
                     "engine_commit": _git_commit(),
                     "translation_model": model,
                     "font_fingerprint": font_fingerprint,
+                    "translation_config": translation_config,
+                    "qa_commit": _git_commit(),
+                    "qa_fingerprint": _qa_fingerprint(),
+                    "qa_preflight": qa_preflight,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -630,6 +944,7 @@ def cmd_evaluate(entries: list[Entry], workdir: Path, args) -> int:
                 print(f"evaluate {entry.id}: cached")
                 continue
             print(f"evaluate {entry.id}: stale report, reevaluating")
+        started_at = datetime.now(timezone.utc).isoformat()
         started = time.time()
         try:
             issues = _run_with_pdf_open_retry(
@@ -647,6 +962,9 @@ def cmd_evaluate(entries: list[Entry], workdir: Path, args) -> int:
             print(f"evaluate {entry.id}: FAILED {exc}", file=sys.stderr)
             continue
         errors = [issue for issue in issues if issue.severity == "error"]
+        actionable_warnings = [
+            issue for issue in issues if _is_actionable_warning(issue)
+        ]
         legacy_errors = [
             issue for issue in errors if issue.code not in INSPECTOR_ISSUE_CODES
         ]
@@ -658,13 +976,16 @@ def cmd_evaluate(entries: list[Entry], workdir: Path, args) -> int:
                 error_pages.add(issue.page)
         source_sha256 = _sha256_file(source)
         translated_sha256 = _sha256_file(mono)
+        finished_at = datetime.now(timezone.utc).isoformat()
         payload = {
-            "schema_version": 2,
+            "schema_version": 3,
             "id": entry.id,
             "arxiv_id": entry.arxiv_id,
             "title": entry.title,
             "tags": list(entry.tags),
-            "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "evaluated_at": finished_at,
             "source_sha256": source_sha256,
             "translated_sha256": translated_sha256,
             "qa_fingerprint": _qa_fingerprint(),
@@ -680,10 +1001,14 @@ def cmd_evaluate(entries: list[Entry], workdir: Path, args) -> int:
             "pages": visual.original_pages,
             "issue_count": len(issues),
             "error_count": len(errors),
+            "actionable_warning_count": len(actionable_warnings),
+            "actionable_warning_codes": sorted(
+                {issue.code for issue in actionable_warnings}
+            ),
             "legacy_error_count": len(legacy_errors),
             "error_pages": sorted(error_pages),
             "issues_by_code": dict(sorted(by_code.items())),
-            "strict_pass": not errors and visual.overall_score >= 0.55,
+            "strict_pass": _strict_evaluation(issues, visual.overall_score),
             "legacy_pass": not legacy_errors and visual.overall_score >= 0.55,
             "issues": [
                 {
@@ -702,6 +1027,7 @@ def cmd_evaluate(entries: list[Entry], workdir: Path, args) -> int:
         print(
             f"evaluate {entry.id}: visual={payload['visual_score']:.2f} "
             f"errors={payload['error_count']} "
+            f"actionable_warnings={payload['actionable_warning_count']} "
             f"(legacy {payload['legacy_error_count']}) "
             f"strict={'PASS' if payload['strict_pass'] else 'FAIL'}"
         )
@@ -769,17 +1095,18 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
         print("no evaluation reports found; run evaluate first")
         return 1
 
+    generated_at = datetime.now(timezone.utc).isoformat()
     lines = [
         "# Classic paper translation benchmark",
         "",
-        f"Generated: {datetime.now(timezone.utc).isoformat()}",
+        f"Generated: {generated_at}",
         "",
         f"Papers evaluated: {len(rows)} | strict pass: "
         f"{sum(1 for _, report, _ in rows if report['strict_pass'])} | "
         f"legacy pass: {sum(1 for _, report, _ in rows if report['legacy_pass'])}",
         "",
-        "| paper | pages | visual | errors | top issue classes | strict | legacy |",
-        "|---|---|---|---|---|---|---|",
+        "| paper | pages | visual | errors | actionable warnings | engine | output SHA | strict |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for entry, report, _meta in rows:
         top = sorted(
@@ -788,9 +1115,11 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
         top_text = ", ".join(f"{code}:{count}" for code, count in top) or "-"
         lines.append(
             f"| {entry.id} | {report['pages']} | {report['visual_score']:.2f} "
-            f"| {report['error_count']} | {top_text} "
-            f"| {'PASS' if report['strict_pass'] else 'FAIL'} "
-            f"| {'PASS' if report['legacy_pass'] else 'FAIL'} |"
+            f"| {report['error_count']} "
+            f"| {report.get('actionable_warning_count', 0)} ({top_text}) "
+            f"| {str(report.get('engine_commit', 'unknown'))[:12]} "
+            f"| {str(report.get('translated_sha256', 'unknown'))[:12]} "
+            f"| {'PASS' if report['strict_pass'] else 'FAIL'} |"
         )
 
     # layout-axis coverage
@@ -836,6 +1165,9 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
                 "pages": report["pages"],
                 "visual_score": report["visual_score"],
                 "error_count": report["error_count"],
+                "actionable_warning_count": report.get(
+                    "actionable_warning_count", 0
+                ),
                 "issues_by_code": report["issues_by_code"],
                 "strict_pass": report["strict_pass"],
                 "legacy_pass": report["legacy_pass"],
@@ -850,7 +1182,7 @@ def cmd_report(entries: list[Entry], workdir: Path, args) -> int:
         )
     payload = {
         "schema_version": 2,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at,
         "papers": showcase,
     }
     comparison = _baseline_comparison(
@@ -924,6 +1256,75 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _round_evidence_errors(
+    round_metadata: dict,
+    reports: dict[str, dict],
+    report_markdown: Path,
+) -> list[str]:
+    """Validate homogeneous provenance and final report ordering for a round."""
+    errors: list[str] = []
+    expected_ids = list(round_metadata.get("paper_ids") or [])
+    actual_ids = list(reports)
+    if set(actual_ids) != set(expected_ids):
+        errors.append(
+            f"round paper set differs: expected={expected_ids} actual={actual_ids}"
+        )
+    stable_fields = (
+        "engine_commit",
+        "engine_fingerprint",
+        "qa_commit",
+        "qa_fingerprint",
+        "font_fingerprint",
+        "translation_model",
+        "translation_config",
+    )
+    latest_evaluation: datetime | None = None
+    for paper_id in expected_ids:
+        report = reports.get(paper_id)
+        if report is None:
+            continue
+        if report.get("schema_version") != 3:
+            errors.append(f"{paper_id}: evaluation schema is not 3")
+        for field in stable_fields:
+            if report.get(field) != round_metadata.get(field):
+                errors.append(f"{paper_id}: {field} differs from round")
+        if report.get("actionable_warning_count", 0):
+            errors.append(f"{paper_id}: actionable warnings remain")
+        evaluated_at = _parse_timestamp(
+            report.get("finished_at") or report.get("evaluated_at")
+        )
+        if evaluated_at is None:
+            errors.append(f"{paper_id}: evaluation completion time missing")
+        elif latest_evaluation is None or evaluated_at > latest_evaluation:
+            latest_evaluation = evaluated_at
+
+    if not report_markdown.exists():
+        errors.append("REPORT.md is missing")
+        return errors
+    generated_at = None
+    for line in report_markdown.read_text(encoding="utf-8").splitlines():
+        if line.startswith("Generated: "):
+            generated_at = _parse_timestamp(line.removeprefix("Generated: ").strip())
+            break
+    if generated_at is None:
+        errors.append("REPORT.md generation time missing")
+    elif latest_evaluation is not None and generated_at <= latest_evaluation:
+        errors.append("REPORT.md predates one or more per-paper evaluations")
+    return errors
+
+
 def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
     """Fail unless benchmark evidence meets the open-source release policy."""
     _load_env_file()
@@ -985,6 +1386,9 @@ def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
         ):
             provenance_errors.append(f"{entry.id}: translation model is stale")
 
+        if int(report.get("actionable_warning_count", 0)) != 0:
+            provenance_errors.append(f"{entry.id}: actionable warnings remain")
+
         if baseline_dir:
             baseline_path = baseline_dir / f"{entry.id}.json"
             if baseline_path.exists():
@@ -1006,6 +1410,8 @@ def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
     manifest_axes = set(json.loads(manifest.read_text(encoding="utf-8"))["layout_axes"])
     missing_axes = sorted(manifest_axes - covered_axes) if require_all_axes else []
     failures: list[str] = []
+    if missing_reports:
+        failures.append(f"evaluation reports missing: {len(missing_reports)}")
     if evaluated < min_evaluated:
         failures.append(f"evaluated {evaluated} papers; require at least {min_evaluated}")
     if strict_passes < min_strict:
@@ -1016,6 +1422,42 @@ def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
         failures.append(f"artifact provenance errors: {len(provenance_errors)}")
     if regressions:
         failures.append(f"papers regressed against baseline: {len(regressions)}")
+
+    round_errors: list[str] = []
+    round_path = workdir / "round.json"
+    if round_path.exists():
+        round_metadata = json.loads(round_path.read_text(encoding="utf-8"))
+        round_errors.extend(
+            _round_evidence_errors(round_metadata, reports, workdir / "REPORT.md")
+        )
+        round_created_at = _parse_timestamp(round_metadata.get("created_at"))
+        for paper_id in round_metadata.get("paper_ids", []):
+            timing_path = paths["translations"] / f"{paper_id}.timing.json"
+            if not timing_path.exists():
+                round_errors.append(f"{paper_id}: translation timing missing")
+                continue
+            timing = json.loads(timing_path.read_text(encoding="utf-8"))
+            if timing.get("schema_version") != 3:
+                round_errors.append(f"{paper_id}: translation schema is not 3")
+            started_at = _parse_timestamp(timing.get("started_at"))
+            finished_at = _parse_timestamp(timing.get("finished_at"))
+            if started_at is None or finished_at is None:
+                round_errors.append(f"{paper_id}: translation times missing")
+            elif round_created_at is not None and started_at < round_created_at:
+                round_errors.append(f"{paper_id}: translation predates round")
+            for field in (
+                "engine_commit",
+                "engine_fingerprint",
+                "qa_commit",
+                "qa_fingerprint",
+                "font_fingerprint",
+                "translation_model",
+                "translation_config",
+            ):
+                if timing.get(field) != round_metadata.get(field):
+                    round_errors.append(f"{paper_id}: timing {field} differs from round")
+        if round_errors:
+            failures.append(f"round evidence errors: {len(round_errors)}")
 
     result = {
         "schema_version": 2,
@@ -1030,6 +1472,11 @@ def cmd_gate(entries: list[Entry], workdir: Path, args) -> int:
         "missing_reports": missing_reports,
         "provenance_errors": provenance_errors,
         "regressions": regressions,
+        "round_errors": round_errors,
+        "actionable_warning_count": sum(
+            int(report.get("actionable_warning_count", 0))
+            for report in reports.values()
+        ),
         "failures": failures,
     }
     output = workdir / "quality-gate.json"
@@ -1069,6 +1516,15 @@ def main() -> int:
         action="store_true",
         help="isolate even a single-paper translation in a fresh subprocess",
     )
+    parser.add_argument("--quality", default="quality")
+    parser.add_argument(
+        "--qa-mode", choices=["single", "iterative"], default="iterative"
+    )
+    parser.add_argument("--qa-max-passes", type=int, default=4)
+    parser.add_argument("--translation-attempts", type=int, default=3)
+    parser.add_argument("--translation-timeout-seconds", type=float, default=3600)
+    parser.add_argument("--batch-timeout-seconds", type=float, default=43200)
+    parser.add_argument("--heartbeat-seconds", type=float, default=15)
     parser.add_argument(
         "--no-previews", action="store_true", help="skip preview rendering in report"
     )
@@ -1084,6 +1540,7 @@ def main() -> int:
     args = parser.parse_args()
 
     entries = _load_entries(args.only, args.manifest)
+    round_entries = _load_entries(None, args.manifest)
     args.workdir.mkdir(parents=True, exist_ok=True)
     handler = {
         "fetch": cmd_fetch,
@@ -1093,6 +1550,8 @@ def main() -> int:
         "gate": cmd_gate,
     }[args.command]
     with _benchmark_workdir_lock(args.workdir, args.command):
+        _load_env_file()
+        _ensure_round_metadata(round_entries, args.workdir, args.manifest, args)
         return handler(entries, args.workdir, args)
 
 

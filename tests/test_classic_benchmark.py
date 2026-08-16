@@ -16,6 +16,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 MANIFEST = REPO / "benchmarks" / "classic20" / "manifest.json"
+HELDOUT_MANIFEST = REPO / "benchmarks" / "classic20" / "heldout-final.json"
 
 
 @pytest.fixture(scope="module")
@@ -30,6 +31,36 @@ def benchmark_module():
 
 
 class TestManifest:
+    def test_heldout_manifest_is_exactly_the_frozen_classic20(self):
+        data = json.loads(HELDOUT_MANIFEST.read_text(encoding="utf-8"))
+        assert [paper["id"] for paper in data["papers"]] == [
+            "attention",
+            "resnet",
+            "bert",
+            "gan",
+            "adam",
+            "vit",
+            "clip",
+            "ddpm",
+            "unet",
+            "dqn",
+            "ppo",
+            "word2vec",
+            "bahdanau",
+            "faster_rcnn",
+            "mask_rcnn",
+            "lora",
+            "batchnorm",
+            "latent_diffusion",
+            "gpt3",
+            "instructgpt",
+        ]
+        canonical = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        assert data["papers"] == canonical["papers"][:20]
+        assert set(data["layout_axes"]) == {
+            tag for paper in data["papers"] for tag in paper["tags"]
+        }
+
     def test_has_at_least_20_papers_with_margin(self):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
         assert len(data["papers"]) >= 25
@@ -52,6 +83,132 @@ class TestManifest:
 
 
 class TestHarness:
+    def test_actionable_warning_fails_strict_evaluation(self, benchmark_module):
+        warning = SimpleNamespace(
+            page=4,
+            code="formula_changed",
+            severity="warning",
+            message="formula ink differs",
+        )
+        informational = SimpleNamespace(
+            page=4,
+            code="high_risk_layout",
+            severity="warning",
+            message="visually reviewed",
+        )
+
+        assert benchmark_module._strict_evaluation([informational], 0.91) is True
+        assert benchmark_module._strict_evaluation([warning], 0.91) is False
+        assert benchmark_module._actionable_warning_count([warning, informational]) == 1
+
+    def test_isolated_process_retries_timeout_and_emits_heartbeats(
+        self, benchmark_module, monkeypatch
+    ):
+        processes = []
+
+        class FakeProcess:
+            def __init__(self, return_code):
+                self.return_code = return_code
+                self.returncode = None
+                self.terminated = False
+                self.killed = False
+                self.polls = 0
+
+            def poll(self):
+                self.polls += 1
+                if self.return_code == "timeout":
+                    return None
+                self.returncode = self.return_code
+                return self.returncode
+
+            def terminate(self):
+                self.terminated = True
+
+            def wait(self, timeout=None):
+                if self.return_code == "timeout":
+                    raise subprocess.TimeoutExpired("fixture", timeout)
+                return self.return_code
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+
+        outcomes = iter(["timeout", 0])
+
+        def fake_popen(*_args, **_kwargs):
+            process = FakeProcess(next(outcomes))
+            processes.append(process)
+            return process
+
+        monotonic_values = iter([0.0, 0.0, 2.0, 2.0, 2.0])
+        monkeypatch.setattr(benchmark_module.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(
+            benchmark_module.time, "monotonic", lambda: next(monotonic_values)
+        )
+        monkeypatch.setattr(benchmark_module.time, "sleep", lambda _seconds: None)
+        events = []
+
+        result = benchmark_module._run_isolated_translation_process(
+            ["translate", "paper"],
+            pass_fds=(),
+            max_attempts=2,
+            timeout_seconds=1,
+            heartbeat_seconds=0.1,
+            batch_deadline=None,
+            on_event=events.append,
+        )
+
+        assert result["status"] == "completed"
+        assert result["attempt"] == 2
+        assert processes[0].terminated is True
+        assert processes[0].killed is True
+        assert any(event["status"] == "running" for event in events)
+        assert any(event["status"] == "retrying" for event in events)
+
+    def test_round_gate_rejects_mixed_fingerprints_and_stale_report(
+        self, benchmark_module, tmp_path
+    ):
+        generated = "2026-08-16T10:00:00+00:00"
+        round_metadata = {
+            "schema_version": 1,
+            "created_at": "2026-08-16T09:00:00+00:00",
+            "paper_ids": ["first", "second"],
+            "engine_commit": "engine-1",
+            "engine_fingerprint": "engine-fp",
+            "qa_commit": "qa-1",
+            "qa_fingerprint": "qa-fp",
+            "font_fingerprint": "font-fp",
+            "translation_model": "model",
+            "translation_config": {"quality": "quality", "qa_max_passes": 4},
+        }
+        reports = {
+            "first": {
+                **round_metadata,
+                "id": "first",
+                "evaluated_at": generated,
+                "engine_commit": "engine-1",
+                "strict_pass": True,
+                "actionable_warning_count": 0,
+            },
+            "second": {
+                **round_metadata,
+                "id": "second",
+                "evaluated_at": generated,
+                "engine_commit": "engine-2",
+                "strict_pass": True,
+                "actionable_warning_count": 0,
+            },
+        }
+        (tmp_path / "REPORT.md").write_text(
+            "Generated: 2026-08-16T09:30:00+00:00\n", encoding="utf-8"
+        )
+
+        errors = benchmark_module._round_evidence_errors(
+            round_metadata, reports, tmp_path / "REPORT.md"
+        )
+
+        assert any("second: engine_commit" in error for error in errors)
+        assert any("REPORT.md predates" in error for error in errors)
     def test_pdf_open_retry_recovers_from_transient_failure(
         self, benchmark_module, monkeypatch
     ):
@@ -405,10 +562,13 @@ class TestHarness:
         monkeypatch.setattr(
             benchmark_module, "_env", lambda name, default="": "test-api-key"
         )
+        def run_process(command, **kwargs):
+            calls.append((command, kwargs))
+            kwargs["on_event"]({"status": "completed", "attempt": 1})
+            return {"status": "completed", "attempt": 1, "return_code": 0}
+
         monkeypatch.setattr(
-            benchmark_module.subprocess,
-            "call",
-            lambda command, **kwargs: calls.append((command, kwargs)) or 0,
+            benchmark_module, "_run_isolated_translation_process", run_process
         )
 
         class Args:
@@ -427,6 +587,9 @@ class TestHarness:
             call[0][call[0].index("--manifest") + 1] == str(Args.manifest)
             for call in calls
         )
+        state = json.loads((tmp_path / "batch-state.json").read_text(encoding="utf-8"))
+        assert state["status"] == "completed"
+        assert all(paper["status"] == "completed" for paper in state["papers"].values())
 
     def test_atomic_write_preserves_old_artifact_until_replace(
         self, benchmark_module, tmp_path, monkeypatch
@@ -447,6 +610,133 @@ class TestHarness:
         monkeypatch.setattr(benchmark_module.os, "replace", real_replace)
         benchmark_module._atomic_write_text(destination, "new")
         assert destination.read_text(encoding="utf-8") == "new"
+
+    def test_translation_records_schema3_config_times_and_iterative_qa(
+        self, benchmark_module, tmp_path, monkeypatch
+    ):
+        workdir = tmp_path / "bench"
+        (workdir / "papers").mkdir(parents=True)
+        (workdir / "papers" / "word2vec.pdf").write_bytes(b"%PDF source")
+        entries = benchmark_module._load_entries("word2vec")
+        monkeypatch.setattr(benchmark_module, "_load_env_file", lambda: None)
+        monkeypatch.setattr(
+            benchmark_module,
+            "_env",
+            lambda name, default="": (
+                "test-api-key" if name == "DEEPSEEK_API_KEY" else default
+            ),
+        )
+        monkeypatch.setattr(
+            benchmark_module, "_current_engine_fingerprint", lambda: "engine-fp"
+        )
+        monkeypatch.setattr(
+            benchmark_module, "_current_font_fingerprint", lambda: "font-fp"
+        )
+        monkeypatch.setattr(benchmark_module, "_git_commit", lambda: "commit")
+        qa_record = {
+            "mode": "iterative",
+            "max_passes": 4,
+            "passes_run": 1,
+            "status": "passed",
+            "history": [],
+        }
+        monkeypatch.setattr(
+            benchmark_module,
+            "_run_iterative_quality_qa",
+            lambda *_args, **_kwargs: qa_record,
+        )
+
+        import pdf_zh_translator.pdf_layout as layout_module
+        import pdf_zh_translator.translators as translator_module
+
+        def fake_translate_pdf(*, output_pdf, **_kwargs):
+            output_pdf.write_bytes(b"%PDF translated")
+            return SimpleNamespace(page_count=1, translated_blocks=2)
+
+        monkeypatch.setattr(layout_module, "translate_pdf", fake_translate_pdf)
+        monkeypatch.setattr(
+            translator_module, "VendorTranslator", lambda **_kwargs: object()
+        )
+        monkeypatch.setattr(
+            translator_module,
+            "CachedTranslator",
+            lambda _vendor, _path: object(),
+        )
+
+        class Args:
+            isolate = False
+            force = True
+            quality = "quality"
+            qa_mode = "iterative"
+            qa_max_passes = 4
+
+        assert benchmark_module.cmd_translate(entries, workdir, Args()) == 0
+        timing = json.loads(
+            (workdir / "translations" / "word2vec.timing.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert timing["schema_version"] == 3
+        assert timing["started_at"] <= timing["finished_at"]
+        assert timing["translation_config"]["qa_mode"] == "iterative"
+        assert timing["translation_config"]["qa_max_passes"] == 4
+        assert timing["qa_preflight"] == qa_record
+
+    def test_evaluate_persists_actionable_warning_as_strict_failure(
+        self, benchmark_module, tmp_path, monkeypatch
+    ):
+        workdir = tmp_path / "bench"
+        for name in ("papers", "translations"):
+            (workdir / name).mkdir(parents=True)
+        source = workdir / "papers" / "word2vec.pdf"
+        translated = workdir / "translations" / "word2vec-mono.pdf"
+        source.write_bytes(b"%PDF source")
+        translated.write_bytes(b"%PDF translated")
+        timing = {
+            "schema_version": 3,
+            "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "translated_sha256": hashlib.sha256(translated.read_bytes()).hexdigest(),
+            "engine_fingerprint": "engine-fp",
+            "engine_commit": "commit",
+            "translation_model": "model",
+            "font_fingerprint": "font-fp",
+            "translation_config": {"qa_mode": "iterative", "qa_max_passes": 4},
+        }
+        (workdir / "translations" / "word2vec.timing.json").write_text(
+            json.dumps(timing), encoding="utf-8"
+        )
+        issue = SimpleNamespace(
+            page=2,
+            code="formula_changed",
+            severity="warning",
+            message="formula differs",
+        )
+
+        import pdf_zh_translator.pdf_layout as layout_module
+        import pdf_zh_translator.visual_qa as visual_module
+
+        monkeypatch.setattr(
+            layout_module, "verify_translation_issues", lambda *_args: [issue]
+        )
+        monkeypatch.setattr(
+            visual_module,
+            "score_visual_layout",
+            lambda *_args: SimpleNamespace(
+                overall_score=0.9, risk_level="low", original_pages=2
+            ),
+        )
+
+        class Args:
+            force = True
+
+        entries = benchmark_module._load_entries("word2vec")
+        assert benchmark_module.cmd_evaluate(entries, workdir, Args()) == 0
+        report = json.loads(
+            (workdir / "reports" / "word2vec.json").read_text(encoding="utf-8")
+        )
+        assert report["strict_pass"] is False
+        assert report["actionable_warning_count"] == 1
+        assert report["actionable_warning_codes"] == ["formula_changed"]
 
     @pytest.mark.parametrize("drift_kind", ["engine", "font"])
     def test_runtime_fingerprint_drift_never_replaces_previous_pdf(
