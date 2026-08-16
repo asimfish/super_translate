@@ -62,6 +62,11 @@ def _main_translate(spec: dict) -> int:
     from app.services.translator import QualityPreset, TranslationConfig, translate_pdf_sync
 
     config_data = dict(spec["config"])
+    try:
+        secret_payload = json.loads(sys.stdin.buffer.read(8192) or b"{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        secret_payload = {}
+    config_data["api_key"] = str(secret_payload.get("api_key", ""))
     config_data["quality"] = QualityPreset(config_data.get("quality", "balanced"))
     config = TranslationConfig(**config_data)
 

@@ -27,7 +27,7 @@ long translations.
 - A VPS with Docker and Docker Compose installed.
 - A domain name with an `A`/`AAAA` record pointing at the VPS
   (needed for automatic HTTPS; skip if you only use it inside a LAN).
-- A DeepSeek / OpenAI / Moonshot API key.
+- API keys for the translation providers users choose.
 
 ## 2. Configure
 
@@ -41,8 +41,9 @@ cp .env.example .env
 Edit `.env` and set at minimum:
 
 ```bash
-# Translation backend key (any one of these)
-PAPER_CHINA_DEEPSEEK_API_KEY=sk-...
+# Stable encryption key for each user's provider credentials.
+# Generate once: openssl rand -base64 32 | tr '+/' '-_'
+PAPER_CHINA_CREDENTIAL_ENCRYPTION_KEY=<paste the generated key>
 
 # REQUIRED on a public server: strong random bearer token.
 # Generate: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -51,6 +52,10 @@ PAPER_CHINA_API_TOKEN=<paste the generated token>
 # Public URL (used in notification links)
 PAPER_CHINA_BASE_URL=https://translate.example.com
 ```
+
+Users enter DeepSeek, Kimi, OpenAI, Anthropic, or GLM keys in **API 设置** after
+login. Keep the encryption key with database backups; changing or losing it
+makes existing encrypted provider keys unreadable.
 
 Then edit `Caddyfile` and replace `your-domain.example.com` with your domain.
 
@@ -147,7 +152,7 @@ retried from the UI.
 | `403 Remote API access requires PAPER_CHINA_API_TOKEN` | You exposed the app publicly without a token. Set `PAPER_CHINA_API_TOKEN` and restart. |
 | Upload fails at ~100MB | `PAPER_CHINA_MAX_UPLOAD_SIZE` (bytes) and the `request_body max_size` in `Caddyfile` both cap uploads. |
 | `No CJK font available` | The image should include `fonts-noto-cjk`; if you built a custom image, install it or set `PDF_ZH_FONT_FILE`. |
-| Translation fails immediately with missing key | The backend selected in the UI has no API key in `.env`. |
+| Translation fails immediately with missing key | Open **API 设置** and configure the selected provider for the current account. |
 | HTTP 429 from the translation provider | Set `PAPER_CHINA_TRANSLATION_CONCURRENCY=1` and keep `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS=1`. |
 | Long papers time out | Raise `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` (also raise the Caddy `response_header_timeout`). |
 

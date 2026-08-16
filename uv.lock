@@ -2844,6 +2844,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiosqlite" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "fonttools" },
     { name = "jinja2" },
@@ -2870,6 +2871,7 @@ dev = [
 requires-dist = [
     { name = "aiofiles", specifier = ">=23.0" },
     { name = "aiosqlite", specifier = ">=0.19" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", specifier = ">=0.104" },
     { name = "fonttools", specifier = ">=4.44" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25" },

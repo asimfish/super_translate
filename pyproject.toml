@@ -28,6 +28,8 @@ dependencies = [
     "aiofiles>=23.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
+    # AES-GCM encryption for user-scoped translation provider credentials.
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

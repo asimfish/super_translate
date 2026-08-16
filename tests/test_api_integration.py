@@ -3294,6 +3294,7 @@ class TestRecoverStuckTranslations:
         job = MagicMock()
         job.id = "job123"
         job.paper_id = "abcd12345678"
+        job.access_scope = "alice"
         job.backend = "deepseek"
         job.quality = "balanced"
         job.preserve_graphics_text = True
@@ -3340,6 +3341,7 @@ class TestRecoverStuckTranslations:
         assert resume_payloads == [
             {
                 "paper_id": "abcd12345678",
+                "access_scope": "alice",
                 "backend": "deepseek",
                 "quality": "balanced",
                 "preserve_graphics_text": True,
@@ -3361,6 +3363,7 @@ class TestRecoverStuckTranslations:
         job = MagicMock()
         job.id = "job456"
         job.paper_id = "efgh12345678"
+        job.access_scope = "bob"
         job.backend = "deepseek"
         job.quality = "quality"
         job.preserve_graphics_text = True
@@ -3407,6 +3410,7 @@ class TestRecoverStuckTranslations:
         assert resume_payloads == [
             {
                 "paper_id": "efgh12345678",
+                "access_scope": "bob",
                 "backend": "deepseek",
                 "quality": "quality",
                 "preserve_graphics_text": True,

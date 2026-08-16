@@ -244,6 +244,8 @@ _BACKEND_ENV_KEYS = {
     "deepseek": "DEEPSEEK_API_KEY",
     "openai": "OPENAI_API_KEY",
     "kimi": "MOONSHOT_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "glm": "GLM_API_KEY",
     "deepl": "DEEPL_API_KEY",
 }
 
@@ -308,9 +310,9 @@ def _build_pdf2zh_envs(
     return envs
 
 
-# Backends the native engine can drive (LLM APIs speaking the DeepSeek or
-# OpenAI chat protocol). Others (google/deepl/ollama) stay on pdf2zh.
-_NATIVE_ENGINE_BACKENDS = {"deepseek", "openai", "kimi"}
+# Backends the native engine can drive. Anthropic uses its Messages protocol;
+# the others use DeepSeek or OpenAI-compatible chat requests.
+_NATIVE_ENGINE_BACKENDS = {"deepseek", "openai", "kimi", "anthropic", "glm"}
 
 
 def _use_native_engine(config: TranslationConfig) -> bool:
@@ -319,7 +321,7 @@ def _use_native_engine(config: TranslationConfig) -> bool:
     # Kimi K3 fixes its sampling parameters server-side, while pdf2zh's bundled
     # OpenAI adapter always sends temperature=0. Keep Kimi on our constraint-aware
     # native adapter even when the global fallback engine is set to pdf2zh.
-    if config.backend == "kimi":
+    if config.backend in {"kimi", "anthropic", "glm"}:
         return True
     return settings.translation_engine == "native" and config.backend in _NATIVE_ENGINE_BACKENDS
 
@@ -492,7 +494,11 @@ def _translate_sync_native(
     source_path = input_path
 
     if config.backend == "deepseek":
-        api_url = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com")
+        api_url = (
+            config.base_url
+            or os.environ.get("DEEPSEEK_API_URL", "")
+            or "https://api.deepseek.com"
+        )
         api_key = config.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         mode = "deepseek"
         model = config.model or "deepseek-v4-pro"
@@ -505,6 +511,16 @@ def _translate_sync_native(
         api_key = config.api_key or os.environ.get("MOONSHOT_API_KEY", "")
         mode = "openai-compatible"
         model = config.model or "kimi-k3"
+    elif config.backend == "anthropic":
+        api_url = config.base_url or "https://api.anthropic.com/v1"
+        api_key = config.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        mode = "anthropic"
+        model = config.model or "claude-sonnet-5"
+    elif config.backend == "glm":
+        api_url = config.base_url or "https://open.bigmodel.cn/api/paas/v4"
+        api_key = config.api_key or os.environ.get("GLM_API_KEY", "")
+        mode = "openai-compatible"
+        model = config.model or "glm-5.2"
     else:  # openai
         api_url = config.base_url or "https://api.openai.com/v1"
         api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")

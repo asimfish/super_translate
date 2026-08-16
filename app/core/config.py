@@ -32,8 +32,16 @@ class Settings(BaseSettings):
     moonshot_api_key: SecretStr = SecretStr("")
     moonshot_base_url: str = "https://api.moonshot.cn/v1"
     kimi_model: str = "kimi-k3"
+    anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_model: str = "claude-sonnet-5"
+    glm_api_key: SecretStr = SecretStr("")
+    glm_model: str = "glm-5.2"
     deepl_api_key: SecretStr = SecretStr("")
     ollama_host: str = ""
+
+    # Base64url-encoded 32-byte AES-GCM key used to encrypt per-user provider
+    # credentials. Generate with: openssl rand -base64 32 | tr '+/' '-_'
+    credential_encryption_key: SecretStr = SecretStr("")
 
     # Rate limiting
     rate_limit_per_minute: int = 60

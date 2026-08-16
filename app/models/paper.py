@@ -106,6 +106,7 @@ class TranslationJob(Base):
         ForeignKey("papers.id", ondelete="CASCADE"),
         nullable=False,
     )
+    access_scope: Mapped[str] = mapped_column(String(80), nullable=False, default="local")
     backend: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     quality: Mapped[str] = mapped_column(String(20), nullable=False, default="balanced")
     preserve_graphics_text: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

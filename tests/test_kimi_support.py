@@ -53,12 +53,26 @@ def test_resolve_kimi_backend_config_uses_moonshot_settings():
 
 
 def test_translation_endpoint_accepts_and_schedules_kimi():
+    from app.core.provider_credentials import ResolvedProviderCredential
+
     db = AsyncMock()
     db.execute.return_value = MagicMock(rowcount=1)
     db.add = MagicMock()
     db.commit = AsyncMock()
 
-    with patch("app.api.papers._schedule_background_task") as schedule:
+    credential = ResolvedProviderCredential(
+        provider="kimi",
+        api_key="moonshot-key",
+        base_url="https://api.moonshot.cn/v1",
+        model="kimi-k3",
+    )
+    with (
+        patch("app.api.papers._schedule_background_task") as schedule,
+        patch(
+            "app.api.papers.load_provider_credential",
+            new=AsyncMock(return_value=credential),
+        ),
+    ):
         response = asyncio.run(
             start_translation(
                 "abcd12345678",
@@ -72,6 +86,8 @@ def test_translation_endpoint_accepts_and_schedules_kimi():
     assert response["status"] == "translating"
     assert schedule.call_args.args[2] == "kimi"
     assert db.add.call_args.args[0].backend == "kimi"
+    assert db.add.call_args.args[0].access_scope == "local"
+    assert schedule.call_args.args[-1] == "local"
 
 
 def test_native_kimi_builds_official_vendor_configuration(tmp_path):
