@@ -219,6 +219,7 @@ select:focus-visible {
 }
 .status-pending { background: #2a2e31; color: #b8c1be; }
 .status-translating { background: #123b38; color: #8fe7dc; }
+.status-repairing { background: #493b16; color: #f4d778; }
 .status-completed { background: #173a29; color: #a5e9bf; }
 .status-failed { background: #462325; color: #ffb1ad; }
 .paper-card .actions {

@@ -451,6 +451,19 @@ def test_translation_progress_ui_has_client_eta_smoothing():
     assert "@keyframes progress-stripes" in css
 
 
+def test_translation_repairing_state_is_visible_without_leaking_live_polling():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+
+    assert "repairing: '等待系统修复'" in js
+    assert "paper.translation_status === 'repairing'" in js
+    assert "p.translation_status === 'repairing'" in js
+    assert "currentPaper.translation_status === 'repairing'" in js
+    assert ".status-repairing" in css
+    assert '<option value="repairing">等待系统修复</option>' in html
+
+
 def test_translation_progress_is_scoped_to_the_active_paper():
     js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
 

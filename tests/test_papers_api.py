@@ -86,6 +86,21 @@ class TestPaperToResponse(unittest.TestCase):
         self.assertIsNone(resp.translation_eta_seconds)
         self.assertEqual(resp.translation_eta, "")
 
+    def test_repairing_state_reports_persisted_recovery_stage(self):
+        paper = self._make_paper(
+            translation_status="repairing",
+            translation_progress=1.0,
+            translation_log="[10:00:00] 译后检查未通过",
+        )
+        paper.translation_stage = "等待系统修复"
+        paper.translation_eta_seconds = 30
+
+        resp = _paper_to_response(paper)
+
+        self.assertEqual(resp.translation_stage, "等待系统修复")
+        self.assertIsNone(resp.translation_eta_seconds)
+        self.assertEqual(resp.translation_eta, "")
+
     def test_with_file_flags(self):
         paper = self._make_paper()
         resp = _paper_to_response(

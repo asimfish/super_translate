@@ -36,6 +36,11 @@ def client():
 
     with (
         patch("app.main._recover_stuck_translations", new_callable=AsyncMock, return_value=[]),
+        patch(
+            "app.main._recover_repair_pending_translations",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
         TestClient(app) as test_client,
     ):
         yield test_client
@@ -349,6 +354,11 @@ class TestPaperUploadEndpoint:
             patch("app.api.papers.settings") as mock_settings,
             patch("app.api.papers.get_pdf_info", side_effect=Exception("corrupt PDF")),
             patch("app.main._recover_stuck_translations", new_callable=AsyncMock, return_value=[]),
+            patch(
+                "app.main._recover_repair_pending_translations",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
             TestClient(app, raise_server_exceptions=False) as c,
         ):
             mock_gen.return_value = "stored_test.pdf"
@@ -379,6 +389,11 @@ class TestPaperUploadEndpoint:
             patch("app.api.papers.get_pdf_info", return_value=((1, 100), "Test")),
             patch("app.api.papers.extract_title_from_pdf", return_value="Test"),
             patch("app.main._recover_stuck_translations", new_callable=AsyncMock, return_value=[]),
+            patch(
+                "app.main._recover_repair_pending_translations",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
             TestClient(app, raise_server_exceptions=False) as c,
         ):
             mock_gen.return_value = "stored_test.pdf"
@@ -409,6 +424,11 @@ class TestPaperUploadEndpoint:
             patch("app.api.papers.settings") as mock_settings,
             patch.object(Path, "open", mock_open),
             patch("app.main._recover_stuck_translations", new_callable=AsyncMock, return_value=[]),
+            patch(
+                "app.main._recover_repair_pending_translations",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
             TestClient(app, raise_server_exceptions=False) as c,
         ):
             mock_gen.return_value = "stored_test.pdf"
@@ -499,6 +519,18 @@ class TestPaperDeleteEndpoint:
         response = client.delete(f"/api/papers/{sample_paper.id}")
         assert response.status_code == 409
         assert "translation is in progress" in response.json()["detail"]
+
+    def test_delete_paper_waiting_for_system_repair_requires_cancel(
+        self, client, mock_db, sample_paper
+    ):
+        sample_paper.translation_status = "repairing"
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.return_value = mock_result
+
+        response = client.delete(f"/api/papers/{sample_paper.id}")
+
+        assert response.status_code == 409
 
 
 class TestPaperUpdateEndpoint:
@@ -680,6 +712,19 @@ class TestTranslationEndpoint:
         mock_db.execute.side_effect = [mock_update_result, mock_select_result]
 
         response = client.post(f"/api/papers/{sample_paper.id}/translate")
+        assert response.status_code == 409
+
+    def test_translate_waiting_for_system_repair_is_not_duplicated(
+        self, client, mock_db, sample_paper
+    ):
+        sample_paper.translation_status = "repairing"
+        mock_update_result = MagicMock(rowcount=0)
+        mock_select_result = MagicMock()
+        mock_select_result.scalar_one_or_none.return_value = sample_paper
+        mock_db.execute.side_effect = [mock_update_result, mock_select_result]
+
+        response = client.post(f"/api/papers/{sample_paper.id}/translate")
+
         assert response.status_code == 409
 
     def test_translate_starts_successfully(self, client, mock_db, sample_paper):
@@ -1100,6 +1145,23 @@ class TestCancelEndpoint:
             assert sample_paper.id in _cancelled_papers
             _cancelled_papers.discard(sample_paper.id)
 
+    def test_cancel_repair_pending_job_returns_paper_to_pending(
+        self, client, mock_db, sample_paper
+    ):
+        sample_paper.translation_status = "repairing"
+        paper_result = MagicMock()
+        paper_result.scalar_one_or_none.return_value = sample_paper
+        update_result = MagicMock(rowcount=1)
+        mock_db.execute.side_effect = [paper_result, update_result]
+
+        response = client.post(f"/api/papers/{sample_paper.id}/cancel")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "cancelled"
+        assert sample_paper.translation_status == "pending"
+        assert sample_paper.translation_stage == "等待翻译"
+        mock_db.commit.assert_awaited_once()
+
 
 class TestTranslationJobsEndpoint:
     def test_lists_translation_jobs(self, client, mock_db, sample_paper):
@@ -1118,6 +1180,10 @@ class TestTranslationJobsEndpoint:
         job.ocr_dpi = 180
         job.status = "running"
         job.progress = 0.5
+        job.attempt_count = 2
+        job.max_attempts = 3
+        job.engine_revision = "revision-123"
+        job.last_issue_fingerprint = "issue-456"
         job.cancel_requested = False
         job.error = None
         job.created_at = None
@@ -1138,6 +1204,10 @@ class TestTranslationJobsEndpoint:
         assert data[0]["status"] == "running"
         assert data[0]["progress"] == 0.5
         assert data[0]["qa_mode"] == "iterative"
+        assert data[0]["attempt_count"] == 2
+        assert data[0]["max_attempts"] == 3
+        assert data[0]["engine_revision"] == "revision-123"
+        assert data[0]["last_issue_fingerprint"] == "issue-456"
 
 
 class TestDownloadEndpoints:
@@ -2117,7 +2187,7 @@ class TestRunTranslation:
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
-    def test_qa_error_fails_translation_but_keeps_outputs(
+    def test_qa_error_waits_for_repair_and_keeps_outputs(
         self, mock_settings, mock_translate, tmp_path
     ):
         from app.api.papers import _run_translation
@@ -2162,7 +2232,8 @@ class TestRunTranslation:
         ):
             _run_translation("paper123", "google", "fast")
 
-        assert paper.translation_status == "failed"
+        assert paper.translation_status == "repairing"
+        assert paper.translation_stage == "等待系统修复"
         assert "译后检查未通过：1 个错误" in paper.translation_error
         assert "公式变更（第 1 页）" in paper.translation_error
         assert paper.translated_filename == "paper123/test-mono.pdf"
@@ -2170,7 +2241,7 @@ class TestRunTranslation:
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
-    def test_blocking_qa_error_fails_translation(
+    def test_blocking_qa_error_waits_for_system_repair(
         self, mock_settings, mock_translate, tmp_path
     ):
         from app.api.papers import _run_translation
@@ -2215,7 +2286,7 @@ class TestRunTranslation:
         ):
             _run_translation("paper123", "google", "fast")
 
-        assert paper.translation_status == "failed"
+        assert paper.translation_status == "repairing"
         assert "译后检查阻断：1 个错误" in paper.translation_error
         assert "页数不一致" in paper.translation_error
         assert paper.translated_filename == "paper123/test-mono.pdf"
@@ -2456,7 +2527,9 @@ class TestRunTranslation:
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
-    def test_translation_exception_sets_failed(self, mock_settings, mock_translate, tmp_path):
+    def test_translation_exception_waits_for_system_repair(
+        self, mock_settings, mock_translate, tmp_path
+    ):
         from app.api.papers import _run_translation
 
         paper = MagicMock()
@@ -2481,7 +2554,7 @@ class TestRunTranslation:
         with patch("app.core.database.async_session", self._make_async_session_mock(db)):
             _run_translation("paper123", "deepseek", "balanced")
 
-        assert paper.translation_status == "failed"
+        assert paper.translation_status == "repairing"
         assert paper.translation_error is not None
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
@@ -2516,7 +2589,7 @@ class TestRunTranslation:
         with patch("app.core.database.async_session", self._make_async_session_mock(db)):
             _run_translation("paper123", "deepseek", "balanced")
 
-        assert paper.translation_status == "failed"
+        assert paper.translation_status == "repairing"
         assert not output_dir.exists()
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
@@ -2551,7 +2624,7 @@ class TestRunTranslation:
         with patch("app.core.database.async_session", self._make_async_session_mock(db)):
             _run_translation("paper123", "deepseek", "balanced")
 
-        assert paper.translation_status == "failed"
+        assert paper.translation_status == "repairing"
         assert not partial_dir.exists()
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
@@ -3501,6 +3574,128 @@ class TestRecoverStuckTranslations:
         assert mock_session.execute.await_count == 5
         mock_session.commit.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_new_engine_revision_resumes_repair_pending_job(self):
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+        from sqlalchemy.pool import StaticPool
+
+        from app.core.database import Base
+        from app.main import _recover_repair_pending_translations
+        from app.models.paper import Paper, TranslationJob
+
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with session_factory() as db:
+            db.add(
+                Paper(
+                    id="abcd12345678",
+                    title="Repair me",
+                    original_filename="paper.pdf",
+                    stored_filename="paper.pdf",
+                    translation_status="repairing",
+                    translation_stage="等待系统修复",
+                )
+            )
+            db.add(
+                TranslationJob(
+                    id="repair-job",
+                    paper_id="abcd12345678",
+                    backend="deepseek",
+                    quality="quality",
+                    status="repair_pending",
+                    attempt_count=3,
+                    max_attempts=3,
+                    engine_revision="old-revision",
+                    last_issue_fingerprint="same-error",
+                )
+            )
+            await db.commit()
+
+        with (
+            patch("app.core.database.async_session", session_factory),
+            patch("app.main.current_engine_revision", return_value="new-revision"),
+        ):
+            payloads = await _recover_repair_pending_translations()
+
+        assert len(payloads) == 1
+        assert payloads[0]["job_id"] == "repair-job"
+        async with session_factory() as db:
+            paper = await db.get(Paper, "abcd12345678")
+            job = await db.get(TranslationJob, "repair-job")
+            assert paper.translation_status == "translating"
+            assert paper.translation_stage == "等待恢复"
+            assert job.status == "queued"
+            assert job.attempt_count == 0
+            assert job.engine_revision == "new-revision"
+            assert job.last_issue_fingerprint == ""
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_same_engine_revision_keeps_repair_job_parked(self):
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+        from sqlalchemy.pool import StaticPool
+
+        from app.core.database import Base
+        from app.main import _recover_repair_pending_translations
+        from app.models.paper import Paper, TranslationJob
+
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with session_factory() as db:
+            db.add(
+                Paper(
+                    id="abcd12345678",
+                    title="Repair me",
+                    original_filename="paper.pdf",
+                    stored_filename="paper.pdf",
+                    translation_status="repairing",
+                    translation_stage="等待系统修复",
+                )
+            )
+            db.add(
+                TranslationJob(
+                    id="repair-job",
+                    paper_id="abcd12345678",
+                    status="repair_pending",
+                    engine_revision="same-revision",
+                )
+            )
+            await db.commit()
+
+        with (
+            patch("app.core.database.async_session", session_factory),
+            patch("app.main.current_engine_revision", return_value="same-revision"),
+        ):
+            payloads = await _recover_repair_pending_translations()
+
+        assert payloads == []
+        async with session_factory() as db:
+            paper = await db.get(Paper, "abcd12345678")
+            job = await db.get(TranslationJob, "repair-job")
+            assert paper.translation_status == "repairing"
+            assert job.status == "repair_pending"
+        await engine.dispose()
+
 
 class TestEnsureDirs:
     """Test directory creation on startup."""
@@ -3512,6 +3707,14 @@ class TestEnsureDirs:
 
         assert settings.resume_queued_translations_on_startup is True
         assert settings.translation_timeout_seconds == 1800
+
+    def test_translation_recovery_defaults_are_bounded(self):
+        from app.core.config import Settings
+
+        settings = Settings(_env_file=None)
+
+        assert settings.translation_recovery_attempts == 3
+        assert settings.translation_recovery_backoff_seconds >= 0
 
     def test_creates_all_directories(self, tmp_path):
         from app.core.config import Settings, ensure_dirs
@@ -3561,6 +3764,11 @@ class TestLifespan:
                 new_callable=AsyncMock,
                 return_value=[],
             ) as mock_recover,
+            patch(
+                "app.main._recover_repair_pending_translations",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_repair_recover,
         ):
             async with lifespan(MagicMock()):
                 pass
@@ -3568,6 +3776,7 @@ class TestLifespan:
         mock_dirs.assert_called_once()
         mock_db.assert_awaited_once()
         mock_recover.assert_awaited_once_with(resume_queued=True)
+        mock_repair_recover.assert_awaited_once_with()
 
     @pytest.mark.asyncio
     async def test_lifespan_schedules_recovered_jobs(self):
@@ -3585,12 +3794,18 @@ class TestLifespan:
                 new_callable=AsyncMock,
                 return_value=[payload],
             ) as mock_recover,
+            patch(
+                "app.main._recover_repair_pending_translations",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_repair_recover,
             patch("app.main._schedule_recovered_translation") as mock_schedule,
         ):
             async with lifespan(MagicMock()):
                 pass
 
         mock_recover.assert_awaited_once_with(resume_queued=True)
+        mock_repair_recover.assert_awaited_once_with()
         mock_schedule.assert_called_once_with(payload)
 
 
@@ -3663,6 +3878,34 @@ class TestInitDb:
             assert "ix_translation_jobs_status" in index_names
             assert "ix_translation_jobs_cancel_requested" in index_names
 
+        await test_engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_init_db_creates_translation_recovery_columns(self):
+        import sqlalchemy as sa
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy.pool import StaticPool
+
+        from app.core.database import init_db
+
+        test_engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+        with patch("app.core.database.engine", test_engine):
+            await init_db()
+
+        async with test_engine.connect() as conn:
+            result = await conn.execute(sa.text("PRAGMA table_info(translation_jobs)"))
+            columns = {row[1] for row in result.fetchall()}
+
+        assert {
+            "attempt_count",
+            "max_attempts",
+            "engine_revision",
+            "last_issue_fingerprint",
+        } <= columns
         await test_engine.dispose()
 
 
@@ -3935,7 +4178,7 @@ class TestSelfHealingRetry:
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
-    def test_layout_error_does_not_retry(self, mock_settings, mock_translate, tmp_path):
+    def test_layout_error_retries_until_clean(self, mock_settings, mock_translate, tmp_path):
         from types import SimpleNamespace
 
         from app.api.papers import _run_translation
@@ -3949,6 +4192,8 @@ class TestSelfHealingRetry:
         translations_dir.mkdir()
         mock_settings.papers_path = papers_dir
         mock_settings.translations_path = translations_dir
+        mock_settings.translation_recovery_attempts = 3
+        mock_settings.translation_recovery_backoff_seconds = 0
         TestRunTranslation._write_valid_pdf(self, papers_dir / "test.pdf", "Original.")
         mono_path = translations_dir / "paper123" / "test-mono.pdf"
         TestRunTranslation._write_valid_pdf(self, mono_path, "译文内容。")
@@ -3962,7 +4207,8 @@ class TestSelfHealingRetry:
                     message="重叠",
                     severity="error",
                 )
-            ]
+            ],
+            [],
         ]
         with (
             patch("app.core.database.async_session",
@@ -3971,12 +4217,50 @@ class TestSelfHealingRetry:
         ):
             _run_translation("paper123", "google", "fast")
 
-        assert mock_translate.call_count == 1
-        assert paper.translation_status == "failed"
+        assert mock_translate.call_count == 2
+        assert paper.translation_status == "completed"
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
-    def test_persistent_untranslated_fails_after_one_retry(
+    def test_worker_timeout_retries_until_translation_succeeds(
+        self, mock_settings, mock_translate, tmp_path
+    ):
+        from app.api.papers import _run_translation
+        from app.services.translator import TranslationResult
+
+        paper = self._paper()
+        db = TestRunTranslation._setup_db_mock(self, paper)
+        papers_dir = tmp_path / "papers"
+        papers_dir.mkdir()
+        translations_dir = tmp_path / "translations"
+        translations_dir.mkdir()
+        mock_settings.papers_path = papers_dir
+        mock_settings.translations_path = translations_dir
+        mock_settings.translation_recovery_attempts = 3
+        mock_settings.translation_recovery_backoff_seconds = 0
+        TestRunTranslation._write_valid_pdf(self, papers_dir / "test.pdf", "Original.")
+        mono_path = translations_dir / "paper123" / "test-mono.pdf"
+        TestRunTranslation._write_valid_pdf(self, mono_path, "译文内容。")
+        mock_translate.side_effect = [
+            TranslationResult(error="Translation timed out"),
+            TranslationResult(mono_path=mono_path),
+        ]
+
+        with (
+            patch(
+                "app.core.database.async_session",
+                TestRunTranslation._make_async_session_mock(self, db),
+            ),
+            patch("app.api.papers._run_post_translation_qa", return_value=[]),
+        ):
+            _run_translation("paper123", "google", "fast")
+
+        assert mock_translate.call_count == 2
+        assert paper.translation_status == "completed"
+
+    @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
+    @patch("app.api.papers.settings")
+    def test_persistent_untranslated_waits_for_system_repair_after_retry_budget(
         self, mock_settings, mock_translate, tmp_path
     ):
         from types import SimpleNamespace
@@ -3992,12 +4276,22 @@ class TestSelfHealingRetry:
         translations_dir.mkdir()
         mock_settings.papers_path = papers_dir
         mock_settings.translations_path = translations_dir
+        mock_settings.translation_recovery_attempts = 3
+        mock_settings.translation_recovery_backoff_seconds = 0
         TestRunTranslation._write_valid_pdf(self, papers_dir / "test.pdf", "Original.")
         mono_path = translations_dir / "paper123" / "test-mono.pdf"
         TestRunTranslation._write_valid_pdf(self, mono_path, "译文内容。")
         mock_translate.return_value = TranslationResult(mono_path=mono_path)
 
         qa_results = [
+            [
+                SimpleNamespace(
+                    page=6,
+                    code="untranslated_english",
+                    message="漏翻",
+                    severity="error",
+                )
+            ],
             [
                 SimpleNamespace(
                     page=6,
@@ -4022,8 +4316,10 @@ class TestSelfHealingRetry:
         ):
             _run_translation("paper123", "google", "fast")
 
-        assert mock_translate.call_count == 2
-        assert paper.translation_status == "failed"
+        assert mock_translate.call_count == 3
+        assert paper.translation_status == "repairing"
+        assert paper.translation_stage == "等待系统修复"
+        assert paper.translated_filename
 
 
 class TestPagePreviewEndpoint:
@@ -4203,6 +4499,9 @@ class TestWorkerRunner:
 
         output_dir = tmp_path / "out"
         output_dir.mkdir()
+        (output_dir / ".worker_result.json").write_text(
+            json.dumps({"mono_path": str(tmp_path / "stale.pdf"), "error": None})
+        )
 
         async def fake_exec(*args, **kwargs):
             return self._fake_proc(-11)  # SIGSEGV, no result file written

@@ -17,6 +17,7 @@ class TranslationStatus(str, PyEnum):
 
     PENDING = "pending"
     TRANSLATING = "translating"
+    REPAIRING = "repairing"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -26,6 +27,7 @@ class TranslationJobStatus(str, PyEnum):
 
     QUEUED = "queued"
     RUNNING = "running"
+    REPAIR_PENDING = "repair_pending"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -121,6 +123,12 @@ class TranslationJob(Base):
         default=TranslationJobStatus.QUEUED.value,
     )
     progress: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    engine_revision: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    last_issue_fingerprint: Mapped[str] = mapped_column(
+        String(128), nullable=False, default=""
+    )
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

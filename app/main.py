@@ -29,6 +29,7 @@ from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.users import refresh_token_scopes
+from app.services.translation_recovery import current_engine_revision
 
 # Stats cache with async lock, partitioned by workspace access scope so one
 # workspace can never observe another workspace's aggregate counters.
@@ -304,12 +305,87 @@ async def _recover_stuck_translations(
         return resume_payloads if resume_queued else []
 
 
+async def _recover_repair_pending_translations() -> list[dict[str, object]]:
+    """Requeue parked repair jobs when translation-engine code has changed."""
+    from sqlalchemy import func, select
+    from sqlalchemy import update as sa_update
+
+    from app.core.database import async_session
+    from app.models.paper import (
+        Paper,
+        TranslationJob,
+        TranslationJobStatus,
+        TranslationStatus,
+    )
+
+    revision = current_engine_revision()
+    async with async_session() as db:
+        result = await db.execute(
+            select(TranslationJob)
+            .join(Paper, Paper.id == TranslationJob.paper_id)
+            .where(TranslationJob.status == TranslationJobStatus.REPAIR_PENDING.value)
+            .where(Paper.translation_status == TranslationStatus.REPAIRING.value)
+            .order_by(TranslationJob.created_at.desc())
+        )
+        jobs = []
+        seen_papers: set[str] = set()
+        for job in result.scalars().all():
+            if job.paper_id in seen_papers:
+                continue
+            seen_papers.add(job.paper_id)
+            if job.engine_revision != revision:
+                jobs.append(job)
+        if not jobs:
+            return []
+
+        job_ids = [job.id for job in jobs]
+        paper_ids = [job.paper_id for job in jobs]
+        payloads = [_translation_job_resume_payload(job) for job in reversed(jobs)]
+        await db.execute(
+            sa_update(TranslationJob)
+            .where(TranslationJob.id.in_(job_ids))
+            .values(
+                status=TranslationJobStatus.QUEUED.value,
+                progress=0.0,
+                attempt_count=0,
+                engine_revision=revision,
+                last_issue_fingerprint="",
+                cancel_requested=False,
+                heartbeat_at=None,
+                started_at=None,
+                finished_at=None,
+                error=None,
+                updated_at=func.now(),
+            )
+        )
+        await db.execute(
+            sa_update(Paper)
+            .where(Paper.id.in_(paper_ids))
+            .values(
+                translation_status=TranslationStatus.TRANSLATING.value,
+                translation_error=None,
+                translation_progress=0.0,
+                translation_stage="等待恢复",
+                translation_eta_seconds=None,
+            )
+        )
+        await db.commit()
+        logger.info(
+            "Requeued %d repair-pending translation job(s) for engine revision %s",
+            len(payloads),
+            revision,
+        )
+        return payloads
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ensure_dirs()
     await init_db()
     resume_queued = settings.resume_queued_translations_on_startup
     recovered_jobs = await _recover_stuck_translations(resume_queued=resume_queued)
+    if resume_queued:
+        recovered_jobs.extend(await _recover_repair_pending_translations())
     for payload in recovered_jobs:
         _schedule_recovered_translation(payload)
     if recovered_jobs:

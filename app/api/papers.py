@@ -47,6 +47,11 @@ from app.services.quality_agent import (
     has_retranslatable_error,
     issue_fingerprint,
 )
+from app.services.translation_recovery import (
+    current_engine_revision,
+    recovery_attempt_limit,
+    recovery_backoff_seconds,
+)
 from app.services.translator import (
     QualityPreset,
     TranslationConfig,
@@ -224,6 +229,10 @@ class TranslationJobResponse(BaseModel):
     ocr_dpi: int
     status: str
     progress: float
+    attempt_count: int
+    max_attempts: int
+    engine_revision: str
+    last_issue_fingerprint: str
     cancel_requested: bool
     error: str | None
     created_at: str
@@ -321,6 +330,10 @@ def _job_to_response(job: TranslationJob) -> TranslationJobResponse:
         ocr_dpi=job.ocr_dpi,
         status=job.status,
         progress=max(0.0, min(1.0, job.progress)),
+        attempt_count=job.attempt_count,
+        max_attempts=job.max_attempts,
+        engine_revision=job.engine_revision,
+        last_issue_fingerprint=job.last_issue_fingerprint,
         cancel_requested=job.cancel_requested,
         error=job.error,
         created_at=job.created_at.isoformat() if job.created_at else "",
@@ -341,7 +354,15 @@ def _translation_progress_meta(paper: Paper) -> dict:
     status = paper.translation_status
     log = paper.translation_log or ""
 
-    if status == TranslationStatus.TRANSLATING.value:
+    if status == TranslationStatus.REPAIRING.value:
+        db_stage = getattr(paper, "translation_stage", "")
+        stage = (
+            db_stage.strip()
+            if isinstance(db_stage, str) and db_stage.strip()
+            else "等待系统修复"
+        )
+        eta_seconds = None
+    elif status == TranslationStatus.TRANSLATING.value:
         db_stage = getattr(paper, "translation_stage", "")
         stage = (
             db_stage.strip()
@@ -366,6 +387,8 @@ def _infer_translation_stage(status: str, log: str) -> str:
         return "等待翻译"
     if status == TranslationStatus.COMPLETED.value:
         return "已完成"
+    if status == TranslationStatus.REPAIRING.value:
+        return "等待系统修复"
     if status == TranslationStatus.FAILED.value:
         return "失败"
     if status != TranslationStatus.TRANSLATING.value:
@@ -796,7 +819,10 @@ async def delete_paper(
         HTTPException: If paper not found (404) or translation in progress (409)
     """
     paper = await _get_paper_or_404(paper_id, db, access_scope)
-    if paper.translation_status == TranslationStatus.TRANSLATING.value:
+    if paper.translation_status in {
+        TranslationStatus.TRANSLATING.value,
+        TranslationStatus.REPAIRING.value,
+    }:
         raise HTTPException(409, "Cannot delete paper while translation is in progress")
     # Delete DB record first; if commit fails, files are untouched (no orphaned record)
     await db.delete(paper)
@@ -863,7 +889,12 @@ async def start_translation(
         .where(
             Paper.id == paper_id,
             Paper.access_scope == access_scope,
-            Paper.translation_status != TranslationStatus.TRANSLATING.value,
+            Paper.translation_status.not_in(
+                [
+                    TranslationStatus.TRANSLATING.value,
+                    TranslationStatus.REPAIRING.value,
+                ]
+            ),
         )
         .values(
             translation_status=TranslationStatus.TRANSLATING.value,
@@ -894,6 +925,8 @@ async def start_translation(
         ocr_language=ocr_language,
         ocr_dpi=ocr_dpi,
         status=TranslationJobStatus.QUEUED.value,
+        max_attempts=recovery_attempt_limit(settings.translation_recovery_attempts),
+        engine_revision=current_engine_revision(),
     )
     db.add(job)
     await db.commit()
@@ -927,8 +960,33 @@ async def cancel_translation(
     The translation will stop at the next progress callback.
     """
     paper = await _get_paper_or_404(paper_id, db, access_scope)
-    if paper.translation_status != TranslationStatus.TRANSLATING.value:
+    if paper.translation_status not in {
+        TranslationStatus.TRANSLATING.value,
+        TranslationStatus.REPAIRING.value,
+    }:
         raise HTTPException(409, "Paper is not currently being translated")
+    if paper.translation_status == TranslationStatus.REPAIRING.value:
+        paper.translation_status = TranslationStatus.PENDING.value
+        paper.translation_progress = 0.0
+        paper.translation_error = None
+        paper.translation_stage = "等待翻译"
+        paper.translation_eta_seconds = None
+        await db.execute(
+            update(TranslationJob)
+            .where(
+                TranslationJob.paper_id == paper_id,
+                TranslationJob.status == TranslationJobStatus.REPAIR_PENDING.value,
+            )
+            .values(
+                status=TranslationJobStatus.CANCELLED.value,
+                cancel_requested=True,
+                error="System repair cancelled by user",
+                finished_at=func.now(),
+                updated_at=func.now(),
+            ),
+        )
+        await db.commit()
+        return {"ok": True, "status": "cancelled"}
     _mark_cancel_requested(paper_id)
     await db.execute(
         update(TranslationJob)
@@ -1041,7 +1099,12 @@ async def _update_translation_job(
     *,
     status: str | None = None,
     progress: float | None = None,
+    attempt_count: int | None = None,
+    max_attempts: int | None = None,
+    engine_revision: str | None = None,
+    last_issue_fingerprint: str | None = None,
     error: str | None = None,
+    clear_error: bool = False,
     cancel_requested: bool | None = None,
     started: bool = False,
     finished: bool = False,
@@ -1055,7 +1118,17 @@ async def _update_translation_job(
         values["status"] = status
     if progress is not None:
         values["progress"] = max(0.0, min(1.0, progress))
-    if error is not None:
+    if attempt_count is not None:
+        values["attempt_count"] = max(0, attempt_count)
+    if max_attempts is not None:
+        values["max_attempts"] = max(1, max_attempts)
+    if engine_revision is not None:
+        values["engine_revision"] = engine_revision[:64]
+    if last_issue_fingerprint is not None:
+        values["last_issue_fingerprint"] = last_issue_fingerprint[:128]
+    if clear_error:
+        values["error"] = None
+    elif error is not None:
         values["error"] = error
     if cancel_requested is not None:
         values["cancel_requested"] = cancel_requested
@@ -1365,6 +1438,8 @@ async def _run_translate_in_worker(
     spec_path = output_dir / ".worker_spec.json"
     progress_file = output_dir / ".worker_progress.jsonl"
     result_file = output_dir / ".worker_result.json"
+    progress_file.unlink(missing_ok=True)
+    result_file.unlink(missing_ok=True)
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
     env = dict(os.environ, PYTHONFAULTHANDLER="1")
@@ -1537,14 +1612,47 @@ async def _do_translate(
         postprocess_eta_seconds=qa_eta_seconds,
     )
 
-    # Self-healing: when QA only flags untranslated blocks (supplier echoed the
-    # source or fell back to it), run one more full pass. Cached blocks resolve
-    # instantly; the untranslated blocks were never cached, so they are
-    # regenerated with fresh supplier calls.
-    max_attempts = 1 + _SELF_HEAL_MAX_RETRIES
-    trans_result = None
+    max_attempts = recovery_attempt_limit(settings.translation_recovery_attempts)
+    engine_revision = current_engine_revision()
+    trans_result = TranslationResult(error="Translation did not start")
+    best_result: TranslationResult | None = None
+    best_snapshots: dict[Path, bytes] = {}
+    best_issues: list = []
+    best_score: tuple[int, int] | None = None
+    clean_result = False
     qa_failure_error: str | None = None
     for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            delay = recovery_backoff_seconds(
+                settings.translation_recovery_backoff_seconds,
+                attempt,
+            )
+            _append_log(
+                paper_id,
+                loop,
+                f"自动恢复第 {attempt}/{max_attempts} 次：重新生成并复查译文",
+            )
+            _set_translation_stage(
+                paper_id,
+                loop,
+                f"自动恢复 {attempt}/{max_attempts}",
+                job_id=job_id,
+            )
+            if delay > 0:
+                await asyncio.sleep(delay)
+        async with async_session() as db:
+            await _update_translation_job(
+                db,
+                job_id,
+                status=TranslationJobStatus.RUNNING.value,
+                attempt_count=attempt,
+                max_attempts=max_attempts,
+                engine_revision=engine_revision,
+                clear_error=True,
+                heartbeat=True,
+            )
+            if job_id:
+                await db.commit()
         try:
             trans_result = await _run_translate_in_worker(
                 input_path,
@@ -1557,26 +1665,30 @@ async def _do_translate(
             await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)
             return
         except Exception as e:
-            elapsed = time.monotonic() - start_time
             logger.exception("Translation crashed for paper %s", paper_id)
-            _append_log(paper_id, loop, f"翻译失败: {sanitize_error(e)} (耗时 {elapsed:.0f}秒)")
+            trans_result = TranslationResult(error=sanitize_error(e))
+
+        if not trans_result.success:
+            worker_error = trans_result.error or "Translation worker failed"
             async with async_session() as db:
-                result = await db.execute(select(Paper).where(Paper.id == paper_id))
-                paper = result.scalar_one_or_none()
-                if paper:
-                    paper.translation_status = TranslationStatus.FAILED.value
-                    paper.translation_error = sanitize_error(e)
-                    await _update_translation_job(
-                        db,
-                        job_id,
-                        status=TranslationJobStatus.FAILED.value,
-                        error=sanitize_error(e),
-                        finished=True,
-                    )
+                await _update_translation_job(
+                    db,
+                    job_id,
+                    attempt_count=attempt,
+                    last_issue_fingerprint=f"worker:{worker_error}",
+                    error=worker_error,
+                    heartbeat=True,
+                )
+                if job_id:
                     await db.commit()
-            cleanup_output_dir(output_dir)
-            _clear_cancel_requested(paper_id)
-            return
+            if attempt < max_attempts:
+                _append_log(
+                    paper_id,
+                    loop,
+                    f"本次翻译未完成：{worker_error}；系统将自动恢复",
+                )
+                continue
+            break
 
         qa_failure_error = None
         unresolved_issues: list = []
@@ -1598,24 +1710,60 @@ async def _do_translate(
                     paper_id, loop, output_dir, start_time, job_id
                 )
                 return
-            if _has_blocking_qa_error(unresolved_issues):
-                qa_failure_error = _qa_failure_error_message(unresolved_issues, blocking=True)
-            elif _has_unresolved_error(unresolved_issues):
-                if attempt < max_attempts and _has_self_healable_error(unresolved_issues):
-                    _append_log(
-                        paper_id,
-                        loop,
-                        "检测到疑似漏翻,自动重试一次翻译 (已翻译块走缓存,仅重新生成漏翻块)",
-                    )
-                    _set_translation_stage(paper_id, loop, "漏翻重试", job_id=job_id)
-                    continue
-                qa_failure_error = _qa_failure_error_message(unresolved_issues, blocking=False)
-                _append_log(
-                    paper_id,
-                    loop,
-                    "译后检查失败：仍有未解决问题，已保留译文并生成 QA 报告供复核",
-                )
-        break
+        candidate_score = _qa_issue_score(unresolved_issues)
+        if best_score is None or candidate_score < best_score:
+            best_result = trans_result
+            best_snapshots = _snapshot_translated_outputs(trans_result)
+            best_issues = list(unresolved_issues)
+            best_score = candidate_score
+
+        if not _has_unresolved_error(unresolved_issues):
+            clean_result = True
+            qa_failure_error = None
+            break
+
+        blocking = _has_blocking_qa_error(unresolved_issues)
+        qa_failure_error = _qa_failure_error_message(
+            unresolved_issues,
+            blocking=blocking,
+        )
+        fingerprint = issue_fingerprint(unresolved_issues)
+        async with async_session() as db:
+            await _update_translation_job(
+                db,
+                job_id,
+                attempt_count=attempt,
+                last_issue_fingerprint=fingerprint,
+                error=qa_failure_error,
+                heartbeat=True,
+            )
+            if job_id:
+                await db.commit()
+        if attempt < max_attempts:
+            strategy = (
+                "重新生成漏翻内容"
+                if _has_self_healable_error(unresolved_issues)
+                else "重新渲染并执行完整检查"
+            )
+            _append_log(
+                paper_id,
+                loop,
+                f"译后检查仍有 {candidate_score[0]} 个错误；系统将{strategy}",
+            )
+            continue
+        _append_log(
+            paper_id,
+            loop,
+            "当前引擎已用完自动恢复次数，已保留最佳译文并等待系统修复",
+        )
+
+    if not clean_result and best_result is not None:
+        _restore_translated_outputs(best_snapshots)
+        trans_result = best_result
+        qa_failure_error = _qa_failure_error_message(
+            best_issues,
+            blocking=_has_blocking_qa_error(best_issues),
+        )
 
     elapsed = time.monotonic() - start_time
     terminal_job_status: str | None = None
@@ -1633,21 +1781,25 @@ async def _do_translate(
             return
 
         _update_paper_result(paper, trans_result, output_dir)
-        if trans_result.success and qa_failure_error:
-            paper.translation_status = TranslationStatus.FAILED.value
-            paper.translation_error = qa_failure_error
-            paper.translation_stage = "译后检查失败"
+        if not clean_result:
+            recovery_error = qa_failure_error or trans_result.error or "Translation failed"
+            paper.translation_status = TranslationStatus.REPAIRING.value
+            paper.translation_progress = 0.99 if trans_result.success else 0.0
+            paper.translation_error = recovery_error
+            paper.translation_stage = "等待系统修复"
             paper.translation_eta_seconds = None
-            terminal_job_status = TranslationJobStatus.FAILED.value
-            terminal_job_error = qa_failure_error
             await _update_translation_job(
                 db,
                 job_id,
-                status=TranslationJobStatus.FAILED.value,
-                error=qa_failure_error,
-                finished=True,
+                status=TranslationJobStatus.REPAIR_PENDING.value,
+                progress=paper.translation_progress,
+                attempt_count=max_attempts,
+                max_attempts=max_attempts,
+                engine_revision=engine_revision,
+                error=recovery_error,
+                heartbeat=True,
             )
-        elif trans_result.success:
+        else:
             paper.translation_error = None
             paper.translation_stage = "翻译完成"
             paper.translation_eta_seconds = None
@@ -1657,25 +1809,20 @@ async def _do_translate(
                 job_id,
                 status=TranslationJobStatus.COMPLETED.value,
                 progress=1.0,
+                attempt_count=min(max_attempts, attempt),
+                max_attempts=max_attempts,
+                engine_revision=engine_revision,
+                clear_error=True,
                 finished=True,
             )
-        else:
-            paper.translation_stage = "翻译失败"
-            paper.translation_eta_seconds = None
-            terminal_job_status = TranslationJobStatus.FAILED.value
-            terminal_job_error = trans_result.error or "Translation failed"
-            await _update_translation_job(
-                db,
-                job_id,
-                status=TranslationJobStatus.FAILED.value,
-                error=trans_result.error or "Translation failed",
-                finished=True,
-            )
-        if trans_result.success and not qa_failure_error:
+        if clean_result:
             final_log_message = f"翻译完成! 耗时 {elapsed:.0f}秒"
         else:
             error = qa_failure_error or trans_result.error
-            final_log_message = f"翻译失败: {error} (耗时 {elapsed:.0f}秒)"
+            final_log_message = (
+                f"等待系统修复: {error} (已自动尝试 {max_attempts} 次, "
+                f"耗时 {elapsed:.0f}秒)"
+            )
         paper.translation_log = _append_log_text(paper.translation_log, final_log_message)
         terminal_paper_values = {
             "translation_status": paper.translation_status,
@@ -1698,7 +1845,7 @@ async def _do_translate(
                 webhook_url,
                 paper.title,
                 paper_id,
-                trans_result.success and not qa_failure_error,
+                clean_result,
                 qa_failure_error or trans_result.error,
                 base_url=settings.base_url,
             )

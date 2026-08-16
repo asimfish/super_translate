@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     # Translation concurrency
     max_concurrent_translations: int = 1
     translation_timeout_seconds: int = 1800
+    # Recover transient worker and QA failures before parking the job for a
+    # future engine revision. This remains bounded to avoid an infinite API-cost
+    # loop on deterministic layout defects.
+    translation_recovery_attempts: int = 3
+    translation_recovery_backoff_seconds: float = 2.0
     # Keep translation jobs durable across local server restarts. Queued jobs
     # and jobs interrupted mid-run are reset to queued and restarted on startup.
     resume_queued_translations_on_startup: bool = True

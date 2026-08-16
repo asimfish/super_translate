@@ -15,6 +15,15 @@ Single-pass mode performs one inspection and at most one conservative repair.
 Iterative mode repeats the same contract until clean, no progress, or its pass
 limit. See [ADR-0001](adr/0001-independent-translation-quality-loop.md).
 
+## Durable recovery
+
+Worker failures and QA errors receive bounded automatic retries. If the current
+engine cannot produce a clean result, the job is persisted as `repair_pending`
+and the paper remains visible as `repairing`, with its best PDF and QA evidence
+retained. A newer engine revision automatically requeues those jobs at startup;
+the same revision does not spin on a deterministic failure. See
+[ADR-0002](adr/0002-durable-translation-recovery.md).
+
 ## Quality evidence
 
 Focused PDF fixtures lock individual defect classes. Golden-page suites cover

@@ -371,6 +371,9 @@ function renderPaperList() {
       ${p.translation_status === 'failed' && p.translation_error ? `
         <div class="meta" style="margin-top:4px;color:var(--error);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.translation_error)}">⚠ ${esc(p.translation_error)}</div>
       ` : ''}
+      ${p.translation_status === 'repairing' ? `
+        <div class="meta" style="margin-top:4px;color:var(--warning);font-size:11px" title="${esc(p.translation_error || '')}">已保留最佳译文；系统修复发布后将自动重试</div>
+      ` : ''}
       ${p.tags ? `<div class="meta tags-row" style="margin-top:6px">🏷 ${p.tags.split(',').map(t => `<span class="tag-chip" data-action="filter-by-tag" data-tag="${esc(t.trim())}">${esc(t.trim())}</span>`).join(' ')}</div>` : ''}
       <div class="actions" data-action="stop-propagation">
         ${p.translation_status === 'pending' || p.translation_status === 'failed' ?
@@ -951,9 +954,15 @@ async function openReader(paperId) {
         if (loadId === currentLoadId) requestAnimationFrame(() => syncScrollFromPanel('original'));
       });
     document.getElementById('btn-download-mono').classList.remove('hidden');
-    // Show re-translate button, hide translate button
+    // A repair-pending job remains system-owned until it succeeds or the user
+    // explicitly cancels it; do not offer a duplicate translation request.
     if (btnTranslate) btnTranslate.classList.add('hidden');
-    if (btnRetranslate) btnRetranslate.classList.remove('hidden');
+    if (btnRetranslate) {
+      btnRetranslate.classList.toggle(
+        'hidden',
+        currentPaper.translation_status === 'repairing',
+      );
+    }
   } else {
     placeholder.classList.remove('hidden');
     document.getElementById('pdf-container-translated').classList.add('hidden');
@@ -1593,6 +1602,16 @@ function pollTranslationStatus(paperId) {
         statusEl.textContent = `翻译失败 (${elapsedStr})`;
         fill.style.background = 'var(--error)';
         loadPapers();
+      } else if (paper.translation_status === 'repairing') {
+        clearInterval(translationPollId);
+        translationPollId = null;
+        translationPollPaperId = null;
+        fill.classList.remove('progress-fill-active', 'progress-fill-pending');
+        fill.style.width = `${Math.max(1, pct)}%`;
+        fill.style.background = 'var(--warning)';
+        statusEl.textContent = '等待系统修复（已保留最佳译文）';
+        addTransLog('当前版本已完成自动恢复尝试；修复发布后任务会自动继续');
+        loadPapers();
       } else {
         const stage = paper.translation_stage || (waitingForProgress ? '准备翻译' : '翻译中');
         const pendingHint = waitingForProgress ? ' · 等待首批进度' : '';
@@ -1978,7 +1997,7 @@ function formatDate(iso) {
 }
 
 function statusLabel(s) {
-  const map = { pending: '待翻译', translating: '翻译中', completed: '已完成', failed: '失败' };
+  const map = { pending: '待翻译', translating: '翻译中', repairing: '等待系统修复', completed: '已完成', failed: '失败' };
   return map[s] || esc(s);
 }
 

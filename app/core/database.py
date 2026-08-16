@@ -75,6 +75,30 @@ async def init_db() -> None:
             conn, "papers", "translation_stage", "VARCHAR(40) NOT NULL DEFAULT ''"
         )
         await _ensure_column(conn, "papers", "translation_eta_seconds", "INTEGER")
+        await _ensure_column(
+            conn,
+            "translation_jobs",
+            "attempt_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await _ensure_column(
+            conn,
+            "translation_jobs",
+            "max_attempts",
+            "INTEGER NOT NULL DEFAULT 3",
+        )
+        await _ensure_column(
+            conn,
+            "translation_jobs",
+            "engine_revision",
+            "VARCHAR(64) NOT NULL DEFAULT ''",
+        )
+        await _ensure_column(
+            conn,
+            "translation_jobs",
+            "last_issue_fingerprint",
+            "VARCHAR(128) NOT NULL DEFAULT ''",
+        )
         # create_all skips indexes on existing tables — ensure they exist
         await conn.execute(
             text(
