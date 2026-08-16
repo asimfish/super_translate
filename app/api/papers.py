@@ -897,25 +897,6 @@ async def start_translation(
         raise HTTPException(400, "ocr_dpi must be between 96 and 300")
 
     selected_backend = backend or settings.translation_backend
-    if quality != "fast" and selected_backend in PROVIDER_SPECS:
-        try:
-            credential = await load_provider_credential(db, access_scope, selected_backend)
-        except CredentialConfigurationError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except CredentialDecryptionError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="保存的 API key 无法读取，请在 API 设置中重新填写",
-            ) from exc
-        if credential is None and not (
-            access_scope == LOCAL_ACCESS_SCOPE
-            and server_provider_credential(selected_backend) is not None
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=f"请先在 API 设置中填写 {PROVIDER_SPECS[selected_backend].label} API key",
-            )
-
     # Atomic check-and-set: prevents two concurrent requests from both
     # starting translation for the same paper (TOCTOU race condition).
     result = await db.execute(
@@ -945,6 +926,29 @@ async def start_translation(
         # Either paper doesn't exist or already translating
         await _get_paper_or_404(paper_id, db, access_scope)  # raises 404 if missing
         raise HTTPException(409, "Translation already in progress")
+
+    if quality != "fast" and selected_backend in PROVIDER_SPECS:
+        try:
+            credential = await load_provider_credential(db, access_scope, selected_backend)
+        except CredentialConfigurationError as exc:
+            await db.rollback()
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except CredentialDecryptionError as exc:
+            await db.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail="保存的 API key 无法读取，请在 API 设置中重新填写",
+            ) from exc
+        if credential is None and not (
+            access_scope == LOCAL_ACCESS_SCOPE
+            and server_provider_credential(selected_backend) is not None
+        ):
+            await db.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail=f"请先在 API 设置中填写 {PROVIDER_SPECS[selected_backend].label} API key",
+            )
+
     job_id = generate_job_id()
     job = TranslationJob(
         id=job_id,

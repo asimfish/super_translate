@@ -734,7 +734,9 @@ class TestTranslationEndpoint:
         mock_db.execute.return_value = mock_update_result
 
         with patch("app.api.papers._schedule_background_task"):
-            response = client.post(f"/api/papers/{sample_paper.id}/translate")
+            response = client.post(
+                f"/api/papers/{sample_paper.id}/translate?backend=google"
+            )
             assert response.status_code == 200
             assert response.json()["status"] == "translating"
             assert response.json()["job_id"]
@@ -760,7 +762,9 @@ class TestTranslationEndpoint:
         mock_db.execute.return_value = mock_update_result
 
         with patch("app.api.papers._schedule_background_task") as mock_task:
-            response = client.post(f"/api/papers/{sample_paper.id}/translate")
+            response = client.post(
+                f"/api/papers/{sample_paper.id}/translate?backend=google"
+            )
             assert response.status_code == 200
             call_args = mock_task.call_args[0]
             assert call_args[4] is True
@@ -778,7 +782,8 @@ class TestTranslationEndpoint:
 
         with patch("app.api.papers._schedule_background_task") as mock_task:
             response = client.post(
-                f"/api/papers/{sample_paper.id}/translate?preserve_graphics_text=true",
+                f"/api/papers/{sample_paper.id}/translate"
+                "?backend=google&preserve_graphics_text=true",
             )
             assert response.status_code == 200
             call_args = mock_task.call_args[0]
@@ -793,7 +798,8 @@ class TestTranslationEndpoint:
         with patch("app.api.papers._schedule_background_task") as mock_task:
             response = client.post(
                 f"/api/papers/{sample_paper.id}/translate"
-                "?qa_mode=iterative&qa_max_passes=6&ocr_mode=auto&ocr_language=eng&ocr_dpi=200",
+                "?backend=google&qa_mode=iterative&qa_max_passes=6"
+                "&ocr_mode=auto&ocr_language=eng&ocr_dpi=200",
             )
             assert response.status_code == 200
             call_args = mock_task.call_args[0]
@@ -1766,7 +1772,9 @@ class TestErrorHandling:
         mock_db.execute.return_value = mock_result
 
         with patch("app.api.papers._schedule_background_task"):
-            response = client.post(f"/api/papers/{sample_paper.id}/translate")
+            response = client.post(
+                f"/api/papers/{sample_paper.id}/translate?backend=google"
+            )
             assert response.status_code == 200
             assert response.json()["status"] == "translating"
 
