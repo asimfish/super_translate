@@ -4861,6 +4861,41 @@ def _formula_visible_ink_issues(
     page_number: int,
 ) -> List[TranslationIssue]:
     """Require one visible raster owner for every hidden semantic formula."""
+    issues: List[TranslationIssue] = []
+    for block in source_blocks:
+        if not _uses_fixed_source_math(block):
+            continue
+        for atom_bbox in dict.fromkeys(block.source_math_atom_bboxes):
+            atom_width = atom_bbox[2] - atom_bbox[0]
+            atom_height = atom_bbox[3] - atom_bbox[1]
+            if (
+                atom_width < 1.5
+                or atom_height < 1.5
+                or not _raster_rect_has_ink(source_page, atom_bbox, dpi=240)
+            ):
+                continue
+            similarity = _formula_ink_similarity(
+                source_page,
+                atom_bbox,
+                translated_page,
+                atom_bbox,
+            )
+            if similarity >= 0.55:
+                continue
+            issues.append(
+                TranslationIssue(
+                    page=page_number,
+                    code="formula_visible_ink_mismatch",
+                    message=(
+                        f"Page {page_number}: fixed formula atom differs from source "
+                        f"near x={atom_bbox[0]:.1f}, y={atom_bbox[1]:.1f} "
+                        f"(similarity={similarity:.2f})"
+                    ),
+                    severity="error",
+                )
+            )
+            break
+
     expected: List[Tuple[str, BBox, Tuple[BBox, ...], Tuple[BBox, ...], float]] = []
     for block in source_blocks:
         for token in _tokenize_translation_with_formula_clips(block.text, block):
@@ -4879,7 +4914,7 @@ def _formula_visible_ink_issues(
                     )
                 )
     if not expected:
-        return []
+        return issues
 
     hidden_runs: List[Tuple[str, BBox]] = []
     for trace in translated_page.get_texttrace():
@@ -4908,7 +4943,6 @@ def _formula_visible_ink_issues(
         for image in translated_page.get_image_info(xrefs=True)
         if image.get("bbox")
     ]
-    issues: List[TranslationIssue] = []
     used_runs: set[int] = set()
     source_document = getattr(source_page, "parent", None)
     translated_document = getattr(translated_page, "parent", None)
@@ -19923,8 +19957,17 @@ def _split_mixed_redact_around_fixed_math(
         for piece in pieces:
             overlap_y = min(piece[3], math_bbox[3]) - max(piece[1], math_bbox[1])
             min_height = min(piece[3] - piece[1], math_bbox[3] - math_bbox[1])
-            overlap_x = min(piece[2], math_bbox[2]) - max(piece[0], math_bbox[0])
-            if overlap_x <= 0.0 or overlap_y < max(0.5, min_height * 0.55):
+            expanded_overlap_x = min(
+                piece[2] + padding,
+                math_bbox[2],
+            ) - max(
+                piece[0] - padding,
+                math_bbox[0],
+            )
+            if (
+                expanded_overlap_x <= 0.0
+                or overlap_y < max(0.5, min_height * 0.55)
+            ):
                 next_pieces.append(piece)
                 continue
             left = (piece[0], piece[1], math_bbox[0] - padding, piece[3])

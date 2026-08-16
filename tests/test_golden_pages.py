@@ -420,6 +420,53 @@ def test_price_single_such_residue_is_rejected_by_source_comparison():
     )
 
 
+def test_price_adjacent_inline_formula_atoms_survive_prose_redaction(tmp_path):
+    from pdf_zh_translator.pdf_layout import _formula_ink_similarity
+
+    class PriceFormulaTranslator(_GoldenStubTranslator):
+        def translate_batch(self, texts):
+            outputs = super().translate_batch(texts)
+            for index, source in enumerate(texts):
+                if source.startswith("Proposition 1 (Capacity trap). Fix"):
+                    outputs[index] = (
+                        "命题1（容量陷阱）。固定⟦0⟧，以及。存在⟦1⟧∈(⟦2⟧"
+                        "和⟦3⟧ ⟦4⟧使得对于每一个"
+                    )
+            return outputs
+
+    input_pdf = FIXTURES / "price_p3_formula_connectors.pdf"
+    output_pdf = tmp_path / "price-p3-formula-atoms.pdf"
+    translate_pdf(
+        input_pdf=input_pdf,
+        output_pdf=output_pdf,
+        translator=PriceFormulaTranslator(),
+        preserve_graphics_text=True,
+    )
+
+    with fitz.open(input_pdf) as source, fitz.open(output_pdf) as output:
+        for bbox in (
+            (163.755, 95.672, 167.933, 104.647),  # 0 in p in (0, 1)
+            (206.083, 95.822, 214.964, 106.133),  # < in D_0 < infinity
+        ):
+            assert (
+                _formula_ink_similarity(source[0], bbox, output[0], bbox)
+                >= 0.95
+            )
+
+
+def test_price_missing_fixed_formula_atom_is_a_visual_qa_error():
+    issues = verify_translation_issues(
+        FIXTURES / "price_p3_formula_connectors.pdf",
+        FIXTURES / "price_p3_formula_connectors_translated.pdf",
+    )
+
+    assert any(
+        issue.code == "formula_visible_ink_mismatch"
+        and "fixed formula atom" in issue.message
+        for issue in issues
+    )
+
+
 @pytest.mark.parametrize("fixture", ["otf_p5_algorithm.pdf", "otf_p14_algorithm.pdf"])
 def test_otf_algorithm_float_body_is_not_translated(fixture):
     texts = _plain_unit_texts(fixture)
