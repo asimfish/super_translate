@@ -310,6 +310,17 @@ def test_evicoord_algorithm_reference_paragraph_remains_translatable():
     assert any("Traceability is claim-type specific" in text for text in texts)
 
 
+def test_evicoord_reflowed_formula_sprite_satisfies_visual_qa():
+    issues = verify_translation_issues(
+        FIXTURES / "evicoord_p4_reflowed_formula.pdf",
+        FIXTURES / "evicoord_p4_reflowed_formula_translated.pdf",
+    )
+
+    assert not any(
+        issue.code == "formula_visible_ink_mismatch" for issue in issues
+    )
+
+
 def test_evicoord_cross_column_connector_moves_to_continuation_column():
     from pdf_zh_translator.pdf_layout import (
         _move_orphaned_cross_column_translation_connectors,

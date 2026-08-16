@@ -4816,6 +4816,9 @@ def _formula_sprite_alpha_similarity(
     source_size: float,
     translated_document: object,
     image_xref: int,
+    *,
+    columns: int = 96,
+    rows: int = 48,
 ) -> Optional[float]:
     """Compare the embedded sprite itself, excluding nearby page text."""
     if not source_atom_bboxes or image_xref <= 0:
@@ -4847,8 +4850,18 @@ def _formula_sprite_alpha_similarity(
         mask_pixmap = fitz.Pixmap(translated_document, soft_mask_xref)
         translated_pixmap = fitz.Pixmap(base_pixmap, mask_pixmap)
         return _normalized_mask_similarity(
-            _normalized_alpha_mask(source_pixmap),
-            _normalized_alpha_mask(translated_pixmap),
+            _normalized_alpha_mask(
+                source_pixmap,
+                columns=columns,
+                rows=rows,
+            ),
+            _normalized_alpha_mask(
+                translated_pixmap,
+                columns=columns,
+                rows=rows,
+            ),
+            columns=columns,
+            rows=rows,
         )
     except Exception:
         return None
@@ -4862,26 +4875,134 @@ def _formula_visible_ink_issues(
 ) -> List[TranslationIssue]:
     """Require one visible raster owner for every hidden semantic formula."""
     issues: List[TranslationIssue] = []
+    hidden_runs: List[Tuple[str, BBox]] = []
+    for trace in translated_page.get_texttrace():
+        if int(trace.get("type", 0)) != 3:
+            continue
+        text = "".join(chr(char[0]) for char in trace.get("chars", []))
+        bbox = trace.get("bbox")
+        if not text or not bbox:
+            continue
+        current_bbox = tuple(float(value) for value in bbox)
+        if hidden_runs:
+            previous_text, previous_bbox = hidden_runs[-1]
+            previous_center = (previous_bbox[1] + previous_bbox[3]) / 2.0
+            current_center = (current_bbox[1] + current_bbox[3]) / 2.0
+            gap = current_bbox[0] - previous_bbox[2]
+            if abs(current_center - previous_center) <= 1.5 and -0.5 <= gap <= 2.5:
+                hidden_runs[-1] = (
+                    previous_text + text,
+                    union_bbox([previous_bbox, current_bbox]),
+                )
+                continue
+        hidden_runs.append((text, current_bbox))
+
+    images = [
+        image
+        for image in translated_page.get_image_info(xrefs=True)
+        if image.get("bbox")
+    ]
+    used_runs: set[int] = set()
+    source_document = getattr(source_page, "parent", None)
+    translated_document = getattr(translated_page, "parent", None)
+
+    def relocated_formula_has_visible_owner(token: "_Token") -> bool:
+        if (
+            token.source_bbox is None
+            or not token.source_atom_bboxes
+            or source_document is None
+            or translated_document is None
+        ):
+            return False
+        semantic = re.sub(
+            r"\s+",
+            "",
+            _normalize_formula_accessibility_text(token.text),
+        )
+        matches: List[Tuple[float, int]] = []
+        for run_index, (text, semantic_bbox) in enumerate(hidden_runs):
+            if run_index in used_runs or re.sub(r"\s+", "", text) != semantic:
+                continue
+            semantic_center = (
+                (semantic_bbox[0] + semantic_bbox[2]) / 2.0,
+                (semantic_bbox[1] + semantic_bbox[3]) / 2.0,
+            )
+            for image in images:
+                image_bbox = tuple(float(value) for value in image["bbox"])
+                if not bbox_contains_point(
+                    expand_bbox(image_bbox, 2.0),
+                    semantic_center[0],
+                    semantic_center[1],
+                ):
+                    continue
+                similarity = _formula_sprite_alpha_similarity(
+                    source_document,
+                    token.source_page,
+                    token.source_bbox,
+                    token.source_atom_bboxes,
+                    token.source_exclusion_bboxes,
+                    token.source_size,
+                    translated_document,
+                    int(image.get("xref") or 0),
+                    columns=64,
+                    rows=32,
+                )
+                if similarity is not None:
+                    matches.append((similarity, run_index))
+        if not matches:
+            return False
+        similarity, run_index = max(matches)
+        if similarity < 0.55:
+            return False
+        used_runs.add(run_index)
+        return True
+
     for block in source_blocks:
         if not _uses_fixed_source_math(block):
             continue
-        for atom_bbox in dict.fromkeys(block.source_math_atom_bboxes):
-            atom_width = atom_bbox[2] - atom_bbox[0]
-            atom_height = atom_bbox[3] - atom_bbox[1]
-            if (
-                atom_width < 1.5
-                or atom_height < 1.5
-                or not _raster_rect_has_ink(source_page, atom_bbox, dpi=240)
+        formula_tokens = [
+            token
+            for token in _tokenize_translation_with_formula_clips(block.text, block)
+            if token.kind == "formula" and token.source_bbox is not None
+        ]
+        represented_atoms = {
+            atom for token in formula_tokens for atom in token.source_atom_bboxes
+        }
+        formula_groups = [
+            (token, tuple(dict.fromkeys(token.source_atom_bboxes)))
+            for token in formula_tokens
+            if token.source_atom_bboxes
+        ]
+        formula_groups.extend(
+            (None, (atom,))
+            for atom in dict.fromkeys(block.source_math_atom_bboxes)
+            if atom not in represented_atoms
+        )
+        for token, atom_bboxes in formula_groups:
+            missing_atom: Optional[Tuple[BBox, float]] = None
+            for atom_bbox in atom_bboxes:
+                atom_width = atom_bbox[2] - atom_bbox[0]
+                atom_height = atom_bbox[3] - atom_bbox[1]
+                if (
+                    atom_width < 1.5
+                    or atom_height < 1.5
+                    or not _raster_rect_has_ink(source_page, atom_bbox, dpi=240)
+                ):
+                    continue
+                similarity = _formula_ink_similarity(
+                    source_page,
+                    atom_bbox,
+                    translated_page,
+                    atom_bbox,
+                )
+                if similarity < 0.55:
+                    missing_atom = (atom_bbox, similarity)
+                    break
+            if missing_atom is None or (
+                token is not None and relocated_formula_has_visible_owner(token)
             ):
                 continue
-            similarity = _formula_ink_similarity(
-                source_page,
-                atom_bbox,
-                translated_page,
-                atom_bbox,
-            )
-            if similarity >= 0.55:
-                continue
+            atom_bbox, similarity = missing_atom
             issues.append(
                 TranslationIssue(
                     page=page_number,
@@ -4916,36 +5037,6 @@ def _formula_visible_ink_issues(
     if not expected:
         return issues
 
-    hidden_runs: List[Tuple[str, BBox]] = []
-    for trace in translated_page.get_texttrace():
-        if int(trace.get("type", 0)) != 3:
-            continue
-        text = "".join(chr(char[0]) for char in trace.get("chars", []))
-        bbox = trace.get("bbox")
-        if not text or not bbox:
-            continue
-        current_bbox = tuple(float(value) for value in bbox)
-        if hidden_runs:
-            previous_text, previous_bbox = hidden_runs[-1]
-            previous_center = (previous_bbox[1] + previous_bbox[3]) / 2.0
-            current_center = (current_bbox[1] + current_bbox[3]) / 2.0
-            gap = current_bbox[0] - previous_bbox[2]
-            if abs(current_center - previous_center) <= 1.5 and -0.5 <= gap <= 2.5:
-                hidden_runs[-1] = (
-                    previous_text + text,
-                    union_bbox([previous_bbox, current_bbox]),
-                )
-                continue
-        hidden_runs.append((text, current_bbox))
-
-    images = [
-        image
-        for image in translated_page.get_image_info(xrefs=True)
-        if image.get("bbox")
-    ]
-    used_runs: set[int] = set()
-    source_document = getattr(source_page, "parent", None)
-    translated_document = getattr(translated_page, "parent", None)
     for semantic, source_bbox, source_atoms, source_exclusions, source_size in expected:
         match_index = next(
             (

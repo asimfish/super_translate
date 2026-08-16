@@ -415,6 +415,50 @@ fixture.save(
 )
 ```
 
+## `evicoord_p4_reflowed_formula.pdf`
+
+- Title: *EviCoord: A Domain-Adaptable Evidence-State Coordination Protocol
+  for Multi-Agent AI-for-Science*
+- Venue: DAI 2026 submission
+- Source: production upload; no public source URL is declared in the supplied
+  PDF.
+- Source PDF SHA256: `54c07d5fba5325c06e05829e632506237212fc9c3f997554d17a1760b0767f5e`
+- Extracted page: PDF page 4
+- Fixture SHA256:
+  `a80c7f8015ef3937d53a0ed9b7723cfc73a5fe3a77d591c7b90e6041f44462e5`
+- Paired translated fixture:
+  `evicoord_p4_reflowed_formula_translated.pdf`
+- Translation PDF SHA256:
+  `ecd0c01ba170cb49f785762d01ca8c840c67fef3597d888f2308ef3a7c4320bc`
+- Paired fixture SHA256:
+  `7cd616051079b11f00b913809d9a7afc19cd4952245e3fc48e65a8a11d461b73`
+- Production paper/job: `5865b6ebb657` / `1249f6b875ef4202a387858db94ee15a`
+- License: not declared in the supplied PDF. This single-page excerpt is
+  retained solely as a regression fixture for internal layout QA and should
+  not be redistributed independently of this test purpose.
+- Test purpose: Proposition 1 cannot keep its first inline `x` in the narrow
+  source slot after Chinese translation. The renderer correctly moves it as a
+  visible formula sprite with one hidden semantic copy; visual QA must accept
+  that reflow while continuing to reject genuinely erased formula atoms.
+
+Reproduce the fixtures while preserving the page's image XObjects:
+
+```python
+import fitz
+
+for source_path, output_path in (
+    ("EviCoord.pdf", "tests/fixtures/evicoord_p4_reflowed_formula.pdf"),
+    (
+        "EviCoord-translated.pdf",
+        "tests/fixtures/evicoord_p4_reflowed_formula_translated.pdf",
+    ),
+):
+    source = fitz.open(source_path)
+    fixture = fitz.open()
+    fixture.insert_pdf(source, from_page=3, to_page=3)
+    fixture.save(output_path, garbage=4, deflate=True, clean=False)
+```
+
 ```python
 import fitz
 src = fitz.open("tests/fixtures/otf_production_acceptance_full.pdf")
