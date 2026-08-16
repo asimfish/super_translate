@@ -95,6 +95,7 @@ function requestLogin() {
 }
 
 function logout() {
+  hideProviderSettings();
   localStorage.removeItem('paperChinaApiToken');
   localStorage.removeItem('paperChinaUsername');
   updateCurrentUserBadge();
@@ -178,6 +179,27 @@ const api = {
     if (!res.ok) throw new Error(await errorDetail(res, 'Translation failed'));
     return res.json();
   },
+  async listProviderCredentials() {
+    const res = await apiFetch('/api/provider-credentials');
+    if (!res.ok) throw new Error(await errorDetail(res, 'API 配置加载失败'));
+    return res.json();
+  },
+  async saveProviderCredential(provider, payload) {
+    const res = await apiFetch(`/api/provider-credentials/${encodeURIComponent(provider)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await errorDetail(res, 'API 配置保存失败'));
+    return res.json();
+  },
+  async deleteProviderCredential(provider) {
+    const res = await apiFetch(`/api/provider-credentials/${encodeURIComponent(provider)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error(await errorDetail(res, 'API 配置删除失败'));
+    return res.json();
+  },
   async cancelTranslation(id) {
     const res = await apiFetch(`/api/papers/${id}/cancel`, { method: 'POST' });
     if (!res.ok) throw new Error(await errorDetail(res, 'Cancel failed'));
@@ -218,6 +240,90 @@ const api = {
     return res.json();
   }
 };
+
+// === Provider credentials ===
+function hideProviderSettings() {
+  const modal = document.getElementById('provider-settings-modal');
+  modal?.classList.add('hidden');
+  modal?.querySelectorAll('.provider-key').forEach(input => { input.value = ''; });
+  const error = document.getElementById('provider-settings-error');
+  if (error) error.textContent = '';
+}
+
+function renderProviderCredentials(statuses) {
+  for (const status of statuses) {
+    const row = document.querySelector(`.provider-row[data-provider="${status.provider}"]`);
+    if (!row) continue;
+    const state = row.querySelector('.provider-state');
+    const model = row.querySelector('.provider-model');
+    const remove = row.querySelector('.provider-delete');
+    if (state) {
+      state.textContent = status.configured
+        ? `已配置 ${status.key_hint || ''}`.trim()
+        : '未配置';
+      state.classList.toggle('configured', status.configured);
+    }
+    if (model && status.model) model.value = status.model;
+    if (remove) remove.disabled = status.source !== 'personal';
+  }
+}
+
+async function refreshProviderCredentials() {
+  const error = document.getElementById('provider-settings-error');
+  if (error) error.textContent = '';
+  try {
+    renderProviderCredentials(await api.listProviderCredentials());
+  } catch (err) {
+    if (error) error.textContent = err.message;
+  }
+}
+
+async function showProviderSettings() {
+  const modal = document.getElementById('provider-settings-modal');
+  const username = localStorage.getItem('paperChinaUsername') || '本地管理员';
+  const user = document.getElementById('provider-settings-user');
+  if (user) user.textContent = username;
+  modal?.classList.remove('hidden');
+  await refreshProviderCredentials();
+}
+
+async function saveProviderCredential(e) {
+  const row = e.target.closest('.provider-row');
+  if (!row) return;
+  const provider = row.dataset.provider;
+  const keyInput = row.querySelector('.provider-key');
+  const modelInput = row.querySelector('.provider-model');
+  const button = e.target;
+  const payload = { model: modelInput?.value.trim() || null };
+  if (keyInput?.value.trim()) payload['api_key'] = keyInput.value.trim();
+  button.disabled = true;
+  try {
+    const status = await api.saveProviderCredential(provider, payload);
+    keyInput.value = '';
+    renderProviderCredentials([status]);
+    toastSuccess(`${status.label} API 配置已保存`);
+  } catch (err) {
+    toastError(err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deleteProviderCredential(e) {
+  const row = e.target.closest('.provider-row');
+  if (!row) return;
+  const button = e.target;
+  button.disabled = true;
+  try {
+    await api.deleteProviderCredential(row.dataset.provider);
+    await refreshProviderCredentials();
+    toastSuccess('个人 API 配置已删除');
+  } catch (err) {
+    toastError(err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
 
 // === Views ===
 function showView(name) {
@@ -2033,6 +2139,10 @@ const actionHandlers = {
   'show-upload': showUpload,
   'show-library': showLibrary,
   'logout': logout,
+  'show-provider-settings': showProviderSettings,
+  'hide-provider-settings': hideProviderSettings,
+  'save-provider-credential': saveProviderCredential,
+  'delete-provider-credential': deleteProviderCredential,
   'toggle-reader-mode': toggleReaderMode,
   'batch-translate': batchTranslate,
   'do-upload': doUpload,
@@ -2119,6 +2229,12 @@ document.addEventListener('change', (e) => {
 document.addEventListener('keydown', (e) => {
   // Escape: go back to library from upload/reader views
   if (e.key === 'Escape') {
+    const providerModal = document.getElementById('provider-settings-modal');
+    if (providerModal && !providerModal.classList.contains('hidden')) {
+      hideProviderSettings();
+      e.preventDefault();
+      return;
+    }
     const uploadView = document.getElementById('upload-view');
     const readerView = document.getElementById('reader-view');
     if (uploadView?.classList.contains('active') || readerView?.classList.contains('active')) {

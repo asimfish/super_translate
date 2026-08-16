@@ -16,6 +16,7 @@
     </div>
     <div class="header-right">
       <span id="current-user" class="current-user hidden"></span>
+      <button class="btn btn-outline btn-sm" id="btn-provider-settings" data-action="show-provider-settings">API 设置</button>
       <button class="btn btn-outline btn-sm hidden" id="btn-logout" data-action="logout">退出</button>
       <!-- AGPL-3.0 network-use source offer: keep this link pointing at the running code's repository. -->
       <a class="btn btn-outline btn-sm" href="https://github.com/asimfish/super_translate" target="_blank" rel="noopener">源码</a>
@@ -105,6 +106,8 @@
               <option value="deepseek" selected>DeepSeek V4 Pro</option>
               <option value="kimi">Kimi K3</option>
               <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic Claude</option>
+              <option value="glm">智谱 GLM</option>
               <option value="google">Google 翻译</option>
             </select>
             <select id="quality-preset" class="quality-select" aria-label="翻译质量">
@@ -184,6 +187,57 @@
       </div>
     </div>
   </main>
+</div>
+
+<!-- Provider Credential Modal -->
+<div id="provider-settings-modal" class="provider-modal hidden" role="dialog" aria-modal="true" aria-labelledby="provider-settings-title">
+  <section class="provider-dialog">
+    <div class="provider-dialog-header">
+      <div>
+        <h2 id="provider-settings-title">API 设置</h2>
+        <span id="provider-settings-user" class="provider-settings-user"></span>
+      </div>
+      <button class="btn btn-outline btn-sm" data-action="hide-provider-settings" aria-label="关闭 API 设置">关闭</button>
+    </div>
+    <div class="provider-list" id="provider-settings-list">
+      <div class="provider-row" data-provider="deepseek">
+        <div class="provider-identity"><strong>DeepSeek</strong><span class="provider-state">未配置</span></div>
+        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="DeepSeek API key">
+        <input class="provider-model" type="text" value="deepseek-v4-pro" aria-label="DeepSeek 模型">
+        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
+        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      </div>
+      <div class="provider-row" data-provider="kimi">
+        <div class="provider-identity"><strong>Kimi</strong><span class="provider-state">未配置</span></div>
+        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="Kimi API key">
+        <input class="provider-model" type="text" value="kimi-k3" aria-label="Kimi 模型">
+        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
+        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      </div>
+      <div class="provider-row" data-provider="openai">
+        <div class="provider-identity"><strong>OpenAI</strong><span class="provider-state">未配置</span></div>
+        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="OpenAI API key">
+        <input class="provider-model" type="text" value="gpt-4o-mini" aria-label="OpenAI 模型">
+        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
+        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      </div>
+      <div class="provider-row" data-provider="anthropic">
+        <div class="provider-identity"><strong>Anthropic</strong><span class="provider-state">未配置</span></div>
+        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="Anthropic API key">
+        <input class="provider-model" type="text" value="claude-sonnet-5" aria-label="Anthropic 模型">
+        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
+        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      </div>
+      <div class="provider-row" data-provider="glm">
+        <div class="provider-identity"><strong>智谱 GLM</strong><span class="provider-state">未配置</span></div>
+        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="智谱 GLM API key">
+        <input class="provider-model" type="text" value="glm-5.2" aria-label="智谱 GLM 模型">
+        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
+        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      </div>
+    </div>
+    <div id="provider-settings-error" class="login-error" role="alert"></div>
+  </section>
 </div>
 
 <!-- Login Modal -->

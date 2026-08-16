@@ -24,6 +24,7 @@ from starlette.responses import Response
 from app import __version__
 from app.api.auth import router as auth_router
 from app.api.papers import router as papers_router
+from app.api.provider_credentials import router as provider_credentials_router
 from app.core.access import access_decision_for_request, get_request_access_scope
 from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
@@ -48,6 +49,7 @@ def _translation_job_resume_payload(job) -> dict[str, object]:
     """Serialize a queued translation job into _run_translation arguments."""
     return {
         "paper_id": job.paper_id,
+        "access_scope": job.access_scope,
         "backend": job.backend,
         "quality": job.quality,
         "preserve_graphics_text": job.preserve_graphics_text,
@@ -89,6 +91,7 @@ def _schedule_recovered_translation(
             payload["ocr_language"],
             payload["ocr_dpi"],
             payload["job_id"],
+            payload["access_scope"],
         )
 
     task = asyncio.create_task(_run_after_delay())
@@ -497,6 +500,7 @@ async def validation_exception_handler(
 
 app.include_router(papers_router)
 app.include_router(auth_router)
+app.include_router(provider_credentials_router)
 
 static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

@@ -22,9 +22,17 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.access import get_request_access_scope
+from app.core.access import LOCAL_ACCESS_SCOPE, get_request_access_scope
 from app.core.config import settings
 from app.core.database import get_session
+from app.core.provider_credentials import (
+    PROVIDER_SPECS,
+    CredentialConfigurationError,
+    CredentialDecryptionError,
+    ResolvedProviderCredential,
+    load_provider_credential,
+    server_provider_credential,
+)
 from app.models.paper import (
     Paper,
     TranslationJob,
@@ -867,7 +875,13 @@ async def start_translation(
         HTTPException: If paper not found (404), translation in progress (409),
         or invalid backend/quality values (400)
     """
-    valid_backends = {"", "deepseek", "kimi", "openai", "google", "deepl", "ollama"}
+    valid_backends = {
+        "",
+        *PROVIDER_SPECS,
+        "google",
+        "deepl",
+        "ollama",
+    }
     valid_qualities = {"fast", "balanced", "quality"}
     if backend not in valid_backends:
         raise HTTPException(400, f"Invalid backend: {backend}")
@@ -881,6 +895,26 @@ async def start_translation(
         raise HTTPException(400, f"Invalid OCR mode: {ocr_mode}")
     if ocr_dpi < 96 or ocr_dpi > 300:
         raise HTTPException(400, "ocr_dpi must be between 96 and 300")
+
+    selected_backend = backend or settings.translation_backend
+    if quality != "fast" and selected_backend in PROVIDER_SPECS:
+        try:
+            credential = await load_provider_credential(db, access_scope, selected_backend)
+        except CredentialConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except CredentialDecryptionError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="保存的 API key 无法读取，请在 API 设置中重新填写",
+            ) from exc
+        if credential is None and not (
+            access_scope == LOCAL_ACCESS_SCOPE
+            and server_provider_credential(selected_backend) is not None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"请先在 API 设置中填写 {PROVIDER_SPECS[selected_backend].label} API key",
+            )
 
     # Atomic check-and-set: prevents two concurrent requests from both
     # starting translation for the same paper (TOCTOU race condition).
@@ -915,7 +949,8 @@ async def start_translation(
     job = TranslationJob(
         id=job_id,
         paper_id=paper_id,
-        backend=backend or settings.translation_backend,
+        access_scope=access_scope,
+        backend=selected_backend,
         quality=quality,
         preserve_graphics_text=preserve_graphics_text,
         skip_overflow=skip_overflow,
@@ -934,7 +969,7 @@ async def start_translation(
     _schedule_background_task(
         _run_translation,
         paper_id,
-        backend or settings.translation_backend,
+        selected_backend,
         quality,
         preserve_graphics_text,
         skip_overflow,
@@ -944,6 +979,7 @@ async def start_translation(
         ocr_language,
         ocr_dpi,
         job_id,
+        access_scope,
     )
 
     return {"ok": True, "status": "translating", "job_id": job_id}
@@ -1023,6 +1059,8 @@ _BACKEND_API_KEY_ATTRS = {
     "deepseek": "deepseek_api_key",
     "kimi": "moonshot_api_key",
     "openai": "openai_api_key",
+    "anthropic": "anthropic_api_key",
+    "glm": "glm_api_key",
     "deepl": "deepl_api_key",
 }
 
@@ -1035,6 +1073,8 @@ def _resolve_backend_config(
     ocr_mode: str = "off",
     ocr_language: str = "eng",
     ocr_dpi: int = 180,
+    provider_credential: ResolvedProviderCredential | None = None,
+    allow_server_default: bool = True,
 ) -> TranslationConfig:
     """Build TranslationConfig from backend name and quality preset.
 
@@ -1045,7 +1085,13 @@ def _resolve_backend_config(
     base_url = ""
     model_name = ""
 
-    if backend == "deepseek":
+    if provider_credential is not None:
+        if provider_credential.provider != backend:
+            raise HTTPException(400, "Provider credential does not match translation backend")
+        api_key = provider_credential.api_key
+        base_url = provider_credential.base_url
+        model_name = provider_credential.model
+    elif backend == "deepseek":
         api_key = settings.deepseek_api_key.get_secret_value()
         model_name = settings.deepseek_model
     elif backend == "kimi":
@@ -1056,6 +1102,14 @@ def _resolve_backend_config(
         api_key = settings.openai_api_key.get_secret_value()
         base_url = settings.openai_base_url
         model_name = settings.openai_model
+    elif backend == "anthropic":
+        api_key = settings.anthropic_api_key.get_secret_value()
+        base_url = PROVIDER_SPECS[backend].base_url
+        model_name = settings.anthropic_model
+    elif backend == "glm":
+        api_key = settings.glm_api_key.get_secret_value()
+        base_url = PROVIDER_SPECS[backend].base_url
+        model_name = settings.glm_model
     elif backend == "deepl":
         api_key = settings.deepl_api_key.get_secret_value()
     elif backend == "ollama":
@@ -1073,10 +1127,10 @@ def _resolve_backend_config(
         prefixed_key = f"PAPER_CHINA_{attr.upper()}"
         unprefixed_key = attr.upper()
         has_env_key = os.environ.get(prefixed_key, "") or os.environ.get(unprefixed_key, "")
-        if not api_key and not has_env_key:
+        if not api_key and (not allow_server_default or not has_env_key):
             raise HTTPException(
                 400,
-                f"Backend '{backend}' requires an API key. Set {prefixed_key} in your .env file.",
+                f"Backend '{backend}' requires an API key. Configure it in API 设置.",
             )
 
     return TranslationConfig(
@@ -1246,6 +1300,7 @@ def _run_translation(
     ocr_language: str = "eng",
     ocr_dpi: int = 180,
     job_id: str | None = None,
+    access_scope: str | None = None,
 ) -> None:
     logger.info("Translation job waiting for available worker slot: paper %s", paper_id)
     acquired = _translation_semaphore.acquire()
@@ -1264,6 +1319,23 @@ def _run_translation(
     try:
         _clear_cancel_requested(paper_id)
         quality_preset = _quality_map.get(quality, QualityPreset.BALANCED)
+        provider_credential = None
+        if quality_preset != QualityPreset.FAST and backend in PROVIDER_SPECS:
+            if access_scope is not None:
+                async def _load_credential() -> ResolvedProviderCredential | None:
+                    from app.core.database import async_session
+
+                    async with async_session() as db:
+                        return await load_provider_credential(db, access_scope, backend)
+
+                provider_credential = asyncio.run(_load_credential())
+                if provider_credential is None and access_scope == LOCAL_ACCESS_SCOPE:
+                    provider_credential = server_provider_credential(backend)
+                if provider_credential is None:
+                    raise HTTPException(
+                        400,
+                        f"请先在 API 设置中填写 {PROVIDER_SPECS[backend].label} API key",
+                    )
         config = _resolve_backend_config(
             backend,
             quality_preset,
@@ -1272,6 +1344,8 @@ def _run_translation(
             ocr_mode=ocr_mode,
             ocr_language=ocr_language,
             ocr_dpi=ocr_dpi,
+            provider_credential=provider_credential,
+            allow_server_default=access_scope in (None, LOCAL_ACCESS_SCOPE),
         )
 
         asyncio.run(_do_translate(paper_id, config, quality, qa_mode, qa_max_passes, job_id))
@@ -1435,6 +1509,7 @@ async def _run_translate_in_worker(
         "output_dir": str(output_dir),
         "config": {**dataclasses.asdict(config), "quality": config.quality.value},
     }
+    api_key = spec["config"].pop("api_key", "")
     spec_path = output_dir / ".worker_spec.json"
     progress_file = output_dir / ".worker_progress.jsonl"
     result_file = output_dir / ".worker_result.json"
@@ -1450,9 +1525,26 @@ async def _run_translate_in_worker(
         str(spec_path),
         cwd=str(settings.base_dir),
         env=env,
+        stdin=asyncio.subprocess.PIPE,
         # stderr inherits the server log so faulthandler stacks are kept.
         stdout=asyncio.subprocess.DEVNULL,
     )
+    if proc.stdin is None:
+        return TranslationResult(error="Translation worker secret channel is unavailable")
+    try:
+        proc.stdin.write(json.dumps({"api_key": api_key}).encode("utf-8"))
+        drain_result = proc.stdin.drain()
+        if hasattr(drain_result, "__await__"):
+            await drain_result
+        proc.stdin.close()
+        close_result = proc.stdin.wait_closed()
+        if hasattr(close_result, "__await__"):
+            await close_result
+    except (BrokenPipeError, ConnectionResetError):
+        with contextlib.suppress(ProcessLookupError):
+            proc.terminate()
+        await proc.wait()
+        return TranslationResult(error="Translation worker could not receive API credentials")
 
     last_progress = -1.0
     deadline = time.monotonic() + settings.translation_timeout_seconds

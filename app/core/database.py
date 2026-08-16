@@ -99,6 +99,21 @@ async def init_db() -> None:
             "last_issue_fingerprint",
             "VARCHAR(128) NOT NULL DEFAULT ''",
         )
+        await _ensure_column(
+            conn,
+            "translation_jobs",
+            "access_scope",
+            "VARCHAR(80) NOT NULL DEFAULT 'local'",
+        )
+        # Backfill durable jobs from their owning paper so jobs created before
+        # this column existed cannot resume under the wrong user's credentials.
+        await conn.execute(
+            text(
+                "UPDATE translation_jobs SET access_scope = COALESCE("
+                "(SELECT papers.access_scope FROM papers "
+                "WHERE papers.id = translation_jobs.paper_id), access_scope)"
+            )
+        )
         # create_all skips indexes on existing tables — ensure they exist
         await conn.execute(
             text(

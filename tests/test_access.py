@@ -169,7 +169,13 @@ async def test_start_translation_update_filters_by_access_scope():
     background_tasks = MagicMock()
 
     with patch("app.api.papers._schedule_background_task") as mock_schedule:
-        response = await start_translation("abcd12345678", background_tasks, db, "team-a")
+        response = await start_translation(
+            "abcd12345678",
+            background_tasks,
+            db,
+            "team-a",
+            quality="fast",
+        )
 
     assert response["ok"] is True
     assert db.committed is True

@@ -8,6 +8,7 @@ The default adapter intentionally supports two common supplier contracts:
   return a JSON array of translated strings.
 * ``deepseek``: call DeepSeek's official OpenAI-compatible endpoint with
   ``deepseek-v4-pro`` by default.
+* ``anthropic``: call Anthropic's Messages endpoint and parse text content blocks.
 """
 
 from __future__ import annotations
@@ -480,7 +481,7 @@ class VendorTranslator(Translator):
         return singles
 
     def _translate_single_plain(self, text: str, reason: BaseException) -> str:
-        if self.mode not in {"deepseek", "openai-compatible"}:
+        if self.mode not in {"deepseek", "openai-compatible", "anthropic"}:
             raise TranslationError(
                 "Supplier JSON response was unusable and plain-text fallback is unsupported: %s"
                 % reason
@@ -494,7 +495,19 @@ class VendorTranslator(Translator):
             )
         if self.mode == "deepseek":
             return self._translate_deepseek_plain(text)
+        if self.mode == "anthropic":
+            return self._translate_anthropic_plain(text)
         return self._translate_openai_plain(text)
+
+    def _translate_anthropic_plain(self, text: str) -> str:
+        payload = {
+            "model": self.model or "claude-sonnet-5",
+            "system": single_translation_prompt(text),
+            "messages": [{"role": "user", "content": text}],
+            "max_tokens": self.max_output_tokens,
+        }
+        data = self._post_json(normalize_anthropic_messages_url(self.api_url), payload)
+        return coerce_plain_translation(extract_anthropic_message(data))
 
     def _translate_openai_plain(self, text: str) -> str:
         payload = {
@@ -534,6 +547,8 @@ class VendorTranslator(Translator):
             return self._translate_openai_compatible(chunk)
         if self.mode == "deepseek":
             return self._translate_deepseek(chunk)
+        if self.mode == "anthropic":
+            return self._translate_anthropic(chunk)
         raise TranslationError("Unsupported translation mode: %s" % self.mode)
 
     def _translate_generic(self, texts: Sequence[str]) -> List[str]:
@@ -602,13 +617,36 @@ class VendorTranslator(Translator):
         content = extract_openai_message(data)
         return parse_json_translations(content)
 
+    def _translate_anthropic(self, texts: Sequence[str]) -> List[str]:
+        prompt = translation_array_prompt_with_types(
+            self.block_types,
+            list(texts),
+            quality_retry=self.quality_retry,
+        )
+        payload = {
+            "model": self.model or "claude-sonnet-5",
+            "system": prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": json.dumps(list(texts), ensure_ascii=False),
+                }
+            ],
+            "max_tokens": self.max_output_tokens,
+        }
+        data = self._post_json(normalize_anthropic_messages_url(self.api_url), payload)
+        return parse_json_string_list(extract_anthropic_message(data))
+
     def _post_json(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        if self.api_key:
+        if self.api_key and self.mode == "anthropic":
+            headers["x-api-key"] = self.api_key
+            headers["anthropic-version"] = "2023-06-01"
+        elif self.api_key:
             auth_value = self.api_key
             if self.auth_scheme:
                 auth_value = "%s %s" % (self.auth_scheme, self.api_key)
@@ -737,6 +775,23 @@ def extract_openai_message(data: Dict[str, Any]) -> str:
     if isinstance(first.get("text"), str):
         return first["text"]
     raise TranslationError("OpenAI-compatible response has no message content")
+
+
+def extract_anthropic_message(data: Dict[str, Any]) -> str:
+    """Extract concatenated text blocks from an Anthropic Messages response."""
+    content = data.get("content")
+    if not isinstance(content, list):
+        raise TranslationError("Anthropic response has no content blocks")
+    parts = [
+        item["text"]
+        for item in content
+        if isinstance(item, dict)
+        and item.get("type") == "text"
+        and isinstance(item.get("text"), str)
+    ]
+    if not parts:
+        raise TranslationError("Anthropic response has no text content")
+    return "".join(parts)
 
 
 _TRANSLATION_RULES = (
@@ -946,6 +1001,15 @@ def normalize_deepseek_chat_url(api_url: str) -> str:
     if stripped == "https://api.deepseek.com/v1":
         return "https://api.deepseek.com/chat/completions"
     return stripped + "/chat/completions"
+
+
+def normalize_anthropic_messages_url(api_url: str) -> str:
+    stripped = api_url.rstrip("/")
+    if stripped.endswith("/messages"):
+        return stripped
+    if stripped.endswith("/v1"):
+        return stripped + "/messages"
+    return stripped + "/v1/messages"
 
 
 def chunked(items: Sequence[str], size: int) -> Iterable[Sequence[str]]:

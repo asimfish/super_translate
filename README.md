@@ -12,7 +12,8 @@ Super Translate is a web-based system for translating English academic papers in
 
 ## Features
 
-- **Smart Translation Engine** — Supports DeepSeek, Kimi K3, OpenAI, and Google Translate backends with automatic fallback
+- **Smart Translation Engine** — Supports DeepSeek, Kimi K3, OpenAI, Anthropic Claude, GLM, and Google Translate
+- **Per-user API Keys** — Encrypts each account's provider keys at rest and keeps them out of job files and API responses
 - **Layout Preservation** — Maintains original page dimensions, images, vector graphics, and text block positions
 - **Formula Protection** — Mathematical formulas, equations, and variables are preserved as-is
 - **Figure/Text Safety** — Preserves figure internals while translating captions and surrounding prose
@@ -47,18 +48,16 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-### 2. Configure API Key
+### 2. Configure Credential Encryption
 
 ```bash
-# Set your DeepSeek API key (default backend)
-export PAPER_CHINA_DEEPSEEK_API_KEY="your-api-key-here"
-
-# Or use OpenAI
-export PAPER_CHINA_OPENAI_API_KEY="your-openai-key"
-
-# Or use Kimi K3 (select "Kimi K3" in the reader toolbar)
-export PAPER_CHINA_MOONSHOT_API_KEY="your-moonshot-key"
+# Required before users can save provider keys in API 设置
+export PAPER_CHINA_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32 | tr '+/' '-_')"
 ```
+
+After login, open **API 设置** and enter the key for DeepSeek, Kimi, OpenAI,
+Anthropic, or GLM. Server-level provider key variables remain an optional
+backward-compatible fallback for the local administrator only.
 
 ### 3. Start the Server
 
@@ -88,6 +87,9 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 | `PAPER_CHINA_MOONSHOT_BASE_URL` | `https://api.moonshot.cn/v1` | Kimi OpenAI-compatible API base URL |
 | `PAPER_CHINA_KIMI_MODEL` | `kimi-k3` | Kimi model ID |
 | `PAPER_CHINA_OPENAI_API_KEY` | — | OpenAI API key |
+| `PAPER_CHINA_ANTHROPIC_API_KEY` | — | Local-administrator Anthropic API key fallback |
+| `PAPER_CHINA_GLM_API_KEY` | — | Local-administrator GLM API key fallback |
+| `PAPER_CHINA_CREDENTIAL_ENCRYPTION_KEY` | — | Base64url-encoded 32-byte key for per-user API credentials |
 | `PAPER_CHINA_TRANSLATION_ENGINE` | `native` | Translation engine (`native` or `pdf2zh`) |
 | `PAPER_CHINA_TRANSLATION_BACKEND` | `deepseek` | Default translation backend |
 | `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` | `1800` | Global timeout for each translation run |
@@ -100,6 +102,9 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 
 Kimi K3 always uses the native translation engine because its API fixes sampling
 parameters that the bundled pdf2zh OpenAI adapter overrides.
+
+Back up `PAPER_CHINA_CREDENTIAL_ENCRYPTION_KEY` with the database. If it is
+lost or rotated without migration, users must enter their provider keys again.
 
 Remote access is local-only by default unless `PAPER_CHINA_API_TOKEN` or
 `PAPER_CHINA_WORKSPACE_TOKENS` is set. When a token is configured, the web UI

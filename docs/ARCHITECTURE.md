@@ -30,3 +30,12 @@ Focused PDF fixtures lock individual defect classes. Golden-page suites cover
 font/platform variants. `benchmarks/classic20/manifest.json` defines the
 release benchmark across more than 20 papers and records license policy; only
 Creative Commons artifacts may be exposed on the public showcase.
+
+## Provider credentials
+
+Authenticated users configure DeepSeek, Kimi, OpenAI, Anthropic, or GLM under
+their own access scope. Keys are AES-GCM encrypted at rest, are never returned
+to the browser, and are passed to the isolated translation worker through stdin
+instead of the durable worker specification. Translation jobs persist their
+credential owner scope so restart recovery preserves tenant ownership. Provider
+base URLs are server-controlled. See [ADR-0002](adr/0002-user-scoped-provider-credentials.md).

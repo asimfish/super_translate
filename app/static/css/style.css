@@ -722,6 +722,85 @@ select:focus-visible {
   animation: toast-out 0.3s ease forwards;
 }
 
+/* User-scoped provider settings */
+.provider-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.62);
+}
+.provider-dialog {
+  width: min(880px, 96vw);
+  max-height: min(760px, 92vh);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+.provider-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.provider-dialog-header h2 {
+  font-size: 20px;
+  line-height: 1.3;
+}
+.provider-settings-user {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.provider-list {
+  display: grid;
+  gap: 8px;
+}
+.provider-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.85fr) minmax(180px, 1.5fr) minmax(150px, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+.provider-identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.provider-identity strong { font-size: 14px; }
+.provider-state {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.provider-state.configured { color: var(--success); }
+.provider-row input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  outline: none;
+  background: var(--bg-field);
+  color: var(--text);
+  font: inherit;
+}
+.provider-row input:focus { border-color: var(--accent); }
+.provider-row button:disabled { opacity: 0.45; cursor: not-allowed; }
+
 @keyframes toast-in {
   from { opacity: 0; transform: translateX(100px); }
   to { opacity: 1; transform: translateX(0); }
@@ -780,6 +859,14 @@ select:focus-visible {
   .reader-actions { width: 100%; justify-content: flex-start; }
   .translate-controls { width: 100%; }
   .quality-select { flex: 1 1 150px; }
+  .provider-modal { padding: 12px; }
+  .provider-dialog { padding: 16px; }
+  .provider-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .provider-identity,
+  .provider-key,
+  .provider-model { grid-column: 1 / -1; }
   .translation-progress {
     left: 16px;
     right: 16px;
