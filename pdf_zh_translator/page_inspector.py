@@ -1362,17 +1362,37 @@ def _display_alignment_issues(
             for block in source_role_blocks
         ):
             continue
+        exact_window = (
+            max(0.0, row[0]),
+            max(0.0, row[1] - 1.0),
+            min(page_width, row[2]),
+            row[3] + 1.0,
+        )
+        source_profile = original_ink.get().centroid_x(exact_window)
+        translated_profile = translated_ink.get().centroid_x(exact_window)
+        exact_drift = (
+            abs(source_profile - translated_profile)
+            if source_profile is not None and translated_profile is not None
+            else None
+        )
+        if exact_drift is not None and exact_drift <= 3.0:
+            continue
         observation_window = (
             max(0.0, row[0] - _DISPLAY_ALIGN_WINDOW_PAD_PT),
             row[1],
             min(page_width, row[2] + _DISPLAY_ALIGN_WINDOW_PAD_PT),
             row[3],
         )
-        source_profile = original_ink.get().centroid_x(observation_window)
-        translated_profile = translated_ink.get().centroid_x(observation_window)
-        if source_profile is None or translated_profile is None:
+        wide_source = original_ink.get().centroid_x(observation_window)
+        wide_translated = translated_ink.get().centroid_x(observation_window)
+        wide_drift = (
+            abs(wide_source - wide_translated)
+            if wide_source is not None and wide_translated is not None
+            else None
+        )
+        if wide_drift is None and exact_drift is None:
             continue
-        drift = abs(source_profile - translated_profile)
+        drift = wide_drift if wide_drift is not None else exact_drift
         if drift <= _DISPLAY_ALIGN_TOLERANCE_PT:
             continue
         issues.append(

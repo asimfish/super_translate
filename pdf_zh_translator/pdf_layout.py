@@ -6240,6 +6240,12 @@ def _translation_retains_source_prose_run(
             "\n",
             plain,
         )
+        plain = re.sub(
+            r"\b(?:BLEU|chrF|TER)(?:\+[A-Za-z0-9_.-]+){3,}\b",
+            "\n",
+            plain,
+            flags=re.IGNORECASE,
+        )
         plain = _without_structured_prompt_lists(plain)
         plain = re.sub(
             r"\b(?:pick|place|pull|push|on|inhand|under)\s*\([^()]{1,180}\)",
@@ -8040,6 +8046,7 @@ def prepare_translation_units(
     algorithm_regions: Dict[int, List[BBox]] = {}
     equation_table_regions: Dict[int, List[BBox]] = {}
     display_equation_regions: Dict[int, List[BBox]] = {}
+    rule_bounded_sample_regions: Dict[int, List[BBox]] = {}
     compute_preserved = preserve_graphics_text or preserved_regions_out is not None
     raw_blocks, gutter_rects = collect_text_blocks(
         document,
@@ -8098,6 +8105,9 @@ def prepare_translation_units(
         page_blocks = [b for b in blocks if b.page_index == page_index]
         classify_blocks(page_blocks, page_index, page_height, image_zones)
         _promote_run_in_academic_statement_bodies(page_blocks)
+        page_sample_regions = _rule_bounded_sample_table_regions(page, page_blocks)
+        if page_sample_regions:
+            rule_bounded_sample_regions[page_index] = page_sample_regions
         for registry in (equation_table_regions, display_equation_regions):
             if page_index in registry:
                 registry[page_index] = _regions_not_owned_by_formula_blocks(
@@ -8121,6 +8131,7 @@ def prepare_translation_units(
             page_table_regions = [
                 block.bbox for block in page_blocks if block.block_type == "table"
             ]
+            page_table_regions.extend(page_sample_regions)
             if page_table_regions:
                 table_regions_out[page_index] = list(
                     dict.fromkeys(page_table_regions)
@@ -8154,6 +8165,9 @@ def prepare_translation_units(
                     document[page_index],
                     page_blocks,
                 )
+            )
+            preserved_union.setdefault(page_index, []).extend(
+                rule_bounded_sample_regions.get(page_index, ())
             )
         for page_index, page_algorithm_regions in algorithm_regions.items():
             preserved_union.setdefault(page_index, []).extend(page_algorithm_regions)
@@ -9545,6 +9559,19 @@ def _merge_wrapped_formula_continuation_records(
     index = 0
     while index < len(records):
         current = records[index]
+        flowing_paragraph_end = _flow_inline_math_paragraph_sequence_end(records, index)
+        if flowing_paragraph_end is not None:
+            merged_records = records[index : flowing_paragraph_end + 1]
+            output.append(
+                _RawBlockRec(
+                    lines=_promote_stacked_plain_formula_fragments(
+                        [line for record in merged_records for line in record.lines]
+                    ),
+                    detached_inline_scripts=True,
+                )
+            )
+            index = flowing_paragraph_end + 1
+            continue
         fragmented_formula_end = _fragmented_inline_formula_record_sequence_end(
             records,
             index,
@@ -9684,6 +9711,99 @@ def _merge_wrapped_formula_continuation_records(
         output.append(current)
         index += 1
     return output
+
+
+def _flow_inline_math_paragraph_sequence_end(
+    records: Sequence[_RawBlockRec],
+    start: int,
+) -> Optional[int]:
+    """Join one prose paragraph fragmented into overlapping PDF text objects.
+
+    Tall fractions and summations are frequently emitted as side-by-side or
+    vertically overlapping records.  This recognizes the paragraph from its
+    reading-order continuity and source geometry, while stopping at structural
+    headings and numbered display equations.
+    """
+    if start < 0 or start + 1 >= len(records):
+        return None
+    first = records[start]
+    first_plain = " ".join(strip_sentinels(first.bare_text()).split())
+    first_width = first.bbox[2] - first.bbox[0]
+    first_words = len(_prose_words(first_plain))
+    first_math = sum(sentinel_char_count(line.text) for line in first.lines)
+    if (
+        first_width < 180.0
+        or first_words < 8
+        or sentence_final_text(first_plain)
+        or first_math > max(90, first_words * 3)
+        or not any(line_is_prose(line) for line in first.lines)
+        or any(split_bold_leadin_line(line) is not None for line in first.lines)
+        or any(line_looks_like_section_heading(line) for line in first.lines)
+        or any(
+            EQUATION_NUMBER_RE.fullmatch("".join(strip_sentinels(line.text).split()))
+            for line in first.lines
+        )
+    ):
+        return None
+
+    following = records[start + 1]
+    first_overlap = min(first.bbox[3], following.bbox[3]) - max(
+        first.bbox[1], following.bbox[1]
+    )
+    first_overlap_ratio = first_overlap / max(
+        1.0,
+        min(
+            first.bbox[3] - first.bbox[1],
+            following.bbox[3] - following.bbox[1],
+        ),
+    )
+    if first_overlap_ratio < 0.34:
+        return None
+
+    sequence_bottom = first.bbox[3]
+    total_words = first_words
+    total_math = first_math
+    saw_overlapping_record = False
+    for candidate_index in range(start + 1, min(len(records), start + 10)):
+        candidate = records[candidate_index]
+        if any(line_looks_like_section_heading(line) for line in candidate.lines):
+            break
+        if any(
+            EQUATION_NUMBER_RE.fullmatch("".join(strip_sentinels(line.text).split()))
+            for line in candidate.lines
+        ):
+            break
+        if (
+            candidate.bbox[1] < first.bbox[1] - 4.0
+            or candidate.bbox[1] > sequence_bottom + 4.0
+            or candidate.bbox[0] < first.bbox[0] - 8.0
+            or candidate.bbox[2] > first.bbox[2] + 8.0
+            or candidate.bbox[3] - first.bbox[1] > 230.0
+        ):
+            break
+        vertical_overlap = min(sequence_bottom, candidate.bbox[3]) - max(
+            first.bbox[1], candidate.bbox[1]
+        )
+        horizontal_overlap = min(first.bbox[2], candidate.bbox[2]) - max(
+            first.bbox[0], candidate.bbox[0]
+        )
+        side_by_side = bool(
+            vertical_overlap > 0.0
+            and candidate.bbox[0] <= first.bbox[2] + 4.0
+            and candidate.bbox[2] >= first.bbox[0] - 4.0
+        )
+        if horizontal_overlap <= 0.0 and not side_by_side:
+            break
+        saw_overlapping_record = saw_overlapping_record or candidate.bbox[1] < sequence_bottom
+        candidate_plain = " ".join(strip_sentinels(candidate.bare_text()).split())
+        total_words += len(_prose_words(candidate_plain))
+        total_math += sum(sentinel_char_count(line.text) for line in candidate.lines)
+        sequence_bottom = max(sequence_bottom, candidate.bbox[3])
+        if sentence_final_text(candidate_plain):
+            if saw_overlapping_record and total_words >= 24 and total_math >= 8:
+                return candidate_index
+            break
+    return None
 
 
 def _fragmented_inline_formula_record_sequence_end(
@@ -11208,6 +11328,129 @@ def _formatted_dataset_example_region_bboxes(
             )
         )
     return regions
+
+
+def _rule_bounded_sample_table_regions(
+    page: object,
+    blocks: Sequence[TextBlock],
+) -> List[BBox]:
+    """Protect sample tables whose rows are separated only by long rules.
+
+    Long-form prompt and generation appendices often use booktabs-style
+    horizontal rules without a ``Table N`` caption or vertical grid.  Their
+    payload is verbatim evaluation data, not paper prose.  Require a repeated,
+    aligned rule family and split it at real section headings so ordinary page
+    rules and prose between adjacent tables remain translatable.
+    """
+    page_width = float(page.rect.width)
+    min_rule_width = max(180.0, page_width * 0.55)
+    rules: List[BBox] = []
+    for drawing in _page_drawings(page):
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        rule = (
+            float(rect.x0),
+            float(rect.y0),
+            float(rect.x1),
+            float(rect.y1),
+        )
+        if rule[2] - rule[0] >= min_rule_width and rule[3] - rule[1] <= 2.5:
+            rules.append(rule)
+    if len(rules) < 3:
+        return []
+
+    families: List[List[BBox]] = []
+    for rule in sorted(rules, key=lambda item: (item[0], item[2], item[1])):
+        for family in families:
+            median_left = statistics.median(item[0] for item in family)
+            median_right = statistics.median(item[2] for item in family)
+            if abs(rule[0] - median_left) <= 8.0 and abs(rule[2] - median_right) <= 8.0:
+                family.append(rule)
+                break
+        else:
+            families.append([rule])
+
+    regions: List[BBox] = []
+    for family in families:
+        ordered = sorted(family, key=lambda item: item[1])
+        if len(ordered) < 3:
+            continue
+        segments: List[List[BBox]] = [[]]
+        for previous, rule in zip(ordered, ordered[1:]):
+            gap_headings = [
+                block
+                for block in blocks
+                if previous[3] + 3.0 < block.bbox[1]
+                and block.bbox[3] < rule[1] - 3.0
+                and re.match(
+                    r"^\s*(?:[A-Z]\.)?\d+(?:\.\d+)+\s+[A-Z]",
+                    " ".join(strip_sentinels(block.text).split()),
+                )
+            ]
+            segments[-1].append(previous)
+            if gap_headings:
+                segments.append([])
+        segments[-1].append(ordered[-1])
+
+        for segment in segments:
+            if len(segment) < 3:
+                continue
+            x0 = min(rule[0] for rule in segment)
+            x1 = max(rule[2] for rule in segment)
+            y0 = min(rule[1] for rule in segment)
+            y1 = max(rule[3] for rule in segment)
+            if y1 - y0 < 40.0:
+                continue
+            contents = [
+                block
+                for block in blocks
+                if block.block_type != "caption"
+                and x0 - 4.0 <= (block.bbox[0] + block.bbox[2]) / 2.0 <= x1 + 4.0
+                and y0 <= (block.bbox[1] + block.bbox[3]) / 2.0 <= y1
+            ]
+            if len(contents) < 2:
+                continue
+            caption_anchored = any(
+                _TABLE_CAPTION_RE.match(strip_sentinels(block.text))
+                and block.bbox[0] < x1
+                and block.bbox[2] > x0
+                and (
+                    0.0 <= y0 - block.bbox[3] <= _TABLE_CAPTION_MAX_ABOVE_GAP
+                    or 0.0 <= block.bbox[1] - y1 <= _TABLE_CAPTION_MAX_BELOW_GAP
+                )
+                for block in blocks
+            )
+            if caption_anchored:
+                # Numbered academic tables already have stronger cell/grid
+                # ownership and rule QA. This fallback is only for uncatalogued
+                # prompt/sample payloads.
+                continue
+            content_text = " ".join(strip_sentinels(block.text) for block in contents)
+            sample_cue = bool(
+                re.search(r"\buse\s+case\s+example\b", content_text, re.IGNORECASE)
+                or re.search(
+                    r"\bgenerated\s+(?:poem|text|sample|completion|response|output)\b",
+                    content_text,
+                    re.IGNORECASE,
+                )
+                or (
+                    re.search(r"\bcontext\s*(?:→|->|:)\s*", content_text, re.IGNORECASE)
+                    and re.search(
+                        r"\b(?:generated|completion|response|output)\b",
+                        content_text,
+                        re.IGNORECASE,
+                    )
+                )
+                or (
+                    re.search(r"\bhuman\s*:", content_text, re.IGNORECASE)
+                    and re.search(r"\b(?:AI|assistant)\s*:", content_text, re.IGNORECASE)
+                )
+            )
+            if not sample_cue:
+                continue
+            regions.append((x0, y0, x1, y1))
+    return list(dict.fromkeys(regions))
 
 
 def _vector_table_region_bboxes(
@@ -14498,7 +14741,11 @@ def line_is_prose(line: _LineRec) -> bool:
             re.IGNORECASE,
         )
     )
-    if strong_mixed_prose or metric_comparison_prose or short_formula_connector:
+    if (
+        strong_mixed_prose
+        or metric_comparison_prose
+        or short_formula_connector
+    ):
         return True
     if len(words) < 3 and not has_formula_tail:
         return has_short_fragment
@@ -15141,9 +15388,27 @@ def _record_is_flowing_inline_formula_paragraph(record: _RawBlockRec) -> bool:
     prose_lines = [line for line in record.lines if line_is_prose(line)]
     math_lines = [line for line in record.lines if not line_is_prose(line)]
     plain = strip_sentinels(record.bare_text())
+    first_plain = " ".join(strip_sentinels(record.lines[0].text).split()).strip()
+    starts_with_run_in_label = bool(
+        record.detached_inline_scripts
+        and len(record.lines) >= 2
+        and first_plain.endswith(":")
+        and 1 <= len(_prose_words(first_plain)) <= 5
+        and record.lines[0].spans
+        and all(
+            span_is_bold(span)
+            for span in record.lines[0].spans
+            if normalize_span_text(span.get("text", "")).strip()
+        )
+        and lines_share_y_band(record.lines[0], record.lines[1])
+        and -2.0 <= record.lines[1].bbox[0] - record.lines[0].bbox[2] <= 18.0
+    )
     return bool(
         prose_lines
-        and record.lines[0] is prose_lines[0]
+        and (
+            record.lines[0] is prose_lines[0]
+            or starts_with_run_in_label
+        )
         and len(prose_lines) >= 3
         and len(prose_lines) / len(record.lines)
         >= (0.3 if record.detached_inline_scripts else 0.6)
@@ -15928,8 +16193,46 @@ def _fragmented_inline_math_paragraph_block(
 
     prose_lines = [line for line in record.lines if line_is_prose(line)]
     math_fragments = [line for line in record.lines if not line_is_prose(line)]
+    formula_bearing_lines = [line for line in record.lines if line.math_run_bboxes]
     plain = strip_sentinels(record.bare_text())
     ordinary_flowing_inline = _record_is_flowing_inline_formula_paragraph(record)
+    ordinary_inline_sentence = bool(
+        len(record.lines) >= 3
+        and len(prose_lines) >= 3
+        and len(formula_bearing_lines) >= 2
+        and len(_prose_words(plain)) >= 20
+        and sum(plain.count(mark) for mark in ".!?") >= 1
+        and any(
+            not line_is_prose(line)
+            and len(line.math_run_bboxes) >= 2
+            and len(_prose_words(_text_outside_sentinels(line.text))) >= 5
+            and re.search(
+                r"\b(?:train(?:s|ed|ing)?|represent(?:s|ed|ing)?|corresponds?)\b",
+                _text_outside_sentinels(line.text),
+                re.IGNORECASE,
+            )
+            for line in record.lines
+        )
+        and not any(
+            EQUATION_NUMBER_RE.fullmatch(
+                "".join(strip_sentinels(line.text).split())
+            )
+            for line in record.lines
+        )
+    )
+    formula_explanation_fragment = bool(
+        equation_record
+        and re.match(r"^\s*(?:Here|Where)\b", " ".join(plain.split()), re.IGNORECASE)
+        and len(prose_lines) >= 2
+        and len(formula_bearing_lines) >= 2
+        and len(_prose_words(plain)) >= 7
+        and not any(
+            EQUATION_NUMBER_RE.fullmatch(
+                "".join(strip_sentinels(line.text).split())
+            )
+            for line in record.lines
+        )
+    )
     short_derivation = bool(
         re.match(
             r"^\s*(?:This result can be obtained|Thus we can get|Knowing)\b",
@@ -15978,12 +16281,14 @@ def _fragmented_inline_math_paragraph_block(
         and not long_prose_majority
         and not academic_formula_statement
         and not ordinary_flowing_inline
+        and not ordinary_inline_sentence
     ):
         return None
     if (
         (
             len(prose_lines) < (1 if short_derivation else 2)
             and not prose_rich_equation_record
+            and not formula_explanation_fragment
         )
         or (not short_derivation and (
             sum(
@@ -16001,16 +16306,26 @@ def _fragmented_inline_math_paragraph_block(
             / len(record.lines)
             < 0.3
         ))
-        or not math_fragments
+        or (not math_fragments and not ordinary_inline_sentence)
     ):
         return None
 
     minimum_prose_words = (
-        6 if short_derivation else 12 if prose_rich_equation_record else 20
+        6
+        if short_derivation
+        else 7
+        if formula_explanation_fragment
+        else 12
+        if prose_rich_equation_record
+        else 20
     )
     if len(_prose_words(plain)) < minimum_prose_words:
         return None
-    if not record.detached_inline_scripts and sum(plain.count(mark) for mark in ".!?") < 1:
+    if (
+        not record.detached_inline_scripts
+        and not formula_explanation_fragment
+        and sum(plain.count(mark) for mark in ".!?") < 1
+    ):
         return None
     if any(
         EQUATION_NUMBER_RE.fullmatch("".join(strip_sentinels(line.text).split()))
@@ -16026,6 +16341,7 @@ def _fragmented_inline_math_paragraph_block(
                 long_prose_majority
                 or academic_formula_statement
                 or prose_rich_equation_record
+                or ordinary_inline_sentence
             )
             and sentinel_char_count(line.text) > 0
             and len(_prose_words(_text_outside_sentinels(line.text))) >= 3
@@ -16041,7 +16357,7 @@ def _fragmented_inline_math_paragraph_block(
     block = paragraph.flush(page_index)
     if block is None:
         return None
-    block.block_type = "body"
+    block.block_type = "formula_prose" if formula_explanation_fragment else "body"
     block.no_merge = bool(
         not record.detached_inline_scripts
         and not (
@@ -16056,6 +16372,8 @@ def _fragmented_inline_math_paragraph_block(
         or academic_formula_statement
         or prose_rich_equation_record
         or ordinary_flowing_inline
+        or ordinary_inline_sentence
+        or formula_explanation_fragment
     ):
         block.flow_inline_math = True
     return block

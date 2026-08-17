@@ -513,3 +513,41 @@ role-relative font shrink, untranslated prose, and translated content leaking
 into algorithm regions. Existing deliberately corrupted OTF and GuidedVLA
 fixtures remain the non-target controls, so a fix cannot pass by weakening the
 detectors.
+
+## Classic20 final-r1 strict-gate replays
+
+These excerpts freeze the seven papers rejected by the isolated
+`classic20_final_r1_9601f54` run on engine commit
+`9601f54d72aa39e9255f81e175b65f374b42eed3`. The source PDFs were fetched from
+arXiv on 2026-08-17 and declare the arXiv non-exclusive distribution license.
+The paired `*_bad_translated.pdf` files are test-only outputs from that same
+round; they are not release artifacts.
+
+| fixture | title / official source | pages | full source SHA256 | fixture SHA256 | bad output SHA256 |
+|---|---|---:|---|---|---|
+| `classic20_final_adam_p3_p5_p9.pdf` | [Adam: A Method for Stochastic Optimization](https://arxiv.org/abs/1412.6980) | 3, 5, 9 | `eab9c73ae2ceda884b94830bda99312254bac4806f6c9f045cbab90721ecda31` | `4458785a479c5a571840de16c041ee76e13bd5a816d7d96c734e395466a20471` | `61b540ccf39e17523ae6925199c92050433bb2b196ffd76800e8606a9711585f` |
+| `classic20_final_ddpm_p8.pdf` | [Denoising Diffusion Probabilistic Models](https://arxiv.org/abs/2006.11239) | 8 | `aee5e07a802e8dfd2a386374c94fd61d1d056cb7e1e0fec4f28e8120ff5d8505` | `e611073dd93b8e1f80ba9dfb26372ae86473efcd1c3b18dab2b1ae20494099a2` | `775a088d469f63ac39d2f83861a9ab28ebd1322592ba7c70104bcff431080d1b` |
+| `classic20_final_latent_p4.pdf` | [High-Resolution Image Synthesis with Latent Diffusion Models](https://arxiv.org/abs/2112.10752) | 4 | `46ede043a8dc07ca1f0f445620523fe1ad8b2436bd83856a3835612a47e9f79e` | `09b1e151a70cf48e00078c16fda0007c5bba1cecde2b26cf041c65193244e63a` | `58bc11f5c7e8e6198748a138b1299aafd99b45a5695d7fa2885a19286701f745` |
+| `classic20_final_resnet_p3.pdf` | [Deep Residual Learning for Image Recognition](https://arxiv.org/abs/1512.03385) | 3 | `1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a` | `70f0c255549c3f601f23d19d5eeef23e1c83a3116705f374e70bb7211342523a` | `38221072905fafcaab39b838b9a0b3ff4b4185af6485b29c0ff5f34d976cdbae` |
+| `classic20_final_bahdanau_p3.pdf` | [Neural Machine Translation by Jointly Learning to Align and Translate](https://arxiv.org/abs/1409.0473) | 3 | `84801c8410da51b449d379d2fa4939a416123f2c93991077a680f863026022a7` | `3f157e4307a921956f6438861fff3833c9ed6c72ff617f77d05cb79d43360fff` | `001def9837c36f4e7e578dea8f5d30ee740da8d1ac15af8c3b28426ef9e75498` |
+| `classic20_final_gpt3_p15_p49.pdf` | [Language Models are Few-Shot Learners](https://arxiv.org/abs/2005.14165) | 15, 49 | `97fd272f1fdfc18677462d0292f5fbf26ca86b4d1b485c2dba03269b643a0e83` | `ae8d127d943f46cfa8d54de42fe2bf7573d47a133aee6d6c69c215f618833a88` | `1a9f9fb4b19acdecedf3fd57adc589c85e0fabc95be7f49c143344d1d5211a89` |
+| `classic20_final_instructgpt_p30_p31.pdf` | [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155) | 30-31 | `c1984bb50a5b90fddb895fdc3a0f72e5bc977148c9f63ef6040cbe7a3e1f0d98` | `11cb580e286d051a2736cba8c8058b34a1d774c362b47e1041299db4331660a5` | `2ad36d2deba556313ab7e172c8f52ed64456d1688527da8004a925e2130de09d` |
+
+Extraction command (the translated pair uses the same page numbers and
+command against the frozen round output):
+
+```python
+import fitz
+
+source = fitz.open("paper.pdf")
+fixture = fitz.open()
+for page_number in PAGES:
+    fixture.insert_pdf(source, from_page=page_number - 1, to_page=page_number - 1)
+fixture.save("tests/fixtures/fixture.pdf", garbage=4, deflate=True, clean=False)
+```
+
+The fixtures cover continuous paragraph reading order around inline formula
+towers, rule-bounded sample tables without numbered captions, translated
+technical signatures in captions, preserved table payloads, and false display
+formula alignment alerts. They are limited to the pages required for those
+regressions and are retained under fair-use test-fixture scope.

@@ -5032,3 +5032,185 @@ def test_source_unit_qa_flags_short_formula_adjacent_phrase():
         block,
         "A key property is that we can",
     )
+
+
+def test_classic20_final_adam_formula_paragraphs_are_continuous_units():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("classic20_final_adam_p3_p5_p9.pdf")
+
+    page_three = [
+        block
+        for block in blocks
+        if block.page_index == 0
+        and (
+            "otherwise. The first case" in strip_sentinels(block.text)
+            or "effective magnitude of the steps" in strip_sentinels(block.text)
+        )
+    ]
+    assert len(page_three) == 1
+    assert "which cancel out" in strip_sentinels(page_three[0].text)
+    assert page_three[0].flow_inline_math
+
+    page_five = [
+        block
+        for block in blocks
+        if block.page_index == 1
+        and (
+            "AdaGrad:" in strip_sentinels(block.text)
+            or "infinitely large parameter updates" in strip_sentinels(block.text)
+        )
+    ]
+    assert len(page_five) == 1
+    assert "basic version updates parameters" in strip_sentinels(page_five[0].text)
+    assert "direct correspondence" in strip_sentinels(page_five[0].text)
+    assert page_five[0].flow_inline_math
+
+    page_nine = [
+        block
+        for block in blocks
+        if block.page_index == 2
+        and (
+            "Since the last iterate is noisy" in strip_sentinels(block.text)
+            or "Initalization bias can again" in strip_sentinels(block.text)
+        )
+    ]
+    assert len(page_nine) == 1
+    assert "exponential moving average" in strip_sentinels(page_nine[0].text)
+    assert page_nine[0].flow_inline_math
+
+
+def test_classic20_final_ddpm_formula_sentence_is_one_reading_order_unit():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    candidates = [
+        block
+        for block in _unit_blocks("classic20_final_ddpm_p8.pdf")
+        if "fully expressive conditional distribution" in strip_sentinels(block.text)
+        or "copy coordinates" in strip_sentinels(block.text)
+        or "training an autoregressive model" in strip_sentinels(block.text)
+    ]
+
+    assert len(candidates) == 1
+    plain = " ".join(strip_sentinels(candidates[0].text).split())
+    assert "minimizing" in plain
+    assert "copy coordinates" in plain
+    assert "training an autoregressive model" in plain
+    assert candidates[0].flow_inline_math
+
+
+def test_classic20_final_latent_formula_explanation_stays_translatable():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    candidates = [
+        block
+        for block in _unit_blocks("classic20_final_latent_p4.pdf")
+        if "denotes a (flattened) intermediate" in strip_sentinels(block.text)
+        or strip_sentinels(block.text).lstrip().startswith("Here,")
+    ]
+
+    assert len(candidates) == 1
+    plain = " ".join(strip_sentinels(candidates[0].text).split())
+    assert plain.startswith("Here,")
+    assert "representation of the UNet" in plain
+    assert candidates[0].flow_inline_math
+
+
+def test_classic20_final_rule_bounded_sample_tables_are_preserved():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    gpt_blocks = _unit_blocks("classic20_final_gpt3_p15_p49.pdf")
+    gpt_page_49 = [
+        " ".join(strip_sentinels(block.text).split())
+        for block in gpt_blocks
+        if block.page_index == 1
+    ]
+    assert any(text.startswith("Figure F.1:") for text in gpt_page_49)
+    assert not any("Generated Poem" in text for text in gpt_page_49)
+    assert not any("The sun was all we had" in text for text in gpt_page_49)
+
+    instruct_blocks = _unit_blocks("classic20_final_instructgpt_p30_p31.pdf")
+    page_30 = [
+        " ".join(strip_sentinels(block.text).split())
+        for block in instruct_blocks
+        if block.page_index == 0
+    ]
+    page_31 = [
+        " ".join(strip_sentinels(block.text).split())
+        for block in instruct_blocks
+        if block.page_index == 1
+    ]
+    assert any(text.startswith("Next, we list") for text in page_30)
+    assert any("Illustrative user prompts" in text for text in page_30)
+    assert not any("Summarize this for a second-grade student" in text for text in page_30)
+    assert not any("indie movie ideas" in text for text in page_30)
+    assert not any("list of companies and the categories" in text for text in page_31)
+    assert not any("conversation with an AI assistant" in text for text in page_31)
+
+
+def test_rule_bounded_sample_detection_does_not_swallow_header_rule_body(tmp_path):
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    path = tmp_path / "ordinary_header_rule.pdf"
+    document = fitz.open()
+    page = document.new_page(width=612, height=792)
+    page.insert_text((72, 54), "Published as a conference paper at ICLR 2025", fontsize=8)
+    page.draw_line((60, 72), (552, 72), color=(0, 0, 0), width=0.7)
+    page.insert_text(
+        (72, 112),
+        "This ordinary body paragraph explains the experimental setup and must be translated.",
+        fontsize=10,
+    )
+    document.save(path)
+    document.close()
+
+    source = fitz.open(path)
+    try:
+        units, _, _ = prepare_translation_units(
+            source,
+            preserve_graphics_text=True,
+        )
+    finally:
+        source.close()
+
+    texts = [" ".join(strip_sentinels(block.text).split()) for block, _, _ in units]
+    assert any(text.startswith("This ordinary body paragraph") for text in texts)
+
+
+def test_classic20_final_damaged_sample_tables_are_rejected_by_qa():
+    cases = (
+        (
+            "classic20_final_gpt3_p15_p49.pdf",
+            "classic20_final_gpt3_p15_p49_bad_translated.pdf",
+            2,
+        ),
+        (
+            "classic20_final_instructgpt_p30_p31.pdf",
+            "classic20_final_instructgpt_p30_p31_bad_translated.pdf",
+            1,
+        ),
+    )
+    for source, translated, damaged_page in cases:
+        issues = verify_translation_issues(FIXTURES / source, FIXTURES / translated)
+        assert any(
+            issue.page == damaged_page
+            and issue.code in {"preserved_text_changed", "preserved_ink_mismatch"}
+            for issue in issues
+        )
+        assert not any(
+            issue.page == 1 and issue.code == "untranslated_english"
+            for issue in issues
+        )
+
+
+@pytest.mark.parametrize(
+    "stem",
+    ("classic20_final_resnet_p3", "classic20_final_bahdanau_p3"),
+)
+def test_classic20_final_unchanged_display_formulas_are_not_misaligned(stem):
+    issues = verify_translation_issues(
+        FIXTURES / f"{stem}.pdf",
+        FIXTURES / f"{stem}_bad_translated.pdf",
+    )
+
+    assert not [issue for issue in issues if issue.code == "display_formula_misaligned"]
