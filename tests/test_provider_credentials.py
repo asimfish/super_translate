@@ -285,6 +285,93 @@ def test_curated_model_catalog_always_contains_provider_defaults():
         assert spec.default_model in curated_provider_models(provider)
 
 
+def test_curated_model_catalog_matches_verified_official_translation_models():
+    from app.services.provider_model_catalog import curated_provider_models
+
+    expected = {
+        "deepseek": (
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+        ),
+        "kimi": (
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "kimi-k2.7-code-highspeed",
+            "kimi-k2.6",
+        ),
+        "openai": (
+            "gpt-5.6",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.2",
+            "gpt-5.1",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-4o",
+            "gpt-4o-mini",
+        ),
+        "anthropic": (
+            "claude-fable-5",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5",
+        ),
+        "glm": (
+            "glm-5.2",
+            "glm-5.1",
+            "glm-5-turbo",
+            "glm-5",
+            "glm-4.7",
+            "glm-4.7-flash",
+            "glm-4.7-flashx",
+            "glm-4.6",
+            "glm-4.5-air",
+            "glm-4.5-airx",
+            "glm-4.5-flash",
+            "glm-4-flash-250414",
+            "glm-4-flashx-250414",
+        ),
+    }
+
+    assert {
+        provider: curated_provider_models(provider) for provider in expected
+    } == expected
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "expected"),
+    [
+        ("deepseek", "deepseek-v4-pro", True),
+        ("deepseek", "deepseek-chat", False),
+        ("deepseek", "deepseek-reasoner", False),
+        ("kimi", "kimi-k3", True),
+        ("kimi", "kimi-k2.7-code-highspeed", True),
+        ("kimi", "kimi-k2.6", True),
+        ("kimi", "kimi-k2.5", False),
+        ("kimi", "kimi-k2-0905-preview", False),
+        ("kimi", "moonshot-v1-128k", False),
+        ("openai", "gpt-5.2", True),
+        ("openai", "gpt-5.6-terra", True),
+        ("openai", "gpt-4.1-mini", True),
+        ("openai", "gpt-5.1-codex", False),
+        ("openai", "gpt-5-chat-latest", False),
+        ("openai", "o3-deep-research", False),
+        ("openai", "gpt-audio", False),
+        ("glm", "glm-4.7-flashx", True),
+        ("glm", "glm-5v-turbo", False),
+        ("glm", "glm-ocr", False),
+    ],
+)
+def test_dynamic_model_filter_keeps_translation_models_only(provider, model, expected):
+    from app.services.provider_model_catalog import _is_translation_model
+
+    assert _is_translation_model(provider, model) is expected
+
+
 def test_provider_model_discovery_uses_vendor_auth_and_filters_non_text_models():
     from app.services.provider_model_catalog import fetch_provider_models
 

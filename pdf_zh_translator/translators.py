@@ -582,16 +582,25 @@ class VendorTranslator(Translator):
 
     def _apply_openai_compatible_model_constraints(self, payload: Dict[str, Any]) -> None:
         """Apply model-specific request constraints without changing other providers."""
-        if not (self.model or "").lower().startswith("kimi-k3"):
+        model = (self.model or "").lower()
+        if model.startswith("kimi-"):
+            # Current Kimi models fix their sampling values server-side and use
+            # the replacement Chat Completions output-budget field.
+            payload.pop("temperature", None)
+            max_tokens = payload.pop("max_tokens", None)
+            if max_tokens is not None:
+                payload["max_completion_tokens"] = max_tokens
+            if model.startswith("kimi-k3"):
+                payload["reasoning_effort"] = "max"
+            elif model.startswith("kimi-k2.6"):
+                payload["thinking"] = {"type": "disabled"}
             return
-        # Kimi K3 fixes its sampling values server-side and rejects temperature,
-        # top_p, and penalty overrides. Its completion budget uses the current
-        # OpenAI-compatible max_completion_tokens field.
-        payload.pop("temperature", None)
-        max_tokens = payload.pop("max_tokens", None)
-        if max_tokens is not None:
-            payload["max_completion_tokens"] = max_tokens
-        payload["reasoning_effort"] = "max"
+
+        if re.match(r"^gpt-5(?:[.-]|$)", model):
+            payload.pop("temperature", None)
+            max_tokens = payload.pop("max_tokens", None)
+            if max_tokens is not None:
+                payload["max_completion_tokens"] = max_tokens
 
     def _translate_deepseek(self, texts: Sequence[str]) -> List[str]:
         prompt = translation_array_prompt_with_types(

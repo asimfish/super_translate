@@ -22,10 +22,48 @@ _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
 # the models actually available to the current provider account.
 _CURATED_MODELS: dict[str, tuple[str, ...]] = {
     "deepseek": ("deepseek-v4-pro", "deepseek-v4-flash"),
-    "kimi": ("kimi-k3",),
-    "openai": ("gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1"),
-    "anthropic": ("claude-sonnet-5",),
-    "glm": ("glm-5.2", "glm-5-turbo", "glm-4.7"),
+    "kimi": (
+        "kimi-k3",
+        "kimi-k2.7-code",
+        "kimi-k2.7-code-highspeed",
+        "kimi-k2.6",
+    ),
+    "openai": (
+        "gpt-5.6",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.2",
+        "gpt-5.1",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "gpt-4o",
+        "gpt-4o-mini",
+    ),
+    "anthropic": (
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+    ),
+    "glm": (
+        "glm-5.2",
+        "glm-5.1",
+        "glm-5-turbo",
+        "glm-5",
+        "glm-4.7",
+        "glm-4.7-flash",
+        "glm-4.7-flashx",
+        "glm-4.6",
+        "glm-4.5-air",
+        "glm-4.5-airx",
+        "glm-4.5-flash",
+        "glm-4-flash-250414",
+        "glm-4-flashx-250414",
+    ),
 }
 
 
@@ -62,7 +100,7 @@ def curated_provider_models(provider: str) -> tuple[str, ...]:
     """Return deterministic fallback models, always including the default."""
     normalized = validate_provider(provider)
     default = PROVIDER_SPECS[normalized].default_model
-    return tuple(dict.fromkeys((default, *_CURATED_MODELS.get(normalized, ()))))
+    return tuple(dict.fromkeys((*_CURATED_MODELS.get(normalized, ()), default)))
 
 
 def _is_translation_model(provider: str, model: str) -> bool:
@@ -72,24 +110,51 @@ def _is_translation_model(provider: str, model: str) -> bool:
     if provider == "anthropic":
         return lowered.startswith("claude-")
     if provider == "deepseek":
-        return lowered.startswith("deepseek-")
+        retired = {"deepseek-chat", "deepseek-reasoner"}
+        return lowered.startswith("deepseek-") and lowered not in retired
     if provider == "kimi":
-        return lowered.startswith(("kimi-", "moonshot-"))
+        retired = {"kimi-k2.5", "kimi-latest", "kimi-thinking-preview"}
+        return (
+            lowered.startswith("kimi-")
+            and lowered not in retired
+            and not lowered.startswith("kimi-k2-")
+        )
     if provider == "glm":
-        excluded = ("embedding", "rerank", "ocr", "asr", "tts", "image", "video")
-        return lowered.startswith("glm-") and not any(part in lowered for part in excluded)
+        excluded = (
+            "embedding",
+            "rerank",
+            "ocr",
+            "asr",
+            "tts",
+            "image",
+            "video",
+            "vision",
+        )
+        vision_model = re.match(r"^glm-[0-9]+(?:\.[0-9]+)?v(?:-|$)", lowered)
+        return (
+            lowered.startswith("glm-")
+            and vision_model is None
+            and not any(part in lowered for part in excluded)
+        )
     if provider == "openai":
         excluded = (
             "audio",
+            "chat-latest",
+            "chatgpt",
+            "codex",
+            "deep-research",
             "embedding",
             "image",
+            "instruct",
+            "preview",
+            "pro",
             "realtime",
             "search",
             "transcribe",
             "tts",
             "whisper",
         )
-        return lowered.startswith(("gpt-", "o1", "o3", "o4")) and not any(
+        return lowered.startswith("gpt-") and not any(
             part in lowered for part in excluded
         )
     return False
