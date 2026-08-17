@@ -253,6 +253,19 @@ const api = {
     if (!res.ok) throw new Error(await errorDetail(res, 'API 配置加载失败'));
     return res.json();
   },
+  async listProviderModels() {
+    const res = await apiFetch('/api/provider-credentials/models');
+    if (!res.ok) throw new Error(await errorDetail(res, '模型列表加载失败'));
+    return res.json();
+  },
+  async refreshProviderModels(provider) {
+    const res = await apiFetch(
+      `/api/provider-credentials/models/${encodeURIComponent(provider)}/refresh`,
+      { method: 'POST' }
+    );
+    if (!res.ok) throw new Error(await errorDetail(res, '模型列表更新失败'));
+    return res.json();
+  },
   async saveProviderCredential(provider, payload) {
     const res = await apiFetch(`/api/provider-credentials/${encodeURIComponent(provider)}`, {
       method: 'PUT',
@@ -337,11 +350,38 @@ function renderProviderCredentials(statuses) {
   }
 }
 
+function renderProviderModelCatalogs(catalogs) {
+  for (const catalog of catalogs) {
+    const row = document.querySelector(`.provider-row[data-provider="${catalog.provider}"]`);
+    if (!row) continue;
+    const select = row.querySelector('.provider-model');
+    if (!select) continue;
+    const selected = catalog.selected_model || select.value || catalog.default_model;
+    const models = [...new Set([selected, ...(catalog.models || [])].filter(Boolean))];
+    select.replaceChildren(...models.map(model => {
+      const option = document.createElement('option');
+      option.value = model;
+      option.textContent = model;
+      return option;
+    }));
+    select.value = selected;
+    const refresh = row.querySelector('.provider-model-refresh');
+    if (refresh) {
+      refresh.title = catalog.warning || `${catalog.label} 模型列表：${catalog.source}`;
+    }
+  }
+}
+
 async function refreshProviderCredentials() {
   const error = document.getElementById('provider-settings-error');
   if (error) error.textContent = '';
   try {
-    renderProviderCredentials(await api.listProviderCredentials());
+    const [catalogs, statuses] = await Promise.all([
+      api.listProviderModels(),
+      api.listProviderCredentials(),
+    ]);
+    renderProviderModelCatalogs(catalogs);
+    renderProviderCredentials(statuses);
   } catch (err) {
     if (error) error.textContent = err.message;
   }
@@ -371,6 +411,29 @@ async function saveProviderCredential(e) {
     keyInput.value = '';
     renderProviderCredentials([status]);
     toastSuccess(`${status.label} API 配置已保存`);
+    api.refreshProviderModels(provider)
+      .then(catalog => {
+        renderProviderModelCatalogs([catalog]);
+        if (catalog.warning) toastError(catalog.warning);
+      })
+      .catch(err => toastError(err.message));
+  } catch (err) {
+    toastError(err.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function refreshProviderModelsForRow(e) {
+  const row = e.target.closest('.provider-row');
+  if (!row) return;
+  const button = e.target;
+  button.disabled = true;
+  try {
+    const catalog = await api.refreshProviderModels(row.dataset.provider);
+    renderProviderModelCatalogs([catalog]);
+    if (catalog.warning) toastError(catalog.warning);
+    else toastSuccess(`${catalog.label} 模型列表已更新`);
   } catch (err) {
     toastError(err.message);
   } finally {
@@ -2356,6 +2419,7 @@ const actionHandlers = {
   'show-provider-settings': showProviderSettings,
   'hide-provider-settings': hideProviderSettings,
   'save-provider-credential': saveProviderCredential,
+  'refresh-provider-models': refreshProviderModelsForRow,
   'delete-provider-credential': deleteProviderCredential,
   'toggle-reader-mode': toggleReaderMode,
   'batch-translate': batchTranslate,

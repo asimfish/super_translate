@@ -6,6 +6,9 @@ import asyncio
 import base64
 import json
 import os
+import threading
+import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -264,9 +267,206 @@ def test_ui_exposes_user_provider_settings_without_key_echo():
     assert 'id="provider-settings-modal"' in html
     for provider in ("deepseek", "kimi", "openai", "anthropic", "glm"):
         assert f'data-provider="{provider}"' in html
+    assert html.count('<select class="provider-model"') == 5
+    assert '<input class="provider-model"' not in html
     assert "async listProviderCredentials()" in js
+    assert "async listProviderModels()" in js
+    assert "async refreshProviderModels(provider)" in js
     assert "async saveProviderCredential(provider, payload)" in js
+    assert "renderProviderModelCatalogs" in js
     assert ".api_key" not in js
+
+
+def test_curated_model_catalog_always_contains_provider_defaults():
+    from app.core.provider_credentials import PROVIDER_SPECS
+    from app.services.provider_model_catalog import curated_provider_models
+
+    for provider, spec in PROVIDER_SPECS.items():
+        assert spec.default_model in curated_provider_models(provider)
+
+
+def test_provider_model_discovery_uses_vendor_auth_and_filters_non_text_models():
+    from app.services.provider_model_catalog import fetch_provider_models
+
+    response = MagicMock()
+    response.read.return_value = json.dumps(
+        {
+            "data": [
+                {"id": "claude-sonnet-5"},
+                {"id": "claude-opus-5"},
+                {"id": "text-embedding-irrelevant"},
+            ]
+        }
+    ).encode()
+    response.__enter__.return_value = response
+
+    opener = MagicMock()
+    opener.open.return_value = response
+    with patch("urllib.request.build_opener", return_value=opener):
+        models = fetch_provider_models(
+            "anthropic",
+            api_key="anthropic-private-key",
+            base_url="https://api.anthropic.com/v1",
+            timeout_seconds=3,
+        )
+
+    request = opener.open.call_args.args[0]
+    assert request.full_url == "https://api.anthropic.com/v1/models"
+    assert request.headers["X-api-key"] == "anthropic-private-key"
+    assert request.headers["Anthropic-version"] == "2023-06-01"
+    assert request.headers.get("Authorization") is None
+    assert models == ("claude-opus-5", "claude-sonnet-5")
+
+
+def test_provider_model_discovery_rejects_redirects_before_resending_credentials():
+    from app.services.provider_model_catalog import fetch_provider_models
+
+    redirected_headers = []
+
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/models":
+                self.send_response(302)
+                self.send_header(
+                    "Location",
+                    f"http://127.0.0.1:{self.server.server_port}/credential-sink",
+                )
+                self.end_headers()
+                return
+            redirected_headers.append(dict(self.headers))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"data": [{"id": "gpt-4o-mini"}]}')
+
+        def log_message(self, _format, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            fetch_provider_models(
+                "openai",
+                api_key="sk-must-not-follow-redirect",
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                timeout_seconds=3,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+    assert exc_info.value.code == 302
+    assert redirected_headers == []
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_api_never_returns_provider_secret():
+    from app.api.provider_credentials import list_provider_models
+    from app.core.provider_credentials import ResolvedProviderCredential
+
+    credential = ResolvedProviderCredential(
+        provider="deepseek",
+        api_key="sk-private-model-discovery",
+        base_url="https://api.deepseek.com",
+        model="deepseek-v4-pro",
+    )
+    db = AsyncMock()
+    with (
+        patch(
+            "app.api.provider_credentials.load_provider_credential",
+            side_effect=lambda _db, _scope, provider: (
+                credential if provider == "deepseek" else None
+            ),
+        ),
+        patch(
+            "app.api.provider_credentials.get_provider_model_catalog",
+            new=AsyncMock(
+                side_effect=lambda provider, **_kwargs: MagicMock(
+                    provider=provider,
+                    models=(
+                        "deepseek-v4-pro",
+                        "deepseek-v4-flash",
+                    )
+                    if provider == "deepseek"
+                    else (f"{provider}-default",),
+                    source="provider" if provider == "deepseek" else "curated",
+                    refreshed_at=None,
+                    warning="",
+                )
+            ),
+        ),
+    ):
+        catalogs = await list_provider_models(db, "alice")
+
+    serialized = json.dumps(
+        [catalog.model_dump(mode="json") for catalog in catalogs],
+        ensure_ascii=False,
+    )
+    assert "sk-private-model-discovery" not in serialized
+    assert catalogs[0].selected_model == "deepseek-v4-pro"
+    assert catalogs[0].models == ["deepseek-v4-pro", "deepseek-v4-flash"]
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_cache_is_scoped_and_force_refreshable():
+    from app.services.provider_model_catalog import get_provider_model_catalog
+
+    discovered = ("deepseek-account-model",)
+    with patch(
+        "app.services.provider_model_catalog.fetch_provider_models",
+        return_value=discovered,
+    ) as fetch:
+        first = await get_provider_model_catalog(
+            "deepseek",
+            access_scope="cache-user-a",
+            api_key="sk-cache-user-a",
+        )
+        cached = await get_provider_model_catalog(
+            "deepseek",
+            access_scope="cache-user-a",
+            api_key="sk-cache-user-a",
+        )
+        other_user = await get_provider_model_catalog(
+            "deepseek",
+            access_scope="cache-user-b",
+            api_key="sk-cache-user-b",
+        )
+        refreshed = await get_provider_model_catalog(
+            "deepseek",
+            access_scope="cache-user-a",
+            api_key="sk-cache-user-a",
+            force_refresh=True,
+        )
+
+    assert first.source == "provider"
+    assert cached.source == "cache"
+    assert other_user.source == "provider"
+    assert refreshed.source == "provider"
+    assert fetch.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_refresh_failure_returns_safe_curated_fallback():
+    from app.services.provider_model_catalog import get_provider_model_catalog
+
+    with patch(
+        "app.services.provider_model_catalog.fetch_provider_models",
+        side_effect=TimeoutError("upstream timed out with a secret-bearing URL"),
+    ):
+        catalog = await get_provider_model_catalog(
+            "openai",
+            access_scope="fallback-user",
+            api_key="sk-fallback-private",
+            force_refresh=True,
+        )
+
+    assert catalog.source == "curated"
+    assert catalog.warning == "无法更新模型列表，已使用内置列表"
+    assert "gpt-4o-mini" in catalog.models
+    assert "secret" not in catalog.warning
 
 
 @pytest.mark.asyncio

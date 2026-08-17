@@ -733,7 +733,7 @@ select:focus-visible {
   background: rgba(0, 0, 0, 0.62);
 }
 .provider-dialog {
-  width: min(880px, 96vw);
+  width: min(1040px, 96vw);
   max-height: min(760px, 92vh);
   overflow: auto;
   padding: 22px;
@@ -765,7 +765,7 @@ select:focus-visible {
 }
 .provider-row {
   display: grid;
-  grid-template-columns: minmax(130px, 0.85fr) minmax(180px, 1.5fr) minmax(150px, 1fr) auto auto;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(190px, 1.3fr) minmax(220px, 1.2fr) auto auto;
   align-items: center;
   gap: 10px;
   min-height: 64px;
@@ -786,7 +786,8 @@ select:focus-visible {
   overflow-wrap: anywhere;
 }
 .provider-state.configured { color: var(--success); }
-.provider-row input {
+.provider-row input,
+.provider-row select {
   width: 100%;
   min-width: 0;
   height: 38px;
@@ -798,7 +799,16 @@ select:focus-visible {
   color: var(--text);
   font: inherit;
 }
-.provider-row input:focus { border-color: var(--accent); }
+.provider-row input:focus,
+.provider-row select:focus { border-color: var(--accent); }
+.provider-model-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.provider-model-refresh { min-width: 48px; }
 .provider-row button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 @keyframes toast-in {
@@ -866,7 +876,7 @@ select:focus-visible {
   }
   .provider-identity,
   .provider-key,
-  .provider-model { grid-column: 1 / -1; }
+  .provider-model-control { grid-column: 1 / -1; }
   .translation-progress {
     left: 16px;
     right: 16px;

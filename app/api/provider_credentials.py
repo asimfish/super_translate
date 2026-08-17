@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,12 +16,18 @@ from app.core.database import get_session
 from app.core.provider_credentials import (
     PROVIDER_SPECS,
     CredentialConfigurationError,
+    CredentialDecryptionError,
     encrypt_api_key,
     get_provider_credential_record,
+    load_provider_credential,
     server_provider_credential,
     validate_provider,
 )
 from app.models.provider_credential import ProviderCredential
+from app.services.provider_model_catalog import (
+    ProviderModelCatalog,
+    get_provider_model_catalog,
+)
 
 router = APIRouter(prefix="/api/provider-credentials", tags=["provider-credentials"])
 AccessScope = Annotated[str, Depends(get_request_access_scope)]
@@ -66,6 +74,19 @@ class ProviderCredentialResponse(BaseModel):
     source: str = "none"
 
 
+class ProviderModelCatalogResponse(BaseModel):
+    """Safe provider model choices; API keys are intentionally absent."""
+
+    provider: str
+    label: str
+    default_model: str
+    selected_model: str
+    models: list[str]
+    source: str
+    refreshed_at: datetime | None = None
+    warning: str = ""
+
+
 def _key_hint(api_key: str) -> str:
     return f"••••{api_key[-4:]}" if api_key else ""
 
@@ -99,6 +120,99 @@ async def _provider_status(
         key_hint="服务器配置" if server_credential else "",
         source="server" if server_credential else "none",
     )
+
+
+async def _catalog_credential(
+    provider: str,
+    db: AsyncSession,
+    access_scope: str,
+):
+    try:
+        credential = await load_provider_credential(db, access_scope, provider)
+    except (CredentialConfigurationError, CredentialDecryptionError):
+        credential = None
+    if credential is None and access_scope == LOCAL_ACCESS_SCOPE:
+        credential = server_provider_credential(provider)
+    return credential
+
+
+def _catalog_response(
+    provider: str,
+    catalog: ProviderModelCatalog,
+    selected_model: str,
+) -> ProviderModelCatalogResponse:
+    spec = PROVIDER_SPECS[provider]
+    models = list(dict.fromkeys((selected_model, *catalog.models)))
+    return ProviderModelCatalogResponse(
+        provider=provider,
+        label=spec.label,
+        default_model=spec.default_model,
+        selected_model=selected_model,
+        models=models,
+        source=catalog.source,
+        refreshed_at=catalog.refreshed_at,
+        warning=catalog.warning,
+    )
+
+
+@router.get("/models", response_model=list[ProviderModelCatalogResponse])
+async def list_provider_models(
+    db: DbSession,
+    access_scope: AccessScope,
+) -> list[ProviderModelCatalogResponse]:
+    """List model choices and lazily refresh configured providers every six hours."""
+    credentials = {}
+    for provider in PROVIDER_SPECS:
+        credentials[provider] = await _catalog_credential(provider, db, access_scope)
+
+    catalogs = await asyncio.gather(
+        *(
+            get_provider_model_catalog(
+                provider,
+                access_scope=access_scope,
+                api_key=(credentials[provider].api_key if credentials[provider] else None),
+                base_url=(credentials[provider].base_url if credentials[provider] else None),
+            )
+            for provider in PROVIDER_SPECS
+        )
+    )
+    return [
+        _catalog_response(
+            provider,
+            catalog,
+            credentials[provider].model
+            if credentials[provider]
+            else PROVIDER_SPECS[provider].default_model,
+        )
+        for provider, catalog in zip(PROVIDER_SPECS, catalogs)
+    ]
+
+
+@router.post(
+    "/models/{provider}/refresh",
+    response_model=ProviderModelCatalogResponse,
+)
+async def refresh_provider_models(
+    provider: str,
+    db: DbSession,
+    access_scope: AccessScope,
+) -> ProviderModelCatalogResponse:
+    """Force-refresh one provider catalog after the user saves a credential."""
+    try:
+        normalized = validate_provider(provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    credential = await _catalog_credential(normalized, db, access_scope)
+    if credential is None:
+        raise HTTPException(status_code=400, detail="请先保存该供应商的 API Key")
+    catalog = await get_provider_model_catalog(
+        normalized,
+        access_scope=access_scope,
+        api_key=credential.api_key,
+        base_url=credential.base_url,
+        force_refresh=True,
+    )
+    return _catalog_response(normalized, catalog, credential.model)
 
 
 @router.get("", response_model=list[ProviderCredentialResponse])
