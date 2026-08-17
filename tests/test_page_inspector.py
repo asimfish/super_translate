@@ -225,8 +225,32 @@ class TestProductionRegressions:
                 translated_ink,
                 1,
                 [tuple(formula)],
+                table_regions=[tuple(formula)],
+            )
+            assert not _display_alignment_issues(
+                original_ink,
+                translated_ink,
+                1,
+                [tuple(formula)],
                 source_role_blocks=[
                     SimpleNamespace(bbox=tuple(formula), formula_anchors=(formula,))
+                ],
+            )
+            assert not _display_alignment_issues(
+                original_ink,
+                translated_ink,
+                1,
+                [tuple(formula)],
+                source_role_blocks=[
+                    SimpleNamespace(
+                        bbox=(formula.x0 - 80.0, formula.y0, formula.x0, formula.y1),
+                        block_type="formula_prose",
+                        formula_anchors=(),
+                        flow_inline_math=True,
+                        preserve_position=True,
+                        keepout_bboxes=(tuple(formula),),
+                        redaction_formula_restore_groups=((tuple(formula),),),
+                    )
                 ],
             )
 

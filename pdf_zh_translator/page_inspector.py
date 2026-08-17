@@ -1320,6 +1320,7 @@ def _display_alignment_issues(
     equation_rows: Sequence[BBox],
     *,
     algorithm_regions: Sequence[BBox] = (),
+    table_regions: Sequence[BBox] = (),
     source_role_blocks: Sequence[object] = (),
 ) -> List[object]:
     issues: List[object] = []
@@ -1334,8 +1335,30 @@ def _display_alignment_issues(
         ):
             continue
         if any(
-            getattr(block, "formula_anchors", ())
-            and _bbox_overlap_area(row, block.bbox) >= row_area * 0.80
+            _bbox_overlap_area(row, region) >= row_area * 0.80
+            for region in table_regions
+        ):
+            continue
+        if any(
+            (
+                getattr(block, "formula_anchors", ())
+                and _bbox_overlap_area(row, block.bbox) >= row_area * 0.80
+            )
+            or (
+                getattr(block, "block_type", "") == "formula_prose"
+                and getattr(block, "flow_inline_math", False)
+                and getattr(block, "preserve_position", False)
+                and not getattr(block, "formula_anchors", ())
+                and any(
+                    _bbox_overlap_area(row, atom) > 0.0
+                    for group in getattr(
+                        block,
+                        "redaction_formula_restore_groups",
+                        (),
+                    )
+                    for atom in group
+                )
+            )
             for block in source_role_blocks
         ):
             continue
@@ -2187,6 +2210,7 @@ def inspect_translation(
                     page_number,
                     equation_rows.get(index, []),
                     algorithm_regions=algorithm_regions.get(index, []),
+                    table_regions=table_bands,
                     source_role_blocks=source_role_blocks.get(index, ()),
                 )
             )

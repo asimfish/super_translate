@@ -746,6 +746,25 @@ def test_formula_row_prose_suffix_is_not_a_second_overlapping_translation_unit()
     assert "The log probability can be computed as follows" in matching[0]
 
 
+def test_fragmented_inline_formula_paragraph_stops_before_display_equation():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("dynaguide_p26_unnumbered_display_formula.pdf")
+    paragraph = next(
+        " ".join(strip_sentinels(block.text).split())
+        for block in blocks
+        if "The log probability can be computed as follows" in strip_sentinels(block.text)
+    )
+
+    assert paragraph.startswith("We start from the very rough approximation")
+    assert paragraph.endswith("The log probability can be computed as follows:")
+    assert "There are different ways of combining" not in paragraph
+    assert any(
+        "There are different ways of combining" in strip_sentinels(block.text)
+        for block in blocks
+    )
+
+
 def test_inline_formula_anchor_absorbs_detached_subscript_glyph():
     from pdf_zh_translator.pdf_layout import bbox_intersection_area, strip_sentinels
 
@@ -1449,6 +1468,7 @@ def test_formula_preflight_reserves_conservative_descender_clearance(monkeypatch
         ),
     )
     monkeypatch.setattr(layout, "translated_text_fits", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(layout, "_sibling_group_item_height", lambda *_args: None)
 
     adjusted = layout._clear_adjacent_formula_ink_overlaps(
         [(previous, "previous"), (current, "current")],
@@ -1464,6 +1484,66 @@ def test_formula_preflight_reserves_conservative_descender_clearance(monkeypatch
     shifted = adjusted[1][0]
     assert shifted.bbox[1] >= 103.5
     assert shifted.bbox[3] - shifted.bbox[1] == pytest.approx(104.0)
+
+
+def test_formula_preflight_does_not_borrow_through_preserved_equation(monkeypatch):
+    from types import SimpleNamespace
+
+    import pdf_zh_translator.pdf_layout as layout
+
+    previous = layout.TextBlock(
+        page_index=0,
+        bbox=(108.0, 512.7, 256.2, 522.8),
+        text="Equation lead",
+        font_size=10.0,
+        color=(0.0, 0.0, 0.0),
+    )
+    current = layout.TextBlock(
+        page_index=0,
+        bbox=(108.0, 546.7, 504.0, 570.0),
+        text="Formula-bearing following paragraph",
+        font_size=10.0,
+        color=(0.0, 0.0, 0.0),
+        formula_anchors=((280.0, 552.0, 320.0, 564.0),),
+        keepout_bboxes=[(273.0, 561.5, 333.0, 585.0)],
+    )
+    preserved_equation = (227.9, 524.1, 504.0, 544.1)
+
+    monkeypatch.setattr(
+        layout,
+        "_translated_block_ink_bbox",
+        lambda block, _text, **_kwargs: (
+            (108.0, 513.0, 256.2, 523.0)
+            if block is previous
+            else (108.0, block.bbox[1] + 0.8, 504.0, block.bbox[3] - 0.8)
+        ),
+    )
+    monkeypatch.setattr(
+        layout,
+        "translated_text_fits",
+        lambda block, *_args, **_kwargs: block.bbox[1] <= 540.0,
+    )
+    monkeypatch.setattr(layout, "_sibling_group_item_height", lambda *_args: None)
+    monkeypatch.setattr(
+        layout,
+        "_unresolved_formula_keepouts",
+        lambda block: block.keepout_bboxes or [],
+    )
+
+    adjusted = layout._clear_adjacent_formula_ink_overlaps(
+        [(previous, "previous"), (current, "current")],
+        [False, False],
+        page_rect=SimpleNamespace(width=612.0, height=792.0),
+        font_pack=object(),
+        min_font_size=7.0,
+        font_scale=1.0,
+        margin=0.8,
+        source_document=object(),
+        obstacles=[preserved_equation],
+    )
+
+    shifted = adjusted[1][0]
+    assert shifted.bbox[1] >= preserved_equation[3] + 0.6
 
 
 def test_otf_fragmented_author_names_are_not_translation_units():
@@ -1638,7 +1718,9 @@ def test_otf_production_replay_has_no_title_or_inline_formula_errors(tmp_path):
     ]
     assert appendix_connector["size"] >= statistics.median(page17_body_sizes) * 0.85
 
-    theorem_connector = next(span for span in page18_spans if span["text"] == "且")
+    theorem_connector = next(
+        span for span in page18_spans if span["text"].strip() == "且"
+    )
     assert not _span_is_bold(theorem_connector)
     source_body_size = 9.86 * 0.92
     connector_spans = [
@@ -2828,6 +2910,15 @@ def test_guidedvla_p28_task_descriptions_stay_translatable():
     assert "(T6) Heat the beaker" in task_block
 
 
+def test_guidedvla_p28_task_list_does_not_absorb_adjacent_figure_caption():
+    texts = _plain_unit_texts("guidedvla_p28_preserved.pdf")
+
+    task_block = next(text for text in texts if "ALOHA household tasks" in text)
+    figure_caption = next(text for text in texts if text.startswith("Fig. 11:"))
+    assert "Fig. 11:" not in task_block
+    assert "ALOHA real-world generalization settings" in figure_caption
+
+
 class _GuidedVlaP21RunInTranslator(_GoldenStubTranslator):
     def translate_batch(self, texts):
         fallback = super().translate_batch(texts)
@@ -3273,6 +3364,1157 @@ def test_gears_inline_formula_adjacency_is_not_an_ink_overlap():
     )
 
     assert not [issue for issue in issues if issue.code == "raster_ink_overlap"]
+
+
+def test_ddpm_reverse_process_formula_sentence_is_one_flowing_unit():
+    from pdf_zh_translator.pdf_layout import SENTINEL_RUN_RE, strip_sentinels
+
+    blocks = _unit_blocks("classic20_ddpm_p2_p4.pdf")
+    paragraph = next(
+        block
+        for block in blocks
+        if "Now we discuss our choices" in strip_sentinels(block.text)
+    )
+    plain = " ".join(strip_sentinels(paragraph.text).split())
+
+    assert "had similar results" in plain
+    assert paragraph.flow_inline_math
+    assert not paragraph.nowrap
+    assert len(SENTINEL_RUN_RE.findall(paragraph.text)) >= 12
+
+
+def test_ddpm_numbered_heading_with_inline_formula_keeps_heading_role():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    heading = next(
+        block
+        for block in _unit_blocks("classic20_ddpm_p2_p4.pdf")
+        if "Reverse process" in strip_sentinels(block.text)
+    )
+    plain = " ".join(strip_sentinels(heading.text).split())
+
+    assert plain.startswith("3.2 Reverse process")
+    assert heading.block_type == "heading"
+    assert heading.no_merge
+
+
+def test_ddpm_display_formula_prose_slots_are_translation_units():
+    from pdf_zh_translator.pdf_layout import SENTINEL_RUN_RE, strip_sentinels
+
+    blocks = _unit_blocks("classic20_ddpm_p2_p4.pdf")
+    where = next(
+        block
+        for block in blocks
+        if " ".join(strip_sentinels(block.text).split()).casefold() == "where"
+    )
+    given = next(
+        block
+        for block in blocks
+        if "given" in strip_sentinels(block.text).casefold()
+        and "available as" in strip_sentinels(block.text).casefold()
+    )
+
+    assert where.block_type == "formula_prose"
+    assert where.preserve_position and where.nowrap
+    assert given.block_type == "body"
+    assert "input to the model" in strip_sentinels(given.text)
+    assert len(SENTINEL_RUN_RE.findall(given.text)) == 2
+
+
+def test_ddpm_inline_formula_redactions_do_not_cross_display_formula_atoms():
+    from pdf_zh_translator.pdf_layout import (
+        bbox_intersection_area,
+        prepare_translation_units,
+        strip_sentinels,
+        union_bbox,
+    )
+
+    with fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf") as source:
+        units, _, _ = prepare_translation_units(
+            source,
+            preserve_graphics_text=True,
+        )
+    paragraph = next(
+        block
+        for block, _, _ in units
+        if block.page_index == 0
+        and "forward process variances" in strip_sentinels(block.text).lower()
+    )
+
+    assert paragraph.keepout_formula_atom_groups
+    assert max(
+        bbox_intersection_area(redact, union_bbox(group))
+        for redact in (paragraph.redact_bboxes or [paragraph.bbox])
+        for group in paragraph.keepout_formula_atom_groups
+    ) <= 0.5
+
+
+def test_ddpm_reverse_variance_fraction_is_one_visual_formula_token():
+    from pdf_zh_translator.pdf_layout import (
+        _tokenize_translation_with_formula_clips,
+        strip_sentinels,
+    )
+
+    paragraph = next(
+        block
+        for block in _unit_blocks("classic20_ddpm_p2_p4.pdf")
+        if "Now we discuss our choices" in strip_sentinels(block.text)
+    )
+    formulas = [
+        token
+        for token in _tokenize_translation_with_formula_clips(
+            paragraph.text,
+            paragraph,
+        )
+        if token.kind == "formula"
+    ]
+
+    assert any("˜β" in token.text and "β^{t}" in token.text for token in formulas)
+
+
+def test_ddpm_narrow_formula_connector_uses_single_cjk_glyph():
+    from dataclasses import replace
+
+    from pdf_zh_translator.pdf_layout import (
+        _fit_formula_connector_translation,
+        strip_sentinels,
+    )
+
+    connector = next(
+        block
+        for block in _unit_blocks("classic20_ddpm_p2_p4.pdf")
+        if block.page_index == 1
+        and strip_sentinels(block.text).strip().casefold() == "and"
+    )
+
+    assert _fit_formula_connector_translation(connector, "并且") == "及"
+    assert (
+        _fit_formula_connector_translation(
+            replace(connector, bbox=(108.0, 100.0, 250.0, 112.0)),
+            "并且",
+        )
+        == "并且"
+    )
+
+
+def test_ddpm_formula_fingerprint_excludes_translatable_connectors():
+    from pdf_zh_translator.pdf_layout import _extract_formula_fragments
+
+    with fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf") as document:
+        fragments = _extract_formula_fragments(document[1])
+
+    assert not any(
+        connector in item.casefold()
+        for item in fragments
+        for connector in ("and", "where")
+    )
+
+
+def test_ddpm_formula_fingerprint_normalizes_combining_math_accents():
+    from pdf_zh_translator.pdf_layout import _formula_fragment_present
+
+    assert _formula_fragment_present(
+        "σ2t=˜βt=1−¯αt−1",
+        "σ^{2}_{t}=̃β_{t}=1-̄α_{t}-1",
+    )
+
+
+def test_ddpm_stacked_formula_prefix_is_owned_by_flowing_paragraph():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    paragraph = next(
+        block
+        for block in _unit_blocks("classic20_ddpm_p2_p4.pdf")
+        if block.page_index == 2
+        and "complete sampling" in strip_sentinels(block.text).lower()
+    )
+
+    assert any(
+        bbox[0] <= 303.1 and bbox[2] >= 326.1
+        for bbox in paragraph.formula_anchors
+    )
+    assert not any(
+        bbox[0] <= 303.1 and bbox[2] >= 326.1
+        for bbox in (paragraph.keepout_bboxes or [])
+    )
+
+
+def test_ddpm_regular_inline_formula_paragraph_is_one_reading_order_unit():
+    from pdf_zh_translator.pdf_layout import SENTINEL_RUN_RE, strip_sentinels
+
+    candidates = [
+        block
+        for block in _unit_blocks("classic20_ddpm_p2_p4.pdf")
+        if block.page_index == 0
+        and block.bbox[1] >= 430.0
+        and (
+            "Diffusion models" in strip_sentinels(block.text)
+            or "same dimensionality" in strip_sentinels(block.text)
+        )
+    ]
+
+    assert len(candidates) == 1
+    paragraph = candidates[0]
+    plain = " ".join(strip_sentinels(paragraph.text).split())
+    assert plain.startswith("Diffusion models")
+    assert "where" in plain
+    assert "same dimensionality" in plain
+    assert "learned Gaussian transitions" in plain
+    assert paragraph.flow_inline_math
+    assert not paragraph.nowrap
+    assert len(SENTINEL_RUN_RE.findall(paragraph.text)) >= 6
+
+
+def test_adam_inline_fraction_paragraph_is_one_continuous_translation_unit():
+    from pdf_zh_translator.pdf_layout import SENTINEL_RUN_RE, strip_sentinels
+
+    candidates = [
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 0
+        and (
+            "We show Adam" in strip_sentinels(block.text)
+            or "Our following theorem holds" in strip_sentinels(block.text)
+        )
+    ]
+
+    assert len(candidates) == 1
+    paragraph = candidates[0]
+    plain = " ".join(strip_sentinels(paragraph.text).split())
+    assert "We show Adam" in plain
+    assert "Our following theorem holds" in plain
+    assert "decay exponentially" in plain
+    assert paragraph.flow_inline_math
+    assert not paragraph.nowrap
+    assert len(SENTINEL_RUN_RE.findall(paragraph.text)) >= 12
+
+
+def test_adam_formula_dense_result_discussion_is_one_translation_unit():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    candidates = [
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 0
+        and (
+            "Our Theorem 4.1 implies" in strip_sentinels(block.text)
+            or "average regret of Adam converges" in strip_sentinels(block.text)
+        )
+    ]
+
+    assert len(candidates) == 1
+    plain = " ".join(strip_sentinels(candidates[0].text).split())
+    assert plain.startswith("Our Theorem 4.1 implies")
+    assert "average regret of Adam converges" in plain
+    assert "Corollary 4.2" not in plain
+    assert candidates[0].flow_inline_math
+
+
+def test_adam_young_inequality_keeps_large_formula_as_one_source_row():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    bridge = [
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 1
+        and block.bbox[3] >= 429.0
+        and block.bbox[1] <= 466.0
+        and " ".join(strip_sentinels(block.text).split())
+        in {
+            "We can rearrange the above equation and use Young’s inequality,",
+            ". Also, it can be",
+            "shown that",
+            "and",
+            ". Then",
+        }
+    ]
+
+    assert [" ".join(strip_sentinels(block.text).split()) for block in bridge] == [
+        "We can rearrange the above equation and use Young’s inequality,",
+        ". Also, it can be",
+        "shown that",
+        "and",
+        ". Then",
+    ]
+    assert not any(block.formula_anchors for block in bridge)
+    assert all(block.preserve_position for block in bridge)
+
+
+def test_adam_academic_statement_uses_continuous_formula_flow():
+    from pdf_zh_translator.pdf_layout import _uses_fixed_source_math, strip_sentinels
+
+    theorem = next(
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 0
+        and " ".join(strip_sentinels(block.text).split()).startswith("Theorem 4.1")
+    )
+
+    assert theorem.formula_anchors
+    assert theorem.flow_inline_math
+    assert not _uses_fixed_source_math(theorem)
+
+    corollary = next(
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 0
+        and " ".join(strip_sentinels(block.text).split()).startswith("Corollary 4.2")
+    )
+    assert "R(T)" not in strip_sentinels(corollary.text)
+    assert len(corollary.formula_anchors) == 9
+
+
+def test_adam_formula_bridge_prose_slots_keep_source_formulas_external():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    bridge = [
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 1
+        and block.bbox[3] >= 429.0
+        and block.bbox[1] <= 466.0
+        and any(
+            phrase in strip_sentinels(block.text)
+            for phrase in ("We can rearrange", "Also, it can be", "shown that")
+        )
+    ]
+
+    assert len(bridge) == 3
+    assert all(block.source_prose_bboxes for block in bridge)
+    assert not any(block.source_math_bboxes for block in bridge)
+    assert all(block.keepout_bboxes for block in bridge)
+
+
+def test_adam_formula_bridge_fully_redacts_prose_and_restores_cross_line_atoms():
+    from pdf_zh_translator.pdf_layout import (
+        bbox_area,
+        bbox_intersection_area,
+        strip_sentinels,
+        union_bbox,
+    )
+
+    lead = next(
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 1
+        and "We can rearrange" in strip_sentinels(block.text)
+    )
+
+    redacts = lead.redact_bboxes or ()
+    assert lead.source_prose_bboxes
+    assert redacts
+    assert all(
+        any(
+            bbox_intersection_area(prose, redact) / max(bbox_area(prose), 0.1)
+            >= 0.9
+            for redact in redacts
+        )
+        for prose in lead.source_prose_bboxes
+    )
+    assert len(lead.redaction_formula_restore_groups) >= 3
+    assert all(
+        any(
+            bbox_intersection_area(atom, redact) > 0.0
+            for atom in group
+            for redact in redacts
+        )
+        or any(
+            bbox_intersection_area(union_bbox(group), keepout)
+            / max(bbox_area(union_bbox(group)), 0.1)
+            >= 0.9
+            and any(
+                bbox_intersection_area(keepout, redact) > 0.0
+                for redact in redacts
+            )
+            for keepout in lead.keepout_bboxes
+        )
+        for group in lead.redaction_formula_restore_groups
+    )
+
+
+def _formula_image_cjk_ink_overlaps(page):
+    from pdf_zh_translator.pdf_layout import (
+        _bbox_intersection_rect,
+        _raster_spans_share_ink_component,
+        bbox_area,
+    )
+
+    spans = [
+        span
+        for block in page.get_text("dict").get("blocks", [])
+        if block.get("type") == 0
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+        if span.get("text", "").strip() and len(span.get("bbox", ())) == 4
+    ]
+    hidden_formula_spans = [
+        span
+        for span in spans
+        if not (int(span.get("char_flags", 16)) & 16)
+        and not re.search(r"[\u3400-\u9fff]", span.get("text", ""))
+    ]
+    visible_cjk_spans = [
+        span
+        for span in spans
+        if int(span.get("char_flags", 16)) & 16
+        and re.search(r"[\u3400-\u9fff]", span.get("text", ""))
+    ]
+    formula_images = [
+        tuple(float(value) for value in image["bbox"])
+        for image in page.get_image_info(xrefs=True)
+        if any(
+            _bbox_intersection_rect(
+                tuple(float(value) for value in image["bbox"]),
+                tuple(float(value) for value in span["bbox"]),
+            )
+            is not None
+            for span in hidden_formula_spans
+        )
+    ]
+    overlaps = []
+    for image_bbox in formula_images:
+        for span in visible_cjk_spans:
+            span_bbox = tuple(float(value) for value in span["bbox"])
+            intersection = _bbox_intersection_rect(image_bbox, span_bbox)
+            if intersection is None or intersection[3] - intersection[1] < 1.0:
+                continue
+            smaller = min(bbox_area(image_bbox), bbox_area(span_bbox))
+            if bbox_area(intersection) / max(smaller, 1.0) < 0.08:
+                continue
+            if _raster_spans_share_ink_component(
+                page,
+                image_bbox,
+                span_bbox,
+                intersection,
+                dpi=240,
+                allow_bbox_fallback=False,
+            ):
+                overlaps.append((image_bbox, span_bbox, span.get("text", "")))
+    return overlaps
+
+
+def test_adam_formula_sprites_do_not_overlap_visible_cjk(tmp_path):
+    source = FIXTURES / "classic20_adam_p4_p14.pdf"
+    translated = tmp_path / "adam.pdf"
+    translate_pdf(
+        input_pdf=source,
+        output_pdf=translated,
+        translator=CacheOnlyTranslator(FIXTURES / "classic20_adam_cache.jsonl"),
+        preserve_graphics_text=True,
+    )
+
+    with fitz.open(translated) as document:
+        page = document[0]
+        visible_text = page.get_text()
+        overlaps = _formula_image_cjk_ink_overlaps(page)
+        visible_cjk = [
+            span
+            for block in page.get_text("dict").get("blocks", [])
+            if block.get("type") == 0
+            for line in block.get("lines", [])
+            for span in line.get("spans", [])
+            if int(span.get("char_flags", 16)) & 16
+            and re.search(r"[\u3400-\u9fff]", span.get("text", ""))
+        ]
+        body_size = statistics.median(span["size"] for span in visible_cjk)
+        statement_labels = [
+            span
+            for span in visible_cjk
+            if re.match(r"^(?:定理|推论)\s*4\.", span.get("text", ""))
+        ]
+
+    assert overlaps == []
+    assert "guarantee, for all" not in visible_text
+    assert len(statement_labels) == 2
+    assert all(span["size"] >= body_size * 0.85 for span in statement_labels)
+
+
+def test_formula_sprite_overlap_scan_ignores_clear_inline_formula(tmp_path):
+    from pdf_zh_translator.pdf_layout import (
+        _raster_ink_overlap_issues,
+        build_font_pack,
+        register_font_pack,
+    )
+
+    path = tmp_path / "clear-inline-formula.pdf"
+    document = fitz.open()
+    page = document.new_page(width=180, height=100)
+    font_pack = build_font_pack(None, [])
+    register_font_pack(page, font_pack)
+    pixmap = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, 24, 12), False)
+    pixmap.clear_with(255)
+    page.insert_image(fitz.Rect(12, 30, 36, 42), pixmap=pixmap)
+    page.insert_text((14, 40), "x=1", fontsize=8, render_mode=3)
+    page.insert_text(
+        (48, 40),
+        "中文正文",
+        fontname=font_pack.fonts_for(False)[0][1],
+        fontsize=9,
+    )
+    document.save(path)
+    document.close()
+
+    with fitz.open(path) as reopened:
+        assert _formula_image_cjk_ink_overlaps(reopened[0]) == []
+        assert _raster_ink_overlap_issues(reopened[0], reopened[0], 1) == []
+
+
+def test_formula_sprite_overlap_is_a_production_qa_error(tmp_path):
+    from pdf_zh_translator.pdf_layout import (
+        _raster_ink_overlap_issues,
+        build_font_pack,
+        register_font_pack,
+    )
+
+    path = tmp_path / "overlapping-inline-formula.pdf"
+    document = fitz.open()
+    page = document.new_page(width=180, height=100)
+    font_pack = build_font_pack(None, [])
+    register_font_pack(page, font_pack)
+    pixmap = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, 36, 18), False)
+    pixmap.clear_with(0)
+    page.insert_image(fitz.Rect(12, 28, 48, 46), pixmap=pixmap)
+    page.insert_text((14, 40), "x=1", fontsize=8, render_mode=3)
+    page.insert_text(
+        (34, 41),
+        "中文",
+        fontname=font_pack.fonts_for(False)[0][1],
+        fontsize=10,
+    )
+    document.save(path)
+    document.close()
+
+    with fitz.open(path) as reopened:
+        issues = _raster_ink_overlap_issues(reopened[0], reopened[0], 1)
+
+    overlap = next(issue for issue in issues if issue.code == "raster_ink_overlap")
+    assert overlap.severity == "error"
+    assert "formula-image" in overlap.message
+
+
+def test_ddpm_numbered_display_connector_remains_a_fixed_compact_slot():
+    from pdf_zh_translator.pdf_layout import (
+        _fit_formula_connector_translation,
+        strip_sentinels,
+    )
+
+    connector = next(
+        block
+        for block in _unit_blocks("classic20_ddpm_p2_p4.pdf")
+        if block.page_index == 1
+        and " ".join(strip_sentinels(block.text).split()).casefold() == "and"
+    )
+
+    assert connector.block_type == "body"
+    assert not connector.formula_anchors
+    assert connector.keepout_bboxes == [connector.bbox]
+    assert connector.source_lines == 1
+    assert _fit_formula_connector_translation(connector, "并且") == "及"
+
+
+def test_clip_bottom_note_keeps_same_row_prose_in_one_translation_unit():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("classic20_clip_p1_p47.pdf")
+    bottom_notes = [
+        block
+        for block in blocks
+        if block.page_index == 0 and block.bbox[1] >= 670.0
+    ]
+    texts = [" ".join(strip_sentinels(block.text).split()) for block in bottom_notes]
+
+    assert any(
+        "Equal contribution" in text
+        and "OpenAI, San Francisco, CA 94110, USA." in text
+        for text in texts
+    )
+    assert not any(text == "OpenAI, San Francisco, CA 94110, USA." for text in texts)
+
+
+def test_clip_long_table_caption_owns_all_wrapped_citation_lines():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    captions = [
+        block
+        for block in _unit_blocks("classic20_clip_p1_p47.pdf")
+        if block.page_index == 1 and block.block_type == "caption"
+    ]
+    table_17 = next(
+        block
+        for block in captions
+        if "Table 17." in strip_sentinels(block.text)
+    )
+    text = " ".join(strip_sentinels(table_17.text).split())
+
+    assert table_17.source_lines == 5
+    assert "Hongsuck Seo et al." in text
+    assert "Vo et al." in text
+    assert "Weyand et al., 2016)" in text
+    assert table_17.bbox[3] >= 686.8
+
+
+def test_batchnorm_bottom_caption_algorithms_are_fully_preserved():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_batchnorm_p2_p4_p8.pdf")
+    algorithm_regions = {}
+    units, _, _ = prepare_translation_units(
+        source,
+        preserve_graphics_text=True,
+        algorithm_regions_out=algorithm_regions,
+    )
+    source.close()
+    texts = [" ".join(strip_sentinels(block.text).split()) for block, _, _ in units]
+
+    assert any(
+        region[1] <= 498.0 and region[3] >= 689.0
+        for region in algorithm_regions[1]
+    )
+    assert any(
+        region[1] <= 308.0 and region[3] >= 635.0
+        for region in algorithm_regions[2]
+    )
+    assert not any("// mini-batch" in text for text in texts)
+    assert not any("// For clarity" in text for text in texts)
+    assert any("as the Batch Normalizing Transform" in text for text in texts)
+    assert any("The BN transform can be added" in text for text in texts)
+
+
+def test_batchnorm_jacobian_display_stays_out_of_prose_translation_units():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_batchnorm_p2_p4_p8.pdf")
+    equation_rows = {}
+    units, _, _ = prepare_translation_units(
+        source,
+        preserve_graphics_text=True,
+        equation_rows_out=equation_rows,
+    )
+    source.close()
+    page_texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+        if block.page_index == 1
+    ]
+
+    assert any(text.endswith("compute the Jacobians") for text in page_texts)
+    assert any(text.startswith("ignoring the latter term") for text in page_texts)
+    assert not any("Jacobian" in text and "Norm(x,X)" in text for text in page_texts)
+    assert not any(text.startswith("∂X ; ignoring") for text in page_texts)
+    assert any(row[1] <= 145.0 and row[3] >= 164.0 for row in equation_rows[1])
+    assert any(row[1] <= 162.0 and row[3] >= 178.0 for row in equation_rows[1])
+
+
+def test_batchnorm_source_continuations_keep_one_reading_order_unit():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("classic20_batchnorm_p2_p4_p8.pdf")
+    texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block in blocks
+    ]
+    continuation_pairs = (
+        ("We deﬁne Internal Covariate Shift", "descent step ignores"),
+        ("inverse square root", "transforms for backpropagation"),
+        ("To Batch-Normalize a network", "Batch Normalization can be trained"),
+        ("using the population", "the expectation is over training mini-batches"),
+    )
+
+    for prefix, continuation in continuation_pairs:
+        matches = [
+            text
+            for text in texts
+            if prefix in text or continuation in text
+        ]
+        assert len(matches) == 1, (prefix, continuation, matches)
+        assert prefix in matches[0]
+        assert continuation in matches[0]
+
+
+def test_batchnorm_figure_captioned_results_table_has_one_preserved_envelope():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_batchnorm_p2_p4_p8.pdf")
+    preserved_regions = {}
+    units, _, _ = prepare_translation_units(
+        source,
+        preserve_graphics_text=True,
+        preserved_regions_out=preserved_regions,
+    )
+    source.close()
+    page_texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+        if block.page_index == 3
+    ]
+
+    assert not any(text == "Model" for text in page_texts)
+    assert not any("GoogLeNet ensemble" in text for text in page_texts)
+    assert not any("BN-Inception single crop" in text for text in page_texts)
+    assert any(text.startswith("Figure 4:") for text in page_texts)
+    assert any(
+        region[0] <= 132.0
+        and region[1] <= 35.0
+        and region[2] >= 480.0
+        and region[3] >= 131.0
+        for region in preserved_regions[3]
+    )
+
+
+def test_batchnorm_cmex_accents_keep_local_geometry_and_formula_ownership():
+    from pdf_zh_translator.pdf_layout import (
+        _tokenize_translation_with_formula_clips,
+        prepare_translation_units,
+        strip_sentinels,
+    )
+
+    source = fitz.open(FIXTURES / "classic20_batchnorm_p2_p4_p8.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+
+    page_two_paragraphs = [
+        block
+        for block, _, _ in units
+        if block.page_index == 0
+        and "We deﬁne Internal Covariate Shift" in strip_sentinels(block.text)
+    ]
+    assert len(page_two_paragraphs) == 1
+    paragraph = page_two_paragraphs[0]
+    assert paragraph.source_lines <= 40
+    assert paragraph.bbox[3] <= 520.0
+    assert max(bbox[3] - bbox[1] for bbox in paragraph.formula_anchors) <= 22.0
+
+    page_three_paragraphs = [
+        block
+        for block, _, _ in units
+        if block.page_index == 1
+        and "These parameters are learned" in strip_sentinels(block.text)
+    ]
+    assert len(page_three_paragraphs) == 1
+    paragraph = page_three_paragraphs[0]
+    radical_index = next(
+        index
+        for index, anchor in enumerate(paragraph.formula_anchors)
+        if anchor[0] < 480.0 and anchor[2] > 520.0
+    )
+    radical_anchor = paragraph.formula_anchors[radical_index]
+    formula_tokens = [
+        token
+        for token in _tokenize_translation_with_formula_clips(paragraph.text, paragraph)
+        if token.kind == "formula" and "Var" in token.text
+    ]
+    assert radical_anchor[3] - radical_anchor[1] <= 22.0
+    assert len(formula_tokens) == 1
+    radical_atoms = formula_tokens[0].source_atom_bboxes
+    assert radical_atoms
+    assert any(
+        atom[0] <= radical_anchor[0] + 1.0
+        and atom[2] >= radical_anchor[0] + 5.0
+        for atom in radical_atoms
+    )
+
+
+def test_batchnorm_stale_cmex_delete_bounds_protect_formula_atoms():
+    from pdf_zh_translator.pdf_layout import (
+        bboxes_intersect,
+        prepare_translation_units,
+        strip_sentinels,
+    )
+
+    source = fitz.open(FIXTURES / "classic20_batchnorm_p2_p4_p8.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+
+    matches = [
+        block
+        for block, _, _ in units
+        if block.page_index == 1
+        and strip_sentinels(block.text).startswith(
+            "where the expectation and variance"
+        )
+    ]
+    assert len(matches) == 1
+    block = matches[0]
+    expected_keepout = (178.4, 576.3, 188.5, 607.4)
+    stale_keepouts = [
+        keepout
+        for keepout in block.keepout_bboxes or ()
+        if all(
+            abs(actual - expected) <= 0.2
+            for actual, expected in zip(keepout, expected_keepout)
+        )
+    ]
+    assert len(stale_keepouts) == 1
+    assert all(
+        not bboxes_intersect(redact, stale_keepouts[0])
+        for redact in block.redact_bboxes or ()
+    )
+    assert any(
+        atom[0] <= 178.5 and atom[2] >= 188.3
+        for group in block.redaction_formula_restore_groups
+        for atom in group
+    )
+
+
+def test_batchnorm_redacted_radical_restore_mask_covers_complete_radicand():
+    from pdf_zh_translator.pdf_layout import _expanded_radical_restore_atoms
+
+    source = fitz.open(FIXTURES / "classic20_batchnorm_p2_p4_p8.pdf")
+    root_atom = (409.32, 114.27, 419.28, 123.68)
+
+    expanded = _expanded_radical_restore_atoms(
+        source[2],
+        (root_atom,),
+    )
+    unchanged_non_root = _expanded_radical_restore_atoms(
+        source[2],
+        ((417.36, 107.85, 423.05, 117.81),),
+    )
+    source.close()
+
+    assert len(expanded) == 1
+    assert expanded[0][0] <= 409.33
+    assert expanded[0][2] >= 460.6
+    assert expanded[0][3] >= 132.99
+    assert unchanged_non_root == ((417.36, 107.85, 423.05, 117.81),)
+
+
+def test_batchnorm_redacted_radical_visible_ink_survives_translation(tmp_path):
+    from pdf_zh_translator.pdf_layout import _formula_ink_similarity
+
+    source_path = FIXTURES / "classic20_batchnorm_p2_p4_p8.pdf"
+    translated_path = tmp_path / "batchnorm-radical.pdf"
+    translate_pdf(
+        input_pdf=source_path,
+        output_pdf=translated_path,
+        translator=CacheOnlyTranslator(
+            FIXTURES / "classic20_batchnorm_cache.jsonl"
+        ),
+        preserve_graphics_text=True,
+    )
+    source = fitz.open(source_path)
+    translated = fitz.open(translated_path)
+    radical_clip = (409.0, 113.8, 419.5, 133.4)
+
+    similarity = _formula_ink_similarity(
+        source[2],
+        radical_clip,
+        translated[2],
+        radical_clip,
+    )
+    source.close()
+    translated.close()
+
+    assert similarity >= 0.8
+
+
+def test_latent_diffusion_snr_paragraph_is_one_inline_formula_flow():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_latent_p16_p25_p29.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    paragraph_blocks = [
+        block
+        for block, _, _ in units
+        if block.page_index == 0
+        and "Diffusion models can be speciﬁed" in strip_sentinels(block.text)
+    ]
+
+    assert len(paragraph_blocks) == 1
+    paragraph = paragraph_blocks[0]
+    text = " ".join(strip_sentinels(paragraph.text).split())
+    assert paragraph.flow_inline_math is True
+    assert paragraph.source_lines >= 7
+    assert text.endswith("deﬁne a forward diffusion processq as")
+    assert "(αt)^{T}" in text
+    assert "(σ_{t})^{T}" in text
+
+
+def test_latent_diffusion_numbered_formula_operator_names_are_preserved():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_latent_p16_p25_p29.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    formula_zone_texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+        if block.page_index == 1 and 540.0 <= block.bbox[1] <= 670.0
+    ]
+
+    assert not any(text == "for" for text in formula_zone_texts)
+    assert not any(text == "LayerNorm" for text in formula_zone_texts)
+    assert not any("MultiHeadSelfAttention" in text for text in formula_zone_texts)
+
+
+def test_latent_diffusion_rescaling_paragraph_is_one_inline_formula_flow():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_latent_p16_p25_p29.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    page_blocks = [block for block, _, _ in units if block.page_index == 2]
+    paragraph_blocks = [
+        block
+        for block in page_blocks
+        if "from the ﬁrst batch in the data" in strip_sentinels(block.text)
+    ]
+
+    assert len(paragraph_blocks) == 1
+    paragraph = paragraph_blocks[0]
+    text = " ".join(strip_sentinels(paragraph.text).split())
+    assert paragraph.flow_inline_math is True
+    assert paragraph.source_lines >= 9
+    assert "The output ofE is scaled" in text
+    assert "unit standard deviation" in text
+    assert text.endswith("the ﬁrst layer ofD.")
+    assert not any(
+        strip_sentinels(block.text).lstrip().startswith(". The output of")
+        for block in page_blocks
+    )
+
+
+def test_latent_diffusion_formula_accents_are_owned_by_math_placeholders():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units
+
+    source = fitz.open(FIXTURES / "classic20_latent_p16_p25_p29.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    candidates = [
+        (protected, mapping)
+        for block, protected, mapping in units
+        if block.page_index == 2 and "from the ﬁrst batch" in protected
+    ]
+
+    assert len(candidates) == 1
+    protected, mapping = candidates[0]
+    assert "ˆ" not in protected
+    assert sum(value.count("ˆ") for value in mapping.values()) == 3
+
+
+def test_ddpm_display_formula_lead_paragraph_remains_translatable():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    page_texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+        if block.page_index == 1
+    ]
+
+    assert any("Second, to represent the mean" in text for text in page_texts)
+
+
+def test_ddpm_short_formula_lead_remains_translatable():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    page_texts = [
+        " ".join(strip_sentinels(block.text).split())
+        for block, _, _ in units
+        if block.page_index == 2
+    ]
+
+    assert any("to compute" in text for text in page_texts)
+
+
+def test_ddpm_display_formula_explanation_connectors_remain_translatable():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    compact_texts = {
+        " ".join(strip_sentinels(block.text).split()).casefold()
+        for block, _, _ in units
+        if block.page_index == 1
+    }
+
+    assert {"where", "and"} <= compact_texts
+
+
+def test_ddpm_stacked_inline_formula_paragraph_keeps_one_reading_order_unit():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    page_units = [
+        (block, " ".join(strip_sentinels(block.text).split()))
+        for block, _, _ in units
+        if block.page_index == 2
+    ]
+    paragraphs = [item for item in page_units if "to compute" in item[1]]
+
+    assert len(paragraphs) == 1
+    block, text = paragraphs[0]
+    assert "The complete sampling procedure" in text
+    assert "learned gradient of the data density" in text
+    assert block.block_type == "body"
+    assert block.flow_inline_math
+    assert not block.preserve_position
+    assert block.source_lines >= 8
+
+
+def test_ddpm_formula_tail_layout_includes_its_first_prose_cue():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units
+
+    source = fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    candidates = [
+        block
+        for block, protected, _ in units
+        if block.page_index == 2
+        and "to compute" in protected
+        and "The complete sampling" in protected
+    ]
+
+    assert len(candidates) == 1
+    block = candidates[0]
+    assert block.redact_bboxes
+    assert block.bbox[1] <= min(bbox[1] for bbox in block.redact_bboxes)
+    assert len(block.formula_anchors) >= 8
+
+
+def test_ddpm_formula_side_cue_flows_with_following_body_paragraph():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+
+    source = fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    page_units = [
+        (block, " ".join(strip_sentinels(block.text).split()))
+        for block, _, _ in units
+        if block.page_index == 2
+    ]
+    paragraphs = [
+        item
+        for item in page_units
+        if "wherez" in item[1].replace(" ", "")
+        and "procedure, Algorithm 2" in item[1]
+    ]
+
+    assert len(paragraphs) == 1
+    block, text = paragraphs[0]
+    assert text.replace(" ", "").index("wherez") < text.index(
+        "procedure, Algorithm 2"
+    )
+    assert block.block_type == "body"
+    assert block.flow_inline_math
+    assert not block.nowrap
+
+
+def test_ddpm_numeric_citation_does_not_absorb_following_equation_prose():
+    from pdf_zh_translator.pdf_layout import prepare_translation_units
+
+    source = fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf")
+    units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
+    source.close()
+    candidates = [
+        (protected, mapping)
+        for block, protected, mapping in units
+        if block.page_index == 2 and "denoising score matching over multiple" in protected
+    ]
+
+    assert len(candidates) == 1
+    protected, mapping = candidates[0]
+    assert "As Eq. (12)" in protected
+    assert all("As Eq. (12)" not in formula for formula in mapping.values())
+
+
+_CLASSIC20_PRODUCTION_REPLAYS = (
+    (
+        "classic20_adam_p4_p14.pdf",
+        "classic20_adam_cache.jsonl",
+    ),
+    (
+        "classic20_clip_p1_p47.pdf",
+        "classic20_clip_cache.jsonl",
+    ),
+    (
+        "classic20_ddpm_p2_p4.pdf",
+        "classic20_ddpm_cache.jsonl",
+    ),
+    (
+        "classic20_batchnorm_p2_p4_p8.pdf",
+        "classic20_batchnorm_cache.jsonl",
+    ),
+    (
+        "classic20_latent_p16_p25_p29.pdf",
+        "classic20_latent_diffusion_cache.jsonl",
+    ),
+)
+
+_CLASSIC20_ACTIONABLE_CODES = {
+    "font_size_drift",
+    "font_role_heading_mismatch",
+    "text_overlap",
+    "raster_ink_overlap",
+    "formula_changed",
+    "formula_clipped",
+    "formula_visible_ink_mismatch",
+    "display_formula_misaligned",
+    "table_structure_mismatch",
+    "untranslated_english",
+    "untranslated_natural_language",
+    "untranslated_block",
+}
+
+
+@pytest.mark.parametrize(("fixture", "cache"), _CLASSIC20_PRODUCTION_REPLAYS)
+def test_classic20_production_failure_pages_are_strictly_clean(
+    tmp_path, fixture, cache
+):
+    source = FIXTURES / fixture
+    translated = tmp_path / fixture
+    translate_pdf(
+        input_pdf=source,
+        output_pdf=translated,
+        translator=CacheOnlyTranslator(FIXTURES / cache),
+        preserve_graphics_text=True,
+    )
+
+    issues = verify_translation_issues(source, translated)
+    blocking = [
+        issue
+        for issue in issues
+        if issue.severity == "error"
+        or issue.code in _CLASSIC20_ACTIONABLE_CODES
+        or issue.code.startswith("preserved_")
+    ]
+
+    assert blocking == []
+
+
+@pytest.mark.parametrize(
+    ("source", "translated", "expected"),
+    (
+        ("otf_p2_font_drift.pdf", "otf_p2_font_drift_translated.pdf", "font_size_drift"),
+        ("otf_p4_formula_clip.pdf", "otf_p4_formula_clip_translated.pdf", "formula_clipped"),
+        (
+            "guidedvla_p6_analysis_overlap.pdf",
+            "guidedvla_p6_analysis_overlap_bad_translated.pdf",
+            "text_overlap",
+        ),
+        (
+            "otf_p9_table_grid.pdf",
+            "otf_p9_table_grid_translated.pdf",
+            "table_structure_mismatch",
+        ),
+    ),
+)
+def test_classic20_fixes_keep_non_target_damage_detectable(
+    source, translated, expected
+):
+    issues = verify_translation_issues(FIXTURES / source, FIXTURES / translated)
+
+    assert any(issue.code == expected for issue in issues)
 
 
 @pytest.mark.parametrize("fixture", GOLDEN_PAGES)
