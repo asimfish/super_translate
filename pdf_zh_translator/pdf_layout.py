@@ -23,6 +23,7 @@ import math
 import os
 import re
 import statistics
+import threading
 import unicodedata
 import uuid
 from collections import Counter
@@ -199,6 +200,9 @@ _SINGLE_QUOTED_LITERAL_RE = re.compile(
 SENTINEL_RUN_RE = re.compile(
     "{o}[^{o}{c}]*{c}(?:\\s?{o}[^{o}{c}]*{c})*".format(o=SENTINEL_OPEN, c=SENTINEL_CLOSE)
 )
+SENTINEL_GROUP_RE = re.compile(
+    "{o}[^{o}{c}]*{c}".format(o=SENTINEL_OPEN, c=SENTINEL_CLOSE)
+)
 CITATION_RE = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
 URL_RE = re.compile(r"(?:https?://|www\.)\S+")
 EMAIL_RE = re.compile(
@@ -289,8 +293,16 @@ FONT_SEARCH_PATTERNS = (
     "NotoSansCJK*Regular*.ttc",
 )
 
-# Repo-local font faces extracted from the system TTCs (see ensure_font_pack).
-FONTS_DIR = Path(__file__).resolve().parent.parent / "data" / "fonts"
+# Generated font faces must live outside the repository. On macOS, repositories
+# below Desktop can be managed by iCloud and large ignored files may become
+# dataless placeholders while a translation is running. The user cache is both
+# local and safely reproducible from the system TTC collections.
+FONTS_DIR = Path(
+    os.environ.get(
+        "PAPER_CHINA_FONT_CACHE_DIR",
+        Path.home() / ".cache" / "paper-china" / "fonts",
+    )
+).expanduser()
 BODY_FONT_FILE = FONTS_DIR / "SongtiSC-Regular.ttf"
 BOLD_FONT_FILE = FONTS_DIR / "HiraginoSansGB-W6.ttf"
 FALLBACK_FONT_CANDIDATES = (
@@ -336,6 +348,8 @@ TTC_FACE_SOURCES = (
     ),
 )
 _SANITIZED_NOTO_CJK_FONT_FILES: set[tuple[str, int, int]] = set()
+_FONT_PACK_LOCK = threading.Lock()
+_FONT_FILE_SIGNATURES = {b"\x00\x01\x00\x00", b"OTTO", b"ttcf", b"true"}
 _AMBIGUOUS_NOTO_COPY_CODEPOINTS = {
     0x00AD: 0x002D,  # soft hyphen shares the ASCII hyphen glyph
     0x2011: 0x002D,  # non-breaking hyphen shares the ASCII hyphen glyph
@@ -4681,9 +4695,17 @@ def _font_role_consistency_issues(
     # only an expected bold heading from the same column immediately below;
     # a genuinely regular/missing heading still has no candidate and remains
     # an error.
-    claimed_cascaded_headings: set[int] = set()
+    claimed_cascaded_headings: set[int] = {
+        id(span)
+        for owner_index, assigned in enumerate(assignments)
+        if source_blocks[owner_index].block_type in {"title", "heading", "run_in_heading"}
+        for span in assigned
+        if _span_uses_bold_weight(span)
+    }
     for index, block in enumerate(source_blocks):
         if block.block_type not in {"heading", "run_in_heading"} or not block.bold:
+            continue
+        if any(_span_uses_bold_weight(span) for span in assignments[index]):
             continue
         x_tolerance = max(6.0, block.font_size * 0.75)
         y_tolerance = max(8.0, block.font_size * 3.2)
@@ -5495,13 +5517,14 @@ def _formula_image_visible_ink_bbox(
         import fitz
 
         mask = fitz.Pixmap(page.parent, smask)
-        if mask.width <= 0 or mask.height <= 0 or not mask.samples:
+        samples = mask.samples
+        if mask.width <= 0 or mask.height <= 0 or not samples:
             return bbox
         channels = max(1, int(mask.n))
         visible = [
             index // channels
-            for index in range(0, len(mask.samples), channels)
-            if mask.samples[index] > 8
+            for index in range(0, len(samples), channels)
+            if samples[index] > 8
         ]
         if not visible:
             return bbox
@@ -5580,13 +5603,10 @@ def _raster_ink_overlap_issues(
         )
         if len(image) > 1
     }
-    formula_images = [
-        _formula_image_visible_ink_bbox(
-            translated_page,
-            image,
-            smask_by_xref,
-        )
-        for image in translated_page.get_image_info(xrefs=True)
+    image_infos = list(translated_page.get_image_info(xrefs=True))
+    formula_image_indexes = [
+        index
+        for index, image in enumerate(image_infos)
         if any(
             _bbox_intersection_rect(
                 tuple(float(value) for value in image["bbox"]),
@@ -5596,6 +5616,32 @@ def _raster_ink_overlap_issues(
             for span in hidden_formula_spans
         )
     ]
+    candidate_image_indexes = set(formula_image_indexes)
+    for formula_index in formula_image_indexes:
+        formula_raw_bbox = tuple(
+            float(value) for value in image_infos[formula_index]["bbox"]
+        )
+        for other_index, other_image in enumerate(image_infos):
+            if other_index == formula_index:
+                continue
+            other_raw_bbox = tuple(float(value) for value in other_image["bbox"])
+            if (
+                other_raw_bbox[3] - other_raw_bbox[1] > 80.0
+                or other_raw_bbox[2] - other_raw_bbox[0]
+                > float(translated_page.rect.width) * 0.5
+                or _bbox_intersection_rect(formula_raw_bbox, other_raw_bbox) is None
+            ):
+                continue
+            candidate_image_indexes.add(other_index)
+    image_ink_bboxes = {
+        index: _formula_image_visible_ink_bbox(
+            translated_page,
+            image_infos[index],
+            smask_by_xref,
+        )
+        for index in candidate_image_indexes
+    }
+    formula_images = [image_ink_bboxes[index] for index in formula_image_indexes]
     visible_cjk_spans = [
         span for span in cjk_spans if int(span.get("char_flags", 16)) & 16
     ]
@@ -5623,6 +5669,47 @@ def _raster_ink_overlap_issues(
                     code="raster_ink_overlap",
                     message=(
                         f"Page {page_number}: 240dpi formula-image ink overlap at "
+                        f"x={intersection[0]:.1f}, y={intersection[1]:.1f}"
+                    ),
+                    severity="error",
+                )
+            ]
+    for formula_index in formula_image_indexes:
+        formula_bbox = image_ink_bboxes[formula_index]
+        for other_index in candidate_image_indexes:
+            if other_index == formula_index:
+                continue
+            other_bbox = image_ink_bboxes[other_index]
+            other_raw_bbox = tuple(
+                float(value) for value in image_infos[other_index]["bbox"]
+            )
+            if (
+                other_raw_bbox[3] - other_raw_bbox[1] > 80.0
+                or other_raw_bbox[2] - other_raw_bbox[0]
+                > float(translated_page.rect.width) * 0.5
+            ):
+                continue
+            intersection = _bbox_intersection_rect(formula_bbox, other_bbox)
+            if intersection is None or intersection[3] - intersection[1] < 1.0:
+                continue
+            smaller = min(bbox_area(formula_bbox), bbox_area(other_bbox))
+            if smaller <= 0.0 or bbox_area(intersection) / smaller < 0.08:
+                continue
+            if not _raster_spans_share_ink_component(
+                translated_page,
+                formula_bbox,
+                other_bbox,
+                intersection,
+                dpi=240,
+                allow_bbox_fallback=False,
+            ):
+                continue
+            return [
+                TranslationIssue(
+                    page=page_number,
+                    code="raster_ink_overlap",
+                    message=(
+                        f"Page {page_number}: 240dpi formula sprites overlap at "
                         f"x={intersection[0]:.1f}, y={intersection[1]:.1f}"
                     ),
                     severity="error",
@@ -7657,26 +7744,46 @@ def build_font_pack(font_file: Optional[Path], warnings: List[str]) -> FontPack:
 
 
 def ensure_font_pack_files(warnings: List[str]) -> Tuple[Optional[Path], Optional[Path]]:
-    """Extract body/heading faces from system TTC collections into the repo,
-    once. Each destination tries its candidate collections in order (macOS
-    system fonts, then Linux Noto CJK)."""
-    results: List[Optional[Path]] = []
-    for destination, candidates in TTC_FACE_SOURCES:
-        if destination.is_file():
-            _sanitize_noto_cjk_font_file(destination, warnings)
-            results.append(destination)
-            continue
-        extracted = None
-        for ttc_path, face_name in candidates:
-            extracted = extract_ttc_face(Path(ttc_path), face_name, destination)
-            if extracted is not None:
-                break
-        if extracted is None:
-            warnings.append("Could not extract a face for %s" % destination.name)
-        else:
-            _sanitize_noto_cjk_font_file(extracted, warnings)
-        results.append(extracted)
-    return results[0], results[1]
+    """Resolve valid body/heading faces in the local user font cache."""
+    with _FONT_PACK_LOCK:
+        results: List[Optional[Path]] = []
+        for destination, candidates in TTC_FACE_SOURCES:
+            if _font_file_has_valid_signature(destination):
+                _sanitize_noto_cjk_font_file(destination, warnings)
+                results.append(destination)
+                continue
+            if destination.exists():
+                warnings.append(
+                    "Rebuilding invalid cached CJK font: %s" % destination.name
+                )
+            extracted = None
+            for ttc_path, face_name in candidates:
+                candidate = extract_ttc_face(Path(ttc_path), face_name, destination)
+                if candidate is not None and _font_file_has_valid_signature(candidate):
+                    extracted = candidate
+                    break
+            if extracted is None:
+                warnings.append("Could not extract a valid face for %s" % destination.name)
+            else:
+                _sanitize_noto_cjk_font_file(extracted, warnings)
+            results.append(extracted)
+        return results[0], results[1]
+
+
+def _font_file_has_valid_signature(path: Path) -> bool:
+    try:
+        stat = path.stat()
+        if stat.st_size <= 0:
+            return False
+        # A non-empty file with no allocated blocks is a macOS/iCloud dataless
+        # placeholder. Reject it before opening so the read cannot block on a
+        # cloud materialization attempt.
+        if getattr(stat, "st_blocks", 1) == 0:
+            return False
+        with path.open("rb") as stream:
+            return stream.read(4) in _FONT_FILE_SIGNATURES
+    except OSError:
+        return False
 
 
 def _sanitize_noto_cjk_unicode_cmap(font: object) -> bool:
@@ -7803,12 +7910,25 @@ def extract_ttc_face(ttc_path: Path, face_name: str, destination: Path) -> Optio
         return None
     try:
         collection = TTCollection(str(ttc_path), lazy=False)
-        for face in collection.fonts:
-            name = face["name"].getDebugName(4) or ""
-            if name.startswith(face_name):
+        try:
+            for face in collection.fonts:
+                name = face["name"].getDebugName(4) or ""
+                if not name.startswith(face_name):
+                    continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                face.save(str(destination))
+                temporary = destination.with_name(
+                    f".{destination.name}.{uuid.uuid4().hex}.tmp"
+                )
+                try:
+                    face.save(str(temporary))
+                    if not _font_file_has_valid_signature(temporary):
+                        return None
+                    os.replace(temporary, destination)
+                finally:
+                    temporary.unlink(missing_ok=True)
                 return destination
+        finally:
+            collection.close()
     except Exception:
         return None
     return None
@@ -8025,6 +8145,71 @@ def _promote_run_in_academic_statement_bodies(blocks: Sequence[TextBlock]) -> No
         body.no_merge = True
 
 
+def _detach_terminal_formula_punctuation(block: TextBlock) -> None:
+    """Return sentence punctuation at the end of an inline formula to prose.
+
+    TeX PDFs often emit the final period or comma with the surrounding math
+    font.  Keeping that glyph in the formula sprite moves it with the formula's
+    ink box, which can leave a visibly lowered punctuation mark after CJK
+    reflow.  Only detach a narrow, rightmost atom from a multi-atom terminal
+    formula run; decimal points and punctuation inside a formula remain owned
+    by the formula.
+    """
+    matches = list(SENTINEL_RUN_RE.finditer(block.text))
+    if not matches:
+        return
+    marker = matches[-1]
+    if block.text[marker.end() :].strip():
+        return
+    terminal = re.search(
+        rf"{re.escape(SENTINEL_OPEN)}([.,;:]){re.escape(SENTINEL_CLOSE)}$",
+        marker.group(0),
+    )
+    if terminal is None:
+        return
+    formula_index = len(matches) - 1
+    if formula_index >= len(block.source_math_atom_groups):
+        return
+    atom_group = list(block.source_math_atom_groups[formula_index])
+    if len(atom_group) < 2:
+        return
+    punctuation_bbox = atom_group[-1]
+    punctuation_width = punctuation_bbox[2] - punctuation_bbox[0]
+    if punctuation_width > max(4.0, block.font_size * 0.8):
+        return
+    if punctuation_bbox[2] + 0.25 < max(atom[2] for atom in atom_group[:-1]):
+        return
+
+    punctuation = terminal.group(1)
+    shortened_marker = marker.group(0)[: terminal.start()]
+    block.text = (
+        block.text[: marker.start()]
+        + shortened_marker
+        + punctuation
+        + block.text[marker.end() :]
+    )
+
+    atom_group.pop()
+    math_groups = list(block.source_math_atom_groups)
+    math_groups[formula_index] = tuple(atom_group)
+    block.source_math_atom_groups = tuple(math_groups)
+
+    math_runs = list(block.source_math_bboxes)
+    if formula_index < len(math_runs):
+        math_runs[formula_index] = union_bbox(atom_group)
+        block.source_math_bboxes = tuple(math_runs)
+
+    math_atoms = list(block.source_math_atom_bboxes)
+    for index in range(len(math_atoms) - 1, -1, -1):
+        if math_atoms[index] == punctuation_bbox:
+            del math_atoms[index]
+            break
+    block.source_math_atom_bboxes = tuple(math_atoms)
+    block.source_prose_bboxes = tuple(
+        dict.fromkeys([*block.source_prose_bboxes, punctuation_bbox])
+    )
+
+
 def prepare_translation_units(
     document: object,
     preserve_graphics_text: bool = False,
@@ -8086,6 +8271,10 @@ def prepare_translation_units(
     )
     for page_index in range(document.page_count):
         _attach_blank_completion_rule_vectors(
+            document[page_index],
+            [block for block in blocks if block.page_index == page_index],
+        )
+        _attach_inline_formula_rule_vectors(
             document[page_index],
             [block for block in blocks if block.page_index == page_index],
         )
@@ -8250,6 +8439,7 @@ def prepare_translation_units(
         ):
             skipped += 1
             continue
+        _detach_terminal_formula_punctuation(block)
         plain = strip_sentinels(block.text)
         formula_prose = _looks_like_translatable_formula_prose_block(block)
         if not is_translatable(plain) and not formula_prose:
@@ -8515,6 +8705,151 @@ def _attach_blank_completion_rule_vectors(
             block.redact_bboxes = redacts
 
 
+def _attach_inline_formula_rule_vectors(
+    page: object,
+    blocks: Sequence[TextBlock],
+) -> None:
+    """Give movable formulas ownership of nearby fraction and radical rules."""
+    rules: List[BBox] = []
+    for drawing in _page_drawings(page):
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        bbox = (
+            float(rect.x0),
+            float(rect.y0),
+            float(rect.x1),
+            float(rect.y1),
+        )
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+        if 8.0 <= width <= 180.0 and height <= 1.5:
+            rules.append(bbox)
+    if not rules:
+        return
+    radical_ink_bboxes = _cmex_radical_ink_bboxes(page)
+
+    for block in blocks:
+        if not block.flow_inline_math or not block.source_math_atom_groups:
+            continue
+        block_width = max(1.0, block.bbox[2] - block.bbox[0])
+        groups = [list(group) for group in block.source_math_atom_groups]
+        runs = list(block.source_math_bboxes)
+        atoms = list(block.source_math_atom_bboxes)
+        redacts = list(block.redact_bboxes or [])
+        changed = False
+        for rule in rules:
+            rule_width = rule[2] - rule[0]
+            if rule_width > block_width * 0.75:
+                continue
+            center_y = (rule[1] + rule[3]) / 2.0
+            vector_atom = (rule[0], center_y - 0.5, rule[2], center_y + 0.5)
+            candidates: List[Tuple[int, float, float]] = []
+            for index, group in enumerate(groups):
+                if not group:
+                    continue
+                hull = union_bbox(group)
+                radical_edge = abs(rule[0] - hull[2]) <= 1.5 and (
+                    hull[1] - 2.0 <= center_y <= hull[3] + 2.0
+                )
+                horizontal_overlap = max(
+                    0.0,
+                    min(rule[2], hull[2]) - max(rule[0], hull[0]),
+                )
+                contained_rule = bool(
+                    horizontal_overlap / max(rule_width, 0.1) >= 0.65
+                    and hull[1] - 2.0 <= center_y <= hull[3] + 2.0
+                )
+                if radical_edge or contained_rule:
+                    candidates.append(
+                        (
+                            index,
+                            1.0 if radical_edge else 0.0,
+                            horizontal_overlap / max(rule_width, 0.1),
+                        )
+                    )
+            if not candidates:
+                continue
+            selected = max(candidates, key=lambda item: (item[1], item[2]))
+            group_index = selected[0]
+            if selected[1] > 0.0:
+                for atom_index, atom in enumerate(groups[group_index]):
+                    expanded = next(
+                        (
+                            expanded_bbox
+                            for normalized_bbox, expanded_bbox in radical_ink_bboxes
+                            if atom == normalized_bbox
+                        ),
+                        None,
+                    )
+                    if expanded is None:
+                        continue
+                    groups[group_index][atom_index] = expanded
+                    atoms = [expanded if item == atom else item for item in atoms]
+                    redacts = [expanded if item == atom else item for item in redacts]
+            groups[group_index] = list(
+                dict.fromkeys([*groups[group_index], vector_atom])
+            )
+            if group_index < len(runs):
+                runs[group_index] = union_bbox(groups[group_index])
+            atoms = list(dict.fromkeys([*atoms, vector_atom]))
+            redacts = list(dict.fromkeys([*redacts, vector_atom]))
+            changed = True
+        if changed:
+            block.source_math_atom_groups = tuple(tuple(group) for group in groups)
+            block.source_math_bboxes = tuple(runs)
+            block.source_math_atom_bboxes = tuple(atoms)
+            block.redact_bboxes = redacts
+
+
+def _cmex_radical_ink_bboxes(page: object) -> List[Tuple[BBox, BBox]]:
+    """Return post-segmentation ink bounds for tall Computer Modern roots."""
+    get_text = getattr(page, "get_text", None)
+    if not callable(get_text):
+        return []
+    try:
+        raw_blocks = get_text("dict").get("blocks", [])
+    except Exception:
+        return []
+    radicals: List[Tuple[BBox, BBox]] = []
+    for raw_block in raw_blocks:
+        for line in raw_block.get("lines", []):
+            for span in line.get("spans", []):
+                if (
+                    "CMEX" not in str(span.get("font", "")).upper()
+                    or normalize_span_text(span.get("text", "")).strip() != "q"
+                    or len(span.get("bbox", ())) != 4
+                    or len(span.get("origin", ())) < 2
+                ):
+                    continue
+                size = float(span.get("size", 0.0))
+                if size <= 0.0:
+                    continue
+                normalized_span = _normalized_extracted_math_span(span)
+                normalized_bbox = tuple(
+                    float(value) for value in normalized_span["bbox"]
+                )
+                raw_bbox = tuple(float(value) for value in span["bbox"])
+                expanded_y1 = min(
+                    raw_bbox[3],
+                    float(span["origin"][1]) + size * 1.85,
+                )
+                if expanded_y1 <= normalized_bbox[3] + size * 0.5:
+                    continue
+                radicals.append(
+                    (
+                        normalized_bbox,
+                        (
+                            normalized_bbox[0],
+                            normalized_bbox[1],
+                            normalized_bbox[2],
+                            expanded_y1,
+                        ),
+                    )
+                )
+    return radicals
+
+
 def _erase_reflowed_formula_vector_decorations(
     page: object,
     blocks: Sequence[TextBlock],
@@ -8633,7 +8968,11 @@ def mark_bibliography_blocks(
             heading_size = block.font_size
             flags.append(False)  # the heading itself is translated
             continue
-        if in_references and _looks_like_appendix_heading(compact):
+        if in_references and _is_structural_bibliography_terminator(
+            block,
+            compact,
+            heading_size,
+        ):
             in_references = False
         if in_references and block.bold and block.font_size >= max(heading_size * 0.92, 10.5):
             in_references = False  # next section (appendix) starts
@@ -9644,6 +9983,19 @@ def _merge_wrapped_formula_continuation_records(
             )
             index += 2
             continue
+        if _records_form_inline_formula_tail_sentence(records, index):
+            following = records[index + 1]
+            output.append(
+                _RawBlockRec(
+                    lines=_promote_stacked_plain_formula_fragments(
+                        [*current.lines, *following.lines]
+                    ),
+                    detached_inline_scripts=True,
+                    flow_inline_math=True,
+                )
+            )
+            index += 2
+            continue
         paragraph_end = _inline_fraction_paragraph_before_statement_end(
             records,
             index,
@@ -9686,6 +10038,7 @@ def _merge_wrapped_formula_continuation_records(
                 _RawBlockRec(
                     lines=_promote_stacked_plain_formula_fragments(merged_lines),
                     detached_inline_scripts=True,
+                    flow_inline_math=True,
                 )
             )
             index = bridge_end + 1
@@ -9711,6 +10064,114 @@ def _merge_wrapped_formula_continuation_records(
         output.append(current)
         index += 1
     return output
+
+
+def _records_form_inline_formula_tail_sentence(
+    records: Sequence[_RawBlockRec],
+    start: int,
+) -> bool:
+    """Join a sentence whose tall inline formula was emitted separately.
+
+    A radical can end the prose record while the radicand, scripts, and short
+    grammatical tail occupy the next record.  The prose slots still share one
+    source baseline and the formula runs form a left-to-right chain.  Requiring
+    both signals keeps a following centered display equation separate.
+    """
+    if start < 0 or start + 1 >= len(records):
+        return False
+    prefix, formula_tail = records[start : start + 2]
+    if (
+        not prefix.lines
+        or len(formula_tail.lines) < 2
+        or any(
+            line_looks_like_section_heading(line)
+            or EQUATION_NUMBER_RE.fullmatch(
+                "".join(strip_sentinels(line.text).split())
+            )
+            for record in (prefix, formula_tail)
+            for line in record.lines
+        )
+    ):
+        return False
+
+    prefix_prose = [
+        bbox for line in prefix.lines for bbox in line.prose_bboxes
+    ]
+    prefix_math = [
+        bbox for line in prefix.lines for bbox in line.math_run_bboxes
+    ]
+    tail_prose = [
+        bbox for line in formula_tail.lines for bbox in line.prose_bboxes
+    ]
+    tail_math = [
+        bbox for line in formula_tail.lines for bbox in line.math_run_bboxes
+    ]
+    if (
+        not prefix_prose
+        or not prefix_math
+        or len(tail_math) < 2
+    ):
+        return False
+
+    prefix_outside = " ".join(
+        " ".join(_text_outside_sentinels(line.text).split())
+        for line in prefix.lines
+    ).strip()
+    tail_outside = " ".join(
+        " ".join(_text_outside_sentinels(line.text).split())
+        for line in formula_tail.lines
+    ).strip()
+    grammatical_tail = bool(
+        tail_prose
+        and 1 <= len(_prose_words(tail_outside)) <= 4
+        and re.search(r"[A-Za-z]{2,}", tail_outside)
+        and re.search(r"[,;:.!?]\s*$", tail_outside)
+    )
+    formula_only_tail = bool(
+        not _prose_words(tail_outside)
+        and re.search(
+            r"[,;:.!?]\s*$",
+            strip_sentinels(formula_tail.bare_text()),
+        )
+    )
+    if (
+        len(_prose_words(prefix_outside)) < 5
+        or sentence_final_text(prefix_outside)
+        or not (grammatical_tail or formula_only_tail)
+    ):
+        return False
+
+    prefix_prose_bbox = union_bbox(prefix_prose)
+    prefix_math_bbox = max(prefix_math, key=lambda bbox: bbox[2])
+    tail_math_bbox = union_bbox(tail_math)
+    comparison_bbox = union_bbox(tail_prose) if grammatical_tail else tail_math_bbox
+    baseline_overlap = min(prefix_prose_bbox[3], comparison_bbox[3]) - max(
+        prefix_prose_bbox[1], comparison_bbox[1]
+    )
+    comparison_height = max(
+        1.0,
+        min(
+            prefix_prose_bbox[3] - prefix_prose_bbox[1],
+            comparison_bbox[3] - comparison_bbox[1],
+        ),
+    )
+    formula_gap = tail_math_bbox[0] - prefix_math_bbox[2]
+    prefix_gap = prefix_math_bbox[0] - prefix_prose_bbox[2]
+    suffix_gap = (
+        union_bbox(tail_prose)[0] - tail_math_bbox[2]
+        if grammatical_tail
+        else 0.0
+    )
+    combined_height = max(prefix.bbox[3], formula_tail.bbox[3]) - min(
+        prefix.bbox[1], formula_tail.bbox[1]
+    )
+    return bool(
+        baseline_overlap >= comparison_height * (0.7 if grammatical_tail else 0.35)
+        and -2.0 <= prefix_gap <= 16.0
+        and -4.0 <= formula_gap <= 16.0
+        and -2.0 <= suffix_gap <= 16.0
+        and combined_height <= max(48.0, comparison_height * 4.25)
+    )
 
 
 def _flow_inline_math_paragraph_sequence_end(
@@ -12294,6 +12755,18 @@ def classify_blocks(
             block.preserve_position = True
             continue
 
+        if block.bold_prefix and _ACADEMIC_FORMULA_STATEMENT_RE.match(plain):
+            # The source typography owns only the theorem/proposition label.
+            # Preserve that range-level role while keeping the statement in
+            # the same flowing block; setting ``bold`` here would spill the
+            # label weight across the complete translated statement.
+            block.block_type = "run_in_heading"
+            block.should_translate = True
+            block.bold = False
+            block.no_merge = True
+            block.preserve_position = False
+            continue
+
         if block.block_type == "run_in_heading" and re.fullmatch(
             r"(?:[A-Z](?:\.\d+)?|\d+(?:\.\d+)*)\s+[A-Z][A-Z\s-]{3,80}",
             plain,
@@ -12340,10 +12813,14 @@ def classify_blocks(
                 plain,
                 block.source_lines,
             )
-            and not (
-                _bibliography_seen
-                and not _bibliography_ended
-                and _looks_like_reference_author_line(plain)
+            and (
+                not _bibliography_seen
+                or _bibliography_ended
+                or _is_structural_bibliography_terminator(
+                    block,
+                    plain,
+                    _bibliography_heading_size,
+                )
             )
         ):
             # Small-caps appendix titles are often split into mixed-size,
@@ -12375,7 +12852,7 @@ def classify_blocks(
                 block.preserve_position = True
                 continue
             block.should_translate = True
-            block.preserve_position = True
+            block.preserve_position = not block.flow_inline_math
             continue
 
         if looks_like_academic_structure_heading(block, plain):
@@ -12651,6 +13128,36 @@ _CHECKLIST_PROSE_RE = re.compile(
 )
 
 
+def _is_structural_bibliography_terminator(
+    block: TextBlock,
+    text: str,
+    bibliography_heading_size: float,
+) -> bool:
+    """Require structural evidence before leaving a bibliography range."""
+    compact = " ".join(text.split()).strip()
+    if _CHECKLIST_HEADING_RE.match(compact):
+        return True
+    if _APPENDIX_HEADING_RE.match(compact) or _POST_BIBLIOGRAPHY_SECTION_RE.fullmatch(
+        compact
+    ):
+        return True
+    if not _looks_like_appendix_heading(compact, block.source_lines):
+        return False
+    if _looks_like_reference_entry_text(compact) or _looks_like_reference_author_line(
+        compact
+    ):
+        return False
+    if re.search(r"[,;]|\b(?:editors?|eds?\.)\b", compact, re.IGNORECASE):
+        return False
+    if block.bold or block.font_size >= max(bibliography_heading_size * 0.92, 10.5):
+        return True
+    appendix_match = _APPENDIX_LETTER_HEADING_RE.match(compact)
+    appendix_words = (
+        _PROSE_WORD_RE.findall(appendix_match.group(1)) if appendix_match else []
+    )
+    return bool(block.source_lines <= 2 and 1 <= len(appendix_words) <= 4)
+
+
 def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> bool:
     """Check if block is in the bibliography section.
 
@@ -12673,19 +13180,18 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
     # bold headings) must NOT fire on reference-entry-looking lines such as
     # "H. Wallach," inside actual bibliography entries.
     if _bibliography_seen:
-        if _CHECKLIST_HEADING_RE.match(" ".join(raw_text.split())):
+        if _is_structural_bibliography_terminator(
+            block,
+            raw_text,
+            _bibliography_heading_size,
+        ):
             _bibliography_ended = True
         elif not _looks_like_reference_entry_text(raw_text):
-            if _looks_like_appendix_heading(
-                raw_text, block.source_lines
-            ) and not _looks_like_reference_author_line(raw_text):
-                _bibliography_ended = True
-            else:
-                # Fallback: bold section headings also end the range.
-                bib_size_threshold = max(_bibliography_heading_size * 0.92, 10.5)
-                if block.bold and block.font_size >= bib_size_threshold:
-                    if _SECTION_NUM_RE.match(raw_text) or len(raw_text) < 60:
-                        _bibliography_ended = True
+            # Fallback: bold section headings also end the range.
+            bib_size_threshold = max(_bibliography_heading_size * 0.92, 10.5)
+            if block.bold and block.font_size >= bib_size_threshold:
+                if _SECTION_NUM_RE.match(raw_text) or len(raw_text) < 60:
+                    _bibliography_ended = True
 
     if _bibliography_ended:
         return False
@@ -12742,6 +13248,7 @@ class _LineRec:
 class _RawBlockRec:
     lines: List[_LineRec]
     detached_inline_scripts: bool = False
+    flow_inline_math: bool = False
 
     @property
     def bbox(self) -> BBox:
@@ -13337,15 +13844,16 @@ def _format_script_fragment(text: str, position: str) -> str:
 
 
 def _normalized_extracted_math_span(span: dict) -> dict:
-    """Clamp a known MuPDF 1.25 CMEX bbox inflation to its font-size row.
+    """Clamp known MuPDF math-font bbox inflation to the painted glyph row.
 
     MuPDF 1.25 reports some 10pt CMEX accents/operators with a roughly 31pt
     descent even though their origin and visible glyph occupy one text row.
     That stale descent joins following paragraphs and turns inline formulas
-    into oversized layout tokens. Newer MuPDF releases report the same glyph
-    from about ``origin - 0.8em`` to ``origin + 0.2em``. Only clamp that
-    unmistakable shape; legitimate tall extension glyphs and all other math
-    fonts keep their extracted boxes.
+    into oversized layout tokens. CMSY horizontal minus glyphs similarly use
+    the font's nearly one-em descent, which can capture ink from the next text
+    row when rasterized. WASY section signs are extracted as ``M`` with the
+    same phantom descent. Only clamp those unmistakable shapes; legitimate
+    tall extension glyphs and all other math fonts keep their extracted boxes.
     """
     bbox = span.get("bbox")
     origin = span.get("origin")
@@ -13357,23 +13865,80 @@ def _normalized_extracted_math_span(span: dict) -> dict:
         or not origin
         or len(origin) < 2
         or size <= 0.0
-        or "CMEX" not in font.upper()
     ):
         return span
     x0, y0, x1, y1 = (float(value) for value in bbox)
     origin_y = float(origin[1])
+    font_upper = font.upper()
+    normalized_text = normalize_span_text(span.get("text", "")).strip()
+    if (
+        "WASY" in font_upper
+        and normalized_text == "M"
+        and y1 - origin_y >= size * 1.3
+        and y1 - y0 >= size * 2.0
+    ):
+        normalized_y1 = min(y1, origin_y + size * 0.25)
+        if normalized_y1 > y0 + size * 0.5:
+            normalized = dict(span)
+            raw_text = normalize_span_text(span.get("text", ""))
+            normalized["text"] = raw_text.replace("M", "§")
+            normalized["_raw_bbox"] = (x0, y0, x1, y1)
+            normalized["bbox"] = (x0, y0, x1, normalized_y1)
+            return normalized
+    ordinary_cmsy_symbols = set("∥∇≤≥∈∞−=<>+±×÷")
+    if (
+        "CMSY" in font_upper
+        and normalized_text
+        and set(normalized_text) <= ordinary_cmsy_symbols
+        and y1 - origin_y >= size * 0.65
+        and y1 - y0 >= size * 1.5
+    ):
+        normalized_y1 = min(y1, origin_y + size * 0.25)
+        if normalized_y1 > y0 + size * 0.5:
+            normalized = dict(span)
+            normalized["_raw_bbox"] = (x0, y0, x1, y1)
+            normalized["bbox"] = (x0, y0, x1, normalized_y1)
+            return normalized
+    if "CMEX" not in font_upper:
+        return span
     if (
         y1 - y0 <= size * 2.2
         or y1 - origin_y <= size * 1.5
         or origin_y - y0 >= size * 1.2
     ):
         return span
-    normalized_y1 = min(y1, origin_y + size * 0.2)
+    # Computer Modern extension-font summation/product glyphs extract as
+    # ``P``/``X``. Their painted operator legitimately descends about one em
+    # below the text origin, unlike the stale three-em MuPDF tail.
+    large_operator = normalized_text in {
+        "P",
+        "X",
+    }
+    normalized_y1 = min(
+        y1,
+        origin_y + size * (1.2 if large_operator else 0.2),
+    )
     if normalized_y1 <= y0 + size * 0.45:
         return span
     normalized = dict(span)
     normalized["_raw_bbox"] = (x0, y0, x1, y1)
     normalized["bbox"] = (x0, y0, x1, normalized_y1)
+    return normalized
+
+
+def _normalized_math_control_span(span: dict) -> dict:
+    """Expose CMEX delimiter glyphs that PDF extractors report as whitespace."""
+    text = normalize_span_text(span.get("text", ""))
+    if (
+        "CMEX" not in str(span.get("font", "")).upper()
+        or not text
+        or text.strip()
+        or any(char not in {" ", "\x0c"} for char in text)
+        or "\x0c" not in text
+    ):
+        return span
+    normalized = dict(span)
+    normalized["text"] = text.replace(" ", "").replace("\x0c", "|")
     return normalized
 
 
@@ -13401,7 +13966,7 @@ def parse_block_lines(
             # glyphs untouched: neither translated nor erased.
             continue
         spans = [
-            _normalized_extracted_math_span(span)
+            _normalized_math_control_span(_normalized_extracted_math_span(span))
             for span in raw_line.get("spans", [])
         ]
         line_max_size = 0.0
@@ -13649,7 +14214,7 @@ def _coalesce_fragmented_same_baseline_lines(lines: Sequence[_LineRec]) -> List[
             len(group) == 2
             and group[1].text.lstrip().startswith(SENTINEL_OPEN)
             and re.search(
-                r"\b(?:and|or|where|is|are|was|were)\b",
+                r"\b(?:and|or|where|with|is|are|was|were)\b",
                 strip_sentinels(group[1].text),
                 re.IGNORECASE,
             )
@@ -15381,12 +15946,101 @@ def bbox_share_y_band(first: BBox, second: BBox) -> bool:
     return overlap >= 0.5 * min_height
 
 
+def _record_is_inline_formula_sentence_bridge(record: _RawBlockRec) -> bool:
+    """Recognize prose wrapped around one long, multi-span inline formula."""
+    if len(record.lines) < 3 or record_is_table(record):
+        return False
+    if any(
+        EQUATION_NUMBER_RE.fullmatch("".join(strip_sentinels(line.text).split()))
+        for line in record.lines
+    ):
+        return False
+
+    prefix_index = next(
+        (
+            index
+            for index, line in enumerate(record.lines[:-1])
+            if line.prose_bboxes
+            and line.math_run_bboxes
+            and len(_prose_words(_text_outside_sentinels(line.text))) >= 1
+            and max(bbox[2] for bbox in line.prose_bboxes)
+            <= min(bbox[0] for bbox in line.math_run_bboxes) + 1.0
+        ),
+        None,
+    )
+    if prefix_index is None:
+        return False
+    prefix = record.lines[prefix_index]
+    suffix_index = next(
+        (
+            index
+            for index in range(prefix_index + 1, len(record.lines))
+            for line in [record.lines[index]]
+            if line.prose_bboxes
+            and line.math_run_bboxes
+            and len(_prose_words(_text_outside_sentinels(line.text))) >= 5
+            and max(bbox[2] for bbox in line.math_run_bboxes)
+            <= min(bbox[0] for bbox in line.prose_bboxes) + 1.0
+            and lines_share_y_band(prefix, line)
+        ),
+        None,
+    )
+    if suffix_index is None or suffix_index + 1 >= len(record.lines):
+        return False
+    trailing = record.lines[suffix_index + 1]
+    trailing_plain = " ".join(_text_outside_sentinels(trailing.text).split())
+    if (
+        trailing.math_run_bboxes
+        or not trailing.prose_bboxes
+        or not 1 <= len(_prose_words(trailing_plain)) <= 3
+        or sentence_final_text(record.lines[suffix_index].text)
+        or trailing.bbox[0] > record.bbox[0] + 12.0
+        or trailing.bbox[1]
+        - max(bbox[3] for bbox in record.lines[suffix_index].prose_bboxes)
+        > 16.0
+    ):
+        return False
+    formula_rows = [
+        line
+        for line in record.lines[prefix_index : suffix_index + 1]
+        if line.math_run_bboxes
+    ]
+    plain = strip_sentinels(record.bare_text())
+    return bool(
+        len(formula_rows) >= 3
+        and len(_prose_words(plain)) >= 8
+        and not any(line_looks_like_section_heading(line) for line in record.lines)
+    )
+
+
 def _record_is_flowing_inline_formula_paragraph(record: _RawBlockRec) -> bool:
     """Recognize ordinary prose fragmented by several inline math objects."""
-    if len(record.lines) < 4:
+    if len(record.lines) < 3:
         return False
+    if _record_is_inline_formula_sentence_bridge(record):
+        return True
     prose_lines = [line for line in record.lines if line_is_prose(line)]
     math_lines = [line for line in record.lines if not line_is_prose(line)]
+    formula_bearing_prose_lines = [
+        line for line in prose_lines if line.math_run_bboxes
+    ]
+    formula_run_count = sum(
+        len(line.math_run_bboxes) for line in formula_bearing_prose_lines
+    )
+    record_width = max(1.0, record.bbox[2] - record.bbox[0])
+    narrow_inline_formula_runs = bool(
+        formula_bearing_prose_lines
+        and all(
+            math_bbox[2] - math_bbox[0] <= record_width * 0.45
+            for line in formula_bearing_prose_lines
+            for math_bbox in line.math_run_bboxes
+        )
+    )
+    inline_formula_evidence = bool(
+        len(formula_bearing_prose_lines) >= 2
+        and formula_run_count >= 3
+        and narrow_inline_formula_runs
+    )
     plain = strip_sentinels(record.bare_text())
     first_plain = " ".join(strip_sentinels(record.lines[0].text).split()).strip()
     starts_with_run_in_label = bool(
@@ -15403,17 +16057,39 @@ def _record_is_flowing_inline_formula_paragraph(record: _RawBlockRec) -> bool:
         and lines_share_y_band(record.lines[0], record.lines[1])
         and -2.0 <= record.lines[1].bbox[0] - record.lines[0].bbox[2] <= 18.0
     )
+    compact_detached_paragraph = bool(
+        len(record.lines) == 3
+        and record.detached_inline_scripts
+        and len(prose_lines) == len(record.lines)
+        and inline_formula_evidence
+    )
+    compact_detached_inline = bool(
+        record.detached_inline_scripts
+        and len(record.lines) >= 4
+        and len(prose_lines) >= 2
+        and len(math_lines) >= 2
+        and len(_prose_words(plain)) >= 8
+        and sum(plain.count(mark) for mark in ".!?") >= 1
+        and any(line.math_run_bboxes for line in prose_lines)
+    )
     return bool(
         prose_lines
         and (
             record.lines[0] is prose_lines[0]
             or starts_with_run_in_label
         )
-        and len(prose_lines) >= 3
+        and (len(prose_lines) >= 3 or compact_detached_inline)
         and len(prose_lines) / len(record.lines)
         >= (0.3 if record.detached_inline_scripts else 0.6)
-        and len(math_lines) >= 2
-        and len(_prose_words(plain)) >= 20
+        and (len(math_lines) >= 2 or inline_formula_evidence)
+        and len(_prose_words(plain))
+        >= (
+            8
+            if compact_detached_inline
+            else 12
+            if compact_detached_paragraph
+            else 20
+        )
         and sum(plain.count(mark) for mark in ".!?") >= 1
         and not record_is_table(record)
         and not any(
@@ -16165,7 +16841,7 @@ def _fragmented_inline_math_paragraph_block(
     equation normally has a numbered or wide math row, so require neither and
     keep the whole paragraph as one placeholder-protected translation unit.
     """
-    if record_is_table(record):
+    if record_is_table(record) and not record.flow_inline_math:
         return None
     opener = " ".join(strip_sentinels(record.lines[0].text).split())
     academic_formula_statement = bool(
@@ -16187,6 +16863,7 @@ def _fragmented_inline_math_paragraph_block(
         record = _RawBlockRec(
             lines=list(record.lines[:trailing_display_start]),
             detached_inline_scripts=record.detached_inline_scripts,
+            flow_inline_math=record.flow_inline_math,
         )
     if len(record.lines) < 3:
         return None
@@ -16196,6 +16873,9 @@ def _fragmented_inline_math_paragraph_block(
     formula_bearing_lines = [line for line in record.lines if line.math_run_bboxes]
     plain = strip_sentinels(record.bare_text())
     ordinary_flowing_inline = _record_is_flowing_inline_formula_paragraph(record)
+    inline_formula_sentence_bridge = _record_is_inline_formula_sentence_bridge(
+        record
+    )
     ordinary_inline_sentence = bool(
         len(record.lines) >= 3
         and len(prose_lines) >= 3
@@ -16275,6 +16955,7 @@ def _fragmented_inline_math_paragraph_block(
             for line in record.lines
         )
     )
+    explicit_inline_sentence = record.flow_inline_math
     if (
         not equation_record
         and not record.detached_inline_scripts
@@ -16289,8 +16970,10 @@ def _fragmented_inline_math_paragraph_block(
             len(prose_lines) < (1 if short_derivation else 2)
             and not prose_rich_equation_record
             and not formula_explanation_fragment
+            and not inline_formula_sentence_bridge
+            and not explicit_inline_sentence
         )
-        or (not short_derivation and (
+        or (not short_derivation and not explicit_inline_sentence and (
             sum(
                 line_is_prose(line)
                 or (
@@ -16301,22 +16984,36 @@ def _fragmented_inline_math_paragraph_block(
                     prose_rich_equation_record
                     and len(_prose_words(_text_outside_sentinels(line.text))) >= 2
                 )
+                or (
+                    inline_formula_sentence_bridge
+                    and bool(line.prose_bboxes)
+                )
                 for line in record.lines
             )
             / len(record.lines)
             < 0.3
         ))
-        or (not math_fragments and not ordinary_inline_sentence)
+        or (
+            not math_fragments
+            and not ordinary_inline_sentence
+            and not ordinary_flowing_inline
+        )
     ):
         return None
 
     minimum_prose_words = (
         6
         if short_derivation
+        else 8
+        if inline_formula_sentence_bridge
+        else 5
+        if explicit_inline_sentence
+        else 8
+        if ordinary_flowing_inline and record.detached_inline_scripts
         else 7
         if formula_explanation_fragment
         else 12
-        if prose_rich_equation_record
+        if prose_rich_equation_record or ordinary_flowing_inline
         else 20
     )
     if len(_prose_words(plain)) < minimum_prose_words:
@@ -16324,6 +17021,7 @@ def _fragmented_inline_math_paragraph_block(
     if (
         not record.detached_inline_scripts
         and not formula_explanation_fragment
+        and not inline_formula_sentence_bridge
         and sum(plain.count(mark) for mark in ".!?") < 1
     ):
         return None
@@ -16342,6 +17040,7 @@ def _fragmented_inline_math_paragraph_block(
                 or academic_formula_statement
                 or prose_rich_equation_record
                 or ordinary_inline_sentence
+                or explicit_inline_sentence
             )
             and sentinel_char_count(line.text) > 0
             and len(_prose_words(_text_outside_sentinels(line.text))) >= 3
@@ -16357,12 +17056,23 @@ def _fragmented_inline_math_paragraph_block(
     block = paragraph.flush(page_index)
     if block is None:
         return None
-    block.block_type = "formula_prose" if formula_explanation_fragment else "body"
+    block.block_type = (
+        "formula_prose"
+        if (
+            formula_explanation_fragment
+            or inline_formula_sentence_bridge
+            or explicit_inline_sentence
+        )
+        else "body"
+    )
     block.no_merge = bool(
-        not record.detached_inline_scripts
-        and not (
-            prose_rich_equation_record
-            and not sentence_final_text(record.lines[-1].text)
+        explicit_inline_sentence
+        or (
+            not record.detached_inline_scripts
+            and not (
+                prose_rich_equation_record
+                and not sentence_final_text(record.lines[-1].text)
+            )
         )
     )
     block.nowrap = False
@@ -16374,6 +17084,7 @@ def _fragmented_inline_math_paragraph_block(
         or ordinary_flowing_inline
         or ordinary_inline_sentence
         or formula_explanation_fragment
+        or explicit_inline_sentence
     ):
         block.flow_inline_math = True
     return block
@@ -16383,19 +17094,35 @@ def _prose_trailing_display_start(record: _RawBlockRec) -> Optional[int]:
     """Find a 2-D display formula fused after a prose lead at record end."""
     if len(record.lines) < 4:
         return None
-    for index in range(1, len(record.lines) - 1):
+    for index in range(1, len(record.lines)):
         previous = record.lines[index - 1]
         trailing = record.lines[index:]
         previous_plain = " ".join(_text_outside_sentinels(previous.text).split())
-        if not re.search(
-            r"\b(?:(?:defined|expressed|given|written|computed)\s+as|(?:is|are|equals?))\s*$",
+        ordinary_display_lead = re.search(
+            r"\b(?:(?:defined|expressed|given|written|computed)\s+as|"
+            r"(?:is|are|equals?))[,;:]?\s*$",
             previous_plain,
             re.IGNORECASE,
-        ):
+        )
+        bridge_display_lead = bool(
+            _record_is_inline_formula_sentence_bridge(record)
+            and re.search(r"\bhave[,;:]?\s*$", previous_plain, re.IGNORECASE)
+        )
+        if ordinary_display_lead is None and not bridge_display_lead:
             continue
         if any(line_is_prose(line) for line in trailing):
             continue
-        if sum(bool(line.math_bboxes) for line in trailing) < 2:
+        single_display_seed = bool(
+            len(trailing) == 1
+            and bridge_display_lead
+            and trailing[0].math_bboxes
+            and len("".join(strip_sentinels(trailing[0].text).split())) <= 3
+            and trailing[0].bbox[0] >= record.bbox[0] + 48.0
+        )
+        if (
+            sum(bool(line.math_bboxes) for line in trailing) < 2
+            and not single_display_seed
+        ):
             continue
         return index
     return None
@@ -16617,7 +17344,11 @@ def _can_be_shown_formula_bridge_blocks(
     so translating each prose slot in place preserves both the formula and
     the original paragraph geometry.
     """
-    if not record.detached_inline_scripts or len(record.lines) < 4:
+    if (
+        record.flow_inline_math
+        or not record.detached_inline_scripts
+        or len(record.lines) < 4
+    ):
         return None
     first = record.lines[0]
     first_outside = " ".join(_text_outside_sentinels(first.text).split())
@@ -19712,6 +20443,7 @@ def _expanded_radical_restore_atoms(
         else (radical_bbox[1] + radical_bbox[3]) / 2.0
     )
     size = max(1.0, float(radical_span.get("size", 0.0)))
+    radicand_center_limit = min(raw_bbox[3], origin_y + size * 1.25)
     cursor = raw_bbox[2]
     radicand_atoms: List[BBox] = []
     candidates = sorted(
@@ -19724,13 +20456,16 @@ def _expanded_radical_restore_atoms(
     for span in candidates:
         if span is radical_span or not str(span.get("text", "")).strip():
             continue
-        bbox = tuple(float(value) for value in span["bbox"])
+        bbox = tuple(
+            float(value)
+            for value in _normalized_extracted_math_span(span)["bbox"]
+        )
         if bbox[0] < raw_bbox[2] - 0.2:
             continue
         center_y = (bbox[1] + bbox[3]) / 2.0
         if (
             center_y < origin_y - size * 0.15
-            or center_y > raw_bbox[3]
+            or center_y > radicand_center_limit
             or min(raw_bbox[3], bbox[3]) - max(raw_bbox[1], bbox[1]) <= 0.0
         ):
             continue
@@ -20353,6 +21088,7 @@ def _combine_academic_formula_statement_translation_items(
                     preserve_position=False,
                     nowrap=False,
                     bold_prefix=block.bold_prefix,
+                    flow_inline_math=False,
                 ),
                 statement_translation,
             )
@@ -20408,6 +21144,15 @@ def _combine_formula_continuation_translation_items(
             )
         )
         previous_width = max(1.0, previous.bbox[2] - previous.bbox[0])
+        bridge_regions = [
+            *previous.formula_anchors,
+            *(previous.keepout_bboxes or []),
+            *(following.keepout_bboxes or []),
+        ]
+        bridge_right = max(
+            (region[2] for region in bridge_regions),
+            default=previous.bbox[2],
+        )
         detached_formula_suffix = bool(
             previous.formula_anchors
             and following.block_type == "formula_prose"
@@ -20415,7 +21160,8 @@ def _combine_formula_continuation_translation_items(
             and not following.formula_anchors
             and following.keepout_bboxes
             and following.bbox[0] >= previous.bbox[0] + previous_width * 0.6
-            and following.bbox[2] <= previous.bbox[2] + 1.0
+            and following.bbox[0] - bridge_right
+            <= max(5.0, following.font_size * 2.0)
             and min(previous.bbox[3], following.bbox[3])
             - max(previous.bbox[1], following.bbox[1])
             > 0.0
@@ -20471,7 +21217,7 @@ def _combine_formula_continuation_translation_items(
             previous.bbox[2] - previous.bbox[0],
             following.bbox[2] - following.bbox[0],
         )
-        if overlap < narrower_width * 0.65:
+        if not detached_formula_suffix and overlap < narrower_width * 0.65:
             return False
         previous_plain = " ".join(strip_sentinels(previous.text).split()).strip()
         if sentence_final_text(previous_plain):
@@ -20489,14 +21235,26 @@ def _combine_formula_continuation_translation_items(
     while index < len(items):
         block, translated = items[index]
         cursor = index + 1
+        combined_formula_flow = block.flow_inline_math
         while cursor < len(items) and can_append(block, items[cursor][0]):
             following, following_translation = items[cursor]
             merged = merge_two_blocks(block, following)
+            combined_formula_flow = bool(
+                combined_formula_flow
+                or following.flow_inline_math
+                or merged.formula_anchors
+                or merged.keepout_formula_atom_groups
+            )
             block = replace(
                 merged,
                 block_type=block.block_type,
                 no_merge=True,
                 preserve_position=False,
+                # Keep the original value while the continuation chain is
+                # still open. The guard in ``can_append`` deliberately
+                # rejects pre-existing flow blocks, but must not truncate a
+                # chain that this pass itself just assembled.
+                flow_inline_math=block.flow_inline_math,
                 bold_prefix=block.bold_prefix,
                 translated_bold_prefix_chars=block.translated_bold_prefix_chars,
                 source_style_runs=tuple(
@@ -20505,6 +21263,8 @@ def _combine_formula_continuation_translation_items(
             )
             translated = join_lines([translated, following_translation])
             cursor += 1
+        if cursor > index + 1:
+            block = replace(block, flow_inline_math=combined_formula_flow)
         combined.append((block, translated))
         index = cursor
     return combined
@@ -20963,6 +21723,28 @@ def _cascade_same_column(first: TextBlock, second: TextBlock) -> bool:
     return left_edge_delta <= max(40.0, narrower_width * 0.35)
 
 
+def _cascade_formula_regions(block: TextBlock) -> Tuple[BBox, ...]:
+    """Formula ink regions whose layout ownership belongs to ``block``."""
+    return tuple(
+        dict.fromkeys(
+            [
+                *block.formula_anchors,
+                *block.source_math_bboxes,
+            ]
+        )
+    )
+
+
+def _cascade_obstacle_is_owned_formula(block: TextBlock, obstacle: BBox) -> bool:
+    obstacle_area = max(1.0, bbox_area(obstacle))
+    for formula_region in _cascade_formula_regions(block):
+        formula_area = max(1.0, bbox_area(formula_region))
+        overlap = bbox_intersection_area(obstacle, formula_region)
+        if overlap / min(obstacle_area, formula_area) >= 0.55:
+            return True
+    return False
+
+
 def _cascade_item_movable(block: TextBlock) -> bool:
     return bool(
         block.block_type in _CASCADE_MOVABLE_TYPES
@@ -21316,7 +22098,19 @@ def _cascade_expand_page_items(
         for other_index, (other, _other_text) in enumerate(updated):
             if other_index == index or not _cascade_same_column(block, other):
                 continue
-            if other.bbox[1] < block.bbox[3] - 1.0:
+            source_overlap = block.bbox[3] - other.bbox[1]
+            overlapping_formula_flow = bool(
+                block.flow_inline_math
+                and other.flow_inline_math
+                and _cascade_item_movable(other)
+                and other.bbox[1] > block.bbox[1] + 1.0
+                and 0.0 < source_overlap
+                <= max(6.0, min(block.font_size, other.font_size) * 0.65)
+            )
+            if (
+                other.bbox[1] < block.bbox[3] - 1.0
+                and not overlapping_formula_flow
+            ):
                 continue
             if _cascade_item_movable(other):
                 followers.append(other_index)
@@ -21330,6 +22124,14 @@ def _cascade_expand_page_items(
                 block.bbox[2] - block.bbox[0],
                 obstacle[2] - obstacle[0],
             ) * 0.35:
+                continue
+            if _cascade_obstacle_is_owned_formula(block, obstacle) or any(
+                _cascade_obstacle_is_owned_formula(
+                    updated[other_index][0],
+                    obstacle,
+                )
+                for other_index in followers
+            ):
                 continue
             target_reaches_obstacle = (
                 obstacle[1] < block.bbox[3] + deficit + 2.0
@@ -21568,7 +22370,7 @@ def _expand_multiline_block_bbox(
     height = y1 - y0
     unresolved_keepouts = _unresolved_formula_keepouts(block)
     needs_keepout_expansion = bool(
-        block.formula_anchors
+        (block.formula_anchors or block.keepout_formula_atom_groups)
         and unresolved_keepouts
         and not translated_text_fits(
             block=block,
@@ -22223,10 +23025,10 @@ def _formula_source_indexes_in_translation_order(
     block: TextBlock,
 ) -> Tuple[int, ...]:
     """Map reordered translated formula markers back to their source runs."""
-    translated_markers = list(SENTINEL_RUN_RE.finditer(text))
-    source_markers = list(SENTINEL_RUN_RE.finditer(block.text))
     count = len(block.formula_anchors)
     positional = tuple(range(count))
+    translated_markers = _formula_markers_for_anchor_count(text, count)
+    source_markers = _formula_markers_for_anchor_count(block.text, count)
     if len(translated_markers) != count or len(source_markers) != count:
         return positional
 
@@ -22246,6 +23048,27 @@ def _formula_source_indexes_in_translation_order(
     if len(set(reordered)) != count:
         return positional
     return tuple(reordered)
+
+
+def _formula_markers_for_anchor_count(
+    text: str,
+    anchor_count: int,
+) -> List[re.Match[str]]:
+    """Keep formula anchors stable when translation normalizes whitespace.
+
+    Extraction intentionally combines adjacent sentinel groups into one
+    translation placeholder. Separate source placeholders can nevertheless
+    become adjacent after a translator changes two spaces to one. In that
+    case the run regex loses the placeholder boundary, while the individual
+    sentinel groups still provide an exact one-to-one mapping.
+    """
+    run_markers = list(SENTINEL_RUN_RE.finditer(text))
+    if len(run_markers) == anchor_count:
+        return run_markers
+    group_markers = list(SENTINEL_GROUP_RE.finditer(text))
+    if len(group_markers) == anchor_count:
+        return group_markers
+    return run_markers
 
 
 def _formula_source_baseline_ratio(block: TextBlock, source_bbox: BBox) -> float:
@@ -22281,7 +23104,7 @@ def _formula_source_baseline_ratio(block: TextBlock, source_bbox: BBox) -> float
 
 
 def _tokenize_translation_with_formula_clips(text: str, block: TextBlock) -> List[_Token]:
-    markers = list(SENTINEL_RUN_RE.finditer(text))
+    markers = _formula_markers_for_anchor_count(text, len(block.formula_anchors))
     if not markers or len(markers) != len(block.formula_anchors):
         return tokenize_text(clean_translation(strip_sentinels(text)))
 
@@ -22483,6 +23306,25 @@ def _formula_markers_form_atom(first: BBox, second: BBox, separator: str) -> boo
         >= min(first_width, second_width) * 0.55
         and vertical_overlap >= min(first_height, second_height) * 0.45
     ):
+        return True
+    radical_overbar_stack = bool(
+        horizontal_overlap >= min(first_width, second_width) * 0.65
+        and vertical_gap <= max(1.5, reference * 0.15)
+        and first[0] <= second[0] + 1.0
+        and first[2] >= second[2] - 1.0
+    )
+    if radical_overbar_stack:
+        return True
+    advancing_radical_radicand = bool(
+        horizontal_overlap >= min(first_width, second_width) * 0.45
+        and vertical_gap <= max(1.5, reference * 0.15)
+        and first[0] + 1.0 < second[0]
+        and first[2] + 1.0 < second[2]
+        and first[1] < second[1]
+        and first[3] < second[3]
+        and 0.0 < second_center_x - first_center_x <= max(12.0, reference * 1.1)
+    )
+    if advancing_radical_radicand:
         return True
     stacked_script = bool(
         vertical_gap <= 1.5
@@ -23315,11 +24157,28 @@ def _formula_segment_slots(
             segment_index += len(anchors_by_line.get(line_index, []))
             continue
         baseline = min(line_y1 - size * 0.05, line_y0 + size * 0.82)
+        text_band_top = baseline - size * 0.82
+        text_band_bottom = baseline + size * 0.24
         blockers = [
             bbox
             for bbox in (block.keepout_bboxes or [])
             if bbox_share_y_band(line_bbox, bbox)
         ]
+        blockers.extend(
+            anchor
+            for anchor_index, anchor in enumerate(anchors)
+            if anchor_line_indexes[anchor_index] != line_index
+            and min(anchor[3], text_band_bottom)
+            - max(anchor[1], text_band_top)
+            >= max(
+                0.5,
+                min(
+                    anchor[3] - anchor[1],
+                    text_band_bottom - text_band_top,
+                )
+                * 0.15,
+            )
+        )
         cursor_x = float(rect.x0)
         for anchor in anchors_by_line.get(line_index, []):
             interval_end = min(float(rect.x1), anchor[0] - _KEEPOUT_PAD)

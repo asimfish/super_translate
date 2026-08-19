@@ -551,3 +551,39 @@ towers, rule-bounded sample tables without numbered captions, translated
 technical signatures in captions, preserved table payloads, and false display
 formula alignment alerts. They are limited to the pages required for those
 regressions and are retained under fair-use test-fixture scope.
+
+## Classic20 final-r2 strict-gate replays
+
+These excerpts freeze the four papers rejected by the fresh, isolated
+`classic20_final_r2_09f6992` run on engine commit
+`09f69920654f1ca1fdf81a2f6df9c0728a090a83`. The source PDFs were fetched from
+the official arXiv records on 2026-08-17 and declare the arXiv non-exclusive
+distribution license. The paired translated PDFs are test-only outputs from
+that same round and must not be used as release artifacts.
+
+| fixture | title / official source | pages | full source SHA256 | full failed output SHA256 | fixture SHA256 | paired fixture SHA256 | cache SHA256 |
+|---|---|---:|---|---|---|---|---|
+| `classic20_final_r2_gan_p4.pdf` | [Generative Adversarial Networks](https://arxiv.org/abs/1406.2661) | 4 | `ff5819e3a7b713c3bd3107b7de3d51fe0a347aa5d8444f0efdcf2345ef0a8b63` | `38832ddcc5bba74bb4892719daa30ebb0ca5e2c53b284e02bdfa29140079fb95` | `333c25c058ae47f753e3cd3aea08f105a5430fc6bf0b727b94310d112f5d5cb7` | `5e038b25f9f5eb3412db68372274b4ce9c5d56be147d367f19852d8fffe1d08a` | `ecf8d3ca9044b5f99c4a194f5c7ef6566d425e83d6a4d829a8598103289474f7` |
+| `classic20_final_r2_adam_p3_p9_p12_p13.pdf` | [Adam: A Method for Stochastic Optimization](https://arxiv.org/abs/1412.6980) | 3, 9, 12, 13 | `eab9c73ae2ceda884b94830bda99312254bac4806f6c9f045cbab90721ecda31` | `0f1f2487424b545c4e492248ab63c7602c9ef86de13f4534f57870e4ba4f9f67` | `cdb82a448b892b00b6a0ac88d843676bb61b3d2aaf11d759401dbb4a52d87366` | `dc46b7d7d6219e9ac7f92aaf8a9bda2d6cf9de30045a4c771f72166ea7536d09` | `1f804fe1e18b4d97df099997c1466d2e18677e528fed204c941f814219e3288e` |
+| `classic20_final_r2_ddpm_p2.pdf` | [Denoising Diffusion Probabilistic Models](https://arxiv.org/abs/2006.11239) | 2 | `aee5e07a802e8dfd2a386374c94fd61d1d056cb7e1e0fec4f28e8120ff5d8505` | `1f7cd978cf288a457144045ea14cbf71917c315be1bb0d118c3eff644e48218f` | `20e7b6e2dd22c4315a5c69b19ef6306ac7b21c162b1657b8e67147547160eba8` | `2259ecfc5e32552a984335318ebf3f4ef714ee0758a66a7ec3b5c3f4f1c7cf32` | `49ab83bf0a76427e9e86d3a4d7471d6dc00849d280a21587c91e2c56adfddd87` |
+| `classic20_final_r2_latent_p10_p13_p29.pdf` | [High-Resolution Image Synthesis with Latent Diffusion Models](https://arxiv.org/abs/2112.10752) | 10-13, 29 | `46ede043a8dc07ca1f0f445620523fe1ad8b2436bd83856a3835612a47e9f79e` | `5abb064649027e5816afb439c8d9052440a588a6dbf5e5b18fe98890bd093538` | `9d485b60b7f5d25207a1a29e6d71e42db17a0fb22bdf3c319c475724fc1b474d` | `30cd78ceb82bf68cdee3b1ac7827f3108f7326dba7bc4dec3e06b5f544cf716d` | `a6bdb13ba6a08cf9b3c0577845dfa100f4b3a4fb7eeee1136e4d4f29c8ed5c75` |
+
+The excerpts were produced with PyMuPDF `insert_pdf`, preserving the original
+page content streams and text fragmentation:
+
+```python
+import fitz
+
+source = fitz.open("paper.pdf")
+fixture = fitz.open()
+for page_number in PAGES:
+    fixture.insert_pdf(source, from_page=page_number - 1, to_page=page_number - 1)
+fixture.save("tests/fixtures/output.pdf", garbage=4, deflate=True, clean=False)
+```
+
+The r2 fixtures cover a correctly rendered run-in label misassigned by QA,
+formula-bearing body paragraphs that overlap or shrink, a display-equation row
+polluted by paragraph tail text, a bibliography continuation translated after
+a false appendix boundary, and invisible selectable formula text incorrectly
+counted as visible small body text. Existing synthetic and production damage
+fixtures remain the non-target controls.

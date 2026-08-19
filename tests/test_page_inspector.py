@@ -254,6 +254,43 @@ class TestProductionRegressions:
                 ],
             )
 
+    def test_inline_formula_keepout_group_is_not_scored_as_fixed_display(self):
+        from pdf_zh_translator.page_inspector import (
+            _display_alignment_issues,
+            _InkCache,
+        )
+
+        original = fitz.open()
+        original_page = original.new_page(width=300, height=160)
+        original_page.insert_text((90.0, 60.0), "x = y", fontsize=12.0)
+        translated = fitz.open()
+        translated_page = translated.new_page(width=300, height=160)
+        translated_page.insert_text((155.0, 60.0), "x = y", fontsize=12.0)
+        equation_row = (60.0, 42.0, 230.0, 66.0)
+        formula_atoms = ((86.0, 44.0, 126.0, 64.0),)
+
+        issues = _display_alignment_issues(
+            _InkCache(original_page),
+            _InkCache(translated_page),
+            1,
+            [equation_row],
+            source_role_blocks=[
+                SimpleNamespace(
+                    bbox=(40.0, 40.0, 260.0, 72.0),
+                    block_type="body",
+                    formula_anchors=(),
+                    flow_inline_math=True,
+                    preserve_position=False,
+                    keepout_formula_atom_groups=(formula_atoms,),
+                    redaction_formula_restore_groups=(),
+                )
+            ],
+        )
+
+        translated.close()
+        original.close()
+        assert issues == []
+
     def test_clean_page_stays_clean(self):
         codes = _codes("otf_p1_clean")
         assert not set(codes) & INSPECTOR_ISSUE_CODES

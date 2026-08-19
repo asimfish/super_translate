@@ -91,6 +91,7 @@ All settings can be configured via environment variables with the `PAPER_CHINA_`
 | `PAPER_CHINA_GLM_API_KEY` | — | Local-administrator GLM API key fallback |
 | `PAPER_CHINA_CREDENTIAL_ENCRYPTION_KEY` | — | Base64url-encoded 32-byte key for per-user API credentials |
 | `PAPER_CHINA_TRANSLATION_ENGINE` | `native` | Translation engine (`native` or `pdf2zh`) |
+| `PAPER_CHINA_FONT_CACHE_DIR` | `~/.cache/paper-china/fonts` | Local cache for CJK faces extracted from system fonts |
 | `PAPER_CHINA_TRANSLATION_BACKEND` | `deepseek` | Default translation backend |
 | `PAPER_CHINA_TRANSLATION_TIMEOUT_SECONDS` | `1800` | Global timeout for each translation run |
 | `PAPER_CHINA_MAX_CONCURRENT_TRANSLATIONS` | `1` | Max concurrent translation jobs |

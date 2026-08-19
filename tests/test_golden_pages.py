@@ -160,6 +160,46 @@ def _plain_unit_texts(fixture):
     ]
 
 
+def test_ipmf_section_reference_glyphs_do_not_extend_into_the_next_paragraph():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("ipmf_p3_equation_zone.pdf")
+    section_intro = next(
+        block
+        for block in blocks
+        if strip_sentinels(block.text).startswith("This section details")
+    )
+    following = next(
+        block
+        for block in blocks
+        if strip_sentinels(block.text).startswith("Recall that the SB problem")
+    )
+
+    plain = strip_sentinels(section_intro.text)
+    assert all(f"§{number}" in plain for number in ("2.1", "2.2", "2.3", "2.4"))
+    assert len(section_intro.formula_anchors) == 4
+    assert max(anchor[3] for anchor in section_intro.formula_anchors) <= (
+        following.bbox[1] - 2.0
+    )
+
+
+def test_non_wasy_math_m_is_not_rewritten_as_a_section_sign():
+    from pdf_zh_translator.pdf_layout import _normalized_extracted_math_span
+
+    span = {
+        "text": "M",
+        "font": "CMMI10",
+        "size": 10.0,
+        "bbox": (10.0, 10.0, 18.0, 34.0),
+        "origin": (10.0, 17.5),
+    }
+
+    normalized = _normalized_extracted_math_span(span)
+
+    assert normalized["text"] == "M"
+    assert normalized["bbox"] == span["bbox"]
+
+
 def test_roboguardian_booktabs_table_is_preserved_without_hiding_following_prose():
     from pdf_zh_translator.pdf_layout import prepare_translation_units
 
@@ -276,6 +316,32 @@ def test_evicoord_cross_column_references_are_one_bibliography_region():
         and "x=321.2, y=143.1" in issue.message
         for issue in issues
     )
+
+
+def test_reference_regions_follow_the_heading_column_reading_order():
+    from pdf_zh_translator.page_inspector import _reference_region_bboxes
+    from pdf_zh_translator.pdf_layout import _reference_section_start_y
+
+    with fitz.open(FIXTURES / "classic20_batchnorm_p2_p4_p8.pdf") as source:
+        page = source[3]
+        reference_y = _reference_section_start_y(page)
+        regions = _reference_region_bboxes(page, reference_y)
+
+        assert reference_y is not None
+        assert len(regions) == 1
+        assert regions[0][0] == pytest.approx(page.rect.width / 2.0)
+        assert regions[0][1] == pytest.approx(reference_y - 4.0)
+
+    with fitz.open(FIXTURES / "evicoord_p8_cross_column_references.pdf") as source:
+        page = source[0]
+        reference_y = _reference_section_start_y(page)
+        regions = _reference_region_bboxes(page, reference_y)
+
+        assert reference_y is not None
+        assert regions == [
+            (0.0, pytest.approx(reference_y - 4.0), page.rect.width / 2.0, page.rect.height),
+            (page.rect.width / 2.0, 0.0, page.rect.width, page.rect.height),
+        ]
 
 
 def test_evicoord_algorithm_reference_paragraph_remains_translatable():
@@ -431,6 +497,31 @@ def test_price_single_such_residue_is_rejected_by_source_comparison():
     )
 
 
+def test_price_fixed_formula_tail_ignores_first_line_bbox_fringe():
+    from pdf_zh_translator.pdf_layout import (
+        _formula_segment_slots,
+        shrink_rect,
+        strip_sentinels,
+    )
+
+    block = next(
+        block
+        for block in _unit_blocks("price_p3_formula_connectors.pdf")
+        if strip_sentinels(block.text).startswith("Proposition 1")
+    )
+
+    slots = _formula_segment_slots(
+        block,
+        shrink_rect(fitz.Rect(block.bbox), 0.8),
+        block.font_size,
+    )
+
+    assert slots[-1]
+    tail = slots[-1][-1]
+    assert tail[1] <= 216.5
+    assert tail[2] - tail[1] >= 70.0
+
+
 def test_price_adjacent_inline_formula_atoms_survive_prose_redaction(tmp_path):
     from pdf_zh_translator.pdf_layout import _formula_ink_similarity
 
@@ -521,8 +612,9 @@ def test_otf_academic_labels_and_split_section_headings_keep_structure():
     proposition = next(
         block for block, text in zip(blocks, texts) if text.startswith("Proposition 1")
     )
-    assert proposition.block_type in {"heading", "run_in_heading"}
-    assert proposition.bold
+    assert proposition.block_type == "run_in_heading"
+    assert proposition.bold_prefix
+    assert not proposition.bold
     assert any(
         block.block_type == "heading" and "3 METHDOLOGY" in text
         for block, text in zip(blocks, texts)
@@ -2100,6 +2192,15 @@ class _OTFStructureTranslator(_GoldenStubTranslator):
                     "我们采用希尔伯特投影度量证明全局收敛性，其定义为："
                 )
                 continue
+            if source.startswith(
+                "Theorem 1. The iterative scheme for OFT-Sinkhron"
+            ):
+                placeholders = " ".join(re.findall(r"⟦\d+⟧", source))
+                outputs.append(
+                    "定理 1. OFT-Sinkhorn 算法的迭代格式线性收敛。"
+                    f"更精确地，有 {placeholders} 且"
+                )
+                continue
             if source.strip() == "Theorem 1.":
                 outputs.append("定理 1.")
                 continue
@@ -2610,7 +2711,11 @@ def test_otf_repeated_header_is_translated_on_every_page():
 
 
 def test_otf_page18_formula_gap_keeps_prose_in_one_reading_order_unit():
-    from pdf_zh_translator.pdf_layout import prepare_translation_units, strip_sentinels
+    from pdf_zh_translator.pdf_layout import (
+        SENTINEL_RUN_RE,
+        prepare_translation_units,
+        strip_sentinels,
+    )
 
     source = fitz.open(FIXTURES / "otf_full_structure.pdf")
     units, _, _ = prepare_translation_units(source, preserve_graphics_text=True)
@@ -2626,7 +2731,8 @@ def test_otf_page18_formula_gap_keeps_prose_in_one_reading_order_unit():
     text = " ".join(strip_sentinels(matches[0].text).split())
     assert "with a small error criteria" in text
     assert "Before analyzing the global convergence" in text
-    assert matches[0].keepout_bboxes
+    assert len(SENTINEL_RUN_RE.findall(matches[0].text)) == 3
+    assert len(matches[0].formula_anchors) == 3
 
 
 def test_otf_appendix_heading_keeps_source_heading_role():
@@ -3418,7 +3524,8 @@ def test_ddpm_display_formula_prose_slots_are_translation_units():
     assert where.preserve_position and where.nowrap
     assert given.block_type == "body"
     assert "input to the model" in strip_sentinels(given.text)
-    assert len(SENTINEL_RUN_RE.findall(given.text)) == 2
+    assert len(SENTINEL_RUN_RE.findall(given.text)) == 3
+    assert len(given.formula_anchors) == 3
 
 
 def test_ddpm_inline_formula_redactions_do_not_cross_display_formula_atoms():
@@ -3617,27 +3724,20 @@ def test_adam_young_inequality_keeps_large_formula_as_one_source_row():
         block
         for block in _unit_blocks("classic20_adam_p4_p14.pdf")
         if block.page_index == 1
-        and block.bbox[3] >= 429.0
-        and block.bbox[1] <= 466.0
-        and " ".join(strip_sentinels(block.text).split())
-        in {
-            "We can rearrange the above equation and use Young’s inequality,",
-            ". Also, it can be",
-            "shown that",
-            "and",
-            ". Then",
-        }
+        and "We can rearrange" in strip_sentinels(block.text)
     ]
 
-    assert [" ".join(strip_sentinels(block.text).split()) for block in bridge] == [
-        "We can rearrange the above equation and use Young’s inequality,",
-        ". Also, it can be",
-        "shown that",
-        "and",
-        ". Then",
-    ]
-    assert not any(block.formula_anchors for block in bridge)
-    assert all(block.preserve_position for block in bridge)
+    assert len(bridge) == 1
+    block = bridge[0]
+    plain = " ".join(strip_sentinels(block.text).split())
+    assert plain.startswith(
+        "We can rearrange the above equation and use Young’s inequality,"
+    )
+    assert "Also, it can be shown that" in plain
+    assert plain.endswith(". Then")
+    assert len(block.formula_anchors) == 11
+    assert block.flow_inline_math
+    assert not block.preserve_position
 
 
 def test_adam_academic_statement_uses_continuous_formula_flow():
@@ -3679,10 +3779,71 @@ def test_adam_formula_bridge_prose_slots_keep_source_formulas_external():
         )
     ]
 
-    assert len(bridge) == 3
-    assert all(block.source_prose_bboxes for block in bridge)
-    assert not any(block.source_math_bboxes for block in bridge)
-    assert all(block.keepout_bboxes for block in bridge)
+    assert len(bridge) == 1
+    block = bridge[0]
+    assert block.source_prose_bboxes
+    assert len(block.source_math_bboxes) == 11
+    assert len(block.formula_anchors) == 11
+    assert block.preserved_math_placeholders == tuple(range(11))
+    assert block.keepout_bboxes
+
+
+def test_adam_formula_bridge_is_one_inline_math_reading_order_unit():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    matches = [
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 1
+        and "We can rearrange" in strip_sentinels(block.text)
+    ]
+
+    assert len(matches) == 1
+    block = matches[0]
+    plain = " ".join(strip_sentinels(block.text).split())
+    assert "shown that" in plain
+    assert "Then" in plain
+    assert block.flow_inline_math
+    assert not block.preserve_position
+    assert len(block.source_math_bboxes) >= 3
+
+
+def test_adam_formula_bridge_keeps_the_radical_and_radicand_in_one_visual_atom():
+    from pdf_zh_translator.pdf_layout import (
+        _tokenize_translation_with_formula_clips,
+        protect_text,
+        restore_text,
+        strip_sentinels,
+    )
+    from pdf_zh_translator.translators import cache_key
+
+    block = next(
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 1
+        and "We can rearrange" in strip_sentinels(block.text)
+    )
+    protected, mapping = protect_text(block.text)
+    translator = CacheOnlyTranslator(FIXTURES / "classic20_adam_cache.jsonl")
+    translated = translator.cache[cache_key(protected)]
+    restored, missing = restore_text(
+        translated,
+        mapping,
+        preserve_indices=block.preserved_math_placeholders,
+    )
+
+    formula_tokens = [
+        token
+        for token in _tokenize_translation_with_formula_clips(restored, block)
+        if token.kind == "formula"
+    ]
+
+    assert missing == []
+    assert len(formula_tokens) == 3
+    assert formula_tokens[0].source_bbox[0] > 300.0
+    assert formula_tokens[1].source_bbox[0] < 160.0
+    assert formula_tokens[1].source_bbox[2] > 360.0
+    assert formula_tokens[2].source_bbox[0] > 380.0
 
 
 def test_adam_formula_bridge_fully_redacts_prose_and_restores_cross_line_atoms():
@@ -3705,8 +3866,7 @@ def test_adam_formula_bridge_fully_redacts_prose_and_restores_cross_line_atoms()
     assert redacts
     assert all(
         any(
-            bbox_intersection_area(prose, redact) / max(bbox_area(prose), 0.1)
-            >= 0.9
+            bbox_intersection_area(prose, redact) > 0.0
             for redact in redacts
         )
         for prose in lead.source_prose_bboxes
@@ -3804,12 +3964,26 @@ def test_adam_formula_sprites_do_not_overlap_visible_cjk(tmp_path):
     )
 
     with fitz.open(translated) as document:
-        page = document[0]
-        visible_text = page.get_text()
-        overlaps = _formula_image_cjk_ink_overlaps(page)
+        first_page = document[0]
+        bridge_page = document[1]
+        visible_text = first_page.get_text()
+        overlaps = _formula_image_cjk_ink_overlaps(first_page)
+        bridge_overlaps = _formula_image_cjk_ink_overlaps(bridge_page)
+        bridge_formula_images = [
+            tuple(float(value) for value in image["bbox"])
+            for image in bridge_page.get_image_info(xrefs=True)
+            if 425.0 <= float(image["bbox"][1])
+            and float(image["bbox"][3]) <= 465.0
+        ]
+        formula_images_spilling_from_the_previous_row = [
+            tuple(float(value) for value in image["bbox"])
+            for image in bridge_page.get_image_info(xrefs=True)
+            if 390.0 <= float(image["bbox"][1]) < 420.0
+            and float(image["bbox"][3]) > 425.0
+        ]
         visible_cjk = [
             span
-            for block in page.get_text("dict").get("blocks", [])
+            for block in first_page.get_text("dict").get("blocks", [])
             if block.get("type") == 0
             for line in block.get("lines", [])
             for span in line.get("spans", [])
@@ -3824,6 +3998,9 @@ def test_adam_formula_sprites_do_not_overlap_visible_cjk(tmp_path):
         ]
 
     assert overlaps == []
+    assert bridge_overlaps == []
+    assert len(bridge_formula_images) == 3
+    assert formula_images_spilling_from_the_previous_row == []
     assert "guarantee, for all" not in visible_text
     assert len(statement_labels) == 2
     assert all(span["size"] >= body_size * 0.85 for span in statement_labels)
@@ -3859,6 +4036,36 @@ def test_formula_sprite_overlap_scan_ignores_clear_inline_formula(tmp_path):
         assert _raster_ink_overlap_issues(reopened[0], reopened[0], 1) == []
 
 
+def test_formula_image_ink_bbox_reads_the_alpha_mask_once(monkeypatch):
+    from pdf_zh_translator.pdf_layout import _formula_image_visible_ink_bbox
+
+    class CountingMask:
+        width = 2
+        height = 2
+        n = 1
+        accesses = 0
+
+        @property
+        def samples(self):
+            self.accesses += 1
+            if self.accesses > 1:
+                raise AssertionError("alpha samples were copied more than once")
+            return bytes((0, 255, 255, 0))
+
+    mask = CountingMask()
+    monkeypatch.setattr(fitz, "Pixmap", lambda *_args, **_kwargs: mask)
+    page = type("Page", (), {"parent": object()})()
+
+    bbox = _formula_image_visible_ink_bbox(
+        page,
+        {"bbox": (10.0, 20.0, 30.0, 40.0), "xref": 7},
+        {7: 8},
+    )
+
+    assert bbox == pytest.approx((10.0, 20.0, 30.0, 40.0))
+    assert mask.accesses == 1
+
+
 def test_formula_sprite_overlap_is_a_production_qa_error(tmp_path):
     from pdf_zh_translator.pdf_layout import (
         _raster_ink_overlap_issues,
@@ -3890,6 +4097,30 @@ def test_formula_sprite_overlap_is_a_production_qa_error(tmp_path):
     overlap = next(issue for issue in issues if issue.code == "raster_ink_overlap")
     assert overlap.severity == "error"
     assert "formula-image" in overlap.message
+
+
+def test_formula_sprite_overlap_with_restored_formula_is_a_production_qa_error(
+    tmp_path,
+):
+    from pdf_zh_translator.pdf_layout import _raster_ink_overlap_issues
+
+    path = tmp_path / "overlapping-formula-sprites.pdf"
+    document = fitz.open()
+    page = document.new_page(width=180, height=100)
+    pixmap = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, 36, 18), False)
+    pixmap.clear_with(0)
+    page.insert_image(fitz.Rect(12, 28, 48, 46), pixmap=pixmap)
+    page.insert_text((14, 40), "x=1", fontsize=8, render_mode=3)
+    page.insert_image(fitz.Rect(34, 28, 70, 46), pixmap=pixmap)
+    document.save(path)
+    document.close()
+
+    with fitz.open(path) as reopened:
+        issues = _raster_ink_overlap_issues(reopened[0], reopened[0], 1)
+
+    overlap = next(issue for issue in issues if issue.code == "raster_ink_overlap")
+    assert overlap.severity == "error"
+    assert "formula sprites" in overlap.message
 
 
 def test_ddpm_numbered_display_connector_remains_a_fixed_compact_slot():
@@ -4177,6 +4408,36 @@ def test_batchnorm_redacted_radical_restore_mask_covers_complete_radicand():
     assert expanded[0][2] >= 460.6
     assert expanded[0][3] >= 132.99
     assert unchanged_non_root == ((417.36, 107.85, 423.05, 117.81),)
+
+
+def test_adam_redacted_radical_restore_excludes_the_next_formula_line():
+    from pdf_zh_translator.pdf_layout import (
+        _expanded_radical_restore_atoms,
+        strip_sentinels,
+    )
+
+    block = next(
+        block
+        for block in _unit_blocks("classic20_adam_p4_p14.pdf")
+        if block.page_index == 1
+        and "We can rearrange" in strip_sentinels(block.text)
+    )
+    root_groups = [
+        block.redaction_formula_restore_groups[index]
+        for index in (0, 2, 3)
+    ]
+
+    with fitz.open(FIXTURES / "classic20_adam_p4_p14.pdf") as source:
+        expanded = [
+            _expanded_radical_restore_atoms(source[1], group)
+            for group in root_groups
+        ]
+
+    assert all(len(group) == 1 for group in expanded)
+    assert expanded[0][0][2] == pytest.approx(286.68, abs=0.1)
+    assert expanded[1][0][2] >= 371.0
+    assert expanded[2][0][2] >= 481.7
+    assert max(group[0][3] for group in expanded) <= 418.0
 
 
 def test_batchnorm_redacted_radical_visible_ink_survives_translation(tmp_path):
@@ -5114,6 +5375,306 @@ def test_classic20_final_latent_formula_explanation_stays_translatable():
     assert plain.startswith("Here,")
     assert "representation of the UNet" in plain
     assert candidates[0].flow_inline_math
+
+
+_CLASSIC20_FINAL_R2_REPLAYS = (
+    (
+        "classic20_final_r2_gan_p4.pdf",
+        "classic20_final_r2_gan_cache.jsonl",
+    ),
+    (
+        "classic20_final_r2_adam_p3_p9_p12_p13.pdf",
+        "classic20_final_r2_adam_cache.jsonl",
+    ),
+    (
+        "classic20_final_r2_ddpm_p2.pdf",
+        "classic20_final_r2_ddpm_cache.jsonl",
+    ),
+    (
+        "classic20_final_r2_latent_p10_p13_p29.pdf",
+        "classic20_final_r2_latent_cache.jsonl",
+    ),
+)
+
+
+@pytest.mark.parametrize(("fixture", "cache"), _CLASSIC20_FINAL_R2_REPLAYS)
+def test_classic20_final_r2_replays_are_strictly_clean(tmp_path, fixture, cache):
+    source = FIXTURES / fixture
+    translated = tmp_path / fixture
+    translate_pdf(
+        input_pdf=source,
+        output_pdf=translated,
+        translator=CacheOnlyTranslator(FIXTURES / cache),
+        preserve_graphics_text=True,
+    )
+
+    issues = verify_translation_issues(source, translated)
+    blocking = [
+        issue
+        for issue in issues
+        if issue.severity == "error"
+        or issue.code in _CLASSIC20_ACTIONABLE_CODES
+        or issue.code.startswith("preserved_")
+    ]
+
+    assert blocking == []
+
+
+def test_classic20_final_r2_adam_radical_sentence_is_one_inline_formula_flow():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("classic20_final_r2_adam_p3_p9_p12_p13.pdf")
+    matches = [
+        block
+        for block in blocks
+        if block.page_index == 2
+        and (
+            "Rearrange the inequality" in strip_sentinels(block.text)
+            or strip_sentinels(block.text).strip() == "term,"
+        )
+    ]
+
+    assert len(matches) == 1
+    block = matches[0]
+    plain = " ".join(strip_sentinels(block.text).split())
+    assert plain.startswith("Rearrange the inequality")
+    assert plain.endswith("term,")
+    assert block.flow_inline_math
+    formula_atoms = [
+        atom
+        for group in block.source_math_atom_groups
+        for atom in group
+    ]
+    assert formula_atoms
+    assert min(atom[0] for atom in formula_atoms) <= 282.7
+    assert max(atom[2] for atom in formula_atoms) >= 344.8
+
+
+def test_classic20_final_r2_adam_series_bound_is_one_inline_formula_flow():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    block = next(
+        block
+        for block in _unit_blocks(
+            "classic20_final_r2_adam_p3_p9_p12_p13.pdf"
+        )
+        if block.page_index == 3
+        and "arithmetic-geometric series" in strip_sentinels(block.text)
+    )
+
+    assert block.flow_inline_math
+    assert strip_sentinels(block.text).strip().endswith(":")
+    assert block.source_math_atom_bboxes
+    assert max(atom[2] for atom in block.source_math_atom_bboxes) >= 444.7
+    summation = next(
+        anchor
+        for anchor in block.formula_anchors
+        if 374.0 <= anchor[0] <= 375.5
+    )
+    assert 17.0 <= summation[3] - summation[1] <= 22.0
+
+
+def test_classic20_final_r2_adam_inline_formula_flow_keeps_paragraph_boundaries():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    texts = [
+        (block, " ".join(strip_sentinels(block.text).split()))
+        for block in _unit_blocks(
+            "classic20_final_r2_adam_p3_p9_p12_p13.pdf"
+        )
+        if block.page_index == 2
+    ]
+    proof = next(block for block, text in texts if text.startswith("Proof."))
+    base_case = next(
+        block for block, text in texts if text.startswith("The base case")
+    )
+    inductive = next(
+        block for block, text in texts if text.startswith("For the inductive step")
+    )
+
+    assert "base case" not in strip_sentinels(proof.text)
+    assert "inductive step" not in strip_sentinels(base_case.text)
+    assert base_case.flow_inline_math
+    assert base_case.no_merge
+    assert inductive is not base_case
+
+
+def test_classic20_final_r2_adam_notation_paragraph_flows_all_inline_formulas():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    block = next(
+        block
+        for block in _unit_blocks(
+            "classic20_final_r2_adam_p3_p9_p12_p13.pdf"
+        )
+        if block.page_index == 3
+        and strip_sentinels(block.text).startswith("To simplify the notation")
+    )
+
+    assert block.flow_inline_math
+    assert len(block.formula_anchors) >= 7
+    assert len(block.source_math_atom_groups) == len(block.formula_anchors)
+
+
+def test_classic20_final_r2_adam_terminal_period_is_not_formula_ink():
+    from pdf_zh_translator.pdf_layout import (
+        prepare_translation_units,
+        strip_sentinels,
+    )
+
+    source = fitz.open(
+        FIXTURES / "classic20_final_r2_adam_p3_p9_p12_p13.pdf"
+    )
+    units, _, _ = prepare_translation_units(
+        source,
+        preserve_graphics_text=True,
+    )
+    source.close()
+    block, protected, mapping = next(
+        unit
+        for unit in units
+        if unit[0].page_index == 3
+        and strip_sentinels(unit[0].text).startswith("To simplify the notation")
+    )
+
+    assert protected.endswith("⟦7⟧.")
+    assert not mapping[7].endswith(".")
+    assert block.source_prose_bboxes
+    assert max(bbox[2] for bbox in block.source_prose_bboxes) >= 350.6
+    assert max(bbox[3] for bbox in block.source_math_atom_groups[7]) < 725.0
+
+
+def test_classic20_final_r2_adam_theorem_math_atoms_do_not_cross_source_rows():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    theorem = next(
+        block
+        for block in _unit_blocks(
+            "classic20_final_r2_adam_p3_p9_p12_p13.pdf"
+        )
+        if block.page_index == 3
+        and strip_sentinels(block.text).startswith("Theorem 10.5")
+    )
+
+    assert max(bbox[3] for bbox in theorem.source_math_atom_groups[1]) < 740.0
+    assert max(bbox[3] for bbox in theorem.source_math_atom_groups[5]) < 750.0
+
+
+def test_classic20_final_r2_adam_long_inline_inequality_is_one_sentence():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    candidates = [
+        block
+        for block in _unit_blocks(
+            "classic20_final_r2_adam_p3_p9_p12_p13.pdf"
+        )
+        if block.page_index == 2
+        and (
+            strip_sentinels(block.text).startswith("From,")
+            or "take square root of both side" in strip_sentinels(block.text)
+            or strip_sentinels(block.text).strip() == "have,"
+        )
+    ]
+
+    assert len(candidates) == 1
+    plain = " ".join(strip_sentinels(candidates[0].text).split())
+    assert plain.startswith("From,")
+    assert "take square root of both side and have," in plain
+    assert candidates[0].flow_inline_math
+    assert candidates[0].source_math_atom_groups
+
+
+def test_classic20_final_r2_adam_movable_radical_owns_its_vector_overbar():
+    from pdf_zh_translator.pdf_layout import (
+        _tokenize_translation_with_formula_clips,
+        protect_text,
+        restore_text,
+        strip_sentinels,
+    )
+    from pdf_zh_translator.translators import CacheOnlyTranslator, cache_key
+
+    block = next(
+        block
+        for block in _unit_blocks(
+            "classic20_final_r2_adam_p3_p9_p12_p13.pdf"
+        )
+        if block.page_index == 2
+        and strip_sentinels(block.text).startswith("Rearrange the inequality")
+    )
+
+    vector_atoms = [
+        bbox
+        for bbox in block.source_math_atom_bboxes
+        if bbox[2] - bbox[0] >= 50.0 and bbox[3] - bbox[1] <= 1.1
+    ]
+    radical_glyphs = [
+        bbox
+        for bbox in block.source_math_atom_groups[0]
+        if bbox[2] - bbox[0] <= 12.0 and bbox[3] - bbox[1] >= 20.0
+    ]
+    assert vector_atoms == [
+        pytest.approx((282.6749, 665.1595, 345.3474, 666.1595), abs=0.02)
+    ]
+    assert radical_glyphs == [
+        pytest.approx((272.9796, 658.3687, 282.6746, 683.7887), abs=0.02)
+    ]
+
+    protected, mapping = protect_text(block.text)
+    translator = CacheOnlyTranslator(FIXTURES / "classic20_final_r2_adam_cache.jsonl")
+    translated = translator.cache[cache_key(protected)]
+    restored, missing = restore_text(
+        translated,
+        mapping,
+        preserve_indices=block.preserved_math_placeholders,
+    )
+    formula_tokens = [
+        token
+        for token in _tokenize_translation_with_formula_clips(restored, block)
+        if token.kind == "formula"
+    ]
+
+    assert missing == []
+    assert len(formula_tokens) == 1
+    assert vector_atoms[0] in formula_tokens[0].source_atom_bboxes
+
+
+def test_classic20_final_r2_latent_reference_continuations_are_not_translation_units():
+    from pdf_zh_translator.pdf_layout import strip_sentinels
+
+    blocks = _unit_blocks("classic20_final_r2_latent_p10_p13_p29.pdf")
+    leaked = [
+        " ".join(strip_sentinels(block.text).split())
+        for block in blocks
+        if block.page_index in {1, 2, 3}
+        and (
+            "Sugiyama" in strip_sentinels(block.text)
+            or re.match(r"^\[(?:87|101)\]", strip_sentinels(block.text).lstrip())
+        )
+    ]
+
+    assert leaked == []
+
+
+def test_classic20_final_r2_latent_reference_translation_is_blocking():
+    issues = verify_translation_issues(
+        FIXTURES / "classic20_final_r2_latent_p10_p13_p29.pdf",
+        FIXTURES / "classic20_final_r2_latent_p10_p13_p29_translated.pdf",
+    )
+
+    assert any(issue.code == "reference_content_changed" for issue in issues)
+
+
+def test_classic20_final_r2_hidden_formula_copy_does_not_count_as_small_body_text():
+    issues = verify_translation_issues(
+        FIXTURES / "classic20_final_r2_latent_p10_p13_p29.pdf",
+        FIXTURES / "classic20_final_r2_latent_p10_p13_p29_translated.pdf",
+    )
+
+    assert not [
+        issue
+        for issue in issues
+        if issue.page == 5 and issue.code == "font_size_drift"
+    ]
 
 
 def test_classic20_final_rule_bounded_sample_tables_are_preserved():

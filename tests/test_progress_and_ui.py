@@ -154,6 +154,8 @@ def test_reader_image_mode_sync_scroll_real_browser(tmp_path):
             "PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE": "true",
         }
     )
+    server_log_path = tmp_path / "uvicorn.log"
+    server_log = server_log_path.open("w+", encoding="utf-8")
     server = subprocess.Popen(
         [
             sys.executable,
@@ -167,20 +169,40 @@ def test_reader_image_mode_sync_scroll_real_browser(tmp_path):
         ],
         cwd=ROOT,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=server_log,
+        stderr=subprocess.STDOUT,
     )
-    deadline = time.monotonic() + 20.0
+    deadline = time.monotonic() + 60.0
+    ready = False
     while time.monotonic() < deadline:
+        returncode = server.poll()
+        if returncode is not None:
+            break
         try:
             with urlopen(f"{base_url}/health", timeout=1) as response:
                 if response.status == 200:
+                    ready = True
                     break
         except OSError:
             time.sleep(0.1)
     else:
-        server.terminate()
-        raise AssertionError("E2E server did not become ready")
+        returncode = server.poll()
+    if not ready:
+        if server.poll() is None:
+            server.terminate()
+            try:
+                server.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait(timeout=5)
+        server_log.flush()
+        server_log.seek(0)
+        logs = server_log.read()[-4000:]
+        server_log.close()
+        raise AssertionError(
+            "E2E server did not become ready "
+            f"(exit={returncode!r}); uvicorn log:\n{logs}"
+        )
 
     artifact_dir = Path(
         os.environ.get("PAPER_CHINA_E2E_ARTIFACT_DIR", str(tmp_path / "artifacts"))
@@ -388,6 +410,8 @@ def test_reader_image_mode_sync_scroll_real_browser(tmp_path):
             server.wait(timeout=5)
         except subprocess.TimeoutExpired:
             server.kill()
+            server.wait(timeout=5)
+        server_log.close()
 
 
 def test_reader_pdf_open_renders_first_page_before_background_work():

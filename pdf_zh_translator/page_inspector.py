@@ -50,6 +50,7 @@ INSPECTOR_ISSUE_CODES = frozenset(
         "preserved_ink_mismatch",
         "reference_overlap",
         "reference_bold_style",
+        "reference_content_changed",
         "untranslated_block",
         "display_formula_misaligned",
     }
@@ -88,6 +89,7 @@ class _Span:
     font: str
     size: float
     bbox: BBox
+    visible: bool = True
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,8 @@ class _Block:
         weights: Dict[float, int] = {}
         has_cjk = self.cjk_chars() > 0
         for span in self.spans:
+            if not span.visible:
+                continue
             stripped = span.text.strip()
             if not stripped:
                 continue
@@ -129,6 +133,8 @@ class _Block:
         total = 0
         bold = 0
         for span in self.spans:
+            if not span.visible:
+                continue
             stripped = span.text.strip()
             if not stripped:
                 continue
@@ -144,7 +150,56 @@ def _issue(page: int, code: str, message: str, severity: str = "error"):
     return TranslationIssue(page=page, code=code, message=message, severity=severity)
 
 
+def _hidden_text_traces(page: object) -> Tuple[Tuple[BBox, str], ...]:
+    """Return coalesced render-mode 3 text runs, cached per document page."""
+    document = getattr(page, "parent", None)
+    page_number = getattr(page, "number", None)
+    cache = getattr(document, "_pdfzh_hidden_text_trace_cache", None)
+    if cache is None:
+        cache = {}
+        if document is not None:
+            try:
+                document._pdfzh_hidden_text_trace_cache = cache
+            except Exception:
+                cache = {}
+    if page_number in cache:
+        return cache[page_number]
+    hidden: List[Tuple[BBox, str]] = []
+    try:
+        for trace in page.get_texttrace():
+            bbox = trace.get("bbox")
+            if int(trace.get("type", 0)) == 3 and bbox:
+                current = tuple(float(value) for value in bbox)
+                current_text = "".join(
+                    chr(char[0]) for char in trace.get("chars", [])
+                )
+                if hidden:
+                    previous, previous_text = hidden[-1]
+                    previous_center = (previous[1] + previous[3]) / 2.0
+                    current_center = (current[1] + current[3]) / 2.0
+                    gap = current[0] - previous[2]
+                    if abs(current_center - previous_center) <= 1.5 and -0.5 <= gap <= 2.5:
+                        hidden[-1] = (
+                            (
+                                min(previous[0], current[0]),
+                                min(previous[1], current[1]),
+                                max(previous[2], current[2]),
+                                max(previous[3], current[3]),
+                            ),
+                            previous_text + current_text,
+                        )
+                        continue
+                hidden.append((current, current_text))
+    except Exception:
+        hidden = []
+    result = tuple(hidden)
+    if page_number is not None:
+        cache[page_number] = result
+    return result
+
+
 def _text_blocks(page: object) -> List[_Block]:
+    hidden_text_traces = _hidden_text_traces(page)
     blocks: List[_Block] = []
     for raw in page.get_text("dict").get("blocks", []):
         if raw.get("type") != 0:
@@ -154,12 +209,24 @@ def _text_blocks(page: object) -> List[_Block]:
             for span in line.get("spans", []):
                 if not span.get("text"):
                     continue
+                span_bbox = tuple(float(v) for v in span["bbox"])
+                span_area = _bbox_area(span_bbox)
+                hidden = bool(
+                    span_area > 0.0
+                    and any(
+                        span["text"] == hidden_text
+                        and _bbox_overlap_area(span_bbox, hidden_bbox)
+                        >= 0.8 * _bbox_area(hidden_bbox)
+                        for hidden_bbox, hidden_text in hidden_text_traces
+                    )
+                )
                 spans.append(
                     _Span(
                         text=span["text"],
                         font=str(span.get("font", "")),
                         size=float(span.get("size", 0.0)),
-                        bbox=tuple(float(v) for v in span["bbox"]),
+                        bbox=span_bbox,
+                        visible=not hidden,
                     )
                 )
         if spans:
@@ -356,6 +423,8 @@ def _dominant_span_size_in_bbox(block: _Block, bbox: BBox) -> float:
     """Return the dominant visible span size inside one source style role."""
     overlapping: List[_Span] = []
     for span in block.spans:
+        if not span.visible:
+            continue
         span_area = _bbox_area(span.bbox)
         if span_area <= 0.0:
             continue
@@ -1345,6 +1414,25 @@ def _display_alignment_issues(
                 and _bbox_overlap_area(row, block.bbox) >= row_area * 0.80
             )
             or (
+                getattr(block, "flow_inline_math", False)
+                and any(
+                    _bbox_overlap_area(row, anchor) > 0.0
+                    for anchor in getattr(block, "formula_anchors", ())
+                )
+            )
+            or (
+                getattr(block, "flow_inline_math", False)
+                and any(
+                    _bbox_overlap_area(row, atom) > 0.0
+                    for group in getattr(
+                        block,
+                        "keepout_formula_atom_groups",
+                        (),
+                    )
+                    for atom in group
+                )
+            )
+            or (
                 getattr(block, "block_type", "") == "formula_prose"
                 and getattr(block, "flow_inline_math", False)
                 and getattr(block, "preserve_position", False)
@@ -1438,14 +1526,22 @@ def _reference_region_bboxes(
         return [(0.0, reference_y - 4.0, width, height)]
 
     midpoint = width / 2.0
-    heading_center = (heading_bbox[0] + heading_bbox[2]) / 2.0
     narrow_heading = heading_bbox[2] - heading_bbox[0] < width * 0.45
-    if narrow_heading and heading_center < midpoint - width * 0.08:
+    gutter_tolerance = width * 0.02
+    heading_in_left_column = (
+        heading_bbox[0] < midpoint - gutter_tolerance
+        and heading_bbox[2] <= midpoint + gutter_tolerance
+    )
+    heading_in_right_column = (
+        heading_bbox[0] >= midpoint - gutter_tolerance
+        and heading_bbox[2] > midpoint + gutter_tolerance
+    )
+    if narrow_heading and heading_in_left_column:
         return [
             (0.0, reference_y - 4.0, midpoint, height),
             (midpoint, 0.0, width, height),
         ]
-    if narrow_heading and heading_center > midpoint + width * 0.08:
+    if narrow_heading and heading_in_right_column:
         return [(midpoint, reference_y - 4.0, width, height)]
     return [(0.0, reference_y - 4.0, width, height)]
 
@@ -1472,13 +1568,33 @@ def _reference_issues(
             ):
                 continue
             page_spans.extend(
-                span for span in page_block.spans if span.text.strip()
+                span
+                for span in page_block.spans
+                if span.visible and span.text.strip()
             )
         return page_spans[:400]
 
     original_spans = reference_spans(original_page)
     spans: List[_Span] = []
     spans.extend(reference_spans(translated_page))
+
+    source_reference_text = " ".join(span.text.strip() for span in original_spans)
+    translated_reference_text = " ".join(span.text.strip() for span in spans)
+    source_latin_words = _LATIN_WORD_RE.findall(source_reference_text)
+    source_cjk = len(_CJK_HAN_RE.findall(source_reference_text))
+    translated_cjk = len(_CJK_HAN_RE.findall(translated_reference_text))
+    introduced_cjk = max(0, translated_cjk - source_cjk)
+    if len(source_latin_words) >= 20 and introduced_cjk >= 12:
+        issues.append(
+            _issue(
+                page_number,
+                "reference_content_changed",
+                (
+                    f"Page {page_number}: protected references gained "
+                    f"{introduced_cjk} translated CJK characters"
+                ),
+            )
+        )
 
     def same_source_span(candidate: _Span, source: _Span) -> bool:
         if candidate.text.strip() != source.text.strip():
@@ -2057,6 +2173,10 @@ def inspect_translation(
     """Run the visual inspection suite over an original/translated pair."""
 
     from .pdf_layout import (
+        _combine_academic_formula_statement_translation_items,
+        _combine_formula_continuation_translation_items,
+        _combine_inline_style_translation_items,
+        _combine_list_continuation_translation_items,
         _page_looks_like_reference_continuation,
         _reference_section_start_y,
         expand_bbox,
@@ -2077,6 +2197,7 @@ def inspect_translation(
         caption_bands: Dict[int, List[BBox]] = {}
         keepouts: Dict[int, List[BBox]] = {}
         source_role_blocks: Dict[int, List[object]] = {}
+        source_role_items: Dict[int, List[Tuple[object, str]]] = {}
         try:
             units, _gutters, _skipped = prepare_translation_units(
                 original,
@@ -2103,7 +2224,9 @@ def inspect_translation(
             graphic_regions_by_page = {}
         caption_kinds: Dict[int, List[Tuple[BBox, str]]] = {}
         for unit_block, _prompt, _mapping in units:
-            source_role_blocks.setdefault(unit_block.page_index, []).append(unit_block)
+            source_role_items.setdefault(unit_block.page_index, []).append(
+                (unit_block, unit_block.text)
+            )
             if unit_block.block_type == "caption":
                 caption_bands.setdefault(unit_block.page_index, []).append(
                     expand_bbox(unit_block.bbox, 2.0)
@@ -2119,6 +2242,18 @@ def inspect_translation(
                 )
             for keepout in unit_block.keepout_bboxes or []:
                 keepouts.setdefault(unit_block.page_index, []).append(keepout)
+
+        for page_index, role_items in source_role_items.items():
+            combined_role_items = _combine_formula_continuation_translation_items(
+                _combine_academic_formula_statement_translation_items(
+                    _combine_list_continuation_translation_items(
+                        _combine_inline_style_translation_items(role_items)
+                    )
+                )
+            )
+            source_role_blocks[page_index] = [
+                block for block, _text in combined_role_items
+            ]
 
         page_count = min(original.page_count, translated.page_count)
         if max_pages is not None:

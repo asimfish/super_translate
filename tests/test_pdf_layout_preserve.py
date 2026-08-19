@@ -18,11 +18,14 @@ from pdf_zh_translator.pdf_layout import (
     TextBlock,
     _align_formula_anchors,
     _attach_formula_keepouts,
+    _attach_inline_formula_rule_vectors,
     _cascade_expand_page_items,
+    _cascade_obstacle_is_owned_formula,
     _clip_block_bbox_against_floats,
     _combine_inline_style_translation_items,
     _combine_list_continuation_translation_items,
     _demote_unanchorable_math_blocks,
+    _detach_terminal_formula_punctuation,
     _equation_table_region_bboxes,
     _expand_multiline_block_bbox,
     _expand_single_line_body_bbox,
@@ -33,6 +36,7 @@ from pdf_zh_translator.pdf_layout import (
     _font_role_consistency_issues,
     _formula_fragment_present,
     _formula_markers_form_atom,
+    _formula_segment_slots,
     _formula_source_baseline_ratio,
     _has_parallel_panel_sibling,
     _inline_formula_bridge_block,
@@ -108,6 +112,49 @@ from pdf_zh_translator.pdf_layout import (
     verify_translation,
     verify_translation_issues,
 )
+
+
+def test_terminal_formula_punctuation_does_not_split_decimal_content():
+    formula_bbox = (40.0, 20.0, 58.0, 30.0)
+    block = TextBlock(
+        page_index=0,
+        bbox=(10.0, 20.0, 80.0, 30.0),
+        text=f"Value {SENTINEL_OPEN}3.14{SENTINEL_CLOSE}",
+        font_size=10.0,
+        color=(0, 0, 0),
+        source_math_bboxes=(formula_bbox,),
+        source_math_atom_bboxes=(formula_bbox,),
+        source_math_atom_groups=((formula_bbox,),),
+    )
+
+    _detach_terminal_formula_punctuation(block)
+
+    assert block.text == f"Value {SENTINEL_OPEN}3.14{SENTINEL_CLOSE}"
+    assert block.source_math_atom_groups == ((formula_bbox,),)
+
+
+def test_inline_formula_rule_ownership_ignores_wide_table_rules():
+    formula_bbox = (100.0, 100.0, 120.0, 112.0)
+    block = TextBlock(
+        page_index=0,
+        bbox=(50.0, 96.0, 250.0, 126.0),
+        text=f"Text {SENTINEL_OPEN}x{SENTINEL_CLOSE}",
+        font_size=10.0,
+        color=(0, 0, 0),
+        flow_inline_math=True,
+        source_math_bboxes=(formula_bbox,),
+        source_math_atom_bboxes=(formula_bbox,),
+        source_math_atom_groups=((formula_bbox,),),
+    )
+    page = SimpleNamespace(
+        get_drawings=lambda: [
+            {"rect": fitz.Rect(40.0, 113.0, 260.0, 113.0)}
+        ]
+    )
+
+    _attach_inline_formula_rule_vectors(page, [block])
+
+    assert block.source_math_atom_groups == ((formula_bbox,),)
 
 
 class FontRoleConsistencyTests(unittest.TestCase):
@@ -570,6 +617,57 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         self.assertIsNotNone(record)
         assert record is not None
         self.assertEqual(record.lines[0].math_bboxes, [(100.0, 88.0, 110.0, 104.0)])
+
+    def test_parse_block_lines_keeps_cmex_control_glyph_delimiters(self):
+        raw_block = {
+            "lines": [
+                {
+                    "bbox": (100.0, 88.0, 190.0, 104.0),
+                    "spans": [
+                        _span("max ", (100.0, 90.0, 120.0, 100.0)),
+                        _span("\x0c\x0c", (120.0, 88.0, 124.0, 104.0), font="CMEX10"),
+                        _span("q", (124.0, 90.0, 132.0, 100.0), font="CMMI10"),
+                        _span("\x0c\x0c", (132.0, 88.0, 136.0, 104.0), font="CMEX10"),
+                        _span(" < delta", (136.0, 90.0, 165.0, 100.0), font="CMMI10"),
+                        _span(" holds", (165.0, 90.0, 190.0, 100.0)),
+                    ],
+                }
+            ]
+        }
+
+        record, dropped = parse_block_lines(raw_block, page_width=612.0)
+
+        self.assertEqual(dropped, [])
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(len(record.lines), 1)
+        self.assertEqual(
+            record.lines[0].math_run_bboxes,
+            [(100.0, 88.0, 165.0, 104.0)],
+        )
+        self.assertIn("||q||< delta", strip_sentinels(record.lines[0].text))
+
+    def test_parse_block_lines_ignores_ordinary_whitespace_span(self):
+        raw_block = {
+            "lines": [
+                {
+                    "bbox": (100.0, 90.0, 160.0, 100.0),
+                    "spans": [
+                        _span("alpha", (100.0, 90.0, 125.0, 100.0)),
+                        _span("  ", (125.0, 90.0, 130.0, 100.0)),
+                        _span("beta", (130.0, 90.0, 160.0, 100.0)),
+                    ],
+                }
+            ]
+        }
+
+        record, dropped = parse_block_lines(raw_block, page_width=612.0)
+
+        self.assertEqual(dropped, [])
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertFalse(record.lines[0].math_bboxes)
+        self.assertFalse(record.lines[0].math_run_bboxes)
 
     def test_preserve_graphics_mode_keeps_source_fonts_intact(self):
         class DocumentStub:
@@ -3033,6 +3131,14 @@ class FormulaTailProseTests(unittest.TestCase):
             _formula_markers_form_atom(tau_minus, exponent_one, "")
         )
 
+    def test_overlapping_fragments_that_do_not_advance_are_separate_atoms(self):
+        trailing_formula = (159.1, 446.1, 182.5, 457.5)
+        preceding_formula = (149.4, 438.2, 172.3, 447.6)
+
+        self.assertFalse(
+            _formula_markers_form_atom(trailing_formula, preceding_formula, "")
+        )
+
     def test_completion_blank_formula_follows_trailing_article_inline(self):
         prose_bbox = (157.0, 652.4, 406.4, 662.4)
         formula_bbox = (437.2, 652.1, 452.8, 662.4)
@@ -4419,6 +4525,118 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertIn("展开求和末项", translated)
         self.assertEqual(merged.keepout_bboxes, list(continuation.keepout_bboxes))
 
+    def test_keepout_formula_continuation_is_tagged_as_inline_flow(self):
+        from pdf_zh_translator.pdf_layout import (
+            _combine_formula_continuation_translation_items,
+        )
+
+        formula = (227.4, 198.0, 267.0, 220.3)
+        leadin = TextBlock(
+            page_index=0,
+            bbox=(105.0, 200.5, 222.4, 212.2),
+            text="Proof. Under the assumption,",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+        )
+        continuation = TextBlock(
+            page_index=0,
+            bbox=(105.0, 200.5, 490.3, 225.4),
+            text=". We can expand the last term using the update rules,",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            block_type="formula_prose",
+            preserve_position=True,
+            keepout_bboxes=[formula],
+            keepout_formula_atom_groups=((formula,),),
+        )
+
+        combined = _combine_formula_continuation_translation_items(
+            [(leadin, "证明。在该假设下，"), (continuation, "可以展开最后一项，")]
+        )
+
+        self.assertEqual(len(combined), 1)
+        self.assertTrue(combined[0][0].flow_inline_math)
+        self.assertEqual(combined[0][0].keepout_formula_atom_groups, ((formula,),))
+
+    def test_detached_formula_suffix_joins_through_preceding_anchor(self):
+        from pdf_zh_translator.pdf_layout import (
+            _combine_formula_continuation_translation_items,
+        )
+
+        formula = (282.7, 658.4, 347.8, 679.1)
+        leadin = TextBlock(
+            page_index=0,
+            bbox=(105.0, 658.4, 282.7, 679.1),
+            text=(
+                "Rearrange the inequality and substitute the "
+                f"{SENTINEL_OPEN}q formula{SENTINEL_CLOSE}"
+            ),
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            source_math_bboxes=(formula,),
+            formula_anchors=(formula,),
+        )
+        suffix = TextBlock(
+            page_index=0,
+            bbox=(347.8, 667.4, 368.0, 679.1),
+            text="term,",
+            font_size=9.7,
+            color=(0.0, 0.0, 0.0),
+            source_lines=1,
+            block_type="formula_prose",
+            nowrap=True,
+            preserve_position=True,
+            keepout_bboxes=[formula],
+        )
+
+        combined = _combine_formula_continuation_translation_items(
+            [(leadin, "重排不等式并代入该公式"), (suffix, "项，")]
+        )
+
+        self.assertEqual(len(combined), 1)
+        merged, translated = combined[0]
+        self.assertTrue(merged.flow_inline_math)
+        self.assertEqual(merged.formula_anchors, (formula,))
+        self.assertIn("项", translated)
+
+    def test_prose_before_centered_display_formula_stays_separate(self):
+        prose_bbox = (105.0, 100.0, 270.0, 111.7)
+        radical_bbox = (272.0, 91.0, 282.0, 111.7)
+        display_bbox = (190.0, 118.0, 390.0, 146.0)
+        prose = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text="Substituting the previous bound gives",
+                    bbox=prose_bbox,
+                    spans=[],
+                    prose_bboxes=[prose_bbox],
+                ),
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}sqrt{SENTINEL_CLOSE}",
+                    bbox=radical_bbox,
+                    spans=[],
+                    math_bboxes=[radical_bbox],
+                    math_run_bboxes=[radical_bbox],
+                ),
+            ]
+        )
+        display = _RawBlockRec(
+            lines=[
+                _LineRec(
+                    text=f"{SENTINEL_OPEN}x^2+y^2=z^2{SENTINEL_CLOSE}",
+                    bbox=display_bbox,
+                    spans=[],
+                    math_bboxes=[display_bbox],
+                    math_run_bboxes=[display_bbox],
+                )
+            ]
+        )
+
+        merged = _merge_wrapped_formula_continuation_records([prose, display])
+
+        self.assertEqual(len(merged), 2)
+
     def test_fixed_version_prefix_joins_wrapped_body_continuation(self):
         from pdf_zh_translator.pdf_layout import (
             _combine_formula_continuation_translation_items,
@@ -4683,17 +4901,24 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(len(set(sizes)), 1)
 
     def test_standalone_heading_body_raster_overlap_is_flagged(self):
-        from pdf_zh_translator.pdf_layout import _raster_ink_overlap_issues
+        from pdf_zh_translator.pdf_layout import (
+            _raster_ink_overlap_issues,
+            ensure_font_pack_files,
+        )
+
+        body_font, bold_font = ensure_font_pack_files([])
+        assert body_font is not None
+        assert bold_font is not None
 
         original = fitz.open()
         original_page = original.new_page(width=300, height=200)
         translated = fitz.open()
         translated_page = translated.new_page(width=300, height=200)
         translated_page.insert_font(
-            fontname="cjkbold", fontfile="data/fonts/HiraginoSansGB-W6.ttf"
+            fontname="cjkbold", fontfile=str(bold_font)
         )
         translated_page.insert_font(
-            fontname="cjkbody", fontfile="data/fonts/SongtiSC-Regular.ttf"
+            fontname="cjkbody", fontfile=str(body_font)
         )
         translated_page.insert_text(
             (40, 60), "普通标题第一行", fontsize=12, fontname="cjkbold"
@@ -4786,6 +5011,104 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertAlmostEqual(shifted.bbox[3], 91.1)
         self.assertAlmostEqual(shifted.bbox[1] - expanded.bbox[3], 3.5)
         self.assertEqual(untouched.bbox, other_column.bbox)
+
+    def test_layout_cascade_moves_overlapping_formula_flow_follower_and_owned_obstacle(self):
+        prose = TextBlock(
+            page_index=0,
+            bbox=(40.0, 40.0, 260.0, 70.0),
+            text=f"discussion with {SENTINEL_OPEN}g_t{SENTINEL_CLOSE}",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=3,
+            flow_inline_math=True,
+            formula_anchors=((160.0, 54.0, 178.0, 66.0),),
+            source_math_bboxes=((160.0, 54.0, 178.0, 66.0),),
+        )
+        follower_formula = (120.0, 70.0, 150.0, 82.0)
+        statement = TextBlock(
+            page_index=0,
+            bbox=(40.0, 66.0, 260.0, 90.0),
+            text=f"Lemma 2. Let {SENTINEL_OPEN}x_t{SENTINEL_CLOSE} be bounded.",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            block_type="formula_prose",
+            flow_inline_math=True,
+            formula_anchors=(follower_formula,),
+            source_math_bboxes=(follower_formula,),
+        )
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        with patch(
+            "pdf_zh_translator.pdf_layout._cascade_required_height",
+            side_effect=lambda block, *_args, **_kwargs: (
+                45.0 if block is prose else block.bbox[3] - block.bbox[1]
+            ),
+        ):
+            updated = _cascade_expand_page_items(
+                [(prose, "需要额外一行的公式正文"), (statement, "引理2。设公式有界。")],
+                font_pack=font_pack,
+                min_font_size=5.0,
+                font_scale=1.0,
+                margin=0.5,
+                page_height=150.0,
+                obstacles=[follower_formula],
+            )
+
+        expanded, shifted = [item[0] for item in updated]
+        self.assertAlmostEqual(expanded.bbox[3], 85.0)
+        self.assertGreater(shifted.bbox[1], statement.bbox[1])
+        self.assertGreaterEqual(shifted.bbox[1], expanded.bbox[3] + 1.5)
+
+    def test_layout_cascade_does_not_own_neighbor_formula_restore_atoms(self):
+        neighboring_formula = (120.0, 70.0, 180.0, 84.0)
+        block = TextBlock(
+            page_index=0,
+            bbox=(40.0, 40.0, 260.0, 68.0),
+            text="paragraph before a display formula",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            keepout_formula_atom_groups=((neighboring_formula,),),
+            redaction_formula_restore_groups=((neighboring_formula,),),
+        )
+
+        self.assertFalse(
+            _cascade_obstacle_is_owned_formula(block, neighboring_formula)
+        )
+
+        block.formula_anchors = (neighboring_formula,)
+        self.assertTrue(
+            _cascade_obstacle_is_owned_formula(block, neighboring_formula)
+        )
+
+    def test_formula_slots_avoid_tall_anchor_ink_from_previous_source_line(self):
+        previous_line_anchor = (10.0, 0.0, 80.0, 18.0)
+        current_line_anchor = (0.0, 12.0, 8.0, 24.0)
+        block = TextBlock(
+            page_index=0,
+            bbox=(0.0, 0.0, 200.0, 30.0),
+            text=(
+                f"prefix {SENTINEL_OPEN}a{SENTINEL_CLOSE} continuation "
+                f"{SENTINEL_OPEN}b{SENTINEL_CLOSE} suffix"
+            ),
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            formula_anchors=(previous_line_anchor, current_line_anchor),
+            source_line_bboxes=((0.0, 0.0, 200.0, 14.0), (0.0, 10.0, 200.0, 24.0)),
+        )
+
+        slots = _formula_segment_slots(block, fitz.Rect(block.bbox), 10.0)
+
+        self.assertTrue(slots[-1])
+        self.assertGreaterEqual(slots[-1][0][1], previous_line_anchor[2] + 1.0)
 
     def test_layout_cascade_borrows_verified_empty_predecessor_tail_for_statement(self):
         predecessor = TextBlock(
@@ -5506,6 +5829,58 @@ class FormulaTailProseTests(unittest.TestCase):
         assert shifted.bbox == (40.0, 58.5, 260.0, 82.5)
         assert shifted.redact_bboxes == body.redact_bboxes
 
+    def test_multiline_body_nudges_for_formula_atom_group_without_anchor(self):
+        formula = (120.0, 70.0, 180.0, 88.0)
+        body = TextBlock(
+            page_index=0,
+            bbox=(40.0, 60.0, 260.0, 84.0),
+            text="proof text split around an extracted formula",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            keepout_bboxes=[formula],
+            keepout_formula_atom_groups=((formula,),),
+        )
+        previous = TextBlock(
+            page_index=0,
+            bbox=(40.0, 40.0, 260.0, 52.0),
+            text="previous",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+        )
+        font = fitz.Font("helv")
+        font_pack = FontPack(
+            regular=font,
+            regular_file=Path(""),
+            bold=font,
+            bold_file=Path(""),
+            regular_alias="helv",
+            bold_alias="helv",
+        )
+
+        with (
+            patch(
+                "pdf_zh_translator.pdf_layout.line_block_height",
+                return_value=15.0,
+            ),
+            patch(
+                "pdf_zh_translator.pdf_layout.translated_text_fits",
+                side_effect=lambda block, **_kwargs: block.bbox[1] <= 58.5,
+            ),
+        ):
+            shifted = _expand_multiline_block_bbox(
+                body,
+                "需要保持正文字号的中文证明段落",
+                [previous, body],
+                font_pack,
+                10.0,
+                0.5,
+                150.0,
+            )
+
+        assert shifted.bbox == (40.0, 58.5, 260.0, 82.5)
+        assert shifted.redact_bboxes == body.redact_bboxes
+
     def test_layout_cascade_probes_required_height_around_formula_keepouts(self):
         first = TextBlock(
             page_index=0,
@@ -6017,6 +6392,40 @@ class FormulaTailProseTests(unittest.TestCase):
         self.assertEqual(len(formulas), 1)
         self.assertEqual(formulas[0].text, "c/ √ N")
         self.assertEqual(formulas[0].source_bbox, (100.0, 92.0, 138.0, 110.0))
+
+    def test_formula_tokenizer_keeps_clips_when_translation_collapses_marker_spaces(self):
+        root = f"{SENTINEL_OPEN}q{SENTINEL_CLOSE}"
+        radicand = f"{SENTINEL_OPEN}x^{{2}}{SENTINEL_CLOSE}"
+        suffix = f"{SENTINEL_OPEN}-y^{{2}}{SENTINEL_CLOSE}"
+        anchors = (
+            (100.0, 90.0, 142.0, 110.0),
+            (110.0, 100.0, 136.0, 112.0),
+            (136.0, 100.0, 160.0, 112.0),
+        )
+        atom_groups = tuple((anchor,) for anchor in anchors)
+        block = TextBlock(
+            page_index=0,
+            bbox=(80.0, 80.0, 260.0, 130.0),
+            text=f"substitute {root}  {radicand}  {suffix} term",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            formula_anchors=anchors,
+            source_math_atom_groups=atom_groups,
+        )
+
+        tokens = _tokenize_translation_with_formula_clips(
+            f"代入{root} {radicand} {suffix}项",
+            block,
+        )
+        formulas = [token for token in tokens if token.kind == "formula"]
+
+        self.assertEqual(len(formulas), 1)
+        self.assertEqual(formulas[0].source_bbox, (100.0, 90.0, 160.0, 112.0))
+        self.assertEqual(
+            formulas[0].source_atom_bboxes,
+            tuple(anchor for group in atom_groups for anchor in group),
+        )
+        self.assertFalse(any(token.kind == "word" and token.text == "q" for token in tokens))
 
     def test_formula_tokenizer_keeps_prose_connector_between_formulas(self):
         anchors = (
@@ -8650,6 +9059,36 @@ class TestClassifyBlocks(unittest.TestCase):
         self.assertTrue(all(block.should_translate for block in blocks))
         self.assertTrue(all(block.preserve_position for block in blocks))
 
+    def test_academic_statement_keeps_run_in_prefix_role(self):
+        block = self._make_block(
+            "Proposition 1 (Convergence). The sequence converges to the optimum."
+        )
+        block.bold_prefix = True
+        block.starts_bold = True
+        block.bold_terms = ("Proposition 1 (Convergence)",)
+        block.source_lines = 3
+
+        classify_blocks([block], 0, 792, [])
+
+        self.assertEqual(block.block_type, "run_in_heading")
+        self.assertTrue(block.bold_prefix)
+        self.assertFalse(block.bold)
+        self.assertFalse(block.preserve_position)
+
+    def test_theorem_reference_in_body_is_not_a_run_in_heading(self):
+        block = self._make_block(
+            "Our Theorem 4.1 implies that sparse gradients improve convergence."
+        )
+        block.bold_prefix = True
+        block.starts_bold = True
+        block.bold_terms = ("Our",)
+        block.source_lines = 2
+
+        classify_blocks([block], 0, 792, [])
+
+        self.assertEqual(block.block_type, "body")
+        self.assertFalse(block.bold)
+
     def test_small_figure_academic_label_remains_preserved(self):
         block = self._make_block("Definition 4.1.", bold=True)
         block.font_size = 7.5
@@ -10850,6 +11289,11 @@ class TestTranslationVerification(unittest.TestCase):
     def test_verification_ignores_preserved_filename_after_translated_label(self):
         from unittest.mock import patch
 
+        from pdf_zh_translator.pdf_layout import ensure_font_pack_files
+
+        body_font, _bold_font = ensure_font_pack_files([])
+        assert body_font is not None
+
         original = fitz.open()
         original_page = original.new_page(width=300, height=180)
         original_page.insert_text(
@@ -10861,7 +11305,7 @@ class TestTranslationVerification(unittest.TestCase):
         translated = fitz.open()
         translated_page = translated.new_page(width=300, height=180)
         translated_page.insert_font(
-            fontname="cjkbody", fontfile="data/fonts/SongtiSC-Regular.ttf"
+            fontname="cjkbody", fontfile=str(body_font)
         )
         translated_page.insert_text(
             (30, 60),
@@ -15429,3 +15873,75 @@ class ParagraphMergeFontSizeTests(unittest.TestCase):
         self.assertAlmostEqual(shifts[1], 20.8)
         self.assertNotIn(2, shifts)
         self.assertNotIn(3, shifts)
+
+
+def test_font_pack_reextracts_existing_files_with_invalid_signatures(
+    tmp_path, monkeypatch
+):
+    import pdf_zh_translator.pdf_layout as layout
+
+    body = tmp_path / "body.ttf"
+    bold = tmp_path / "bold.ttf"
+    body.write_bytes(b"")
+    bold.write_bytes(b"not-a-font")
+    monkeypatch.setattr(
+        layout,
+        "TTC_FACE_SOURCES",
+        (
+            (body, (("body.ttc", "Body Face"),)),
+            (bold, (("bold.ttc", "Bold Face"),)),
+        ),
+    )
+    monkeypatch.setattr(
+        layout,
+        "_sanitize_noto_cjk_font_file",
+        lambda _path, _warnings: None,
+    )
+    extracted = []
+
+    def fake_extract(source, face_name, destination):
+        extracted.append((source.name, face_name, destination.name))
+        destination.write_bytes(b"OTTOtest-font")
+        return destination
+
+    monkeypatch.setattr(layout, "extract_ttc_face", fake_extract)
+    warnings = []
+
+    resolved = layout.ensure_font_pack_files(warnings)
+
+    assert resolved == (body, bold)
+    assert extracted == [
+        ("body.ttc", "Body Face", "body.ttf"),
+        ("bold.ttc", "Bold Face", "bold.ttf"),
+    ]
+    assert all(path.read_bytes().startswith(b"OTTO") for path in resolved)
+    assert sum("invalid cached CJK font" in warning for warning in warnings) == 2
+
+
+def test_font_pack_keeps_existing_files_with_valid_signatures(tmp_path, monkeypatch):
+    import pdf_zh_translator.pdf_layout as layout
+
+    body = tmp_path / "body.ttf"
+    bold = tmp_path / "bold.ttf"
+    body.write_bytes(b"OTTObody")
+    bold.write_bytes(b"\x00\x01\x00\x00bold")
+    monkeypatch.setattr(
+        layout,
+        "TTC_FACE_SOURCES",
+        (
+            (body, (("body.ttc", "Body Face"),)),
+            (bold, (("bold.ttc", "Bold Face"),)),
+        ),
+    )
+    monkeypatch.setattr(
+        layout,
+        "_sanitize_noto_cjk_font_file",
+        lambda _path, _warnings: None,
+    )
+
+    def unexpected_extract(*_args, **_kwargs):
+        raise AssertionError("valid cached fonts must not be re-extracted")
+
+    monkeypatch.setattr(layout, "extract_ttc_face", unexpected_extract)
+
+    assert layout.ensure_font_pack_files([]) == (body, bold)
