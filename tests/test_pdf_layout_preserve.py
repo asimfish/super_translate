@@ -340,6 +340,81 @@ def test_two_column_two_line_body_does_not_expand_across_page():
     assert expanded.bbox == block.bbox
 
 
+def test_tall_formula_keepout_crossing_block_bottom_remains_unresolved():
+    from pdf_zh_translator.pdf_layout import _unresolved_formula_keepouts
+
+    keepout = (126.4, 587.7, 294.0, 618.6)
+    block = TextBlock(
+        page_index=0,
+        bbox=(51.8, 565.3, 295.6, 600.2),
+        text="Formula-dense prose that must flow around a lower display row.",
+        font_size=9.06,
+        color=(0.0, 0.0, 0.0),
+        source_lines=4,
+        block_type="body",
+        keepout_bboxes=[keepout],
+        source_line_bboxes=(
+            (51.8, 565.3, 295.6, 578.1),
+            (51.8, 577.9, 295.6, 589.0),
+            (51.8, 589.4, 123.8, 600.2),
+        ),
+    )
+
+    assert keepout in _unresolved_formula_keepouts(block)
+
+
+def test_tall_formula_delete_bbox_barely_brushing_block_bottom_is_ignored():
+    from pdf_zh_translator.pdf_layout import _unresolved_formula_keepouts
+
+    # Adam p3: a tall source formula's deletion hull ends 0.4pt inside the
+    # following prose row. Its visible formula ink is above the sentence, so
+    # treating that tiny tail as an obstacle needlessly shrinks the translation.
+    keepout = (272.1, 482.7, 276.5, 518.9)
+    block = TextBlock(
+        page_index=1,
+        bbox=(105.0, 506.8, 352.5, 518.5),
+        text="Which corresponds to the remarkably simple recursive formula:",
+        font_size=10.62,
+        color=(0.0, 0.0, 0.0),
+        source_lines=1,
+        source_line_bboxes=((105.0, 506.8, 352.5, 518.5),),
+        keepout_bboxes=[keepout],
+    )
+
+    assert _unresolved_formula_keepouts(block) == []
+
+
+def test_trimmed_prose_redaction_restores_full_span_and_formula_atoms():
+    from pdf_zh_translator.pdf_layout import _trim_redacts_against_block_keepouts
+
+    source_prose = (141.7, 510.4, 295.0, 519.3)
+    trimmed = (141.7, 510.4, 295.0, 514.6)
+    atom_group = (
+        (208.8, 515.8, 215.1, 527.8),
+        (221.2, 520.5, 226.2, 527.8),
+        (246.8, 520.5, 258.0, 528.8),
+    )
+    keepout = (208.8, 515.8, 258.0, 528.8)
+    block = TextBlock(
+        page_index=0,
+        bbox=(51.5, 496.0, 295.0, 548.4),
+        text="Formula-dense prose with a display row below it.",
+        font_size=8.88,
+        color=(0.0, 0.0, 0.0),
+        source_lines=5,
+        block_type="body",
+        redact_bboxes=[trimmed],
+        keepout_bboxes=[keepout],
+        source_prose_bboxes=(source_prose,),
+        keepout_formula_atom_groups=(atom_group,),
+    )
+
+    _trim_redacts_against_block_keepouts([block])
+
+    assert block.redact_bboxes == [source_prose]
+    assert block.redaction_formula_restore_groups == (atom_group,)
+
+
 class FontRoleConsistencyTests(unittest.TestCase):
     def test_multiline_body_sets_heading_hierarchy_baseline(self):
         source_blocks = [
@@ -9133,6 +9208,57 @@ class PreserveGraphicsTextTests(unittest.TestCase):
         self.assertTrue(inserted)
         self.assertIn("Short translated caption", page.get_text("text"))
 
+    def test_centered_cjk_caption_keeps_requested_size_when_two_lines_fit(self):
+        from pdf_zh_translator.pdf_layout import build_font_pack, register_font_pack
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        font_pack = build_font_pack(None, [])
+        register_font_pack(page, font_pack)
+        block = TextBlock(
+            page_index=0,
+            bbox=(108.0, 482.6, 504.0, 512.8),
+            text=(
+                "Figure 10. Visual RL. Episode return as a function of environment "
+                "steps on 10 image-based DM-Control tasks. Mean and 95% CIs over "
+                "3 random seeds. TD-MPC2 is comparable to state-of-the-art."
+            ),
+            font_size=9.96,
+            color=(0.0, 0.0, 0.0),
+            source_lines=2,
+            block_type="caption",
+            preserve_position=True,
+            bold_prefix=True,
+            bold_terms=("Visual RL", "2"),
+        )
+        translated = (
+            "图10. 视觉强化学习。回合回报随环境步数的变化，在10个基于图像的深度运动"
+            "控制任务上。均值和95%置信区间基于3个随机种子。TD-MPC2与最先进的方法相当。"
+        )
+
+        inserted = insert_translated_text(
+            page=page,
+            block=block,
+            text=translated,
+            font_pack=font_pack,
+            font_size=9.16,
+            min_font_size=5.0,
+            margin=0.8,
+            centered=True,
+        )
+        rendered_sizes = [
+            float(span["size"])
+            for page_block in page.get_text("dict").get("blocks", [])
+            for line in page_block.get("lines", [])
+            for span in line.get("spans", [])
+            if span.get("text", "").strip()
+        ]
+
+        document.close()
+        self.assertTrue(inserted)
+        self.assertTrue(rendered_sizes)
+        self.assertGreaterEqual(min(rendered_sizes), 9.0)
+
     def test_insert_translated_text_renders_ascii_scripts_as_scripts(self):
         document = fitz.open()
         page = document.new_page(width=300, height=180)
@@ -12524,6 +12650,38 @@ class PreservedCollisionSkipTests(unittest.TestCase):
         self.assertEqual(expanded.redact_bboxes, [source_bbox])
         self.assertEqual(expanded.fixed_translation_font_size, 11.96)
 
+    def test_source_anchored_appendix_heading_expands_to_detected_column_width(self):
+        source_bbox = (62.4, 656.8, 164.9, 669.8)
+        heading = TextBlock(
+            page_index=0,
+            bbox=source_bbox,
+            text="D. VLMs for RT-2",
+            font_size=12.95,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+            bold=True,
+            preserve_position=True,
+        )
+        following = TextBlock(
+            page_index=0,
+            bbox=(62.0, 678.9, 533.1, 751.0),
+            text="The following full-width appendix body paragraph.",
+            font_size=10.83,
+            color=(0.0, 0.0, 0.0),
+            block_type="body",
+        )
+
+        expanded = _expand_standalone_heading_to_column(
+            heading,
+            [(62.0, 471.0)],
+            612.0,
+            [heading, following],
+        )
+
+        self.assertEqual(expanded.bbox, (62.4, 656.8, 533.1, 669.8))
+        self.assertEqual(expanded.redact_bboxes, [source_bbox])
+        self.assertEqual(expanded.fixed_translation_font_size, 12.95)
+
     def test_heading_uses_nearby_full_width_body_when_float_skews_columns(self):
         source_bbox = (108.0, 630.9, 263.3, 640.9)
         heading = TextBlock(
@@ -12629,6 +12787,41 @@ class PreservedCollisionSkipTests(unittest.TestCase):
         code = (235.1, 351.8, 504.0, 362.1)
 
         self.assertEqual(_side_adjacent_preserved_regions(label, [code]), [code])
+
+    def test_preserved_formula_crossing_lower_body_becomes_layout_keepout(self):
+        from pdf_zh_translator.pdf_layout import _preserved_keepout_regions
+
+        paragraph = TextBlock(
+            page_index=0,
+            bbox=(51.8, 565.3, 295.6, 600.2),
+            text="Since the covariance matrix is symmetric, the shared first part...",
+            font_size=9.06,
+            color=(0.0, 0.0, 0.0),
+            block_type="body",
+        )
+        preserved_formula = (126.4, 587.7, 294.0, 618.6)
+
+        self.assertEqual(
+            _preserved_keepout_regions(paragraph, [preserved_formula]),
+            [preserved_formula],
+        )
+
+    def test_preserved_formula_hairline_touch_is_not_layout_keepout(self):
+        from pdf_zh_translator.pdf_layout import _preserved_keepout_regions
+
+        paragraph = TextBlock(
+            page_index=0,
+            bbox=(51.8, 565.3, 295.6, 600.2),
+            text="A body paragraph ending just above a protected formula.",
+            font_size=9.06,
+            color=(0.0, 0.0, 0.0),
+            block_type="body",
+        )
+
+        self.assertEqual(
+            _preserved_keepout_regions(paragraph, [(126.4, 599.5, 294.0, 618.6)]),
+            [],
+        )
 
     def test_candidate_colliding_with_preserved_label_is_flagged(self):
         from pdf_zh_translator.pdf_layout import _candidate_bboxes_colliding_with_preserved

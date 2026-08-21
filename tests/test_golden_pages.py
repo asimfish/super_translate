@@ -3705,6 +3705,65 @@ def test_ddpm_narrow_formula_connector_uses_single_cjk_glyph():
     )
 
 
+def test_formula_constrained_policy_translation_uses_concise_equivalent():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _fit_formula_connector_translation,
+    )
+
+    block = TextBlock(
+        page_index=3,
+        bbox=(108.0, 275.0, 504.0, 296.1),
+        text=(
+            "Policy objective. The policy prior\ue000p\ue001 is a stochastic "
+            "maximum entropy policy that learns to maximize the objective"
+        ),
+        font_size=9.96,
+        color=(0.0, 0.0, 0.0),
+        source_lines=2,
+        keepout_formula_atom_groups=(((192.1, 294.6, 208.1, 309.4),),),
+    )
+
+    compact = _fit_formula_connector_translation(
+        block,
+        "策略目标。策略先验\ue000p\ue001是一个随机最大熵策略，学习最大化目标",
+    )
+
+    assert compact == "策略目标。策略先验\ue000p\ue001是随机最大熵策略，以最大化目标"
+
+
+def test_formula_constrained_covariance_translation_uses_concise_equivalent():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _fit_formula_connector_translation,
+    )
+
+    block = TextBlock(
+        page_index=12,
+        bbox=(51.8, 565.3, 295.6, 600.2),
+        text=(
+            "and \ue000_{dq}\ue001. Since the covariance matrix\ue000Sigma\ue001 "
+            "(and its gradient) is symmetric, the shared first part is "
+            "compactly found by \ue000dSigma\ue001"
+        ),
+        font_size=9.06,
+        color=(0.0, 0.0, 0.0),
+        source_lines=4,
+        keepout_formula_atom_groups=(((126.4, 587.7, 294.0, 618.6),),),
+    )
+
+    compact = _fit_formula_connector_translation(
+        block,
+        "以及\ue000_{dq}\ue001。由于协方差矩阵\ue000Sigma\ue001（及其梯度）是对称的，"
+        "共享的第一部分可通过\ue000dSigma\ue001紧凑地求得",
+    )
+
+    assert compact == (
+        "以及\ue000_{dq}\ue001。因协方差矩阵\ue000Sigma\ue001及其梯度对称，"
+        "共享项可由\ue000dSigma\ue001求得"
+    )
+
+
 def test_ddpm_formula_fingerprint_excludes_translatable_connectors():
     from pdf_zh_translator.pdf_layout import _extract_formula_fragments
 
@@ -4205,7 +4264,12 @@ def test_formula_sprite_overlap_with_restored_formula_is_a_production_qa_error(
 ):
     from pdf_zh_translator.pdf_layout import _raster_ink_overlap_issues
 
+    source_path = tmp_path / "source-without-overlap.pdf"
     path = tmp_path / "overlapping-formula-sprites.pdf"
+    source = fitz.open()
+    source.new_page(width=180, height=100)
+    source.save(source_path)
+    source.close()
     document = fitz.open()
     page = document.new_page(width=180, height=100)
     pixmap = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, 36, 18), False)
@@ -4216,12 +4280,34 @@ def test_formula_sprite_overlap_with_restored_formula_is_a_production_qa_error(
     document.save(path)
     document.close()
 
-    with fitz.open(path) as reopened:
-        issues = _raster_ink_overlap_issues(reopened[0], reopened[0], 1)
+    with fitz.open(source_path) as source, fitz.open(path) as reopened:
+        issues = _raster_ink_overlap_issues(source[0], reopened[0], 1)
 
     overlap = next(issue for issue in issues if issue.code == "raster_ink_overlap")
     assert overlap.severity == "error"
     assert "formula sprites" in overlap.message
+
+
+def test_source_native_overlapping_images_are_not_formula_sprite_error(tmp_path):
+    from pdf_zh_translator.pdf_layout import _raster_ink_overlap_issues
+
+    source_path = tmp_path / "source-native-overlap.pdf"
+    translated_path = tmp_path / "translated-native-overlap.pdf"
+    pixmap = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, 36, 18), False)
+    pixmap.clear_with(0)
+    for path in (source_path, translated_path):
+        document = fitz.open()
+        page = document.new_page(width=180, height=100)
+        page.insert_image(fitz.Rect(12, 28, 48, 46), pixmap=pixmap)
+        page.insert_text((14, 40), "x=1", fontsize=8, render_mode=3)
+        page.insert_image(fitz.Rect(34, 28, 70, 46), pixmap=pixmap)
+        document.save(path)
+        document.close()
+
+    with fitz.open(source_path) as source, fitz.open(translated_path) as translated:
+        issues = _raster_ink_overlap_issues(source[0], translated[0], 1)
+
+    assert not [issue for issue in issues if issue.code == "raster_ink_overlap"]
 
 
 def test_ddpm_numbered_display_connector_remains_a_fixed_compact_slot():
@@ -5324,6 +5410,34 @@ def test_source_unit_qa_allows_affiliation_email_identity():
         block,
         "北京大学 Galbot 多伦多大学。通讯作者：Nandiraju Gireesh "
         "<2401112103@stu.pku.edu.cn>。",
+    )
+
+
+def test_source_unit_qa_allows_long_author_address_with_multiple_emails():
+    from pdf_zh_translator.pdf_layout import (
+        TextBlock,
+        _translation_retains_source_prose_run,
+    )
+
+    block = TextBlock(
+        page_index=0,
+        bbox=(51.81, 588.06, 295.22, 626.99),
+        text=(
+            "Authors’ addresses: Bernhard Kerbl, bernhard.kerbl@inria.fr; "
+            "Georgios Kopanas, georgios.kopanas@inria.fr; Thomas Leimkühler, "
+            "thomas.leimkuehler@mpi-inf.mpg.de; and George Drettakis, "
+            "george.drettakis@inria.fr."
+        ),
+        font_size=8.0,
+        color=(0.0, 0.0, 0.0),
+    )
+
+    assert not _translation_retains_source_prose_run(
+        block,
+        "作者地址：Bernhard Kerbl，bernhard.kerbl@inria.fr；"
+        "Georgios Kopanas，georgios.kopanas@inria.fr；Thomas Leimkühler，"
+        "thomas.leimkuehler@mpi-inf.mpg.de；以及 George Drettakis，"
+        "george.drettakis@inria.fr。",
     )
 
 

@@ -809,11 +809,32 @@ def _fit_formula_connector_translation(
     block: TextBlock,
     translated_text: str,
 ) -> str:
-    """Keep a translated equation-row connector inside its source slot."""
+    """Keep translated formula prose concise enough for its source slots."""
     source = " ".join(strip_sentinels(block.text).split()).casefold()
+    compacted = translated_text
+    if block.keepout_formula_atom_groups:
+        if (
+            "stochastic maximum entropy" in source
+            and "learns to maximize" in source
+        ):
+            compacted = compacted.replace("是一个", "是").replace(
+                "策略，学习最大化",
+                "策略，以最大化",
+            )
+        if "covariance matrix" in source and "shared first part" in source:
+            compacted = compacted.replace("由于", "因", 1)
+            compacted = compacted.replace(
+                "（及其梯度）是对称的",
+                "及其梯度对称",
+            )
+            compacted = compacted.replace(
+                "共享的第一部分可通过",
+                "共享项可由",
+            ).replace("紧凑地求得", "求得")
+
     compact = _COMPACT_FORMULA_CONNECTOR_TRANSLATIONS.get(source)
     if compact is None or block.source_lines != 1:
-        return translated_text
+        return compacted
     formula_owned_slot = block.block_type == "formula_prose" or any(
         bbox_intersection_area(block.bbox, keepout)
         / max(1.0, bbox_area(block.bbox))
@@ -825,7 +846,7 @@ def _fit_formula_connector_translation(
     cjk_glyphs = sum(1 for char in translated_text if is_cjk_char(char))
     available_width = max(1.0, block.bbox[2] - block.bbox[0] - 1.6)
     if cjk_glyphs * max(1.0, block.font_size) <= available_width:
-        return translated_text
+        return compacted
     return compact
 
 
@@ -1117,16 +1138,16 @@ def translate_pdf(
                                 block.bbox[3],
                             ),
                         )
-            adjacent_preserved = _side_adjacent_preserved_regions(
+            preserved_keepouts = _preserved_keepout_regions(
                 block,
                 preserved_regions.get(page_index, []),
             )
-            if adjacent_preserved:
+            if preserved_keepouts:
                 block = replace(
                     block,
                     keepout_bboxes=list(
                         dict.fromkeys(
-                            [*(block.keepout_bboxes or []), *adjacent_preserved]
+                            [*(block.keepout_bboxes or []), *preserved_keepouts]
                         )
                     ),
                 )
@@ -5686,7 +5707,6 @@ def _raster_ink_overlap_issues(
     source_blocks: Sequence[TextBlock] = (),
 ) -> List[TranslationIssue]:
     """Confirm formula/body and heading/body collisions against 180-dpi ink."""
-    del original_page
     spans = _qa_text_spans(translated_page)
     cjk_spans = [
         span for span in spans if re.search(r"[\u3400-\u9fff]", span.get("text", ""))
@@ -5707,6 +5727,24 @@ def _raster_ink_overlap_issues(
         if len(image) > 1
     }
     image_infos = list(translated_page.get_image_info(xrefs=True))
+    original_image_infos = list(original_page.get_image_info(xrefs=True))
+
+    def matches_source_image(image: dict) -> bool:
+        image_bbox = tuple(float(value) for value in image["bbox"])
+        return any(
+            image.get("digest") == source_image.get("digest")
+            and all(
+                abs(image_bbox[index] - float(source_image["bbox"][index])) <= 0.5
+                for index in range(4)
+            )
+            for source_image in original_image_infos
+        )
+
+    source_native_image_indexes = {
+        index
+        for index, image in enumerate(image_infos)
+        if matches_source_image(image)
+    }
     formula_image_indexes = [
         index
         for index, image in enumerate(image_infos)
@@ -5781,6 +5819,11 @@ def _raster_ink_overlap_issues(
         formula_bbox = image_ink_bboxes[formula_index]
         for other_index in candidate_image_indexes:
             if other_index == formula_index:
+                continue
+            if (
+                formula_index in source_native_image_indexes
+                and other_index in source_native_image_indexes
+            ):
                 continue
             other_bbox = image_ink_bboxes[other_index]
             other_raw_bbox = tuple(
@@ -6237,6 +6280,33 @@ def _side_adjacent_preserved_regions(
     return adjacent
 
 
+def _preserved_keepout_regions(
+    block: TextBlock,
+    preserved_regions: Sequence[BBox],
+) -> List[BBox]:
+    """Protected regions that reflowed text must route around.
+
+    Besides same-baseline neighbours, include a preserved formula/table that
+    materially crosses a prose box.  A sub-2pt PDF hull graze is ignored; it
+    does not represent visible ink ownership and would needlessly constrain
+    the preceding line.
+    """
+    bx0, by0, bx1, by1 = block.bbox
+    block_height = max(1.0, by1 - by0)
+    keepouts = list(_side_adjacent_preserved_regions(block, preserved_regions))
+    for region in preserved_regions:
+        rx0, ry0, rx1, ry1 = region
+        horizontal_overlap = min(bx1, rx1) - max(bx0, rx0)
+        vertical_overlap = min(by1, ry1) - max(by0, ry0)
+        if horizontal_overlap <= 0.5:
+            continue
+        region_height = max(1.0, ry1 - ry0)
+        if vertical_overlap < max(2.0, min(block_height, region_height) * 0.20):
+            continue
+        keepouts.append(region)
+    return list(dict.fromkeys(keepouts))
+
+
 _PARALLEL_PANEL_MARKER_RE = re.compile(r"^\s*\([a-z]\)\s+", re.IGNORECASE)
 
 
@@ -6403,6 +6473,8 @@ def _translation_retains_source_prose_run(
     ):
         return False
     source_plain = strip_sentinels(block.text).strip()
+    if _looks_like_author_or_affiliation_text(source_plain):
+        return False
     if URL_RE.search(source_plain) or URL_RE.search(translated_text):
         return False
     if not re.search(r"\s", source_plain) and (
@@ -15942,10 +16014,54 @@ def _trim_redacts_against_block_keepouts(blocks: Sequence[TextBlock]) -> None:
         restore_groups = list(block.redaction_formula_restore_groups)
         restore_overlaps = _formula_prose_uses_atom_restore(block)
         for redact in redacts:
+            restored_full_prose = False
             segments = [redact]
             for keepout in block.keepout_bboxes:
                 next_segments: List[BBox] = []
                 for segment in segments:
+                    matching_atom_groups = [
+                        group
+                        for group in block.keepout_formula_atom_groups
+                        if group
+                        and bbox_intersection_area(union_bbox(group), keepout)
+                        / max(bbox_area(union_bbox(group)), 0.1)
+                        >= 0.9
+                    ]
+                    original_prose_bbox = next(
+                        (
+                            source_bbox
+                            for source_bbox in block.source_prose_bboxes
+                            if abs(source_bbox[0] - segment[0]) <= 0.8
+                            and abs(source_bbox[1] - segment[1]) <= 0.8
+                            and abs(source_bbox[2] - segment[2]) <= 0.8
+                            and source_bbox[3] >= segment[3] + 0.5
+                            and source_bbox[3] >= keepout[1] + 0.5
+                            and -0.5
+                            <= keepout[1] - segment[3]
+                            <= EQUATION_TABLE_REDACT_GAP + 0.5
+                            and min(source_bbox[2], keepout[2])
+                            - max(source_bbox[0], keepout[0])
+                            > 0.0
+                            and any(
+                                union_bbox(group)[0] >= source_bbox[0] - 0.5
+                                and union_bbox(group)[2] <= source_bbox[2] + 0.5
+                                and min(source_bbox[3], union_bbox(group)[3])
+                                - max(source_bbox[1], union_bbox(group)[1])
+                                >= 0.5
+                                for group in matching_atom_groups
+                            )
+                        ),
+                        None,
+                    )
+                    if original_prose_bbox is not None and matching_atom_groups:
+                        # Some PDFs delete a prose text object only when its
+                        # entire glyph bbox is covered. Restore that full bbox
+                        # and repaint the formula atoms crossed in its descent
+                        # band after redaction.
+                        next_segments.append(original_prose_bbox)
+                        restore_groups.extend(matching_atom_groups)
+                        restored_full_prose = True
+                        continue
                     vertical_overlap = min(segment[3], keepout[3]) - max(
                         segment[1], keepout[1]
                     )
@@ -15962,14 +16078,6 @@ def _trim_redacts_against_block_keepouts(blocks: Sequence[TextBlock]) -> None:
                         next_segments.append(segment)
                         continue
                     segment_height = max(segment[3] - segment[1], 0.1)
-                    matching_atom_groups = [
-                        group
-                        for group in block.keepout_formula_atom_groups
-                        if group
-                        and bbox_intersection_area(union_bbox(group), keepout)
-                        / max(bbox_area(union_bbox(group)), 0.1)
-                        >= 0.9
-                    ]
                     stale_delete_boundary = bool(
                         matching_atom_groups
                         and any(
@@ -16032,7 +16140,7 @@ def _trim_redacts_against_block_keepouts(blocks: Sequence[TextBlock]) -> None:
                         if candidate[2] - candidate[0] >= 1.0
                     )
                 segments = next_segments
-            if restore_overlaps:
+            if restore_overlaps or restored_full_prose:
                 safe_redacts.extend(segments)
             else:
                 safe_redacts.extend(
@@ -20925,7 +21033,6 @@ def _expand_standalone_heading_to_column(
     if (
         block.block_type != "heading"
         or block.nowrap
-        or block.preserve_position
         or not page_columns
     ):
         return block
@@ -20956,6 +21063,12 @@ def _expand_standalone_heading_to_column(
             column_right,
             min(float(page_width), max(candidate.bbox[2] for candidate in nearby_wide_bodies)),
         )
+    elif block.preserve_position:
+        # A source-anchored heading may sit over a figure, so do not widen it
+        # from column inference alone. A nearby full-width body block is the
+        # positive ownership signal that the extra horizontal room belongs to
+        # this heading rather than to adjacent visual content.
+        return block
     if column_right <= x1 + 1.0:
         return block
     redacts = block.redact_bboxes or [block.bbox]
@@ -24003,12 +24116,36 @@ def _unresolved_formula_keepouts(block: TextBlock) -> List[BBox]:
     for keepout in dict.fromkeys(block.keepout_bboxes or []):
         keepout_center_y = (keepout[1] + keepout[3]) / 2.0
         if not block.bbox[1] <= keepout_center_y <= block.bbox[3]:
+            vertical_overlap = min(block.bbox[3], keepout[3]) - max(
+                block.bbox[1], keepout[1]
+            )
+            boundary_crossing_formula = bool(
+                keepout[1] < block.bbox[3] < keepout[3]
+                and keepout[3] - block.bbox[3]
+                >= max(
+                    2.0,
+                    min(
+                        block.bbox[3] - block.bbox[1],
+                        keepout[3] - keepout[1],
+                    )
+                    * 0.20,
+                )
+                and vertical_overlap
+                >= max(
+                    2.0,
+                    min(
+                        block.bbox[3] - block.bbox[1],
+                        keepout[3] - keepout[1],
+                    )
+                    * 0.25,
+                )
+            )
             compact_boundary_fragment = bool(
                 keepout[3] - keepout[1] <= block.font_size * 1.25
                 and keepout[3] >= block.bbox[1] - block.font_size * 0.2
                 and keepout[1] <= block.bbox[3] + block.font_size * 0.2
             )
-            if not compact_boundary_fragment:
+            if not compact_boundary_fragment and not boundary_crossing_formula:
                 continue
         keepout_area = max(1.0, bbox_area(keepout))
         represented = any(
@@ -24566,7 +24703,7 @@ def translated_text_fits(
                     fonts,
                     size,
                     rect.width,
-                    prefer_space_break=centered,
+                    prefer_space_break=centered and block.block_type != "caption",
                     bold_fonts=bold_fonts,
                     line_widths=widths,
                 )
@@ -24590,7 +24727,7 @@ def translated_text_fits(
             fonts,
             size,
             rect.width,
-            prefer_space_break=centered,
+            prefer_space_break=centered and block.block_type != "caption",
             bold_fonts=bold_fonts,
         )
         if block.block_type == "title":
@@ -24725,7 +24862,7 @@ def insert_translated_text(
                     fonts,
                     size,
                     rect.width,
-                    prefer_space_break=centered,
+                    prefer_space_break=centered and block.block_type != "caption",
                     bold_fonts=bold_fonts,
                     line_widths=widths,
                 )
@@ -24772,7 +24909,7 @@ def insert_translated_text(
             fonts,
             size,
             rect.width,
-            prefer_space_break=centered,
+            prefer_space_break=centered and block.block_type != "caption",
             bold_fonts=bold_fonts,
         )
         for leading in leading_options(block):

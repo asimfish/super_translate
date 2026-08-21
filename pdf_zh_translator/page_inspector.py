@@ -1411,7 +1411,10 @@ def _display_alignment_issues(
         if any(
             (
                 getattr(block, "formula_anchors", ())
-                and _bbox_overlap_area(row, block.bbox) >= row_area * 0.80
+                and any(
+                    _bbox_overlap_area(row, anchor) > 0.0
+                    for anchor in getattr(block, "formula_anchors", ())
+                )
             )
             or (
                 getattr(block, "flow_inline_math", False)
@@ -1546,6 +1549,67 @@ def _reference_region_bboxes(
     return [(0.0, reference_y - 4.0, width, height)]
 
 
+def _reference_continuation_regions(
+    page: object,
+    source_role_blocks: Sequence[object],
+) -> List[BBox]:
+    """Keep a carried bibliography active only until each column's section.
+
+    A two-column page can finish references in the upper left while the right
+    column has already entered an appendix.  Treating a heading near the top
+    as a page-wide boundary flags the last bibliography entries; treating the
+    whole page as references hides untranslated appendix prose.  Bibliography
+    markers before the first heading in each reading column provide the local
+    boundary without guessing from translated text.
+    """
+    width = float(page.rect.width)
+    height = float(page.rect.height)
+    headings = [
+        tuple(float(value) for value in getattr(block, "bbox"))
+        for block in source_role_blocks
+        if getattr(block, "block_type", "") in {"title", "heading"}
+        and bool(getattr(block, "should_translate", True))
+        and getattr(block, "bbox", None) is not None
+    ]
+    if not headings:
+        return [(0.0, 0.0, width, height)]
+
+    prose_widths = [
+        float(getattr(block, "bbox")[2]) - float(getattr(block, "bbox")[0])
+        for block in source_role_blocks
+        if getattr(block, "block_type", "") not in {"title", "heading"}
+        and getattr(block, "bbox", None) is not None
+    ]
+    if any(block_width >= width * 0.55 for block_width in prose_widths):
+        columns = [(0.0, width, min(bbox[1] for bbox in headings))]
+    else:
+        midpoint = width / 2.0
+        columns = []
+        for left, right in ((0.0, midpoint), (midpoint, width)):
+            column_headings = [
+                bbox
+                for bbox in headings
+                if left <= (bbox[0] + bbox[2]) / 2.0 < right
+            ]
+            stop = min((bbox[1] for bbox in column_headings), default=height)
+            columns.append((left, right, stop))
+
+    page_blocks = _text_blocks(page)
+    regions: List[BBox] = []
+    for left, right, stop in columns:
+        fragments = [
+            block.text
+            for block in page_blocks
+            if left <= (block.bbox[0] + block.bbox[2]) / 2.0 < right
+            and block.bbox[1] < stop - 4.0
+            and block.bbox[3] > height * 0.06
+        ]
+        if len(_BIBLIOGRAPHY_MARKER_RE.findall(" ".join(fragments))) < 2:
+            continue
+        regions.append((left, 0.0, right, max(0.0, stop - 4.0)))
+    return regions
+
+
 def _reference_issues(
     original_page: object,
     translated_page: object,
@@ -1553,6 +1617,7 @@ def _reference_issues(
     reference_y: Optional[float],
     *,
     source_role_blocks: Sequence[object] = (),
+    reference_regions: Optional[Sequence[BBox]] = None,
 ) -> List[object]:
     if reference_y is None:
         return []
@@ -1589,14 +1654,18 @@ def _reference_issues(
         translation_exclusions.append(source_bbox)
 
     def reference_spans(page: object) -> List[_Span]:
-        reference_regions = _reference_region_bboxes(page, reference_y)
+        selected_regions = (
+            list(reference_regions)
+            if reference_regions is not None
+            else _reference_region_bboxes(page, reference_y)
+        )
         page_spans: List[_Span] = []
         for page_block in _text_blocks(page):
             center_x = (page_block.bbox[0] + page_block.bbox[2]) / 2.0
             center_y = (page_block.bbox[1] + page_block.bbox[3]) / 2.0
             if not any(
                 left <= center_x <= right and top <= center_y <= bottom
-                for left, top, right, bottom in reference_regions
+                for left, top, right, bottom in selected_regions
             ):
                 continue
             for span in page_block.spans:
@@ -1710,8 +1779,10 @@ def _reference_issues(
             and top
             <= (block.bbox[1] + block.bbox[3]) / 2.0
             <= bottom
-            for left, top, right, bottom in _reference_region_bboxes(
-                original_page, reference_y
+            for left, top, right, bottom in (
+                reference_regions
+                if reference_regions is not None
+                else _reference_region_bboxes(original_page, reference_y)
             )
         )
         for span in block.spans
@@ -2317,6 +2388,13 @@ def inspect_translation(
             reference_y = _reference_section_start_y(translated_page)
             if reference_y is None:
                 reference_y = _reference_section_start_y(original_page)
+            section_headings = [
+                block
+                for block in source_role_blocks.get(index, ())
+                if getattr(block, "block_type", "") in {"title", "heading"}
+                and bool(getattr(block, "should_translate", True))
+            ]
+            carried_reference_regions: Optional[List[BBox]] = None
             if reference_y is not None:
                 reference_active = True
             elif reference_active and (
@@ -2330,7 +2408,15 @@ def inspect_translation(
                 )
                 >= 4
             ):
-                reference_y = 0.0
+                carried_reference_regions = _reference_continuation_regions(
+                    original_page,
+                    source_role_blocks.get(index, ()),
+                )
+                if carried_reference_regions:
+                    reference_y = 0.0
+                reference_active = bool(carried_reference_regions) and not bool(
+                    section_headings
+                )
             else:
                 reference_active = False
 
@@ -2351,9 +2437,10 @@ def inspect_translation(
                 )
             table_bands.extend(_line_table_bboxes(translated_page))
             table_bands.extend(structural_table_regions.get(index, ()))
-            reference_regions = _reference_region_bboxes(
-                original_page,
-                reference_y,
+            reference_regions = (
+                carried_reference_regions
+                if carried_reference_regions is not None
+                else _reference_region_bboxes(original_page, reference_y)
             )
 
             issues.extend(
@@ -2413,6 +2500,7 @@ def inspect_translation(
                     page_number,
                     reference_y,
                     source_role_blocks=source_role_blocks.get(index, ()),
+                    reference_regions=reference_regions,
                 )
             )
             issues.extend(

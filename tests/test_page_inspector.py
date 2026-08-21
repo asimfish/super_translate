@@ -179,6 +179,200 @@ def test_reference_content_still_flags_reference_like_translation_unit():
     original.close()
 
 
+def test_reference_continuation_stops_when_appendix_heading_starts_new_page(
+    tmp_path, monkeypatch
+):
+    from pdf_zh_translator.pdf_layout import TextBlock, ensure_font_pack_files
+
+    body_font, _bold_font = ensure_font_pack_files([])
+    assert body_font is not None
+    reference_text = (
+        "[1] Smith, J. Reliable world models. Proceedings of Learning Systems, 2024. "
+        "[2] Doe, A. Diffusion planning. Journal of Machine Learning, 2023."
+    )
+    appendix_body = (
+        "We describe how sampling observations from a diffusion world model works. "
+        "The solver follows prior work while retaining the learned score and the "
+        "continuous process for stable prediction."
+    )
+
+    original = fitz.open()
+    original_reference = original.new_page(width=360, height=240)
+    original_reference.insert_text((30, 30), "References", fontsize=12)
+    original_reference.insert_textbox(
+        fitz.Rect(30, 70, 330, 205), reference_text, fontsize=9
+    )
+    original_appendix = original.new_page(width=360, height=240)
+    original_appendix.insert_text(
+        (30, 35), "A Sampling observations in DIAMOND", fontsize=12
+    )
+    original_appendix.insert_textbox(
+        fitz.Rect(30, 48, 330, 105), appendix_body, fontsize=9
+    )
+
+    translated = fitz.open()
+    translated_reference = translated.new_page(width=360, height=240)
+    translated_reference.insert_font(fontname="cjkbody", fontfile=str(body_font))
+    translated_reference.insert_text(
+        (30, 30), "References", fontsize=12
+    )
+    translated_reference.insert_textbox(
+        fitz.Rect(30, 70, 330, 205), reference_text, fontsize=9
+    )
+    translated_appendix = translated.new_page(width=360, height=240)
+    translated_appendix.insert_font(fontname="cjkbody", fontfile=str(body_font))
+    translated_appendix.insert_text(
+        (30, 35), "A 在 DIAMOND 中采样观测", fontsize=12, fontname="cjkbody"
+    )
+    translated_appendix.insert_textbox(
+        fitz.Rect(30, 125, 330, 220),
+        (
+            "我们描述如何从扩散世界模型中采样观测，并保留学习到的评分与连续过程，"
+            "以获得稳定预测 (2020) (2021) (2022) (2023)。"
+        ),
+        fontsize=9,
+        fontname="cjkbody",
+    )
+
+    original_path = tmp_path / "reference-then-appendix.pdf"
+    translated_path = tmp_path / "reference-then-appendix-zh.pdf"
+    original.save(original_path)
+    translated.save(translated_path)
+    translated.close()
+    original.close()
+
+    heading_role = TextBlock(
+        page_index=1,
+        bbox=(30.0, 20.0, 250.0, 40.0),
+        text="A Sampling observations in DIAMOND",
+        font_size=12.0,
+        color=(0.0, 0.0, 0.0),
+        block_type="heading",
+        preserve_position=True,
+    )
+
+    def fake_prepare(*_args, **_kwargs):
+        return [(heading_role, "", {})], [], []
+
+    monkeypatch.setattr(
+        "pdf_zh_translator.pdf_layout.prepare_translation_units",
+        fake_prepare,
+    )
+
+    issues = inspect_translation(original_path, translated_path)
+
+    assert not [issue for issue in issues if issue.code == "reference_content_changed"]
+
+
+def test_reference_continuation_can_end_per_column_on_mixed_appendix_page(
+    tmp_path, monkeypatch
+):
+    from pdf_zh_translator.pdf_layout import TextBlock, ensure_font_pack_files
+
+    body_font, _bold_font = ensure_font_pack_files([])
+    assert body_font is not None
+    references = (
+        "Smith, J. Reliable world models. Proceedings of Learning Systems, 2024. "
+        "Doe, A. Diffusion planning. Journal of Machine Learning, 2023. "
+        "Lee, K. Scene synthesis from images. Computer Vision Review, 2022. "
+        "Wu, T. Rasterized Gaussian models. Graphics Research, 2021."
+    )
+
+    original = fitz.open()
+    original_reference = original.new_page(width=400, height=260)
+    original_reference.insert_text((20, 25), "References", fontsize=12)
+    original_reference.insert_textbox(
+        fitz.Rect(20, 45, 380, 230), references, fontsize=9
+    )
+    original_mixed = original.new_page(width=400, height=260)
+    original_mixed.insert_textbox(
+        fitz.Rect(20, 25, 185, 135), references, fontsize=8
+    )
+    original_mixed.insert_text((20, 160), "A Gradient details", fontsize=11)
+    original_mixed.insert_textbox(
+        fitz.Rect(20, 175, 185, 235),
+        "We derive the covariance gradients used by the renderer.",
+        fontsize=9,
+    )
+    original_mixed.insert_text((215, 35), "B Optimization", fontsize=11)
+    original_mixed.insert_textbox(
+        fitz.Rect(215, 50, 380, 120),
+        "The optimization schedule alternates densification and pruning.",
+        fontsize=9,
+    )
+
+    translated = fitz.open()
+    translated_reference = translated.new_page(width=400, height=260)
+    translated_reference.insert_text((20, 25), "References", fontsize=12)
+    translated_reference.insert_textbox(
+        fitz.Rect(20, 45, 380, 230), references, fontsize=9
+    )
+    translated_mixed = translated.new_page(width=400, height=260)
+    translated_mixed.insert_font(fontname="cjkbody", fontfile=str(body_font))
+    translated_mixed.insert_textbox(
+        fitz.Rect(20, 25, 185, 135), references, fontsize=8
+    )
+    translated_mixed.insert_text(
+        (20, 160), "A 梯度细节", fontsize=11, fontname="cjkbody"
+    )
+    translated_mixed.insert_textbox(
+        fitz.Rect(20, 175, 185, 235),
+        "我们推导渲染器使用的协方差梯度。",
+        fontsize=9,
+        fontname="cjkbody",
+    )
+    translated_mixed.insert_text(
+        (215, 35), "B 优化", fontsize=11, fontname="cjkbody"
+    )
+    translated_mixed.insert_textbox(
+        fitz.Rect(215, 50, 380, 120),
+        "优化日程交替执行致密化与剪枝。",
+        fontsize=9,
+        fontname="cjkbody",
+    )
+
+    original_path = tmp_path / "references-mixed-appendix.pdf"
+    translated_path = tmp_path / "references-mixed-appendix-zh.pdf"
+    original.save(original_path)
+    translated.save(translated_path)
+    translated.close()
+    original.close()
+
+    headings = [
+        TextBlock(
+            page_index=1,
+            bbox=(20.0, 149.0, 180.0, 162.0),
+            text="A Gradient details",
+            font_size=11.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+            preserve_position=True,
+        ),
+        TextBlock(
+            page_index=1,
+            bbox=(215.0, 24.0, 380.0, 37.0),
+            text="B Optimization",
+            font_size=11.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+            preserve_position=True,
+        ),
+    ]
+
+    def fake_prepare(*_args, **_kwargs):
+        return [(heading, "", {}) for heading in headings], [], []
+
+    monkeypatch.setattr(
+        "pdf_zh_translator.pdf_layout.prepare_translation_units",
+        fake_prepare,
+    )
+
+    issues = inspect_translation(original_path, translated_path)
+
+    assert not [issue for issue in issues if issue.code == "untranslated_block"]
+    assert not [issue for issue in issues if issue.code == "reference_content_changed"]
+
+
 def test_font_size_pairs_against_source_semantic_role_before_raw_pdf_block():
     original = fitz.open()
     original_page = original.new_page(width=300, height=200)
@@ -340,6 +534,31 @@ class TestProductionRegressions:
                 [tuple(formula)],
                 source_role_blocks=[
                     SimpleNamespace(bbox=tuple(formula), formula_anchors=(formula,))
+                ],
+            )
+            crossing_anchor = (
+                formula.x0 + 10.0,
+                formula.y0 - 2.0,
+                formula.x0 + 24.0,
+                formula.y0 + 4.0,
+            )
+            assert not _display_alignment_issues(
+                original_ink,
+                translated_ink,
+                1,
+                [tuple(formula)],
+                source_role_blocks=[
+                    SimpleNamespace(
+                        bbox=(
+                            formula.x0 - 80.0,
+                            formula.y0 - 24.0,
+                            formula.x1,
+                            formula.y0 + 4.0,
+                        ),
+                        formula_anchors=(crossing_anchor,),
+                        flow_inline_math=False,
+                        keepout_formula_atom_groups=(),
+                    )
                 ],
             )
             assert not _display_alignment_issues(
