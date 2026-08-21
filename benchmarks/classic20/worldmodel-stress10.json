@@ -1,0 +1,76 @@
+{
+  "name": "worldmodel-stress10",
+  "description": "Supplemental world-model, embodied-agent, and generative-vision layout regression set. This is not the fixed WorldModel10 acceptance set.",
+  "layout_axes": [
+    "single_column",
+    "two_column",
+    "math_dense",
+    "algorithm_blocks",
+    "table_heavy",
+    "figure_dense",
+    "appendix_heavy",
+    "long_paper"
+  ],
+  "papers": [
+    {
+      "id": "dreamerv3",
+      "arxiv_id": "2301.04104",
+      "title": "Mastering Diverse Domains through World Models (DreamerV3)",
+      "tags": ["single_column", "figure_dense", "algorithm_blocks"]
+    },
+    {
+      "id": "genie",
+      "arxiv_id": "2402.15391",
+      "title": "Genie: Generative Interactive Environments",
+      "tags": ["single_column", "figure_dense", "appendix_heavy"]
+    },
+    {
+      "id": "vjepa2",
+      "arxiv_id": "2506.09985",
+      "title": "V-JEPA 2: Self-Supervised Video Models for World Understanding",
+      "tags": ["single_column", "figure_dense", "long_paper"]
+    },
+    {
+      "id": "diamond",
+      "arxiv_id": "2405.12399",
+      "title": "Diffusion for World Modeling (DIAMOND)",
+      "tags": ["single_column", "figure_dense", "math_dense"]
+    },
+    {
+      "id": "tdmpc2",
+      "arxiv_id": "2310.16828",
+      "title": "TD-MPC2: Scalable, Robust World Models for Continuous Control",
+      "tags": ["single_column", "figure_dense", "appendix_heavy"]
+    },
+    {
+      "id": "openvla",
+      "arxiv_id": "2406.09246",
+      "title": "OpenVLA: An Open-Source Vision-Language-Action Model",
+      "tags": ["single_column", "figure_dense", "table_heavy"]
+    },
+    {
+      "id": "pi0",
+      "arxiv_id": "2410.24164",
+      "title": "pi_0: A Vision-Language-Action Flow Model",
+      "tags": ["single_column", "figure_dense", "math_dense"]
+    },
+    {
+      "id": "rt2",
+      "arxiv_id": "2307.15818",
+      "title": "RT-2: Vision-Language-Action Models",
+      "tags": ["single_column", "figure_dense", "table_heavy"]
+    },
+    {
+      "id": "gaussian_splat",
+      "arxiv_id": "2308.04079",
+      "title": "3D Gaussian Splatting for Real-Time Radiance Fields",
+      "tags": ["two_column", "figure_dense", "math_dense"]
+    },
+    {
+      "id": "dit",
+      "arxiv_id": "2212.09748",
+      "title": "Scalable Diffusion Models with Transformers (DiT)",
+      "tags": ["two_column", "figure_dense", "table_heavy"]
+    }
+  ]
+}

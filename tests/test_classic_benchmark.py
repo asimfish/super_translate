@@ -17,6 +17,10 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 MANIFEST = REPO / "benchmarks" / "classic20" / "manifest.json"
 HELDOUT_MANIFEST = REPO / "benchmarks" / "classic20" / "heldout-final.json"
+WORLDMODEL10_MANIFEST = REPO / "benchmarks" / "classic20" / "worldmodel10.json"
+WORLDMODEL_STRESS10_MANIFEST = (
+    REPO / "benchmarks" / "classic20" / "worldmodel-stress10.json"
+)
 
 
 @pytest.fixture(scope="module")
@@ -31,6 +35,61 @@ def benchmark_module():
 
 
 class TestManifest:
+    def test_worldmodel10_is_the_fixed_versioned_acceptance_set(self):
+        data = json.loads(WORLDMODEL10_MANIFEST.read_text(encoding="utf-8"))
+        papers = data["papers"]
+
+        assert data["schema_version"] == 1
+        assert data["manifest_version"] == "worldmodel10-2026.08-v1"
+        assert [paper["base_arxiv_id"] for paper in papers] == [
+            "2608.01127",
+            "2607.22535",
+            "2606.17030",
+            "2605.00080",
+            "2602.07050",
+            "2510.07092",
+            "2507.21809",
+            "2505.12705",
+            "2505.14357",
+            "2501.03575",
+        ]
+        assert len(papers) == 10
+        assert all(
+            paper["arxiv_id"] == paper["base_arxiv_id"] + paper["version"]
+            for paper in papers
+        )
+
+    def test_worldmodel10_sources_and_publication_rights_are_locked(self):
+        data = json.loads(WORLDMODEL10_MANIFEST.read_text(encoding="utf-8"))
+        papers = data["papers"]
+        restricted = {
+            paper["id"] for paper in papers if not paper["showcase_ok"]
+        }
+
+        assert restricted == {"hunyuanworld", "vid2world"}
+        for paper in papers:
+            assert paper["abs_url"] == f"https://arxiv.org/abs/{paper['arxiv_id']}"
+            assert paper["pdf_url"] == f"https://arxiv.org/pdf/{paper['arxiv_id']}"
+            assert len(paper["source_sha256"]) == 64
+            assert paper["page_count"] > 0
+            assert paper["submitted_date"] <= paper["version_date"]
+            assert paper["fetched_at"].endswith("+00:00")
+
+    def test_worldmodel10_does_not_overlap_classic_or_stress_sets(self):
+        worldmodel = json.loads(
+            WORLDMODEL10_MANIFEST.read_text(encoding="utf-8")
+        )["papers"]
+        classic = json.loads(MANIFEST.read_text(encoding="utf-8"))["papers"]
+        stress = json.loads(
+            WORLDMODEL_STRESS10_MANIFEST.read_text(encoding="utf-8")
+        )
+
+        worldmodel_ids = {paper["base_arxiv_id"] for paper in worldmodel}
+        classic_ids = {paper["arxiv_id"].split("v", 1)[0] for paper in classic}
+        assert worldmodel_ids.isdisjoint(classic_ids)
+        assert stress["name"] == "worldmodel-stress10"
+        assert "2506.09985" in {paper["arxiv_id"] for paper in stress["papers"]}
+
     def test_heldout_manifest_is_exactly_the_frozen_classic20(self):
         data = json.loads(HELDOUT_MANIFEST.read_text(encoding="utf-8"))
         assert [paper["id"] for paper in data["papers"]] == [
