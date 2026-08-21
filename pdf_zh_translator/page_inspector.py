@@ -1551,10 +1551,42 @@ def _reference_issues(
     translated_page: object,
     page_number: int,
     reference_y: Optional[float],
+    *,
+    source_role_blocks: Sequence[object] = (),
 ) -> List[object]:
     if reference_y is None:
         return []
     issues: List[object] = []
+
+    # Bibliography geometry deliberately follows column reading order, so on
+    # mixed pages its coarse rectangles can also contain legitimate body,
+    # appendix, caption, or repeated-header translations.  Exclude only source
+    # blocks that structure analysis positively selected for translation and
+    # that do not themselves resemble reference entries.  A misclassified
+    # bibliography entry therefore remains visible to this guard.
+    from .pdf_layout import _looks_like_reference_entry_text, strip_sentinels
+
+    translation_exclusions: List[BBox] = []
+    page_width = float(original_page.rect.width)
+    for source_block in source_role_blocks:
+        source_text = " ".join(
+            strip_sentinels(str(getattr(source_block, "text", ""))).split()
+        )
+        bbox = getattr(source_block, "bbox", None)
+        if bbox is None:
+            continue
+        source_bbox = tuple(float(value) for value in bbox)
+        full_width_before_heading = bool(
+            reference_y > 0.0
+            and source_bbox[1] < reference_y - 4.0
+            and source_bbox[2] - source_bbox[0] >= page_width * 0.55
+        )
+        if (
+            _looks_like_reference_entry_text(source_text)
+            and not full_width_before_heading
+        ):
+            continue
+        translation_exclusions.append(source_bbox)
 
     def reference_spans(page: object) -> List[_Span]:
         reference_regions = _reference_region_bboxes(page, reference_y)
@@ -1567,11 +1599,16 @@ def _reference_issues(
                 for left, top, right, bottom in reference_regions
             ):
                 continue
-            page_spans.extend(
-                span
-                for span in page_block.spans
-                if span.visible and span.text.strip()
-            )
+            for span in page_block.spans:
+                if not span.visible or not span.text.strip():
+                    continue
+                span_area = max(1.0, _bbox_area(span.bbox))
+                if any(
+                    _bbox_overlap_area(span.bbox, excluded) >= 0.20 * span_area
+                    for excluded in translation_exclusions
+                ):
+                    continue
+                page_spans.append(span)
         return page_spans[:400]
 
     original_spans = reference_spans(original_page)
@@ -2375,6 +2412,7 @@ def inspect_translation(
                     translated_page,
                     page_number,
                     reference_y,
+                    source_role_blocks=source_role_blocks.get(index, ()),
                 )
             )
             issues.extend(

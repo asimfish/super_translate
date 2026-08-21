@@ -1560,6 +1560,109 @@ def _clear_adjacent_formula_ink_overlaps(
             )
         return ink_cache[index]
 
+    # A flowing paragraph can end inside the extraction hull of the next
+    # academic statement.  When that statement keeps its formulas fixed, a
+    # tall inline token in the preceding translation may push the final CJK
+    # row down over those source glyphs.  Treat only the intersecting fixed
+    # anchors as foreign keepouts.  Prefer the otherwise empty right margin
+    # over shrinking body text, and accept the change only when the paragraph
+    # fits completely at its requested size.
+    for index, ((block, text), centered) in enumerate(
+        zip(list(adjusted), centered_flags)
+    ):
+        if (
+            centered
+            or block.nowrap
+            or block.preserve_position
+            or block.block_type not in {"body", "formula_prose"}
+            or not block.flow_inline_math
+            or _uses_fixed_source_math(block)
+        ):
+            continue
+
+        block_width = max(1.0, block.bbox[2] - block.bbox[0])
+        fixed_followups: List[Tuple[float, TextBlock, Tuple[BBox, ...]]] = []
+        for following, _following_text in adjusted[index + 1 :]:
+            if not _uses_fixed_source_math(following):
+                continue
+            gap = following.bbox[1] - block.bbox[3]
+            if not -max(8.0, block.font_size * 0.8) <= gap <= max(
+                3.0,
+                block.font_size * 0.35,
+            ):
+                continue
+            overlap = min(block.bbox[2], following.bbox[2]) - max(
+                block.bbox[0],
+                following.bbox[0],
+            )
+            following_width = max(1.0, following.bbox[2] - following.bbox[0])
+            if overlap / min(block_width, following_width) < 0.65:
+                continue
+            foreign_anchors = tuple(
+                anchor
+                for anchor in following.formula_anchors
+                if anchor[1] < block.bbox[3] + 0.5
+                and anchor[3] > block.bbox[1] - 0.5
+            )
+            if foreign_anchors:
+                fixed_followups.append((abs(gap), following, foreign_anchors))
+        if not fixed_followups:
+            continue
+
+        _distance, fixed_following, foreign_anchors = min(
+            fixed_followups,
+            key=lambda item: item[0],
+        )
+        x0, y0, x1, y1 = block.bbox
+        right_limit = min(
+            float(page_rect.width) - max(0.5, margin),
+            x1 + max(64.0, block.font_size * 7.0),
+        )
+        for other_index, (other, _other_text) in enumerate(adjusted):
+            if other_index == index or other is fixed_following:
+                continue
+            vertical_overlap = min(y1, other.bbox[3]) - max(y0, other.bbox[1])
+            if vertical_overlap <= 0.0 or other.bbox[0] < x1 - 0.5:
+                continue
+            right_limit = min(right_limit, other.bbox[0] - 0.8)
+        for obstacle in obstacles:
+            vertical_overlap = min(y1, obstacle[3]) - max(y0, obstacle[1])
+            if vertical_overlap <= 0.0 or obstacle[0] < x1 - 0.5:
+                continue
+            right_limit = min(right_limit, obstacle[0] - 0.8)
+        if right_limit <= x1 + 0.1:
+            continue
+
+        requested_size = requested_translation_font_size(
+            block,
+            min_font_size,
+            font_scale,
+        )
+        keepouts = list(
+            dict.fromkeys([*(block.keepout_bboxes or []), *foreign_anchors])
+        )
+        trial_x1 = x1
+        while trial_x1 <= right_limit + 1e-6:
+            candidate = replace(
+                block,
+                bbox=(x0, y0, trial_x1, y1),
+                redact_bboxes=list(block.redact_bboxes or [block.bbox]),
+                keepout_bboxes=keepouts,
+            )
+            if translated_text_fits(
+                candidate,
+                text,
+                font_pack,
+                requested_size,
+                requested_size,
+                margin,
+                centered,
+            ):
+                adjusted[index] = (candidate, text)
+                ink_cache.pop(index, None)
+                break
+            trial_x1 += 1.0
+
     # A translated formula-bearing paragraph near the bottom of a column can
     # need one more line while a detached formula suffix prevents growth below.
     # Source bboxes are too conservative for the upper boundary: the preceding
@@ -15879,6 +15982,23 @@ def _trim_redacts_against_block_keepouts(blocks: Sequence[TextBlock]) -> None:
                             for group in matching_atom_groups
                         )
                     )
+                    visible_atoms_are_vertically_disjoint = bool(
+                        matching_atom_groups
+                        and not stale_delete_boundary
+                        and all(
+                            union_bbox(group)[3] <= segment[1]
+                            or union_bbox(group)[1] >= segment[3]
+                            for group in matching_atom_groups
+                        )
+                    )
+                    if visible_atoms_are_vertically_disjoint:
+                        # A source font's delete bbox can extend beyond its
+                        # painted formula atoms and cross the neighboring prose
+                        # row without being a genuinely stale CMEX boundary.
+                        # Preserve the full prose width here; the vertical trim
+                        # below clears the modest overhang without a text island.
+                        next_segments.append(segment)
+                        continue
                     if restore_overlaps and matching_atom_groups:
                         next_segments.append(segment)
                         restore_groups.extend(matching_atom_groups)
@@ -20498,15 +20618,24 @@ def _restore_redacted_formula_atoms(
                 continue
             group_bbox = union_bbox(group)
             group_area = max(bbox_area(group_bbox), 0.1)
+            owned_atoms = {
+                atom
+                for atom_group in block.source_math_atom_groups
+                for atom in atom_group
+            }
+            every_atom_owned = all(atom in owned_atoms for atom in group)
             inline_formula_owns_group = bool(
                 block.flow_inline_math
                 and len(SENTINEL_RUN_RE.findall(block.text))
                 == len(block.formula_anchors)
-                and any(
-                    bbox_intersection_area(group_bbox, owned)
-                    / max(bbox_area(group_bbox), 0.1)
-                    >= 0.9
-                    for owned in block.source_math_bboxes
+                and (
+                    every_atom_owned
+                    or any(
+                        bbox_intersection_area(group_bbox, owned)
+                        / max(bbox_area(group_bbox), 0.1)
+                        >= 0.9
+                        for owned in block.source_math_bboxes
+                    )
                 )
             )
             if inline_formula_owns_group:
@@ -21120,6 +21249,28 @@ def _combine_formula_continuation_translation_items(
 
     def can_append(previous: TextBlock, following: TextBlock) -> bool:
         following_plain = " ".join(strip_sentinels(following.text).split()).strip()
+        vertical_overlap = min(previous.bbox[3], following.bbox[3]) - max(
+            previous.bbox[1], following.bbox[1]
+        )
+        shorter_height = max(
+            1.0,
+            min(
+                previous.bbox[3] - previous.bbox[1],
+                following.bbox[3] - following.bbox[1],
+            ),
+        )
+        overlapping_inline_math_followup = bool(
+            not previous.flow_inline_math
+            and following.flow_inline_math
+            and previous.formula_anchors
+            and following.formula_anchors
+            and previous.source_lines >= 2
+            and following.source_lines >= 2
+            and vertical_overlap >= shorter_height * 0.55
+            and abs(previous.bbox[0] - following.bbox[0])
+            <= max(4.0, min(previous.font_size, following.font_size) * 0.5)
+            and re.match(r"^[a-z]", following_plain)
+        )
         embedded_following_connector = bool(
             compact_connector(following)
             and following.bbox[2]
@@ -21183,8 +21334,10 @@ def _combine_formula_continuation_translation_items(
             # ``Task:`` after ``Filename:``). A formula in that field must
             # not pull the preceding field into one style range.
             or following.bold_prefix
-            or previous.flow_inline_math
-            or following.flow_inline_math
+            or (
+                (previous.flow_inline_math or following.flow_inline_math)
+                and not overlapping_inline_math_followup
+            )
             or (
                 previous.preserve_position
                 and previous.block_type != "formula_prose"
@@ -22582,9 +22735,19 @@ def _expand_single_line_body_bbox(
 ) -> TextBlock:
     """Give short prose and inline-style runs enough room to keep body size."""
     inline_style_flow = block.flow_inline_math and block.source_lines <= 2
+    compact_two_line_body = bool(
+        block.source_lines == 2
+        and not block.flow_inline_math
+        and not block.formula_anchors
+        and block.bbox[2] - block.bbox[0] >= page_width * 0.55
+    )
     if (
         block.block_type not in {"body", "formula_prose"}
-        or (block.source_lines != 1 and not inline_style_flow)
+        or (
+            block.source_lines != 1
+            and not inline_style_flow
+            and not compact_two_line_body
+        )
         or block.nowrap
         or block.preserve_position
     ):
@@ -22660,6 +22823,17 @@ def _expand_single_line_body_bbox(
         if embedded_in_equation_row
         else min(row_right, max(x1, x0 + desired_width))
     )
+    if (
+        compact_two_line_body
+        and desired_width <= row_right - x0 + 0.1
+        and desired_height <= y1 - y0 + 0.1
+    ):
+        # Some TeX notes occupy two physical source rows only because a
+        # formula starts immediately below them. Their shorter Chinese text
+        # fits one row at body size when the unused right margin is borrowed.
+        # Keep the existing vertical box so the adjacent formula remains a
+        # hard boundary; only widen the prose line.
+        return replace(block, bbox=(x0, y0, new_x1, y1))
 
     top_limit = 0.0
     bottom_limit = float("inf")

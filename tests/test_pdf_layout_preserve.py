@@ -157,6 +157,189 @@ def test_inline_formula_rule_ownership_ignores_wide_table_rules():
     assert block.source_math_atom_groups == ((formula_bbox,),)
 
 
+def test_inline_formula_restore_skips_group_owned_across_multiple_anchors():
+    from pdf_zh_translator.pdf_layout import _restore_redacted_formula_atoms
+
+    first_atom = (108.0, 490.0, 118.0, 500.0)
+    second_atom = (122.0, 488.0, 187.0, 501.0)
+    restore_group = (first_atom, second_atom)
+    block = TextBlock(
+        page_index=0,
+        bbox=(108.0, 466.0, 505.0, 534.0),
+        text=(
+            f"lead {SENTINEL_OPEN}x{SENTINEL_CLOSE} and "
+            f"{SENTINEL_OPEN}y{SENTINEL_CLOSE} tail"
+        ),
+        font_size=10.0,
+        color=(0.0, 0.0, 0.0),
+        block_type="body",
+        flow_inline_math=True,
+        formula_anchors=(first_atom, second_atom),
+        source_math_bboxes=(first_atom, second_atom),
+        source_math_atom_groups=((first_atom,), (second_atom,)),
+        redaction_formula_restore_groups=(restore_group,),
+        redact_bboxes=[(108.0, 488.0, 187.0, 502.0)],
+    )
+
+    with patch(
+        "pdf_zh_translator.pdf_layout._expanded_radical_restore_atoms",
+        return_value=restore_group,
+    ), patch(
+        "pdf_zh_translator.pdf_layout._insert_source_formula_raster"
+    ) as insert_formula:
+        restored = _restore_redacted_formula_atoms(
+            object(),
+            [object()],
+            0,
+            [block],
+        )
+
+    assert restored == 0
+    insert_formula.assert_not_called()
+
+
+def test_formula_continuation_combines_overlapping_inline_math_followup():
+    from pdf_zh_translator.pdf_layout import (
+        _combine_formula_continuation_translation_items,
+    )
+
+    first_formula = (237.0, 669.0, 403.0, 686.0)
+    second_formula = (324.0, 687.0, 449.0, 702.0)
+    lead = TextBlock(
+        page_index=0,
+        bbox=(108.0, 669.4, 402.8, 685.9),
+        text=(
+            "In this paper we use the measure "
+            f"{SENTINEL_OPEN}phi(A, B){SENTINEL_CLOSE}"
+        ),
+        font_size=10.0,
+        color=(0.0, 0.0, 0.0),
+        source_lines=5,
+        block_type="body",
+        formula_anchors=(first_formula,),
+        source_math_bboxes=(first_formula,),
+        source_math_atom_groups=((first_formula,),),
+        keepout_bboxes=[first_formula],
+    )
+    continuation = TextBlock(
+        page_index=0,
+        bbox=(108.0, 673.9, 504.0, 732.3),
+        text=(
+            "to measure the subspace similarity between two matrices "
+            f"{SENTINEL_OPEN}U_A{SENTINEL_CLOSE}."
+        ),
+        font_size=10.0,
+        color=(0.0, 0.0, 0.0),
+        source_lines=7,
+        no_merge=True,
+        block_type="body",
+        flow_inline_math=True,
+        formula_anchors=(second_formula,),
+        source_math_bboxes=(second_formula,),
+        source_math_atom_groups=((second_formula,),),
+        keepout_bboxes=[second_formula],
+    )
+
+    combined = _combine_formula_continuation_translation_items(
+        [
+            (lead, "本文采用测度"),
+            (continuation, "来衡量两个矩阵之间的子空间相似度。"),
+        ]
+    )
+
+    assert len(combined) == 1
+    merged, translated = combined[0]
+    assert merged.bbox == (108.0, 669.4, 504.0, 732.3)
+    assert merged.flow_inline_math
+    assert merged.formula_anchors == (first_formula, second_formula)
+    assert translated == "本文采用测度 来衡量两个矩阵之间的子空间相似度。"
+
+
+def test_two_line_short_body_expands_horizontally_at_body_size():
+    from pdf_zh_translator.pdf_layout import build_font_pack, translated_text_fits
+
+    block = TextBlock(
+        page_index=0,
+        bbox=(105.0, 648.0, 490.0, 670.3),
+        text=(
+            "Note that the efficiency of algorithm 1 can be improved by changing "
+            "the order of computation, at the expense of clarity."
+        ),
+        font_size=9.7,
+        color=(0.0, 0.0, 0.0),
+        source_lines=2,
+        block_type="body",
+        keepout_bboxes=[(140.0, 664.0, 176.0, 682.0)],
+    )
+    formula_below = TextBlock(
+        page_index=0,
+        bbox=(216.0, 670.8, 232.0, 682.5),
+        text="and",
+        font_size=9.7,
+        color=(0.0, 0.0, 0.0),
+        source_lines=1,
+        block_type="formula_prose",
+        preserve_position=True,
+    )
+    translated = (
+        "注意，算法1的效率可以通过改变计算顺序来提高，但会牺牲清晰度，"
+        "例如将循环中的最后三行替换为以下行："
+    )
+    font_pack = build_font_pack(None, [])
+
+    expanded = _expand_single_line_body_bbox(
+        block,
+        translated,
+        [block, formula_below],
+        font_pack,
+        8.92,
+        0.8,
+        595.3,
+    )
+
+    assert expanded.bbox[:2] == block.bbox[:2]
+    assert expanded.bbox[3] == block.bbox[3]
+    assert expanded.bbox[2] > block.bbox[2]
+    assert translated_text_fits(
+        expanded,
+        translated,
+        font_pack,
+        8.92,
+        8.92,
+        0.8,
+    )
+
+
+def test_two_column_two_line_body_does_not_expand_across_page():
+    from pdf_zh_translator.pdf_layout import build_font_pack
+
+    block = TextBlock(
+        page_index=0,
+        bbox=(74.2, 80.6, 271.9, 102.5),
+        text=(
+            "We extend the result to the goal-conditioned, EBM-guided planning "
+            "setting."
+        ),
+        font_size=9.88,
+        color=(0.0, 0.0, 0.0),
+        source_lines=2,
+        block_type="body",
+    )
+    translated = "这是一段用于验证双栏版面稳定性的中文译文" * 2
+
+    expanded = _expand_single_line_body_bbox(
+        block,
+        translated,
+        [block],
+        build_font_pack(None, []),
+        9.09,
+        0.8,
+        541.0,
+    )
+
+    assert expanded.bbox == block.bbox
+
+
 class FontRoleConsistencyTests(unittest.TestCase):
     def test_multiline_body_sets_heading_hierarchy_baseline(self):
         source_blocks = [

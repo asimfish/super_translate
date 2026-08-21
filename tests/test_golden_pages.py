@@ -1638,6 +1638,76 @@ def test_formula_preflight_does_not_borrow_through_preserved_equation(monkeypatc
     assert shifted.bbox[1] >= preserved_equation[3] + 0.6
 
 
+def test_formula_preflight_keeps_flowing_prose_clear_of_following_fixed_math(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    import pdf_zh_translator.pdf_layout as layout
+
+    previous = layout.TextBlock(
+        page_index=0,
+        bbox=(105.0, 275.0, 490.0, 317.0),
+        text=(
+            "The following lemmas use "
+            f"{layout.SENTINEL_OPEN}g_t{layout.SENTINEL_CLOSE} notation."
+        ),
+        font_size=9.7,
+        color=(0.0, 0.0, 0.0),
+        source_lines=3,
+        block_type="body",
+        flow_inline_math=True,
+        formula_anchors=((200.0, 286.0, 256.0, 302.0),),
+    )
+    fixed_anchors = (
+        (176.0, 314.0, 233.0, 326.0),
+        (250.0, 314.0, 266.0, 325.0),
+        (402.0, 313.0, 490.0, 326.0),
+    )
+    fixed = layout.TextBlock(
+        page_index=0,
+        bbox=(105.0, 312.0, 490.0, 336.0),
+        text=(
+            "Lemma 10.3. Let "
+            + " and ".join(
+                f"{layout.SENTINEL_OPEN}formula{index}{layout.SENTINEL_CLOSE}"
+                for index in range(len(fixed_anchors))
+            )
+        ),
+        font_size=9.7,
+        color=(0.0, 0.0, 0.0),
+        source_lines=3,
+        block_type="formula_prose",
+        formula_anchors=fixed_anchors,
+        source_line_bboxes=((105.0, 312.0, 490.0, 336.0),),
+    )
+
+    def fits(block, _text, _font_pack, font_size, min_font_size, *_args):
+        return bool(
+            min_font_size == pytest.approx(font_size)
+            and block.bbox[2] >= 550.0
+            and all(anchor in (block.keepout_bboxes or []) for anchor in fixed_anchors)
+        )
+
+    monkeypatch.setattr(layout, "translated_text_fits", fits)
+
+    adjusted = layout._clear_adjacent_formula_ink_overlaps(
+        [(previous, "前一流式段落"), (fixed, "固定公式陈述")],
+        [False, False],
+        page_rect=SimpleNamespace(width=595.3, height=842.0),
+        font_pack=object(),
+        min_font_size=5.0,
+        font_scale=0.92,
+        margin=0.8,
+        source_document=object(),
+    )
+
+    widened = adjusted[0][0]
+    assert widened.bbox[2] >= 550.0
+    assert widened.redact_bboxes == [previous.bbox]
+    assert all(anchor in widened.keepout_bboxes for anchor in fixed_anchors)
+
+
 def test_otf_fragmented_author_names_are_not_translation_units():
     blocks = _unit_blocks("otf_production_acceptance_full.pdf")
 
@@ -3554,6 +3624,37 @@ def test_ddpm_inline_formula_redactions_do_not_cross_display_formula_atoms():
         for redact in (paragraph.redact_bboxes or [paragraph.bbox])
         for group in paragraph.keepout_formula_atom_groups
     ) <= 0.5
+
+
+def test_ddpm_stale_formula_delete_boundary_redacts_full_prose_span():
+    from pdf_zh_translator.pdf_layout import (
+        bbox_intersection_area,
+        prepare_translation_units,
+        strip_sentinels,
+    )
+
+    with fitz.open(FIXTURES / "classic20_ddpm_p2_p4.pdf") as source:
+        units, _, _ = prepare_translation_units(
+            source,
+            preserve_graphics_text=True,
+        )
+    paragraph = next(
+        block
+        for block, _, _ in units
+        if block.page_index == 2
+        and strip_sentinels(block.text).startswith(
+            "which resembles denoising score matching"
+        )
+    )
+    keepout = paragraph.keepout_bboxes[0]
+    bridge_x = (keepout[0] + keepout[2]) / 2.0
+    first_prose = paragraph.source_prose_bboxes[0]
+
+    assert any(
+        redact[0] <= bridge_x <= redact[2]
+        and bbox_intersection_area(redact, first_prose) > 0.0
+        for redact in paragraph.redact_bboxes or ()
+    )
 
 
 def test_ddpm_reverse_variance_fraction_is_one_visual_formula_token():

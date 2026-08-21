@@ -73,6 +73,112 @@ def test_reference_overlap_still_reports_translation_added_collision():
     original.close()
 
 
+def test_reference_content_ignores_confirmed_translation_unit_inside_broad_region():
+    from pdf_zh_translator.pdf_layout import (
+        _reference_section_start_y,
+        ensure_font_pack_files,
+    )
+
+    body_font, _bold_font = ensure_font_pack_files([])
+    assert body_font is not None
+    source_body = (
+        "3. One can approximately model all conditional distributions by training a "
+        "family of shared models, and this numbered body paragraph must still be "
+        "translated before the bibliography begins."
+    )
+    reference_text = (
+        "[1] Smith, J., Doe, A., and Lee, R. Reliable representation learning "
+        "for scientific documents with robust evaluation across multiple domains and "
+        "practical deployment settings. Journal of Machine Learning Research, 2024."
+    )
+
+    original = fitz.open()
+    original_page = original.new_page(width=360, height=240)
+    original_page.insert_textbox(
+        fitz.Rect(30, 25, 330, 75), source_body, fontsize=9
+    )
+    original_page.insert_text((30, 95), "References", fontsize=12)
+    original_page.insert_textbox(
+        fitz.Rect(30, 105, 330, 185), reference_text, fontsize=9
+    )
+
+    translated = fitz.open()
+    translated_page = translated.new_page(width=360, height=240)
+    translated_page.insert_font(fontname="cjkbody", fontfile=str(body_font))
+    translated_page.insert_textbox(
+        fitz.Rect(30, 25, 330, 75),
+        "该附录段落位于参考文献之后，应当正常翻译，不能计为参考文献内容发生变化。",
+        fontsize=9,
+        fontname="cjkbody",
+    )
+    translated_page.insert_text(
+        (30, 95), "参考文献", fontsize=12, fontname="cjkbody"
+    )
+    translated_page.insert_textbox(
+        fitz.Rect(30, 105, 330, 185), reference_text, fontsize=9
+    )
+    source_role = SimpleNamespace(
+        bbox=(30.0, 25.0, 330.0, 75.0),
+        text=source_body,
+    )
+
+    issues = _reference_issues(
+        original_page,
+        translated_page,
+        1,
+        _reference_section_start_y(original_page),
+        source_role_blocks=[source_role],
+    )
+
+    assert not [issue for issue in issues if issue.code == "reference_content_changed"]
+    translated.close()
+    original.close()
+
+
+def test_reference_content_still_flags_reference_like_translation_unit():
+    from pdf_zh_translator.pdf_layout import ensure_font_pack_files
+
+    body_font, _bold_font = ensure_font_pack_files([])
+    assert body_font is not None
+    reference_text = (
+        "[1] Smith, J., Doe, A., and Lee, R. Reliable representation learning "
+        "for scientific documents with robust evaluation across multiple domains and "
+        "practical deployment settings. Journal of Machine Learning Research, 2024."
+    )
+
+    original = fitz.open()
+    original_page = original.new_page(width=360, height=200)
+    original_page.insert_textbox(
+        fitz.Rect(30, 45, 330, 135), reference_text, fontsize=9
+    )
+
+    translated = fitz.open()
+    translated_page = translated.new_page(width=360, height=200)
+    translated_page.insert_font(fontname="cjkbody", fontfile=str(body_font))
+    translated_page.insert_textbox(
+        fitz.Rect(30, 45, 330, 135),
+        "史密斯、杜和李。面向科学文档的可靠表征学习。机器学习研究期刊，二〇二四年。",
+        fontsize=9,
+        fontname="cjkbody",
+    )
+    source_role = SimpleNamespace(
+        bbox=(30.0, 45.0, 330.0, 135.0),
+        text=reference_text,
+    )
+
+    issues = _reference_issues(
+        original_page,
+        translated_page,
+        1,
+        0.0,
+        source_role_blocks=[source_role],
+    )
+
+    assert [issue for issue in issues if issue.code == "reference_content_changed"]
+    translated.close()
+    original.close()
+
+
 def test_font_size_pairs_against_source_semantic_role_before_raw_pdf_block():
     original = fitz.open()
     original_page = original.new_page(width=300, height=200)
