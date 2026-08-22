@@ -1394,9 +1394,29 @@ def _display_alignment_issues(
 ) -> List[object]:
     issues: List[object] = []
     page_width = float(original_ink._page.rect.width)
+    first_page_author_rows: List[BBox] = []
+    if page_number == 1:
+        from .pdf_layout import (
+            _looks_like_author_or_affiliation_text,
+            strip_sentinels,
+        )
+
+        for block in source_role_blocks:
+            block_bbox = getattr(block, "bbox", None)
+            block_text = getattr(block, "text", "")
+            if block_bbox is None or not block_text:
+                continue
+            plain = " ".join(strip_sentinels(block_text).split())
+            if _looks_like_author_or_affiliation_text(plain):
+                first_page_author_rows.append(tuple(block_bbox))
     for row in equation_rows:
         row_area = _bbox_area(row)
         if row_area < 400.0:
+            continue
+        if any(
+            _bbox_overlap_area(row, author_row) >= row_area * 0.80
+            for author_row in first_page_author_rows
+        ):
             continue
         if any(
             _bbox_overlap_area(row, region) >= row_area * 0.80

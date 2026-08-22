@@ -578,6 +578,33 @@ class TestProductionRegressions:
                     )
                 ],
             )
+            author_row = SimpleNamespace(
+                bbox=tuple(formula),
+                text=(
+                    "Pamela Mishkin^{∗} Chong Zhang Sandhini Agarwal "
+                    "Katarina Slama Alex Ray"
+                ),
+                block_type="body",
+                formula_anchors=(),
+                flow_inline_math=False,
+                preserve_position=False,
+                keepout_formula_atom_groups=(),
+                redaction_formula_restore_groups=(),
+            )
+            assert not _display_alignment_issues(
+                original_ink,
+                translated_ink,
+                1,
+                [tuple(formula)],
+                source_role_blocks=[author_row],
+            )
+            assert _display_alignment_issues(
+                original_ink,
+                translated_ink,
+                2,
+                [tuple(formula)],
+                source_role_blocks=[author_row],
+            )
 
     def test_inline_formula_keepout_group_is_not_scored_as_fixed_display(self):
         from pdf_zh_translator.page_inspector import (
