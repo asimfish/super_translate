@@ -8,12 +8,14 @@ import json
 import os
 import threading
 import urllib.error
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
+from playwright.sync_api import sync_playwright
 from pydantic import SecretStr
 
 from app.core.config import settings
@@ -285,6 +287,93 @@ def test_curated_model_catalog_always_contains_provider_defaults():
         assert spec.default_model in curated_provider_models(provider)
 
 
+def test_curated_model_catalog_matches_verified_official_translation_models():
+    from app.services.provider_model_catalog import curated_provider_models
+
+    expected = {
+        "deepseek": (
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+        ),
+        "kimi": (
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "kimi-k2.7-code-highspeed",
+            "kimi-k2.6",
+        ),
+        "openai": (
+            "gpt-5.6",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.2",
+            "gpt-5.1",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-4o",
+            "gpt-4o-mini",
+        ),
+        "anthropic": (
+            "claude-fable-5",
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-haiku-4-5",
+        ),
+        "glm": (
+            "glm-5.2",
+            "glm-5.1",
+            "glm-5-turbo",
+            "glm-5",
+            "glm-4.7",
+            "glm-4.7-flash",
+            "glm-4.7-flashx",
+            "glm-4.6",
+            "glm-4.5-air",
+            "glm-4.5-airx",
+            "glm-4.5-flash",
+            "glm-4-flash-250414",
+            "glm-4-flashx-250414",
+        ),
+    }
+
+    assert {
+        provider: curated_provider_models(provider) for provider in expected
+    } == expected
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "expected"),
+    [
+        ("deepseek", "deepseek-v4-pro", True),
+        ("deepseek", "deepseek-chat", False),
+        ("deepseek", "deepseek-reasoner", False),
+        ("kimi", "kimi-k3", True),
+        ("kimi", "kimi-k2.7-code-highspeed", True),
+        ("kimi", "kimi-k2.6", True),
+        ("kimi", "kimi-k2.5", False),
+        ("kimi", "kimi-k2-0905-preview", False),
+        ("kimi", "moonshot-v1-128k", False),
+        ("openai", "gpt-5.2", True),
+        ("openai", "gpt-5.6-terra", True),
+        ("openai", "gpt-4.1-mini", True),
+        ("openai", "gpt-5.1-codex", False),
+        ("openai", "gpt-5-chat-latest", False),
+        ("openai", "o3-deep-research", False),
+        ("openai", "gpt-audio", False),
+        ("glm", "glm-4.7-flashx", True),
+        ("glm", "glm-5v-turbo", False),
+        ("glm", "glm-ocr", False),
+    ],
+)
+def test_dynamic_model_filter_keeps_translation_models_only(provider, model, expected):
+    from app.services.provider_model_catalog import _is_translation_model
+
+    assert _is_translation_model(provider, model) is expected
+
+
 def test_provider_model_discovery_uses_vendor_auth_and_filters_non_text_models():
     from app.services.provider_model_catalog import fetch_provider_models
 
@@ -316,6 +405,106 @@ def test_provider_model_discovery_uses_vendor_auth_and_filters_non_text_models()
     assert request.headers["Anthropic-version"] == "2023-06-01"
     assert request.headers.get("Authorization") is None
     assert models == ("claude-opus-5", "claude-sonnet-5")
+
+
+def test_anthropic_model_discovery_follows_paginated_account_catalog():
+    from app.services.provider_model_catalog import fetch_provider_models
+
+    def response(payload):
+        result = MagicMock()
+        result.read.return_value = json.dumps(payload).encode()
+        result.__enter__.return_value = result
+        return result
+
+    opener = MagicMock()
+    opener.open.side_effect = [
+        response(
+            {
+                "data": [
+                    {"id": "claude-sonnet-5"},
+                    {"id": "text-embedding-irrelevant"},
+                ],
+                "has_more": True,
+                "last_id": "claude-sonnet-5",
+            }
+        ),
+        response(
+            {
+                "data": [
+                    {"id": "claude-opus-5"},
+                    {"id": "claude-sonnet-5"},
+                ],
+                "has_more": False,
+                "last_id": "claude-opus-5",
+            }
+        ),
+    ]
+
+    with patch("urllib.request.build_opener", return_value=opener):
+        models = fetch_provider_models(
+            "anthropic",
+            api_key="anthropic-private-key",
+            base_url="https://api.anthropic.com/v1",
+            timeout_seconds=3,
+        )
+
+    urls = [call.args[0].full_url for call in opener.open.call_args_list]
+    assert urls == [
+        "https://api.anthropic.com/v1/models",
+        "https://api.anthropic.com/v1/models?after_id=claude-sonnet-5",
+    ]
+    assert models == ("claude-opus-5", "claude-sonnet-5")
+
+
+def test_anthropic_model_discovery_rejects_repeated_pagination_cursor():
+    from app.services.provider_model_catalog import fetch_provider_models
+
+    payload = json.dumps(
+        {
+            "data": [{"id": "claude-sonnet-5"}],
+            "has_more": True,
+            "last_id": "claude-sonnet-5",
+        }
+    ).encode()
+
+    def response():
+        result = MagicMock()
+        result.read.return_value = payload
+        result.__enter__.return_value = result
+        return result
+
+    opener = MagicMock()
+    opener.open.side_effect = [response(), response()]
+    with (
+        patch("urllib.request.build_opener", return_value=opener),
+        pytest.raises(ValueError, match="pagination cursor"),
+    ):
+        fetch_provider_models(
+            "anthropic",
+            api_key="anthropic-private-key",
+            base_url="https://api.anthropic.com/v1",
+            timeout_seconds=3,
+        )
+
+    assert opener.open.call_count == 2
+
+
+def test_provider_model_discovery_handles_non_object_payload_as_empty():
+    from app.services.provider_model_catalog import fetch_provider_models
+
+    response = MagicMock()
+    response.read.return_value = b"[]"
+    response.__enter__.return_value = response
+    opener = MagicMock()
+    opener.open.return_value = response
+
+    with patch("urllib.request.build_opener", return_value=opener):
+        assert fetch_provider_models(
+            "anthropic",
+            api_key="anthropic-private-key",
+            base_url="https://api.anthropic.com/v1",
+            timeout_seconds=3,
+        ) == ()
 
 
 def test_provider_model_discovery_rejects_redirects_before_resending_credentials():
@@ -408,6 +597,105 @@ async def test_model_catalog_api_never_returns_provider_secret():
     assert "sk-private-model-discovery" not in serialized
     assert catalogs[0].selected_model == "deepseek-v4-pro"
     assert catalogs[0].models == ["deepseek-v4-pro", "deepseek-v4-flash"]
+
+
+def test_model_catalog_response_adds_guidance_without_breaking_model_ids():
+    from app.api.provider_credentials import _catalog_response
+    from app.services.provider_model_catalog import ProviderModelCatalog
+
+    response = _catalog_response(
+        "openai",
+        ProviderModelCatalog(
+            provider="openai",
+            models=("gpt-5.6", "gpt-5.6-terra", "gpt-account-private"),
+            source="provider",
+        ),
+        "gpt-5.6-terra",
+    )
+
+    assert response.models == ["gpt-5.6-terra", "gpt-5.6", "gpt-account-private"]
+    assert response.catalog_verified_on == date(2026, 8, 23)
+    options = {option.id: option for option in response.model_options}
+    assert options["gpt-5.6"].group == "latest"
+    assert options["gpt-5.6-terra"].group == "balanced"
+    assert options["gpt-account-private"].group == "account"
+    assert options["gpt-5.6-terra"].description == "效果、速度与成本均衡"
+
+
+def test_every_curated_model_has_non_account_guidance():
+    from app.core.provider_credentials import PROVIDER_SPECS
+    from app.services.provider_model_catalog import (
+        curated_provider_models,
+        provider_model_guidance,
+    )
+
+    for provider in PROVIDER_SPECS:
+        for model in curated_provider_models(provider):
+            group, description = provider_model_guidance(provider, model)
+            assert group != "account", (provider, model)
+            assert description
+
+
+def test_provider_model_dropdown_groups_models_and_preserves_selection():
+    app_js = str(ROOT / "app/static/js/app.js")
+    catalog = {
+        "provider": "openai",
+        "label": "OpenAI",
+        "default_model": "gpt-4o-mini",
+        "selected_model": "gpt-5.6-terra",
+        "models": ["gpt-5.6-terra", "gpt-5.6", "gpt-5.6-luna"],
+        "model_options": [
+            {
+                "id": "gpt-5.6",
+                "group": "latest",
+                "description": "最新旗舰",
+            },
+            {
+                "id": "gpt-5.6-terra",
+                "group": "balanced",
+                "description": "效果、速度与成本均衡",
+            },
+            {
+                "id": "gpt-5.6-luna",
+                "group": "economy",
+                "description": "低成本高速",
+            },
+        ],
+        "source": "provider",
+        "refreshed_at": "2026-08-23T09:30:00Z",
+        "catalog_verified_on": "2026-08-23",
+        "warning": "",
+    }
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(
+            """
+            <div class="provider-row" data-provider="openai">
+              <div class="provider-model-control">
+                <select class="provider-model"></select>
+                <button class="provider-model-refresh"></button>
+                <span class="provider-model-meta"></span>
+              </div>
+            </div>
+            """
+        )
+        page.add_script_tag(path=app_js)
+        page.evaluate("catalog => renderProviderModelCatalogs([catalog])", catalog)
+
+        assert page.locator(".provider-model").input_value() == "gpt-5.6-terra"
+        assert page.locator(".provider-model optgroup").evaluate_all(
+            "groups => groups.map(group => group.label)"
+        ) == ["最新推荐", "均衡", "低成本 / 高速"]
+        assert page.locator('option[value="gpt-5.6-terra"]').inner_text() == (
+            "gpt-5.6-terra · 效果、速度与成本均衡"
+        )
+        assert "账号模型更新" in page.locator(".provider-model-meta").inner_text()
+        assert "内置目录核对 2026-08-23" in page.locator(
+            ".provider-model-refresh"
+        ).get_attribute("title")
+        browser.close()
 
 
 @pytest.mark.asyncio

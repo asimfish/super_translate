@@ -841,6 +841,14 @@ select:focus-visible {
   min-width: 0;
 }
 .provider-model-refresh { min-width: 48px; }
+.provider-model-meta {
+  grid-column: 1 / -1;
+  min-height: 16px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
 .provider-row button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 @keyframes toast-in {

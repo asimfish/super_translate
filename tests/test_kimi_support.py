@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import BackgroundTasks
 from pydantic import SecretStr
 
@@ -164,6 +165,73 @@ def test_kimi_k3_plain_fallback_obeys_fixed_sampling_constraints():
     assert payload["max_completion_tokens"] == translator.max_output_tokens
     assert "temperature" not in payload
     assert "max_tokens" not in payload
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_thinking"),
+    [
+        ("kimi-k2.6", {"type": "disabled"}),
+        ("kimi-k2.7-code", None),
+        ("kimi-k2.7-code-highspeed", None),
+    ],
+)
+def test_current_kimi_k2_models_obey_fixed_sampling_constraints(
+    model,
+    expected_thinking,
+):
+    translator = VendorTranslator(
+        api_url="https://api.moonshot.cn/v1",
+        api_key="moonshot-key",
+        mode="openai-compatible",
+        model=model,
+        progress=False,
+    )
+    response = {"choices": [{"message": {"content": '["译文"]'}}]}
+
+    with patch.object(translator, "_post_json", return_value=response) as post_json:
+        assert translator.translate_batch(["Source"]) == ["译文"]
+
+    payload = post_json.call_args.args[1]
+    assert payload["max_completion_tokens"] == translator.max_output_tokens
+    assert "temperature" not in payload
+    assert "max_tokens" not in payload
+    assert "reasoning_effort" not in payload
+    if expected_thinking is None:
+        assert "thinking" not in payload
+    else:
+        assert payload["thinking"] == expected_thinking
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.6",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.2",
+        "gpt-5.1",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+    ],
+)
+def test_openai_gpt5_payload_uses_current_completion_token_parameter(model):
+    translator = VendorTranslator(
+        api_url="https://api.openai.com/v1",
+        api_key="openai-key",
+        mode="openai-compatible",
+        model=model,
+        progress=False,
+    )
+    response = {"choices": [{"message": {"content": '["译文"]'}}]}
+
+    with patch.object(translator, "_post_json", return_value=response) as post_json:
+        assert translator.translate_batch(["Source"]) == ["译文"]
+
+    payload = post_json.call_args.args[1]
+    assert payload["max_completion_tokens"] == translator.max_output_tokens
+    assert "max_tokens" not in payload
+    assert "temperature" not in payload
 
 
 def test_non_kimi_openai_payload_is_unchanged():

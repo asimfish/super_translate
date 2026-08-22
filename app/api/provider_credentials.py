@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,8 +25,10 @@ from app.core.provider_credentials import (
 )
 from app.models.provider_credential import ProviderCredential
 from app.services.provider_model_catalog import (
+    MODEL_CATALOG_VERIFIED_ON,
     ProviderModelCatalog,
     get_provider_model_catalog,
+    provider_model_guidance,
 )
 
 router = APIRouter(prefix="/api/provider-credentials", tags=["provider-credentials"])
@@ -74,6 +76,14 @@ class ProviderCredentialResponse(BaseModel):
     source: str = "none"
 
 
+class ProviderModelOptionResponse(BaseModel):
+    """Display guidance for one model without changing its API identifier."""
+
+    id: str
+    group: str
+    description: str
+
+
 class ProviderModelCatalogResponse(BaseModel):
     """Safe provider model choices; API keys are intentionally absent."""
 
@@ -82,8 +92,10 @@ class ProviderModelCatalogResponse(BaseModel):
     default_model: str
     selected_model: str
     models: list[str]
+    model_options: list[ProviderModelOptionResponse]
     source: str
     refreshed_at: datetime | None = None
+    catalog_verified_on: date
     warning: str = ""
 
 
@@ -143,14 +155,26 @@ def _catalog_response(
 ) -> ProviderModelCatalogResponse:
     spec = PROVIDER_SPECS[provider]
     models = list(dict.fromkeys((selected_model, *catalog.models)))
+    model_options = []
+    for model in models:
+        group, description = provider_model_guidance(provider, model)
+        model_options.append(
+            ProviderModelOptionResponse(
+                id=model,
+                group=group,
+                description=description,
+            )
+        )
     return ProviderModelCatalogResponse(
         provider=provider,
         label=spec.label,
         default_model=spec.default_model,
         selected_model=selected_model,
         models=models,
+        model_options=model_options,
         source=catalog.source,
         refreshed_at=catalog.refreshed_at,
+        catalog_verified_on=MODEL_CATALOG_VERIFIED_ON,
         warning=catalog.warning,
     )
 
