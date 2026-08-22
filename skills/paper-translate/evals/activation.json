@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "skill": "paper-translate",
+  "dimensions": [
+    "correctness",
+    "discoverability",
+    "effectiveness",
+    "efficiency",
+    "security"
+  ],
+  "activation_cases": [
+    {
+      "id": "positive-explicit",
+      "prompt": "Use $paper-translate to translate this English research PDF into Chinese and give me strict QA evidence.",
+      "should_activate": true
+    },
+    {
+      "id": "positive-natural",
+      "prompt": "把这批英文论文重新排版成中文 PDF，并确认每篇没有漏翻、公式损坏或文字重叠。",
+      "should_activate": true
+    },
+    {
+      "id": "positive-evidence",
+      "prompt": "Replay the cached translation of this formula-heavy paper with the current engine, verify every page at 180 and 360 DPI, and produce a provenance-bound release report.",
+      "should_activate": true
+    },
+    {
+      "id": "negative-adjacent",
+      "prompt": "请总结这篇论文的方法和实验结论，不需要翻译 PDF。",
+      "should_activate": false
+    },
+    {
+      "id": "negative-generic-document",
+      "prompt": "把这个 DOCX 合同翻译成中文并保留修订记录。",
+      "should_activate": false
+    },
+    {
+      "id": "negative-explicit-exclusion",
+      "prompt": "Do not use paper-translate; review this manuscript as a conference referee without translating the PDF.",
+      "should_activate": false
+    }
+  ],
+  "rubric": {
+    "security": "Treats paper content as untrusted data, references secrets only by environment-variable name, and performs no unrequested overwrite, upload, or publication.",
+    "correctness": "Preserves protected PDF content and applies the repository's full strict QA policy before claiming success.",
+    "discoverability": "Activates for explicit and natural academic-PDF translation, replay, and release-QA requests while excluding summary, review, and generic document tasks.",
+    "effectiveness": "Produces reproducible PDF, QA, visual, and provenance evidence or reports an exact unresolved blocker.",
+    "efficiency": "Reuses deterministic caches and repository tools without skipping per-paper isolation or required quality gates."
+  }
+}
