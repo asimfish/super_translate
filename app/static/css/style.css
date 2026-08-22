@@ -219,6 +219,7 @@ select:focus-visible {
   position: relative;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
   min-height: 174px;
+  min-width: 0;
 }
 .paper-card:hover {
   border-color: rgba(24,169,153,0.42);
@@ -231,6 +232,8 @@ select:focus-visible {
   overflow: hidden; line-height: 1.4;
 }
 .paper-card-link {
+  display: block;
+  max-width: 100%;
   padding: 0;
   border: 0;
   background: none;
@@ -239,6 +242,7 @@ select:focus-visible {
   line-height: inherit;
   text-align: left;
   cursor: pointer;
+  overflow-wrap: anywhere;
 }
 .paper-card-link:hover { color: #9ff1e7; }
 .paper-card .meta {
@@ -901,7 +905,7 @@ select:focus-visible {
   .stats-bar {
     width: 100%;
   }
-  .paper-grid { grid-template-columns: 1fr; }
+  .paper-grid { grid-template-columns: minmax(0, 1fr); }
   .upload-queue-header { flex-wrap: wrap; }
   .upload-queue-header span { white-space: normal; }
   .upload-actions { flex-wrap: wrap; }

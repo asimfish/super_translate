@@ -793,6 +793,10 @@ def test_frontend_accessibility_mobile_and_lazy_pdf_real_browser(tmp_path):
 
     paper = {
         **_paper_payload("paper-a"),
+        "title": (
+            "RoboGuardian: Fault-Aware Execution and Memory Maintenance for "
+            "Embodied Agent Harness Frameworks"
+        ),
         "tags": "attention, benchmark",
         "updated_at": "2026-08-10T00:00:00",
     }
