@@ -38,6 +38,38 @@ function authHeaders(extra = {}) {
 
 // === Login ===
 let loginPromptPromise = null;
+let providerSettingsReturnFocus = null;
+
+function focusableElements(container) {
+  return Array.from(container?.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), '
+    + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  ) || []).filter(element => !element.closest('.hidden'));
+}
+
+function trapModalFocus(modal, event) {
+  if (event.key !== 'Tab' || !modal || modal.classList.contains('hidden')) return false;
+  const focusable = focusableElements(modal);
+  if (focusable.length === 0) return false;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    last.focus();
+    event.preventDefault();
+    return true;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    first.focus();
+    event.preventDefault();
+    return true;
+  }
+  if (!modal.contains(document.activeElement)) {
+    first.focus();
+    event.preventDefault();
+    return true;
+  }
+  return false;
+}
 
 function showLoginModal() {
   document.getElementById('login-modal')?.classList.remove('hidden');
@@ -326,10 +358,15 @@ const api = {
 // === Provider credentials ===
 function hideProviderSettings() {
   const modal = document.getElementById('provider-settings-modal');
+  const wasOpen = modal && !modal.classList.contains('hidden');
   modal?.classList.add('hidden');
   modal?.querySelectorAll('.provider-key').forEach(input => { input.value = ''; });
   const error = document.getElementById('provider-settings-error');
   if (error) error.textContent = '';
+  if (wasOpen && providerSettingsReturnFocus?.isConnected) {
+    providerSettingsReturnFocus.focus();
+  }
+  providerSettingsReturnFocus = null;
 }
 
 function renderProviderCredentials(statuses) {
@@ -392,7 +429,9 @@ async function showProviderSettings() {
   const username = localStorage.getItem('paperChinaUsername') || '本地管理员';
   const user = document.getElementById('provider-settings-user');
   if (user) user.textContent = username;
+  providerSettingsReturnFocus = document.activeElement;
   modal?.classList.remove('hidden');
+  focusableElements(modal)[0]?.focus();
   await refreshProviderCredentials();
 }
 
@@ -590,8 +629,8 @@ function renderPaperList() {
   empty.classList.add('hidden');
 
   container.innerHTML = papers.map(p => `
-    <div class="paper-card" data-paper-id="${esc(p.id)}" data-action="open-reader">
-      <div class="title">${esc(p.title)}</div>
+    <article class="paper-card" data-paper-id="${esc(p.id)}" data-action="open-reader">
+      <h2 class="title"><button type="button" class="paper-card-link" data-action="open-reader" data-paper-id="${esc(p.id)}" aria-label="打开论文：${esc(p.title)}">${esc(p.title)}</button></h2>
       <div class="meta">
         <span>${p.page_count} 页</span>
         <span>${formatSize(p.file_size)}</span>
@@ -599,7 +638,7 @@ function renderPaperList() {
       </div>
       <span class="status status-${sanitizeClass(p.translation_status)}">${statusLabel(p.translation_status)}</span>
       ${p.translation_status === 'translating' ? `
-        <div class="progress-bar" style="margin-top:8px">
+        <div class="progress-bar" style="margin-top:8px" role="progressbar" aria-label="${esc(p.title)} 翻译进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(p.translation_progress * 100)}">
           <div class="progress-fill" style="width:${Math.round(p.translation_progress * 100)}%"></div>
         </div>
       ` : ''}
@@ -612,7 +651,7 @@ function renderPaperList() {
       ${p.translation_status === 'repairing' ? `
         <div class="meta" style="margin-top:4px;color:var(--warning);font-size:11px" title="${esc(p.translation_error || '')}">已保留最佳译文；系统修复发布后将自动重试</div>
       ` : ''}
-      ${p.tags ? `<div class="meta tags-row" style="margin-top:6px">🏷 ${p.tags.split(',').map(t => `<span class="tag-chip" data-action="filter-by-tag" data-tag="${esc(t.trim())}">${esc(t.trim())}</span>`).join(' ')}</div>` : ''}
+      ${p.tags ? `<div class="meta tags-row" style="margin-top:6px"><span aria-hidden="true">🏷</span> ${p.tags.split(',').map(t => `<button type="button" class="tag-chip" data-action="filter-by-tag" data-tag="${esc(t.trim())}">${esc(t.trim())}</button>`).join(' ')}</div>` : ''}
       <div class="actions" data-action="stop-propagation">
         ${p.translation_status === 'pending' || p.translation_status === 'failed' ?
           `<button class="btn btn-sm btn-primary" data-action="quick-translate" data-paper-id="${esc(p.id)}">翻译</button>` : ''}
@@ -622,7 +661,7 @@ function renderPaperList() {
           `<button class="btn btn-sm btn-outline" data-action="download-dual-by-id" data-paper-id="${esc(p.id)}">双语</button>` : ''}
         <button class="btn btn-sm btn-outline" data-action="confirm-delete" data-paper-id="${esc(p.id)}" data-paper-title="${esc(p.title)}">删除</button>
       </div>
-    </div>
+    </article>
   `).join('');
 }
 
@@ -867,6 +906,13 @@ function cancelUpload() {
 
 let uploading = false;
 
+function setProgressValue(fill, percent) {
+  if (!fill) return;
+  const value = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  fill.style.width = `${value}%`;
+  fill.closest('[role="progressbar"]')?.setAttribute('aria-valuenow', String(value));
+}
+
 async function doUpload() {
   if (selectedFiles.length === 0 || uploading) return;
   uploading = true;
@@ -888,7 +934,7 @@ async function doUpload() {
 
   for (let i = 0; i < total; i++) {
     const file = filesToUpload[i];
-    fill.style.width = '0%';
+    setProgressValue(fill, 0);
     fill.style.background = '';
     status.textContent = `上传中 (${i + 1}/${total}): ${file.name}`;
 
@@ -899,7 +945,7 @@ async function doUpload() {
             api.uploadPaperWithProgress(smallFile, smallTags, onProgress)
           );
       await upload(file, tags, pct => {
-        fill.style.width = `${Math.round(pct * 100)}%`;
+        setProgressValue(fill, pct * 100);
       });
       success++;
     } catch (e) {
@@ -909,7 +955,7 @@ async function doUpload() {
     }
   }
 
-  fill.style.width = '100%';
+  setProgressValue(fill, 100);
   fill.style.background = failed > 0 ? 'var(--warning)' : 'var(--success)';
   status.textContent = `完成！${success} 篇成功${failed > 0 ? `，${failed} 篇失败` : ''}`;
   if (success > 0) {
@@ -1038,6 +1084,8 @@ async function refinePdfMetrics(panel, pdf, adaptiveScale) {
 // credentialed page requests succeed. Fetch the vendored worker first and run
 // it from a Blob so the preview credential stays on the main-thread request.
 let pdfWorkerReady = Promise.resolve();
+let pdfLibraryReady = null;
+let pdfWorkerConfigured = false;
 
 function resolvePdfWorkerSrc() {
   const appScript = document.currentScript
@@ -1091,12 +1139,41 @@ async function prepareForwardedPdfWorker(workerSrc) {
   await preloadPdfWorkerOnMainThread(workerSrc);
 }
 
-if (typeof pdfjsLib !== 'undefined') {
+function configurePdfLibrary() {
+  if (typeof pdfjsLib === 'undefined') {
+    throw new Error('PDF 阅读器资源未加载');
+  }
+  if (pdfWorkerConfigured) return pdfWorkerReady;
+  pdfWorkerConfigured = true;
   const pdfWorkerSrc = resolvePdfWorkerSrc();
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
   if (isWhalentForwardedPreview()) {
     pdfWorkerReady = prepareForwardedPdfWorker(pdfWorkerSrc);
   }
+  return pdfWorkerReady;
+}
+
+function ensurePdfLibrary() {
+  if (typeof pdfjsLib !== 'undefined') {
+    if (!pdfLibraryReady) pdfLibraryReady = Promise.resolve(configurePdfLibrary());
+    return pdfLibraryReady;
+  }
+  if (pdfLibraryReady) return pdfLibraryReady;
+  pdfLibraryReady = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = new URL('pdf.min.js', resolvePdfWorkerSrc()).href;
+    script.async = true;
+    script.dataset.pdfLibrary = 'lazy';
+    script.addEventListener('load', () => {
+      Promise.resolve(configurePdfLibrary()).then(resolve, reject);
+    }, { once: true });
+    script.addEventListener('error', () => {
+      pdfLibraryReady = null;
+      reject(new Error(`Cannot load PDF reader script: ${script.src}`));
+    }, { once: true });
+    document.head.appendChild(script);
+  });
+  return pdfLibraryReady;
 }
 
 // === Reader display mode (pdf.js vs per-page images) ===
@@ -1392,6 +1469,7 @@ async function loadPdfDocument(panel, url, loadId = currentLoadId) {
   container.appendChild(loadingDiv);
 
   try {
+    await ensurePdfLibrary();
     await pdfWorkerReady;
     if (loadId !== currentLoadId) return;
     const loadingTask = pdfjsLib.getDocument({ url, httpHeaders: authHeaders() });
@@ -1805,7 +1883,7 @@ function showTranslationSubmitting(paperId) {
 
   if (prog) prog.classList.remove('hidden');
   if (fill) {
-    fill.style.width = '2%';
+    setProgressValue(fill, 2);
     fill.style.background = '';
     fill.classList.add('progress-fill-active', 'progress-fill-pending');
   }
@@ -1868,7 +1946,7 @@ function pollTranslationStatus(paperId) {
   // Start elapsed time timer
   const startTime = Date.now();
   if (fill) {
-    fill.style.width = '3%';
+    setProgressValue(fill, 3);
     fill.style.background = '';
     fill.classList.add('progress-fill-active', 'progress-fill-pending');
   }
@@ -1929,7 +2007,7 @@ function pollTranslationStatus(paperId) {
       const isTranslating = paper.translation_status === 'translating';
       const waitingForProgress = isTranslating && pct <= 0;
       const visiblePct = waitingForProgress ? 3 : pct;
-      fill.style.width = `${visiblePct}%`;
+      setProgressValue(fill, visiblePct);
       fill.classList.toggle('progress-fill-active', isTranslating);
       fill.classList.toggle('progress-fill-pending', waitingForProgress);
       if (percentEl) percentEl.textContent = `${pct}%`;
@@ -1967,7 +2045,7 @@ function pollTranslationStatus(paperId) {
         translationPollId = null;
         translationPollPaperId = null;
         fill.classList.remove('progress-fill-active', 'progress-fill-pending');
-        fill.style.width = '100%';
+        setProgressValue(fill, 100);
         statusEl.textContent = `翻译完成 (${elapsedStr})`;
         setTimeout(() => {
           if (pollGeneration !== translationPollGeneration) return;
@@ -1990,7 +2068,7 @@ function pollTranslationStatus(paperId) {
         translationPollId = null;
         translationPollPaperId = null;
         fill.classList.remove('progress-fill-active', 'progress-fill-pending');
-        fill.style.width = `${Math.max(1, pct)}%`;
+        setProgressValue(fill, Math.max(1, pct));
         fill.style.background = 'var(--warning)';
         statusEl.textContent = '等待系统修复（已保留最佳译文）';
         addTransLog('当前版本已完成自动恢复尝试；修复发布后任务会自动继续');
@@ -2274,14 +2352,43 @@ function initResizer() {
   const right = document.getElementById('right-panel');
   if (!resizer) return;
 
-  let startX, startLeftW;
+  const isStacked = () => window.matchMedia('(max-width: 768px)').matches;
+  let startPosition;
+  let startFirstSize;
+
+  function setResizerSemantics(percent = 50) {
+    resizer.setAttribute('aria-orientation', isStacked() ? 'horizontal' : 'vertical');
+    resizer.setAttribute('aria-valuenow', String(Math.round(percent)));
+  }
+
+  function setPanelSplit(percent) {
+    const bounded = Math.max(20, Math.min(80, percent));
+    const parentRect = left.parentElement.getBoundingClientRect();
+    if (isStacked()) {
+      const total = Math.max(400, left.getBoundingClientRect().height + right.getBoundingClientRect().height);
+      left.style.flex = `0 0 ${total * bounded / 100}px`;
+      right.style.flex = `0 0 ${total * (100 - bounded) / 100}px`;
+    } else {
+      const available = Math.max(400, parentRect.width - resizer.getBoundingClientRect().width);
+      left.style.flex = `0 0 ${available * bounded / 100}px`;
+      right.style.flex = '1';
+    }
+    setResizerSemantics(bounded);
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      reRenderPanel('original');
+      reRenderPanel('translated');
+    }, 200);
+  }
 
   resizer.addEventListener('mousedown', e => {
     e.preventDefault();
-    startX = e.clientX;
-    startLeftW = left.getBoundingClientRect().width;
+    startPosition = isStacked() ? e.clientY : e.clientX;
+    startFirstSize = isStacked()
+      ? left.getBoundingClientRect().height
+      : left.getBoundingClientRect().width;
     document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
+    document.body.style.cursor = isStacked() ? 'row-resize' : 'col-resize';
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', () => {
       document.removeEventListener('mousemove', onMove);
@@ -2293,26 +2400,43 @@ function initResizer() {
   });
 
   function onMove(e) {
-    const dx = e.clientX - startX;
-    const containerW = left.parentElement.getBoundingClientRect().width - 6;
-    const newLeftW = Math.max(200, Math.min(containerW - 200, startLeftW + dx));
-    left.style.flex = `0 0 ${newLeftW}px`;
-    right.style.flex = '1';
-
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      reRenderPanel('original');
-      reRenderPanel('translated');
-    }, 200);
+    const currentPosition = isStacked() ? e.clientY : e.clientX;
+    const parentRect = left.parentElement.getBoundingClientRect();
+    const available = isStacked()
+      ? left.getBoundingClientRect().height + right.getBoundingClientRect().height
+      : parentRect.width - resizer.getBoundingClientRect().width;
+    const firstSize = startFirstSize + currentPosition - startPosition;
+    setPanelSplit(firstSize / Math.max(1, available) * 100);
   }
+
+  resizer.addEventListener('keydown', e => {
+    const decrementKey = isStacked() ? 'ArrowUp' : 'ArrowLeft';
+    const incrementKey = isStacked() ? 'ArrowDown' : 'ArrowRight';
+    if (![decrementKey, incrementKey, 'Home', 'End'].includes(e.key)) return;
+    const current = Number(resizer.getAttribute('aria-valuenow')) || 50;
+    const next = e.key === 'Home' ? 20 : e.key === 'End' ? 80 : current + (e.key === incrementKey ? 5 : -5);
+    setPanelSplit(next);
+    e.preventDefault();
+  });
 
   // Double-click to reset to 50/50 split
   resizer.addEventListener('dblclick', () => {
-    left.style.flex = '1';
-    right.style.flex = '1';
+    if (isStacked()) {
+      left.style.flex = '0 0 50vh';
+      right.style.flex = '0 0 50vh';
+    } else {
+      left.style.flex = '1';
+      right.style.flex = '1';
+    }
+    setResizerSemantics(50);
     reRenderPanel('original');
     reRenderPanel('translated');
   });
+
+  window.addEventListener('resize', () => {
+    setResizerSemantics(Number(resizer.getAttribute('aria-valuenow')) || 50);
+  });
+  setResizerSemantics();
 }
 
 function reRenderPanel(panel) {
@@ -2391,11 +2515,15 @@ function showToast(message, type = 'info', duration = 3000) {
     container = document.createElement('div');
     container.id = 'toast-container';
     container.className = 'toast-container';
+    container.setAttribute('aria-live', 'polite');
+    container.setAttribute('aria-relevant', 'additions');
     document.body.appendChild(container);
   }
 
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  toast.setAttribute('aria-atomic', 'true');
   toast.textContent = message;
   container.appendChild(toast);
 
@@ -2505,9 +2633,11 @@ document.addEventListener('change', (e) => {
 
 // === Keyboard Shortcuts ===
 document.addEventListener('keydown', (e) => {
+  const providerModal = document.getElementById('provider-settings-modal');
+  if (trapModalFocus(providerModal, e)) return;
+
   // Escape: go back to library from upload/reader views
   if (e.key === 'Escape') {
-    const providerModal = document.getElementById('provider-settings-modal');
     if (providerModal && !providerModal.classList.contains('hidden')) {
       hideProviderSettings();
       e.preventDefault();

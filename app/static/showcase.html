@@ -12,7 +12,9 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); }
-  .header { display: flex; align-items: center; justify-content: space-between; padding: 14px 28px; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  .skip-link { position: fixed; left: 8px; top: 8px; z-index: 50; padding: 8px 12px; border-radius: 8px; background: var(--accent); color: white; transform: translateY(-160%); }
+  .skip-link:focus { transform: translateY(0); }
+  .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 28px; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
   .header h1 { font-size: 18px; margin: 0; }
   .header a { color: var(--accent); text-decoration: none; font-size: 14px; }
   .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 60px; }
@@ -44,6 +46,7 @@
   .btn { margin-top: 2px; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 8px; padding: 7px 0; font-size: 13px; cursor: pointer; }
   .btn:hover { border-color: var(--accent); color: var(--accent); }
   .btn[disabled] { color: var(--muted); cursor: not-allowed; }
+  a:focus-visible, button:focus-visible { outline: 3px solid rgba(37, 99, 235, .35); outline-offset: 2px; }
   .modal { position: fixed; inset: 0; background: rgba(15, 20, 30, .55); display: none; align-items: flex-start; justify-content: center; overflow: auto; padding: 30px 16px; z-index: 20; }
   .modal.open { display: flex; }
   .sheet { background: var(--card); border-radius: 14px; max-width: 1080px; width: 100%; padding: 20px 22px 26px; }
@@ -54,25 +57,33 @@
   .pair .imgs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .pair img { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .empty { text-align: center; color: var(--muted); padding: 60px 0; }
-  @media (max-width: 720px) { .pair .imgs { grid-template-columns: 1fr; } }
+  @media (max-width: 720px) {
+    .header { align-items: flex-start; flex-wrap: wrap; padding: 12px 16px; }
+    .header a { flex-basis: 100%; }
+    .wrap { padding-inline: 16px; }
+    .grid { grid-template-columns: minmax(0, 1fr); }
+    .pair .imgs { grid-template-columns: 1fr; }
+    .sheet { padding: 16px; }
+  }
 </style>
 </head>
 <body>
+<a class="skip-link" href="#showcase-main">跳到主要内容</a>
 <header class="header">
   <h1>经典论文翻译质量基准</h1>
   <a href="/">← 返回 Super Translate</a>
 </header>
-<div class="wrap">
-  <p class="intro">25 篇里程碑论文（Attention、ResNet、BERT、GPT-3、SAM……），按十个版式维度覆盖单双栏、公式密集、表格/算法、长参考文献等场景。每篇由引擎完整翻译后经过全量质量检测：文本层校验、九类视觉巡检（字号漂移、公式裁切、表格结构、漏翻……）与渲染相似度评分。所有数据可通过 <code>scripts/classic_benchmark.py</code> 复现。</p>
+<main class="wrap" id="showcase-main" tabindex="-1">
+  <p class="intro"><span id="benchmark-paper-count">多</span> 篇里程碑论文（Attention、ResNet、BERT、GPT-3、SAM……），按十个版式维度覆盖单双栏、公式密集、表格/算法、长参考文献等场景。每篇由引擎完整翻译后经过全量质量检测：文本层校验、九类视觉巡检（字号漂移、公式裁切、表格结构、漏翻……）与渲染相似度评分。所有数据可通过 <code>scripts/classic_benchmark.py</code> 复现。</p>
   <div id="summary" class="summary"></div>
   <p class="note" id="note"></p>
   <div id="grid" class="grid"></div>
   <div id="empty" class="empty" style="display:none">基准数据尚未生成：请先运行 benchmark 的 report 步骤。</div>
-</div>
+</main>
 
-<div class="modal" id="modal">
-  <div class="sheet">
-    <button class="close" data-close>&times;</button>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="m-title" aria-hidden="true">
+  <div class="sheet" tabindex="-1">
+    <button class="close" type="button" data-close aria-label="关闭论文页面对照">&times;</button>
     <h2 id="m-title"></h2>
     <div class="row" id="m-sub"></div>
     <div id="m-pairs"></div>

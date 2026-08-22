@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
+<a class="skip-link" href="#main-content">跳到主要内容</a>
 <div id="app">
   <!-- Header -->
   <header class="header">
@@ -25,7 +26,7 @@
   </header>
 
   <!-- Main Content -->
-  <main class="main">
+  <main class="main" id="main-content" tabindex="-1">
     <!-- Paper Library View -->
     <div id="library-view" class="view active">
       <div class="toolbar">
@@ -89,8 +90,8 @@
           </div>
         </div>
         <div id="upload-progress" class="hidden">
-          <div class="progress-bar"><div class="progress-fill" id="upload-progress-fill"></div></div>
-          <span id="upload-status">上传中...</span>
+          <div class="progress-bar" role="progressbar" aria-label="论文上传进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill" id="upload-progress-fill"></div></div>
+          <span id="upload-status" role="status" aria-live="polite">上传中...</span>
         </div>
       </div>
     </div>
@@ -147,7 +148,7 @@
           <div class="panel-header">原文 (English) <span id="page-info-original" class="page-info">第 1 页</span></div>
           <div id="pdf-container-original" class="pdf-container"></div>
         </div>
-        <div class="resizer" id="resizer"></div>
+        <div class="resizer" id="resizer" role="separator" tabindex="0" aria-label="调整原文与译文栏宽" aria-orientation="vertical" aria-valuemin="20" aria-valuemax="80" aria-valuenow="50"></div>
         <div class="pdf-panel" id="right-panel">
           <div class="panel-header">译文 (中文) <span id="page-info-translated" class="page-info">第 1 页</span></div>
           <div id="pdf-container-translated" class="pdf-container"></div>
@@ -162,10 +163,10 @@
       <div id="translation-progress" class="translation-progress hidden">
         <div id="trans-title" class="trans-title"></div>
         <div class="progress-header">
-          <span id="trans-status">翻译中...</span>
+          <span id="trans-status" role="status" aria-live="polite">翻译中...</span>
           <span id="trans-percent">0%</span>
         </div>
-        <div class="progress-bar"><div class="progress-fill" id="trans-progress-fill"></div></div>
+        <div class="progress-bar" role="progressbar" aria-label="论文翻译进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill" id="trans-progress-fill"></div></div>
         <div class="progress-log-row">
           <div id="trans-log" class="trans-log"></div>
           <button class="btn btn-sm btn-danger" id="btn-cancel-translate" data-action="cancel-translate">取消</button>
@@ -245,14 +246,13 @@
   <form class="login-card" id="login-form">
     <h2 id="login-title">登录 Super Translate</h2>
     <p class="login-hint">每位用户有独立的论文库</p>
-    <input type="text" id="login-username" placeholder="用户名" autocomplete="username" required>
-    <input type="password" id="login-password" placeholder="密码" autocomplete="current-password" required>
+    <input type="text" id="login-username" placeholder="用户名" aria-label="用户名" autocomplete="username" required>
+    <input type="password" id="login-password" placeholder="密码" aria-label="密码" autocomplete="current-password" required>
     <div id="login-error" class="login-error" role="alert"></div>
     <button type="submit" class="btn btn-primary" id="login-submit">登录</button>
   </form>
 </div>
 
-<script src="/static/js/pdf.min.js" defer></script>
 <script src="/static/js/app.js" defer></script>
 </body>
 </html>

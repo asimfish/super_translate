@@ -49,6 +49,7 @@ const L = {
   }
   const papers = data.papers || [];
   const authed = Boolean(data.authenticated);
+  document.getElementById("benchmark-paper-count").textContent = String(papers.length);
 
   const totalErrors = papers.reduce((acc, p) => acc + (p.error_count || 0), 0);
   const strictPass = papers.filter((p) => p.strict_pass).length;
@@ -79,11 +80,11 @@ const L = {
       ? '<span class="chip lic">' + L.cc_ok + "</span>"
       : '<span class="chip lic no">' + L.cc_no + "</span>";
     const canPreview = (p.showcase_ok || authed) && (p.previews || []).length;
-    return '<div class="card">' +
+    return '<article class="card">' +
       '<h3><a href="https://arxiv.org/abs/' + esc(p.arxiv_id) + '" target="_blank" rel="noopener">' + esc(p.title) + "</a></h3>" +
       '<div class="meta">' + (p.tags || []).map((t) => '<span class="chip">' + esc(t) + "</span>").join("") + lic + "</div>" +
       '<div class="row"><span>' + L.visual + visual + "%</span><span>" + p.pages + L.pages_issues + p.error_count + L.issues_suffix + "</span></div>" +
-      '<div class="bar"><i style="width:' + visual + '%"></i></div>' +
+      '<div class="bar" role="progressbar" aria-label="' + esc(p.title + " " + L.visual) + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + visual + '"><i aria-hidden="true" style="width:' + visual + '%"></i></div>' +
       '<div class="badges">' +
         '<span class="badge ' + (p.strict_pass ? "pass" : "fail") + '">' + L.strict_badge + (p.strict_pass ? L.pass : L.fail) + "</span>" +
         '<span class="badge ' + (p.legacy_pass ? "pass" : "fail") + '">' + L.legacy_badge + (p.legacy_pass ? L.pass : L.fail) + "</span>" +
@@ -91,7 +92,7 @@ const L = {
       '<div class="codes">' + codes + "</div>" +
       '<button class="btn" data-open="' + i + '"' + (canPreview ? "" : " disabled") + ">" +
       (canPreview ? (p.showcase_ok ? L.view : L.view_internal) : L.metrics_only) +
-      "</button></div>";
+      "</button></article>";
   }).join("");
 
   const loadPreviewImage = async (img) => {
@@ -105,6 +106,22 @@ const L = {
   };
 
   const modal = document.getElementById("modal");
+  const modalClose = modal.querySelector("[data-close]");
+  let modalReturnFocus = null;
+
+  const modalFocusable = () => Array.from(modal.querySelectorAll(
+    'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  ));
+
+  const closeModal = () => {
+    if (!modal.classList.contains("open")) return;
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+    if (modalReturnFocus && modalReturnFocus.isConnected) modalReturnFocus.focus();
+    modalReturnFocus = null;
+  };
+
   document.body.addEventListener("click", (event) => {
     const openBtn = event.target.closest("[data-open]");
     if (openBtn) {
@@ -117,14 +134,41 @@ const L = {
         const num = String(pair.page).padStart(3, "0");
         const base = "/api/showcase/previews/" + p.id + "/p" + num;
         return '<div class="pair"><div class="cap">' + L.page_cap_prefix + pair.page + L.page_cap_suffix + "</div>" +
-          '<div class="imgs"><img loading="lazy" data-src="' + base + '_original.jpg" alt="' + L.orig +
-          '"><img loading="lazy" data-src="' + base + '_translated.jpg" alt="' + L.trans + '"></div></div>';
+          '<div class="imgs"><img loading="lazy" data-src="' + base + '_original.jpg" alt="' + esc(p.title + " " + L.orig + " " + pair.page) +
+          '"><img loading="lazy" data-src="' + base + '_translated.jpg" alt="' + esc(p.title + " " + L.trans + " " + pair.page) + '"></div></div>';
       }).join("");
       document.querySelectorAll("#m-pairs img[data-src]").forEach(loadPreviewImage);
+      modalReturnFocus = openBtn;
       modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+      document.body.style.overflow = "hidden";
+      modalClose.focus();
     }
     if (event.target.closest("[data-close]") || event.target === modal) {
-      modal.classList.remove("open");
+      closeModal();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (!modal.classList.contains("open")) return;
+    if (event.key === "Escape") {
+      closeModal();
+      event.preventDefault();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = modalFocusable();
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      last.focus();
+      event.preventDefault();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      first.focus();
+      event.preventDefault();
+    } else if (!modal.contains(document.activeElement)) {
+      first.focus();
+      event.preventDefault();
     }
   });
 })();

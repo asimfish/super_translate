@@ -141,6 +141,21 @@ class TestShowcaseData:
         assert "<script src=" in response.text
         assert "<script>" not in response.text
 
+    def test_showcase_page_has_dynamic_count_and_accessible_modal(self, client):
+        response = client.get("/showcase")
+        script = (app_main.static_dir / "showcase.js").read_text(encoding="utf-8")
+
+        assert 'id="benchmark-paper-count"' in response.text
+        assert "25 篇里程碑论文" not in response.text
+        assert 'role="dialog"' in response.text
+        assert 'aria-labelledby="m-title"' in response.text
+        assert 'aria-label="关闭论文页面对照"' in response.text
+        assert 'href="#showcase-main"' in response.text
+        assert 'modal.setAttribute("aria-hidden", "false")' in script
+        assert 'if (event.key === "Escape")' in script
+        assert "modalReturnFocus.focus()" in script
+        assert 'role="progressbar"' in script
+
 
 class TestShowcasePreviews:
     def test_open_paper_preview_served(self, client, benchmark_dir):

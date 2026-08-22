@@ -727,3 +727,181 @@ def test_reader_ui_exposes_editable_figure_manifest_workflow():
     assert "function renderEditableFigureManifest(manifest)" in js
     assert "'show-editable-figures': showEditableFigures" in js
     assert "'extract-editable-figures': extractEditableFigures" in js
+
+
+def test_frontend_accessibility_and_lazy_pdf_contracts_are_wired():
+    js = (ROOT / "app/static/js/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
+
+    assert '<a class="skip-link" href="#main-content">' in html
+    assert 'id="main-content" tabindex="-1"' in html
+    assert '<script src="/static/js/pdf.min.js" defer></script>' not in html
+    assert "function ensurePdfLibrary()" in js
+    assert "await ensurePdfLibrary();" in js
+    assert 'class="paper-card-link"' in js
+    assert 'role="progressbar"' in html
+    assert "trapModalFocus(providerModal, e)" in js
+    assert "providerSettingsReturnFocus.focus();" in js
+    assert "toast.setAttribute('role', type === 'error' ? 'alert' : 'status')" in js
+    assert "resizer.addEventListener('keydown'" in js
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    assert ".header-right" in css
+    assert "flex: 1 1 100%;" in css
+
+
+@pytest.mark.e2e
+def test_frontend_accessibility_mobile_and_lazy_pdf_real_browser(tmp_path):
+    """Verify keyboard, mobile, reduced-motion, and lazy-load behavior in Chromium."""
+    port = _available_port()
+    base_url = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PAPER_CHINA_BASE_DIR": str(tmp_path / "frontend-server"),
+            "PAPER_CHINA_DB_PATH": "paper-china.db",
+            "PAPER_CHINA_ALLOW_UNAUTHENTICATED_REMOTE": "true",
+        }
+    )
+    server = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(f"{base_url}/health", timeout=1) as response:
+                if response.status == 200:
+                    break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        server.terminate()
+        raise AssertionError("Frontend E2E server did not become ready")
+
+    paper = {
+        **_paper_payload("paper-a"),
+        "tags": "attention, benchmark",
+        "updated_at": "2026-08-10T00:00:00",
+    }
+    requested_urls: list[str] = []
+    browser_errors: list[str] = []
+    try:
+        with sync_playwright() as playwright:
+            chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            launch_options = {"headless": True}
+            if Path(chrome).is_file():
+                launch_options["executable_path"] = chrome
+            browser = playwright.chromium.launch(**launch_options)
+            context = browser.new_context(viewport={"width": 1440, "height": 1000})
+            page = context.new_page()
+            page.on("request", lambda request: requested_urls.append(request.url))
+            page.on("console", lambda message: (
+                browser_errors.append(message.text) if message.type == "error" else None
+            ))
+            page.on("pageerror", lambda error: browser_errors.append(str(error)))
+
+            def route_api(route):
+                url = route.request.url
+                if url.endswith("/api/provider-credentials/models"):
+                    body = []
+                elif url.endswith("/api/provider-credentials"):
+                    body = []
+                elif url.endswith("/api/stats"):
+                    body = {"total_papers": 1, "completed_translations": 0}
+                elif "/api/papers" in url:
+                    body = {"papers": [paper], "total": 1}
+                else:
+                    body = {}
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(body, ensure_ascii=False),
+                )
+
+            page.route("**/api/**", route_api)
+            page.goto(base_url, wait_until="load")
+            expect(page.locator(".paper-card-link")).to_have_count(1)
+            assert not any(url.endswith("/static/js/pdf.min.js") for url in requested_urls)
+
+            title_button = page.locator(".paper-card-link")
+            title_button.focus()
+            assert page.evaluate("document.activeElement.className") == "paper-card-link"
+            assert page.locator(".tag-chip").first.evaluate(
+                "element => element.tagName"
+            ) == "BUTTON"
+            expect(page.locator('.paper-card [role="progressbar"]')).to_have_attribute(
+                "aria-valuenow", "42"
+            )
+
+            settings_button = page.locator("#btn-provider-settings")
+            settings_button.focus()
+            settings_button.click()
+            modal = page.locator("#provider-settings-modal")
+            expect(modal).to_be_visible()
+            assert page.evaluate(
+                "document.getElementById('provider-settings-modal').contains(document.activeElement)"
+            )
+            page.locator("#provider-settings-modal button:not([disabled])").last.focus()
+            page.keyboard.press("Tab")
+            assert page.evaluate(
+                "document.activeElement === "
+                "document.querySelector('#provider-settings-modal button')"
+            )
+            page.keyboard.press("Escape")
+            expect(modal).to_be_hidden()
+            assert page.evaluate("document.activeElement.id") == "btn-provider-settings"
+
+            page.evaluate("showToast('浏览器可访问性测试')")
+            expect(page.locator("#toast-container")).to_have_attribute("aria-live", "polite")
+            expect(page.locator(".toast").last).to_have_attribute("role", "status")
+
+            page.evaluate("showView('reader')")
+            resizer = page.locator("#resizer")
+            resizer.focus()
+            page.keyboard.press("ArrowRight")
+            expect(resizer).to_have_attribute("aria-valuenow", "55")
+
+            for width in (390, 320):
+                page.set_viewport_size({"width": width, "height": 844})
+                page.evaluate("showView('library')")
+                assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+            expect(resizer).to_have_attribute("aria-orientation", "horizontal")
+
+            page.evaluate("ensurePdfLibrary()")
+            page.wait_for_function("typeof pdfjsLib !== 'undefined'")
+            assert any(url.endswith("/static/js/pdf.min.js") for url in requested_urls)
+            assert browser_errors == []
+            context.close()
+
+            reduced_context = browser.new_context(
+                viewport={"width": 390, "height": 844}, reduced_motion="reduce"
+            )
+            reduced_page = reduced_context.new_page()
+            reduced_page.route("**/api/**", route_api)
+            reduced_page.goto(base_url, wait_until="load")
+            animation_duration = reduced_page.locator(".skeleton-card").first.evaluate(
+                "element => getComputedStyle(element).animationDuration"
+            )
+            assert animation_duration in {"0s", "1e-05s", "0.00001s"}
+            reduced_context.close()
+            browser.close()
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
