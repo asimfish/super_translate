@@ -350,7 +350,23 @@ function renderProviderCredentials(statuses) {
   }
 }
 
+function providerCatalogTimestamp(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toLocaleString('zh-CN', { hour12: false });
+}
+
 function renderProviderModelCatalogs(catalogs) {
+  const groupDefinitions = [
+    ['latest', '最新推荐'],
+    ['quality', '质量优先'],
+    ['balanced', '均衡'],
+    ['economy', '低成本 / 高速'],
+    ['specialized', '专项模型'],
+    ['legacy', '兼容旧版'],
+    ['account', '账号可用'],
+  ];
   for (const catalog of catalogs) {
     const row = document.querySelector(`.provider-row[data-provider="${catalog.provider}"]`);
     if (!row) continue;
@@ -358,16 +374,55 @@ function renderProviderModelCatalogs(catalogs) {
     if (!select) continue;
     const selected = catalog.selected_model || select.value || catalog.default_model;
     const models = [...new Set([selected, ...(catalog.models || [])].filter(Boolean))];
-    select.replaceChildren(...models.map(model => {
-      const option = document.createElement('option');
-      option.value = model;
-      option.textContent = model;
-      return option;
-    }));
+    const guidance = new Map(
+      (catalog.model_options || []).map(option => [option.id, option])
+    );
+    const groupedModels = new Map(groupDefinitions.map(([id]) => [id, []]));
+    for (const model of models) {
+      const metadata = guidance.get(model) || {
+        id: model,
+        group: 'account',
+        description: '当前账号可用',
+      };
+      const group = groupedModels.has(metadata.group) ? metadata.group : 'account';
+      groupedModels.get(group).push({ ...metadata, id: model });
+    }
+    const groups = groupDefinitions.flatMap(([groupId, groupLabel]) => {
+      const entries = groupedModels.get(groupId);
+      if (!entries.length) return [];
+      const group = document.createElement('optgroup');
+      group.label = groupLabel;
+      group.replaceChildren(...entries.map(metadata => {
+        const option = document.createElement('option');
+        option.value = metadata.id;
+        option.textContent = metadata.description
+          ? `${metadata.id} · ${metadata.description}`
+          : metadata.id;
+        option.title = metadata.description || metadata.id;
+        return option;
+      }));
+      return [group];
+    });
+    select.replaceChildren(...groups);
     select.value = selected;
+
+    const refreshed = providerCatalogTimestamp(catalog.refreshed_at);
+    const verified = catalog.catalog_verified_on
+      ? `内置目录核对 ${catalog.catalog_verified_on}`
+      : '';
+    const meta = row.querySelector('.provider-model-meta');
+    if (meta) {
+      meta.textContent = catalog.warning || (
+        refreshed ? `账号模型更新 ${refreshed}` : verified
+      );
+    }
     const refresh = row.querySelector('.provider-model-refresh');
     if (refresh) {
-      refresh.title = catalog.warning || `${catalog.label} 模型列表：${catalog.source}`;
+      refresh.title = [
+        catalog.warning || `${catalog.label} 模型列表：${catalog.source}`,
+        verified,
+        refreshed ? `账号模型更新 ${refreshed}` : '',
+      ].filter(Boolean).join('；');
     }
   }
 }
