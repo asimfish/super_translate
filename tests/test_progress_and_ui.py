@@ -481,12 +481,13 @@ def test_translation_repairing_state_is_visible_without_leaking_live_polling():
     css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
 
-    assert "repairing: '等待系统修复'" in js
+    assert "repairing: '待修复（任务已停止）'" in js
+    assert "任务已停止，不占用翻译队列" in js
     assert "paper.translation_status === 'repairing'" in js
     assert "p.translation_status === 'repairing'" in js
     assert "currentPaper.translation_status === 'repairing'" in js
     assert ".status-repairing" in css
-    assert '<option value="repairing">等待系统修复</option>' in html
+    assert '<option value="repairing">待修复（已停止）</option>' in html
 
 
 def test_translation_progress_is_scoped_to_the_active_paper():

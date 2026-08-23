@@ -3787,7 +3787,10 @@ class TestLifespan:
 
         mock_dirs.assert_called_once()
         mock_db.assert_awaited_once()
-        mock_recover.assert_awaited_once_with(resume_queued=True)
+        mock_recover.assert_awaited_once_with(
+            resume_queued=True,
+            reconcile_terminal=True,
+        )
         mock_repair_recover.assert_awaited_once_with()
 
     @pytest.mark.asyncio
@@ -3816,7 +3819,10 @@ class TestLifespan:
             async with lifespan(MagicMock()):
                 pass
 
-        mock_recover.assert_awaited_once_with(resume_queued=True)
+        mock_recover.assert_awaited_once_with(
+            resume_queued=True,
+            reconcile_terminal=True,
+        )
         mock_repair_recover.assert_awaited_once_with()
         mock_schedule.assert_called_once_with(payload)
 

@@ -7,7 +7,7 @@ import re
 import time
 import webbrowser
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
@@ -39,7 +39,10 @@ _stats_cache: dict[str, dict[str, int]] = {}
 _stats_cache_time: dict[str, float] = {}
 _stats_lock = asyncio.Lock()
 _startup_translation_tasks: set[asyncio.Task] = set()
+_scheduled_recovery_job_ids: set[str] = set()
 _RECOVERY_STALE_SECONDS = 90
+_RECOVERY_WATCHDOG_SECONDS = 30.0
+_RECOVERY_WAITING_STAGES = ("等待恢复", "等待系统修复")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -66,37 +69,59 @@ def _translation_job_resume_payload(job) -> dict[str, object]:
 def _schedule_recovered_translation(
     payload: dict[str, object],
     delay_seconds: float | None = None,
-) -> None:
+) -> bool:
     """Resume a durable queued translation job after startup."""
-    from app.api.papers import _run_translation
+    from app.api.papers import _reset_paper_status, _run_translation
+
+    job_id = str(payload["job_id"])
+    if job_id in _scheduled_recovery_job_ids:
+        return False
+    _scheduled_recovery_job_ids.add(job_id)
 
     async def _run_after_delay() -> None:
-        delay = (
-            settings.resume_queued_translations_delay_seconds
-            if delay_seconds is None
-            else delay_seconds
-        )
-        if delay > 0:
-            await asyncio.sleep(delay)
-        await asyncio.to_thread(
-            _run_translation,
-            payload["paper_id"],
-            payload["backend"],
-            payload["quality"],
-            payload["preserve_graphics_text"],
-            payload["skip_overflow"],
-            payload["qa_mode"],
-            payload["qa_max_passes"],
-            payload["ocr_mode"],
-            payload["ocr_language"],
-            payload["ocr_dpi"],
-            payload["job_id"],
-            payload["access_scope"],
-        )
+        try:
+            delay = (
+                settings.resume_queued_translations_delay_seconds
+                if delay_seconds is None
+                else delay_seconds
+            )
+            if delay > 0:
+                await asyncio.sleep(delay)
+            await asyncio.to_thread(
+                _run_translation,
+                payload["paper_id"],
+                payload["backend"],
+                payload["quality"],
+                payload["preserve_graphics_text"],
+                payload["skip_overflow"],
+                payload["qa_mode"],
+                payload["qa_max_passes"],
+                payload["ocr_mode"],
+                payload["ocr_language"],
+                payload["ocr_dpi"],
+                payload["job_id"],
+                payload["access_scope"],
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Recovered translation task crashed for job %s", job_id)
+            await asyncio.to_thread(
+                _reset_paper_status,
+                str(payload["paper_id"]),
+                "Recovered translation task crashed unexpectedly",
+                job_id,
+            )
 
     task = asyncio.create_task(_run_after_delay())
     _startup_translation_tasks.add(task)
-    task.add_done_callback(_startup_translation_tasks.discard)
+
+    def _discard_finished_task(finished_task: asyncio.Task) -> None:
+        _startup_translation_tasks.discard(finished_task)
+        _scheduled_recovery_job_ids.discard(job_id)
+
+    task.add_done_callback(_discard_finished_task)
+    return True
 
 
 def _job_is_stale_for_recovery(
@@ -125,18 +150,116 @@ def _job_is_stale_for_recovery(
     return current - reference >= timedelta(seconds=_RECOVERY_STALE_SECONDS)
 
 
-async def _recover_stuck_translations(
-    *,
-    resume_queued: bool = True,
-) -> list[dict[str, object]]:
-    """Recover durable translation records after a crash.
+def _translation_output_is_usable(filename: str | None) -> bool:
+    """Return whether a recorded translation points to a non-empty local output."""
+    if not filename:
+        return False
+    translations_root = settings.translations_path.resolve()
+    output_path = (translations_root / filename).resolve()
+    if not output_path.is_relative_to(translations_root):
+        logger.warning("Rejected translation output outside translations directory: %s", filename)
+        return False
+    try:
+        return output_path.is_file() and output_path.stat().st_size > 0
+    except OSError:
+        return False
 
-    Queued jobs and interrupted running jobs are safe to resume when startup
-    recovery is enabled. The translation runner cleans the output directory
-    before a re-run, so stale partial PDFs are discarded instead of reused.
-    """
-    from sqlalchemy import func, select
-    from sqlalchemy import update as sa_update
+
+async def _repair_translation_state_drift() -> int:
+    """Reconcile translating papers whose latest same-scope job is terminal."""
+    from sqlalchemy import and_, select
+
+    from app.core.database import async_session
+    from app.models.paper import (
+        Paper,
+        TranslationJob,
+        TranslationJobStatus,
+        TranslationStatus,
+    )
+
+    terminal_statuses = (
+        TranslationJobStatus.COMPLETED.value,
+        TranslationJobStatus.FAILED.value,
+        TranslationJobStatus.CANCELLED.value,
+    )
+    now = datetime.now(timezone.utc)
+    async with async_session() as db:
+        try:
+            latest_same_scope_job_id = (
+                select(TranslationJob.id)
+                .where(
+                    TranslationJob.paper_id == Paper.id,
+                    TranslationJob.access_scope == Paper.access_scope,
+                )
+                .order_by(TranslationJob.created_at.desc(), TranslationJob.id.desc())
+                .limit(1)
+                .correlate(Paper)
+                .scalar_subquery()
+            )
+            result = await db.execute(
+                select(Paper, TranslationJob)
+                .join(
+                    TranslationJob,
+                    and_(
+                        TranslationJob.id == latest_same_scope_job_id,
+                        TranslationJob.paper_id == Paper.id,
+                        TranslationJob.access_scope == Paper.access_scope,
+                    ),
+                )
+                .where(
+                    Paper.translation_status == TranslationStatus.TRANSLATING.value,
+                    TranslationJob.status.in_(terminal_statuses),
+                )
+            )
+            records = list(result.all())
+            for paper, job in records:
+                if job.status == TranslationJobStatus.COMPLETED.value:
+                    if _translation_output_is_usable(paper.translated_filename):
+                        paper.translation_status = TranslationStatus.COMPLETED.value
+                        paper.translation_progress = 1.0
+                        paper.translation_stage = "翻译完成"
+                        paper.translation_error = None
+                    else:
+                        error = "Translation output is missing after recovery"
+                        paper.translation_status = TranslationStatus.FAILED.value
+                        paper.translation_progress = 0.0
+                        paper.translation_stage = "恢复失败"
+                        paper.translation_error = error
+                        job.status = TranslationJobStatus.FAILED.value
+                        job.progress = 0.0
+                        job.error = error
+                        job.finished_at = job.finished_at or now
+                        job.updated_at = now
+                elif job.status == TranslationJobStatus.CANCELLED.value:
+                    paper.translation_status = TranslationStatus.PENDING.value
+                    paper.translation_progress = 0.0
+                    paper.translation_stage = ""
+                    paper.translation_error = None
+                else:
+                    paper.translation_status = TranslationStatus.FAILED.value
+                    paper.translation_progress = 0.0
+                    paper.translation_stage = "翻译失败"
+                    paper.translation_error = (
+                        job.error or "Translation failed before state recovery"
+                    )
+                paper.translation_eta_seconds = None
+
+            if records:
+                await db.commit()
+                logger.warning(
+                    "Reconciled %d translation state record(s) with terminal jobs",
+                    len(records),
+                )
+            return len(records)
+        except Exception:
+            await db.rollback()
+            logger.exception("Failed to reconcile translation state drift")
+            return 0
+
+
+async def _find_waiting_translation_jobs() -> list[dict[str, object]]:
+    """Find stale queued jobs explicitly left for the recovery scheduler."""
+    from sqlalchemy import and_, select
 
     from app.core.database import async_session
     from app.models.paper import (
@@ -147,9 +270,111 @@ async def _recover_stuck_translations(
     )
 
     async with async_session() as db:
+        latest_same_scope_job_id = (
+            select(TranslationJob.id)
+            .where(
+                TranslationJob.paper_id == Paper.id,
+                TranslationJob.access_scope == Paper.access_scope,
+            )
+            .order_by(TranslationJob.created_at.desc(), TranslationJob.id.desc())
+            .limit(1)
+            .correlate(Paper)
+            .scalar_subquery()
+        )
+        result = await db.execute(
+            select(TranslationJob)
+            .join(
+                Paper,
+                and_(
+                    Paper.id == TranslationJob.paper_id,
+                    Paper.access_scope == TranslationJob.access_scope,
+                ),
+            )
+            .where(
+                TranslationJob.id == latest_same_scope_job_id,
+                TranslationJob.status == TranslationJobStatus.QUEUED.value,
+                Paper.translation_status == TranslationStatus.TRANSLATING.value,
+                Paper.translation_stage.in_(_RECOVERY_WAITING_STAGES),
+            )
+            .order_by(TranslationJob.created_at.asc())
+        )
+        jobs = result.scalars().all()
+        now = datetime.now(timezone.utc)
+        return [
+            _translation_job_resume_payload(job)
+            for job in jobs
+            if str(job.id) not in _scheduled_recovery_job_ids
+            and _job_is_stale_for_recovery(job, now=now)
+        ]
+
+
+async def _translation_recovery_watchdog(*, resume_queued: bool = True) -> None:
+    """Continuously repair state drift and reschedule forgotten recovery jobs."""
+    while True:
+        await asyncio.sleep(_RECOVERY_WATCHDOG_SECONDS)
+        try:
+            await _repair_translation_state_drift()
+            if not resume_queued:
+                continue
+            payloads = await _find_waiting_translation_jobs()
+            scheduled = sum(
+                _schedule_recovered_translation(payload, delay_seconds=0) for payload in payloads
+            )
+            if scheduled:
+                logger.warning("Recovery watchdog resumed %d translation job(s)", scheduled)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Translation recovery watchdog iteration failed")
+
+
+async def _recover_stuck_translations(
+    *,
+    resume_queued: bool = True,
+    reconcile_terminal: bool = False,
+) -> list[dict[str, object]]:
+    """Recover durable translation records after a crash.
+
+    Queued jobs and interrupted running jobs are safe to resume when startup
+    recovery is enabled. The translation runner cleans the output directory
+    before a re-run, so stale partial PDFs are discarded instead of reused.
+    """
+    from sqlalchemy import and_, func, select
+    from sqlalchemy import update as sa_update
+
+    from app.core.database import async_session
+    from app.models.paper import (
+        Paper,
+        TranslationJob,
+        TranslationJobStatus,
+        TranslationStatus,
+    )
+
+    if reconcile_terminal:
+        await _repair_translation_state_drift()
+
+    async with async_session() as db:
+        latest_same_scope_job_id = (
+            select(TranslationJob.id)
+            .where(
+                TranslationJob.paper_id == Paper.id,
+                TranslationJob.access_scope == Paper.access_scope,
+            )
+            .order_by(TranslationJob.created_at.desc(), TranslationJob.id.desc())
+            .limit(1)
+            .correlate(Paper)
+            .scalar_subquery()
+        )
         queued_result = await db.execute(
             select(TranslationJob)
-            .join(Paper, Paper.id == TranslationJob.paper_id)
+            .join(
+                Paper,
+                and_(
+                    Paper.id == TranslationJob.paper_id,
+                    Paper.access_scope == TranslationJob.access_scope,
+                ),
+            )
+            .where(TranslationJob.id == latest_same_scope_job_id)
             .where(TranslationJob.status == TranslationJobStatus.QUEUED.value)
             .where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
             .order_by(TranslationJob.created_at.asc())
@@ -157,7 +382,14 @@ async def _recover_stuck_translations(
         queued_jobs = list(queued_result.scalars().all())
         running_result = await db.execute(
             select(TranslationJob)
-            .join(Paper, Paper.id == TranslationJob.paper_id)
+            .join(
+                Paper,
+                and_(
+                    Paper.id == TranslationJob.paper_id,
+                    Paper.access_scope == TranslationJob.access_scope,
+                ),
+            )
+            .where(TranslationJob.id == latest_same_scope_job_id)
             .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
             .where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
             .order_by(TranslationJob.started_at.asc(), TranslationJob.created_at.asc())
@@ -310,7 +542,7 @@ async def _recover_stuck_translations(
 
 async def _recover_repair_pending_translations() -> list[dict[str, object]]:
     """Requeue parked repair jobs when translation-engine code has changed."""
-    from sqlalchemy import func, select
+    from sqlalchemy import and_, func, select
     from sqlalchemy import update as sa_update
 
     from app.core.database import async_session
@@ -323,26 +555,39 @@ async def _recover_repair_pending_translations() -> list[dict[str, object]]:
 
     revision = current_engine_revision()
     async with async_session() as db:
+        latest_same_scope_job_id = (
+            select(TranslationJob.id)
+            .where(
+                TranslationJob.paper_id == Paper.id,
+                TranslationJob.access_scope == Paper.access_scope,
+            )
+            .order_by(TranslationJob.created_at.desc(), TranslationJob.id.desc())
+            .limit(1)
+            .correlate(Paper)
+            .scalar_subquery()
+        )
         result = await db.execute(
             select(TranslationJob)
-            .join(Paper, Paper.id == TranslationJob.paper_id)
-            .where(TranslationJob.status == TranslationJobStatus.REPAIR_PENDING.value)
-            .where(Paper.translation_status == TranslationStatus.REPAIRING.value)
+            .join(
+                Paper,
+                and_(
+                    Paper.id == TranslationJob.paper_id,
+                    Paper.access_scope == TranslationJob.access_scope,
+                ),
+            )
+            .where(
+                TranslationJob.id == latest_same_scope_job_id,
+                TranslationJob.status == TranslationJobStatus.REPAIR_PENDING.value,
+                Paper.translation_status == TranslationStatus.REPAIRING.value,
+            )
             .order_by(TranslationJob.created_at.desc())
         )
-        jobs = []
-        seen_papers: set[str] = set()
-        for job in result.scalars().all():
-            if job.paper_id in seen_papers:
-                continue
-            seen_papers.add(job.paper_id)
-            if job.engine_revision != revision:
-                jobs.append(job)
+        jobs = [job for job in result.scalars().all() if job.engine_revision != revision]
         if not jobs:
             return []
 
         job_ids = [job.id for job in jobs]
-        paper_ids = [job.paper_id for job in jobs]
+        paper_keys = [(job.paper_id, job.access_scope) for job in jobs]
         payloads = [_translation_job_resume_payload(job) for job in reversed(jobs)]
         await db.execute(
             sa_update(TranslationJob)
@@ -361,17 +606,21 @@ async def _recover_repair_pending_translations() -> list[dict[str, object]]:
                 updated_at=func.now(),
             )
         )
-        await db.execute(
-            sa_update(Paper)
-            .where(Paper.id.in_(paper_ids))
-            .values(
-                translation_status=TranslationStatus.TRANSLATING.value,
-                translation_error=None,
-                translation_progress=0.0,
-                translation_stage="等待恢复",
-                translation_eta_seconds=None,
+        for paper_id, access_scope in paper_keys:
+            await db.execute(
+                sa_update(Paper)
+                .where(
+                    Paper.id == paper_id,
+                    Paper.access_scope == access_scope,
+                )
+                .values(
+                    translation_status=TranslationStatus.TRANSLATING.value,
+                    translation_error=None,
+                    translation_progress=0.0,
+                    translation_stage="等待恢复",
+                    translation_eta_seconds=None,
+                )
             )
-        )
         await db.commit()
         logger.info(
             "Requeued %d repair-pending translation job(s) for engine revision %s",
@@ -386,7 +635,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ensure_dirs()
     await init_db()
     resume_queued = settings.resume_queued_translations_on_startup
-    recovered_jobs = await _recover_stuck_translations(resume_queued=resume_queued)
+    recovered_jobs = await _recover_stuck_translations(
+        resume_queued=resume_queued,
+        reconcile_terminal=True,
+    )
     if resume_queued:
         recovered_jobs.extend(await _recover_repair_pending_translations())
     for payload in recovered_jobs:
@@ -396,7 +648,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     elif not resume_queued:
         logger.info("Startup translation resume is disabled")
     logger.info("Super Translate started at http://localhost:8000")
-    yield
+    recovery_watchdog = asyncio.create_task(
+        _translation_recovery_watchdog(resume_queued=resume_queued)
+    )
+    try:
+        yield
+    finally:
+        recovery_watchdog.cancel()
+        with suppress(asyncio.CancelledError):
+            await recovery_watchdog
 
 
 app = FastAPI(

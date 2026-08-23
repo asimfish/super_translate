@@ -704,7 +704,7 @@ function renderPaperList() {
         <div class="meta" style="margin-top:4px;color:var(--error);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.translation_error)}">⚠ ${esc(p.translation_error)}</div>
       ` : ''}
       ${p.translation_status === 'repairing' ? `
-        <div class="meta" style="margin-top:4px;color:var(--warning);font-size:11px" title="${esc(p.translation_error || '')}">已保留最佳译文；系统修复发布后将自动重试</div>
+        <div class="meta" style="margin-top:4px;color:var(--warning);font-size:11px" title="${esc(p.translation_error || '')}">任务已停止，不占用翻译队列；已保留最佳译文，修复发布后自动重试</div>
       ` : ''}
       ${p.tags ? `<div class="meta tags-row" style="margin-top:6px"><span aria-hidden="true">🏷</span> ${p.tags.split(',').map(t => `<button type="button" class="tag-chip" data-action="filter-by-tag" data-tag="${esc(t.trim())}">${esc(t.trim())}</button>`).join(' ')}</div>` : ''}
       <div class="actions" data-action="stop-propagation">
@@ -2125,8 +2125,8 @@ function pollTranslationStatus(paperId) {
         fill.classList.remove('progress-fill-active', 'progress-fill-pending');
         setProgressValue(fill, Math.max(1, pct));
         fill.style.background = 'var(--warning)';
-        statusEl.textContent = '等待系统修复（已保留最佳译文）';
-        addTransLog('当前版本已完成自动恢复尝试；修复发布后任务会自动继续');
+        statusEl.textContent = '待修复（任务已停止，已保留最佳译文）';
+        addTransLog('任务已停止且不占用翻译队列；修复发布后会自动重试');
         loadPapers();
       } else {
         const stage = paper.translation_stage || (waitingForProgress ? '准备翻译' : '翻译中');
@@ -2559,7 +2559,7 @@ function formatDate(iso) {
 }
 
 function statusLabel(s) {
-  const map = { pending: '待翻译', translating: '翻译中', repairing: '等待系统修复', completed: '已完成', failed: '失败' };
+  const map = { pending: '待翻译', translating: '翻译中', repairing: '待修复（任务已停止）', completed: '已完成', failed: '失败' };
   return map[s] || esc(s);
 }
 
