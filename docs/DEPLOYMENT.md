@@ -189,36 +189,24 @@ retried from the UI.
   `python -m uvicorn app.main:app --port 8001`, open `http://localhost:8001`.
   No token needed for loopback use.
 
-## Current production deployment (bjxy_5090 + Whalent forwarding)
+## Production notes (reference pattern)
 
-The live instance runs directly on the bjxy_5090 host (no Docker) and is
-bound to loopback. Operators reach it through an authenticated SSH tunnel or
-the current Whalent forwarding URL; it is not exposed on a bare public IP.
+A battle-tested minimal production setup, without Docker:
 
-- App: `uvicorn app.main:app --host 127.0.0.1 --port 18001 --workers 1`
-  inside tmux session `super_translate` on bjxy_5090 (state in
-  `~/super_translate/data/`, config in `~/super_translate/.env`).
-- Local tunnel: `ssh -N -L 28001:127.0.0.1:18001 bjxy_5090`, then open
-  `http://127.0.0.1:28001`. When a browser gateway is required, create a
-  Whalent forwarding URL for that local port and continue to use the API token.
-- Process guard (user crontab, `crontab -l` to inspect):
-  `@reboot` and every 5 minutes run `scripts/start_server.sh`, which
-  idempotently recreates the server tmux session (a dead process ends its tmux
-  session, so the next run restarts it).
-- Backups: `scripts/backup_data.sh` runs daily at 03:17 and snapshots the
-  SQLite DB (via `sqlite3 .backup`), uploaded papers, terminology candidates
-  and `.env` into `~/backups/super_translate/YYYY-MM-DD/`, keeping 14 days.
-  Translated PDFs are excluded (regenerable from papers + cache).
-  Restore: stop the app, copy the snapshot files back over `data/`, restart.
-- Deploying code changes: `git push` to GitHub, then on bjxy_5090
-  `cd ~/super_translate && git pull`, restart by killing the tmux session
-  (`tmux kill-session -t super_translate`) — the 5-minute cron job brings it
-  back, or run `scripts/start_server.sh` manually.
-- Accounts: `liyufeng` (scope `local`, sees the shared library) was created
-  with `scripts/manage_users.py create liyufeng --scope local`.
+- Bind the app to loopback only (`uvicorn app.main:app --host 127.0.0.1
+  --port <port> --workers 1`) and reach it through an authenticated SSH
+  tunnel or reverse proxy — avoid exposing a bare public IP.
+- Process guard: run `scripts/start_server.sh` from cron (`@reboot` + every
+  few minutes); it idempotently recreates the server session, so a dead
+  process is restarted automatically.
+- Backups: `scripts/backup_data.sh` snapshots the SQLite DB (via
+  `sqlite3 .backup`), uploaded papers, terminology candidates and `.env` to a
+  dated directory with retention. Translated PDFs can be excluded — they are
+  regenerable from source papers plus the translation cache.
+- Deploys: `git pull` and restart the server session; the cron guard brings
+  it back automatically.
 - Output size: translated PDFs used to balloon 2-3x because each preserved
   formula re-copied the page's images; `save_pdf_for_fast_web_view` now
   dedupes identical image streams, and `scripts/dedupe_translations.py`
-  shrinks the existing library in place (453MB → 261MB on first run).
-  The public tunnel sustains ~1MB/s, so file size is the main lever on
-  viewer responsiveness.
+  shrinks an existing library in place (453MB → 261MB on a real library).
+  Over slow links, file size is the main lever on viewer responsiveness.
