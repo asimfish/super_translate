@@ -32,7 +32,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 2. **翻译**：在论文卡片上点「翻译」。可选项：
    - **后端**：DeepSeek（默认）/ Kimi K3 / OpenAI / Google。
    - **质量档**：`fast`（Google，免 API key，速度快）/ `balanced`（默认）/
-     `high`（更保守的版面处理）。
+     `quality`（更保守的版面处理）。
    - **保留图内文字**：默认开启。关闭后会尝试翻译图表内部的可编辑文字。
    - **OCR**：扫描版 PDF（纯图片）先做 OCR 再翻译。
 3. **看进度**：卡片上有实时进度条和预计剩余时间；点开可以看逐步日志
@@ -95,7 +95,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 
 ```bash
 # 直接翻译一个 PDF（不经过 Web 界面）
-python -m pdf_zh_translator translate paper.pdf out/ --backend deepseek
+python -m pdf_zh_translator translate paper.pdf paper.zh.pdf --api-mode deepseek
 
 # 术语库一致性检查
 python -m pdf_zh_translator corpus-lint --strict
