@@ -1,0 +1,942 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>SuperTranslate · 保版式学术论文翻译系统 · 项目介绍</title>
+<meta name="description" content="SuperTranslate 项目介绍演示文稿：保版式学术论文 PDF 翻译（英→中），公式/图表/双栏零破坏，对象级 QA 审计，Web 与 Agent Skill 双模式。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a0e1c'/%3E%3Ctext x='32' y='44' font-size='34' text-anchor='middle' fill='%236f9dff' font-family='system-ui' font-weight='700'%3E译%3C/text%3E%3C/svg%3E">
+<script>
+window.__ph = function (img) {
+  var host = img.closest('[data-ph]');
+  if (host) { host.classList.add('ph-on'); img.style.display = 'none'; }
+};
+</script>
+<style>
+  :root {
+    --bg: #0a0e1c;
+    --panel: #121a30;
+    --panel2: #0e1526;
+    --ink: #edf1fc;
+    --muted: #98a5c8;
+    --blue: #6f9dff;
+    --blue-soft: #9ec3ff;
+    --warm: #ff8f6b;
+    --gold: #f3c96b;
+    --green: #5fe6a8;
+    --line: rgba(111, 157, 255, .2);
+    --line-strong: rgba(111, 157, 255, .45);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --ease: cubic-bezier(.2, .8, .2, 1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    background: #060912;
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  button, a { font: inherit; }
+  a { color: var(--blue); text-decoration: none; }
+  img { display: block; max-width: 100%; }
+  .mono { font-family: var(--mono); }
+  .blue { color: var(--blue); } .warm { color: var(--warm); } .gold { color: var(--gold); } .muted { color: var(--muted); } .green { color: var(--green); }
+
+  /* ===== 1920x1080 固定设计画布，JS 等比缩放（信箱式留边） ===== */
+  .stage {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 1920px; height: 1080px;
+    transform: translate(-50%, -50%) scale(var(--stage-scale, 1));
+    overflow: hidden;
+    background:
+      radial-gradient(1200px 600px at 82% -10%, rgba(111, 157, 255, .12), transparent 60%),
+      radial-gradient(900px 520px at -6% 50%, rgba(255, 143, 107, .06), transparent 55%),
+      var(--bg);
+    box-shadow: 0 0 100px rgba(0, 0, 0, .72);
+    isolation: isolate;
+  }
+  .grid-field {
+    position: absolute; inset: 0; z-index: 0; opacity: .3; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(111, 157, 255, .07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(111, 157, 255, .07) 1px, transparent 1px);
+    background-size: 180px 180px;
+    mask-image: radial-gradient(circle at 55% 42%, black, transparent 82%);
+    -webkit-mask-image: radial-gradient(circle at 55% 42%, black, transparent 82%);
+  }
+
+  .slide {
+    position: absolute; inset: 0; z-index: 1;
+    padding: 62px 76px 92px;
+    opacity: 0; visibility: hidden;
+    transform: translate3d(2.5%, 0, 0) scale(.995);
+    transition: opacity .4s ease, transform .55s var(--ease), visibility .4s;
+    overflow: hidden;
+  }
+  .slide.active { opacity: 1; visibility: visible; transform: none; z-index: 2; }
+  .slide.leaving { transform: translate3d(-2.5%, 0, 0) scale(.995); }
+
+  .eyebrow { font: 700 19px/1.3 var(--mono); letter-spacing: .2em; color: var(--blue); text-transform: uppercase; }
+  .eyebrow.gold { color: var(--gold); } .eyebrow.warm { color: var(--warm); }
+  .s-title { margin-top: 14px; font-size: 58px; font-weight: 850; line-height: 1.12; letter-spacing: .01em; }
+  .s-title b { background: linear-gradient(92deg, var(--blue), var(--blue-soft) 55%, var(--warm)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .s-sub { margin-top: 12px; color: var(--muted); font-size: 22px; line-height: 1.6; max-width: 1400px; }
+  .s-sub b { color: var(--ink); }
+
+  .footer-line {
+    position: absolute; left: 76px; right: 76px; bottom: 34px;
+    display: flex; justify-content: space-between; align-items: center; gap: 30px;
+    color: var(--muted); font: 600 16px/1.3 var(--mono); letter-spacing: .04em;
+    z-index: 5;
+  }
+  .footer-line::before {
+    content: ""; position: absolute; left: 0; right: 0; top: -14px; height: 1px;
+    background: linear-gradient(90deg, rgba(111, 157, 255, .55), transparent 75%);
+  }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 8px 18px; border: 1px solid var(--line-strong); border-radius: 999px;
+    background: rgba(10, 14, 28, .85); color: var(--ink);
+    font: 700 18px/1.4 var(--mono); white-space: nowrap;
+  }
+  .chip::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 12px var(--blue); }
+  .chip.gold-chip { border-color: rgba(243, 201, 107, .55); }
+  .chip.gold-chip::before { background: var(--gold); box-shadow: 0 0 12px var(--gold); }
+  .chip.warm-chip { border-color: rgba(255, 143, 107, .55); }
+  .chip.warm-chip::before { background: var(--warm); box-shadow: 0 0 12px var(--warm); }
+
+  /* 占位兜底 */
+  [data-ph].ph-on { position: relative; background: repeating-linear-gradient(-45deg, #131a2e, #131a2e 16px, #101728 16px, #101728 32px) !important; min-height: 200px; }
+  [data-ph].ph-on::after {
+    content: "对比图生成中\A" attr(data-ph);
+    white-space: pre-wrap;
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    padding: 20px; color: var(--muted); font: 650 15px/1.8 var(--mono); word-break: break-all;
+  }
+
+  /* ===== S1 封面 ===== */
+  .cover-copy { position: relative; z-index: 2; width: 56%; padding-top: 40px; }
+  .cover .brand-row { display: flex; align-items: center; gap: 16px; }
+  .cover .brand-row svg { width: 64px; height: 64px; }
+  .cover .brand-row .mono { font: 800 22px/1.3 var(--mono); letter-spacing: .14em; }
+  .cover .brand-row small { display: block; font: 600 15px/1.5 var(--mono); letter-spacing: .08em; color: var(--muted); }
+  .cover h1 { margin-top: 44px; font-size: 96px; font-weight: 850; line-height: 1.06; letter-spacing: -.01em; }
+  .cover h1 b { background: linear-gradient(92deg, var(--blue), var(--blue-soft) 55%, var(--warm)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .cover-lead { margin-top: 30px; font-size: 34px; font-weight: 760; line-height: 1.4; }
+  .cover-lead .warm { padding: 0 .12em; }
+  .cover-sub { margin-top: 20px; color: var(--muted); font-size: 22px; line-height: 1.7; max-width: 820px; }
+  .cover-chips { position: absolute; left: 76px; bottom: 92px; display: flex; gap: 14px; z-index: 2; }
+  .cover-frame {
+    position: absolute; z-index: 1; right: 76px; top: 96px;
+    width: 560px;
+    border: 1px solid var(--line-strong); border-radius: 18px; overflow: hidden;
+    background: var(--panel);
+    box-shadow: 0 40px 100px rgba(0, 0, 0, .6), 0 0 60px rgba(111, 157, 255, .1);
+  }
+  .frame-bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; background: rgba(8, 12, 24, .95); border-bottom: 1px solid var(--line); }
+  .frame-bar i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; }
+  .frame-bar i:nth-child(2) { background: #febc2e; }
+  .frame-bar i:nth-child(3) { background: #28c840; }
+  .frame-bar span { margin-left: 8px; font: 600 14px/1.2 var(--mono); color: var(--muted); letter-spacing: .04em; }
+  .frame-bar em { margin-left: auto; font: 800 12px/1 var(--mono); color: var(--blue); font-style: normal; letter-spacing: .12em; display: inline-flex; align-items: center; gap: 8px; }
+  .frame-bar em::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 12px var(--blue); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .frame-view { position: relative; background: #fff; }
+  .frame-view img { width: 100%; height: 748px; object-fit: contain; background: #fff; }
+  .frame-foot { padding: 12px 16px; background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font: 600 14px/1.5 var(--mono); display: flex; justify-content: space-between; gap: 12px; }
+  .frame-foot b { color: var(--ink); }
+
+  /* ===== S2 痛点 ===== */
+  .pain-grid { display: grid; grid-template-columns: 58fr 42fr; gap: 48px; margin-top: 44px; align-items: start; }
+  .pain-list { display: flex; flex-direction: column; gap: 18px; }
+  .pain-item {
+    display: flex; gap: 20px; align-items: flex-start;
+    border: 1px solid var(--line); border-radius: 16px; background: var(--panel);
+    padding: 22px 26px;
+  }
+  .pain-item i {
+    flex: none; display: grid; place-items: center; width: 52px; height: 52px;
+    border: 1px solid var(--warm); border-radius: 12px; color: var(--warm);
+    font: 800 20px/1 var(--mono); font-style: normal;
+  }
+  .pain-item b { display: block; font-size: 24px; font-weight: 780; }
+  .pain-item span { display: block; margin-top: 6px; color: var(--muted); font-size: 18.5px; line-height: 1.6; }
+  .wreck {
+    border: 1px solid rgba(255, 143, 107, .4); border-radius: 16px; background: var(--panel);
+    padding: 22px 24px;
+  }
+  .wreck .wreck-title { font: 700 15px/1.5 var(--mono); letter-spacing: .12em; color: var(--warm); text-transform: uppercase; }
+  .wreck-pages { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 16px; }
+  .wpage { border-radius: 10px; background: #f4f6fb; padding: 14px 12px; display: flex; flex-direction: column; gap: 7px; min-height: 330px; position: relative; }
+  .wpage i { display: block; height: 7px; border-radius: 3px; background: #b9c2d8; }
+  .wpage i.short { width: 62%; }
+  .wpage i.formula { height: 30px; border: 1.5px dashed #8fa3cc; background: #e7ecf7; }
+  .wpage i.fig { height: 74px; background: #dde4f2; border: 1.5px solid #b9c2d8; }
+  .wpage .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .wpage .cols span { display: flex; flex-direction: column; gap: 6px; }
+  .wpage .cols i { height: 6px; }
+  .wpage.bad i.formula { border-color: #e0654a; background: #fbe3dc; transform: rotate(-1.6deg) translateX(6px); }
+  .wpage.bad i.fig { transform: translateY(10px) rotate(1.2deg); border-color: #e0654a; }
+  .wpage.bad .cols { grid-template-columns: 1fr; }
+  .wpage.bad i.overlap { margin-top: -14px; opacity: .75; }
+  .wpage .ptag { position: absolute; top: -12px; left: 12px; padding: 2px 12px; border-radius: 999px; font: 750 13px/1.6 var(--mono); }
+  .wpage .ptag.okt { background: #10331f; color: #5fe6a8; border: 1px solid #2e7d54; }
+  .wpage .ptag.badt { background: #3a1710; color: #ff9a7a; border: 1px solid #a3492f; }
+  .wreck-note { margin-top: 14px; color: var(--muted); font: 600 14px/1.6 var(--mono); }
+
+  /* ===== S3 方案总览 ===== */
+  .flow { display: flex; align-items: stretch; gap: 14px; margin-top: 74px; }
+  .flow i.arr { align-self: center; color: var(--blue); font-style: normal; font-weight: 800; font-size: 30px; flex: none; }
+  .flow-step {
+    flex: 1 1 0; min-width: 0;
+    border: 1px solid var(--line-strong); border-top: 4px solid var(--fc, var(--blue));
+    border-radius: 14px; background: rgba(10, 14, 28, .88);
+    padding: 22px 18px 20px; text-align: center;
+  }
+  .flow-step small { display: block; font: 750 13.5px/1.4 var(--mono); letter-spacing: .1em; color: var(--fc, var(--blue)); }
+  .flow-step b { display: block; margin-top: 10px; font-size: 23px; font-weight: 800; line-height: 1.3; }
+  .flow-step span { display: block; margin-top: 8px; color: var(--muted); font-size: 15.5px; line-height: 1.55; }
+  .flow-step.gold { --fc: var(--gold); }
+  .flow-step.warm { --fc: var(--warm); }
+  .flow-step.green { --fc: var(--green); }
+  .flow-chips { display: flex; gap: 16px; justify-content: center; margin-top: 60px; }
+
+  /* ===== S4 引擎原理 ===== */
+  .engine-grid { display: grid; grid-template-columns: 46fr 54fr; gap: 54px; margin-top: 40px; align-items: start; }
+  .page-schema { border: 1px solid var(--line-strong); border-radius: 14px; background: #f4f6fb; padding: 26px 24px; display: flex; flex-direction: column; gap: 10px; position: relative; }
+  .page-schema .zone { border-radius: 8px; padding: 9px 12px; font: 700 14px/1.4 var(--mono); }
+  .page-schema .zt { background: rgba(111, 157, 255, .18); border: 1.5px solid #5f83d6; color: #2c4a94; }
+  .page-schema .zf { background: rgba(243, 201, 107, .22); border: 1.5px dashed #c19a3d; color: #7a5c12; }
+  .page-schema .zg { background: rgba(255, 143, 107, .16); border: 1.5px solid #d2643e; color: #93340f; min-height: 104px; display: flex; align-items: center; }
+  .page-schema .zr { background: rgba(150, 120, 220, .16); border: 1.5px solid #7f63c4; color: #4a3391; }
+  .page-schema .zcols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .schema-legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 16px; }
+  .schema-legend span { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font: 650 15px/1.5 var(--mono); }
+  .schema-legend i { width: 14px; height: 14px; border-radius: 4px; }
+  .schema-legend .lt { background: #5f83d6; } .schema-legend .lf { background: #c19a3d; } .schema-legend .lg { background: #d2643e; } .schema-legend .lr { background: #7f63c4; }
+  .engine-points { display: flex; flex-direction: column; gap: 16px; }
+  .engine-point { border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: 12px; background: var(--panel); padding: 18px 22px; }
+  .engine-point b { display: block; font-size: 22px; font-weight: 780; }
+  .engine-point span { display: block; margin-top: 5px; color: var(--muted); font-size: 17px; line-height: 1.6; }
+  .engine-point.gold { border-left-color: var(--gold); }
+  .engine-point.warm { border-left-color: var(--warm); }
+  .engine-point.green { border-left-color: var(--green); }
+
+  /* ===== 对比页（S5/S6） ===== */
+  .cmp-layout { display: grid; grid-template-columns: 340px 1fr; gap: 40px; margin-top: 30px; align-items: start; }
+  .cmp-info { display: flex; flex-direction: column; gap: 14px; }
+  .cmp-info .chip { align-self: flex-start; font-size: 15.5px; padding: 6px 14px; }
+  .cmp-point { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 15px 18px; }
+  .cmp-point b { display: block; font-size: 18.5px; font-weight: 780; }
+  .cmp-point span { display: block; margin-top: 4px; color: var(--muted); font-size: 15px; line-height: 1.55; }
+  .cmp-pages { display: flex; gap: 26px; justify-content: center; }
+  .cmp-pages figure { margin: 0; position: relative; border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; background: #fff; box-shadow: 0 24px 70px rgba(0, 0, 0, .5); }
+  .cmp-pages img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+  .cmp-pages figure { width: 494px; height: 700px; }
+  .cmp-pages .ftag { position: absolute; top: 12px; left: 12px; padding: 4px 13px; border-radius: 999px; font: 750 14px/1.6 var(--mono); letter-spacing: .06em; background: rgba(10, 14, 28, .88); z-index: 2; }
+  .cmp-pages .ftag.en { color: var(--blue-soft); border: 1px solid rgba(111, 157, 255, .6); }
+  .cmp-pages .ftag.zh { color: var(--warm); border: 1px solid rgba(255, 143, 107, .6); }
+  .cmp-vs { align-self: center; font: 850 26px/1 var(--mono); color: var(--muted); letter-spacing: .1em; }
+
+  /* ===== S7 局部放大 ===== */
+  .crops3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 22px; margin-top: 32px; }
+  .crop-card { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); overflow: hidden; }
+  .crop-card .ch { padding: 13px 18px 11px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .crop-card .ch b { font-size: 19px; }
+  .crop-card .ch span { font: 650 12.5px/1.5 var(--mono); color: var(--muted); white-space: nowrap; }
+  .crop-card .cr { position: relative; background: #fff; }
+  .crop-card .cr + .cr { border-top: 1px solid var(--line); }
+  .crop-card .cr img { width: 100%; height: 208px; object-fit: contain; background: #fff; }
+  .crop-card .cr .rtag { position: absolute; top: 8px; left: 8px; padding: 2px 10px; border-radius: 999px; font: 750 12px/1.6 var(--mono); background: rgba(10, 14, 28, .85); z-index: 2; }
+  .crop-card .cr .rtag.en { color: var(--blue-soft); border: 1px solid rgba(111, 157, 255, .55); }
+  .crop-card .cr .rtag.zh { color: var(--warm); border: 1px solid rgba(255, 143, 107, .55); }
+  .crop-card .cf { padding: 10px 18px; border-top: 1px solid var(--line); color: var(--muted); font: 600 13.5px/1.6 var(--mono); }
+  .crop-card .cf b { color: var(--gold); }
+  .license-line { margin-top: 22px; color: var(--muted); font-size: 16px; border-left: 3px solid var(--gold); padding-left: 14px; line-height: 1.7; }
+  .license-line b { color: var(--gold); }
+
+  /* ===== S8 QA ===== */
+  .qa-grid { display: grid; grid-template-columns: 46fr 54fr; gap: 46px; margin-top: 38px; align-items: start; }
+  .qa-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .qa-card { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 20px 22px; }
+  .qa-card small { font: 750 13px/1.4 var(--mono); letter-spacing: .12em; color: var(--blue); }
+  .qa-card b { display: block; margin-top: 8px; font-size: 22px; font-weight: 800; }
+  .qa-card span { display: block; margin-top: 6px; color: var(--muted); font-size: 15.5px; line-height: 1.55; }
+  .qa-loop { border: 1px solid var(--line-strong); border-radius: 16px; background: rgba(10, 14, 28, .8); padding: 26px 28px; }
+  .qa-loop .ql-title { font: 700 15px/1.5 var(--mono); letter-spacing: .14em; color: var(--gold); text-transform: uppercase; }
+  .loop-flow { display: flex; align-items: center; gap: 12px; margin-top: 22px; }
+  .loop-node { flex: 1; border: 1.5px solid var(--fc, var(--blue)); border-radius: 12px; padding: 14px 10px; text-align: center; }
+  .loop-node b { display: block; font-size: 19px; font-weight: 800; color: var(--fc, var(--blue)); }
+  .loop-node span { display: block; margin-top: 4px; color: var(--muted); font: 600 12.5px/1.4 var(--mono); }
+  .loop-node.gold { --fc: var(--gold); } .loop-node.green { --fc: var(--green); }
+  .loop-flow i { color: var(--muted); font-style: normal; font-weight: 800; font-size: 22px; flex: none; }
+  .loop-back { margin-top: 12px; text-align: center; color: var(--muted); font: 650 14.5px/1.6 var(--mono); }
+  .loop-back b { color: var(--gold); }
+  .qa-rules { margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
+  .qa-rules li { list-style: none; position: relative; padding-left: 22px; color: var(--muted); font-size: 17px; line-height: 1.6; }
+  .qa-rules li::before { content: "▸"; position: absolute; left: 0; color: var(--gold); }
+  .qa-rules b { color: var(--ink); }
+
+  /* ===== S9/S10 双模式 ===== */
+  .mode-layout { display: grid; grid-template-columns: 48fr 52fr; gap: 50px; margin-top: 36px; align-items: start; }
+  .mode-list { display: flex; flex-direction: column; gap: 15px; }
+  .mode-row { display: flex; gap: 18px; align-items: flex-start; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 19px 22px; }
+  .mode-row i { flex: none; display: grid; place-items: center; width: 46px; height: 46px; border: 1px solid var(--mc, var(--blue)); border-radius: 11px; color: var(--mc, var(--blue)); font: 800 17px/1 var(--mono); font-style: normal; }
+  .mode-row b { display: block; font-size: 21.5px; font-weight: 780; }
+  .mode-row span { display: block; margin-top: 4px; color: var(--muted); font-size: 16.5px; line-height: 1.55; }
+  .mode-row.warm { --mc: var(--warm); }
+  .mode-shell { border: 1px solid var(--line-strong); border-radius: 14px; overflow: hidden; background: var(--panel2); box-shadow: 0 26px 76px rgba(0, 0, 0, .5); }
+  .shell-bar { display: flex; gap: 8px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); background: rgba(8, 12, 24, .85); }
+  .shell-bar i { width: 11px; height: 11px; border-radius: 50%; background: #2d3a52; }
+  .shell-bar i:nth-child(1) { background: #ff5f57; } .shell-bar i:nth-child(2) { background: #febc2e; } .shell-bar i:nth-child(3) { background: #28c840; }
+  .shell-bar span { margin-left: 8px; font: 600 14px/1.2 var(--mono); color: var(--muted); }
+  .dualpane { display: grid; grid-template-columns: 1fr 3px 1fr; min-height: 430px; }
+  .dualpane .divider { background: var(--blue); box-shadow: 0 0 10px rgba(111, 157, 255, .8); }
+  .dualpane .pg { padding: 26px 24px; display: flex; flex-direction: column; gap: 12px; }
+  .dualpane .pg i { display: block; height: 9px; border-radius: 4px; background: rgba(152, 165, 200, .3); }
+  .dualpane .pg i.w60 { width: 60%; } .dualpane .pg i.w85 { width: 85%; } .dualpane .pg i.w75 { width: 75%; }
+  .dualpane .pg i.fx-box { height: 44px; border: 1.5px dashed rgba(243, 201, 107, .6); background: rgba(243, 201, 107, .07); }
+  .dualpane .pg.zh i { background: rgba(255, 143, 107, .34); }
+  .dualpane .pg .pg-tag { align-self: flex-start; font: 700 13px/1.7 var(--mono); padding: 1px 10px; border-radius: 6px; }
+  .dualpane .pg.en .pg-tag { color: var(--blue-soft); border: 1px solid rgba(111, 157, 255, .5); background: none; }
+  .dualpane .pg.zh .pg-tag { color: var(--warm); border: 1px solid rgba(255, 143, 107, .5); background: none; }
+  .shell-note { padding: 11px 16px; border-top: 1px solid var(--line); color: var(--muted); font: 600 13.5px/1.6 var(--mono); }
+  .term-feed { padding: 22px 26px; font: 600 17px/2.05 var(--mono); color: var(--muted); min-height: 430px; }
+  .term-feed .cmd { color: var(--ink); }
+  .term-feed .cmd::before { content: "> "; color: var(--warm); }
+  .term-feed .ok { color: var(--green); }
+  .term-feed b { color: var(--blue-soft); font-weight: 700; }
+
+  /* ===== S11 基准 ===== */
+  .bench-grid { display: grid; grid-template-columns: 40fr 60fr; gap: 46px; margin-top: 36px; align-items: start; }
+  .bench-stat { border: 1px solid var(--line-strong); border-radius: 16px; background: rgba(10, 14, 28, .8); padding: 26px 28px; }
+  .bench-stat .big { font: 800 74px/1 var(--mono); color: var(--blue-soft); }
+  .bench-stat .big i { font-style: normal; font-size: 30px; color: var(--muted); }
+  .bench-stat p { margin-top: 12px; color: var(--muted); font-size: 18px; line-height: 1.65; }
+  .bench-stat p b { color: var(--ink); }
+  .axes { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 9px; }
+  .axes span { padding: 5px 13px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: 650 14px/1.5 var(--mono); }
+  .paper-cloud { display: flex; flex-wrap: wrap; gap: 10px; align-content: flex-start; }
+  .paper-cloud span { padding: 8px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); font: 650 16.5px/1.5 var(--mono); }
+  .paper-cloud span.wm { border-color: rgba(255, 143, 107, .45); color: var(--warm); }
+  .cloud-legend { margin-top: 18px; color: var(--muted); font: 600 15px/1.6 var(--mono); }
+  .cloud-legend b { color: var(--warm); }
+
+  /* ===== S12 数字 ===== */
+  .num-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px; margin-top: 52px; }
+  .num { border: 1px solid var(--line); border-left: 4px solid rgba(111, 157, 255, .5); border-radius: 14px; background: var(--panel); padding: 30px 30px 26px; }
+  .num.gold { border-left-color: rgba(243, 201, 107, .6); }
+  .num b { display: block; font: 800 64px/1 var(--mono); color: var(--blue-soft); font-variant-numeric: tabular-nums; }
+  .num.gold b { color: var(--gold); }
+  .num span { display: block; margin-top: 12px; color: var(--muted); font-size: 18px; line-height: 1.55; }
+  .num-caveat { margin-top: 34px; color: var(--muted); font-size: 16.5px; border-left: 3px solid var(--gold); padding-left: 14px; line-height: 1.7; }
+  .num-caveat b { color: var(--gold); }
+
+  /* ===== S13 快速开始 ===== */
+  .qs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 40px; }
+  .qs-card { border: 1px solid var(--line-strong); border-radius: 16px; background: var(--panel); padding: 26px 28px; }
+  .qs-card .qk { font: 800 14px/1.5 var(--mono); letter-spacing: .16em; color: var(--blue); }
+  .qs-card.warm .qk { color: var(--warm); }
+  .qs-card h3 { margin-top: 8px; font-size: 27px; font-weight: 800; }
+  .qs-card pre { margin-top: 18px; background: #090d1b; border: 1px solid var(--line); border-radius: 12px; padding: 20px 24px; overflow: hidden; font: 600 16.5px/1.95 var(--mono); color: var(--ink); }
+  .qs-card pre .c { color: var(--muted); }
+  .qs-card .qnote { margin-top: 14px; color: var(--muted); font-size: 16px; line-height: 1.65; }
+  .qs-card .qnote b { color: var(--ink); }
+
+  /* ===== S14 Roadmap ===== */
+  .road-list { display: flex; flex-direction: column; gap: 16px; margin-top: 40px; max-width: 1500px; }
+  .road-item { display: grid; grid-template-columns: 120px 1fr; gap: 24px; align-items: center; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 20px 26px; }
+  .road-item .rno { font: 800 21px/1 var(--mono); color: var(--fc, var(--blue)); border: 1.5px solid var(--fc, var(--blue)); border-radius: 10px; padding: 12px 0; text-align: center; }
+  .road-item.gold { --fc: var(--gold); } .road-item.warm { --fc: var(--warm); } .road-item.green { --fc: var(--green); }
+  .road-item b { display: block; font-size: 23px; font-weight: 780; }
+  .road-item span { display: block; margin-top: 4px; color: var(--muted); font-size: 17px; line-height: 1.55; }
+  .road-note { margin-top: 26px; color: var(--muted); font-size: 17px; }
+  .road-note b { color: var(--ink); }
+
+  /* ===== S15 结尾 ===== */
+  .end-wrap { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 100px; }
+  .end-wrap .eyebrow { font-size: 22px; }
+  .end-repo { margin-top: 34px; font: 800 74px/1.15 var(--mono); letter-spacing: -.02em; color: var(--ink); word-break: break-all; }
+  .end-repo b { background: linear-gradient(92deg, var(--blue), var(--blue-soft) 55%, var(--warm)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .end-slogan { margin-top: 26px; color: var(--muted); font-size: 27px; line-height: 1.6; }
+  .end-slogan b { color: var(--ink); }
+  .end-chips { display: flex; gap: 16px; margin-top: 42px; }
+  .end-fine { margin-top: 40px; color: var(--muted); font: 600 16px/1.7 var(--mono); }
+  .end-fine a { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+
+  /* ===== HUD（视口固定，不随画布缩放） ===== */
+  .hud-progress { position: fixed; z-index: 101; left: 0; top: 0; height: 3px; width: 0; background: linear-gradient(90deg, var(--blue), var(--gold), var(--warm)); box-shadow: 0 0 14px var(--blue); transition: width .35s var(--ease); }
+  .hud-dots {
+    position: fixed; z-index: 101; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: flex; gap: 9px; align-items: center;
+    padding: 9px 14px; border: 1px solid var(--line); border-radius: 999px;
+    background: rgba(10, 14, 28, .82); backdrop-filter: blur(8px);
+  }
+  .hud-dots button {
+    width: 10px; height: 10px; border-radius: 999px; border: none; cursor: pointer; padding: 0;
+    background: rgba(152, 165, 200, .35); transition: background .25s, width .25s;
+  }
+  .hud-dots button:hover { background: rgba(158, 195, 255, .8); }
+  .hud-dots button.on { width: 26px; background: var(--blue); box-shadow: 0 0 10px rgba(111, 157, 255, .7); }
+  .hud-right {
+    position: fixed; z-index: 101; right: 18px; bottom: 14px;
+    display: flex; gap: 8px; align-items: center;
+  }
+  .hud-right .count { color: var(--muted); font: 700 13px/1 var(--mono); letter-spacing: .08em; margin-right: 4px; }
+  .hud-btn {
+    width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+    border: 1px solid var(--line); background: rgba(10, 14, 28, .82); color: var(--muted);
+    display: grid; place-items: center; transition: color .2s, border-color .2s;
+  }
+  .hud-btn:hover { color: var(--blue); border-color: var(--blue); }
+  .hud-btn svg { width: 16px; height: 16px; }
+  .hud-home { position: fixed; z-index: 101; left: 18px; bottom: 14px; color: var(--muted); font: 700 13px/1 var(--mono); letter-spacing: .06em; padding: 10px 14px; border: 1px solid var(--line); border-radius: 9px; background: rgba(10, 14, 28, .82); transition: color .2s, border-color .2s; }
+  .hud-home:hover { color: var(--blue); border-color: var(--blue); }
+  @media (max-width: 640px) { .hud-home { display: none; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .slide { transition: opacity .2s ease; transform: none; }
+    .slide.leaving { transform: none; }
+    .frame-bar em::before { animation: none; }
+  }
+</style>
+<noscript>
+<style>
+  html, body { overflow: auto; height: auto; }
+  .stage { position: static; width: auto; height: auto; transform: none; }
+  .slide { position: static; opacity: 1; visibility: visible; transform: none; padding: 40px 24px; overflow: visible; }
+  .footer-line { position: static; margin-top: 30px; }
+  .hud-dots, .hud-right, .hud-progress { display: none; }
+  .cover-frame, .cover-chips { position: static; width: auto; margin-top: 24px; }
+</style>
+</noscript>
+</head>
+<body>
+
+<div class="stage" id="stage">
+  <div class="grid-field" aria-hidden="true"></div>
+
+  <!-- S1 封面 -->
+  <section class="slide cover active" data-title="封面">
+    <div class="cover-copy">
+      <div class="brand-row">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="8" y="6" width="48" height="52" rx="8" fill="none" stroke="#6f9dff" stroke-width="2.6"/>
+          <line x1="32" y1="10" x2="32" y2="54" stroke="#6f9dff" stroke-width="2" stroke-dasharray="3 4" opacity=".8"/>
+          <line x1="14" y1="18" x2="27" y2="18" stroke="#9ec3ff" stroke-width="2.6" stroke-linecap="round"/>
+          <line x1="14" y1="27" x2="25" y2="27" stroke="#9ec3ff" stroke-width="2.6" stroke-linecap="round" opacity=".7"/>
+          <line x1="14" y1="36" x2="27" y2="36" stroke="#9ec3ff" stroke-width="2.6" stroke-linecap="round" opacity=".45"/>
+          <line x1="37" y1="18" x2="50" y2="18" stroke="#ff8f6b" stroke-width="2.6" stroke-linecap="round"/>
+          <line x1="37" y1="27" x2="48" y2="27" stroke="#ff8f6b" stroke-width="2.6" stroke-linecap="round" opacity=".7"/>
+          <line x1="37" y1="36" x2="50" y2="36" stroke="#ff8f6b" stroke-width="2.6" stroke-linecap="round" opacity=".45"/>
+          <rect x="14" y="43" width="36" height="8" rx="2" fill="none" stroke="#f3c96b" stroke-width="2" opacity=".85"/>
+        </svg>
+        <span><span class="mono">SUPERTRANSLATE</span><small>OPEN SOURCE · AGPL-3.0 · asimfish/super_translate</small></span>
+      </div>
+      <h1>英文论文<br><b>原版式</b>读中文</h1>
+      <p class="cover-lead">公式 <span class="warm">·</span> 图表 <span class="warm">·</span> 双栏排版 <span class="gold">零破坏</span></p>
+      <p class="cover-sub">保版式学术论文 PDF 翻译系统（英→中）：对象级保护 + LLM 翻译 + 可机读 QA 审计，Web 部署与 Agent Skill 双模式。</p>
+    </div>
+    <div class="cover-chips">
+      <span class="chip gold-chip">75/75 页 QA 通过</span>
+      <span class="chip">30 篇基准论文</span>
+      <span class="chip">1855 个测试用例</span>
+      <span class="chip warm-chip">Web + Skill 双模式</span>
+    </div>
+    <aside class="cover-frame">
+      <div class="frame-bar"><i></i><i></i><i></i><span>qwen_robotworld · p1</span><em>LIVE</em></div>
+      <div class="frame-view" data-ph="assets/comparison/qwen_robotworld/hero.gif">
+        <img src="assets/comparison/qwen_robotworld/hero.gif" alt="Qwen-RobotWorld 第 1 页原文与译文轮播" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+      </div>
+      <div class="frame-foot"><span><b>原文 ↔ 译文</b> 自动轮播</span><span class="mono">CC BY 4.0</span></div>
+    </aside>
+    <div class="footer-line"><span>SuperTranslate · 项目介绍</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S2 痛点 -->
+  <section class="slide" data-title="痛点">
+    <span class="eyebrow warm">Problem · 痛点</span>
+    <h2 class="s-title">读英文论文，卡在哪里？</h2>
+    <div class="pain-grid">
+      <div class="pain-list">
+        <div class="pain-item"><i>01</i><div><b>精读一篇英文论文动辄半天</b><span>术语查证、来回翻词典打断思路；中文母语者读中文的速度远快于读英文。</span></div></div>
+        <div class="pain-item"><i>02</i><div><b>网页翻译丢公式、丢版式</b><span>复制进翻译器就变纯文本：公式成乱码、图表全丢，只能对着两个窗口来回跳。</span></div></div>
+        <div class="pain-item"><i>03</i><div><b>常见 PDF 翻译工具破坏排版</b><span>公式错乱、图表错位、双栏变单栏、引用编号被改写——版式一坏，读起来比原文还累。</span></div></div>
+        <div class="pain-item"><i>04</i><div><b>翻完没有质检</b><span>漏翻、错改数字全靠肉眼发现；没有证据，不敢把译文当作可依赖的阅读版本。</span></div></div>
+      </div>
+      <div class="wreck">
+        <div class="wreck-title">典型翻车现场（示意，非特定产品截图）</div>
+        <div class="wreck-pages">
+          <div class="wpage"><span class="ptag okt">原文</span><i></i><i class="short"></i><i class="formula"></i><div class="cols"><span><i></i><i></i><i class="short"></i></span><span><i></i><i class="short"></i><i></i></span></div><i class="fig"></i><i class="short"></i></div>
+          <div class="wpage bad"><span class="ptag badt">翻译后</span><i></i><i class="short"></i><i class="formula"></i><div class="cols"><span><i></i><i></i><i class="short"></i></span><span><i class="overlap"></i><i class="short"></i><i></i></span></div><i class="fig"></i><i class="short"></i></div>
+        </div>
+        <p class="wreck-note">公式挤出边界 · 双栏并成一栏 · 图表漂移遮挡正文</p>
+      </div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 痛点</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S3 方案总览 -->
+  <section class="slide" data-title="方案总览">
+    <span class="eyebrow">Solution · 方案总览</span>
+    <h2 class="s-title">翻译是流水线，<b>版式是契约</b></h2>
+    <p class="s-sub">从 PDF 进、到双 PDF 出，每一步都有确定性的检查点。</p>
+    <div class="flow">
+      <div class="flow-step"><small>PARSE</small><b>对象解析</b><span>逐块识别正文 / 公式 / 图表 / 表格 / 引用</span></div>
+      <i class="arr">→</i>
+      <div class="flow-step gold"><small>FREEZE</small><b>保护区冻结</b><span>公式、图内文字、表格、引用编号原样锁定</span></div>
+      <i class="arr">→</i>
+      <div class="flow-step"><small>TRANSLATE</small><b>LLM 翻译</b><span>正文分块翻译，注入 1000+ 顶会术语提示</span></div>
+      <i class="arr">→</i>
+      <div class="flow-step warm"><small>REFILL</small><b>原位回填</b><span>按原坐标写回，CJK 字体子集嵌入</span></div>
+      <i class="arr">→</i>
+      <div class="flow-step gold"><small>AUDIT</small><b>对象级 QA</b><span>漏翻 / 保护区 / 版面 / 术语四类检测</span></div>
+      <i class="arr">→</i>
+      <div class="flow-step green"><small>DELIVER</small><b>双 PDF 交付</b><span>纯中文 _zh.pdf + 双语对照 _dual.pdf + qa.json</span></div>
+    </div>
+    <div class="flow-chips">
+      <span class="chip">确定性质量环：分数严格改善才替换</span>
+      <span class="chip gold-chip">任务崩溃可恢复 · 缓存可重放</span>
+      <span class="chip warm-chip">全程留证据：每个数字可追溯</span>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 方案总览</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S4 引擎原理 -->
+  <section class="slide" data-title="保版式引擎">
+    <span class="eyebrow">Engine · 保版式引擎原理</span>
+    <h2 class="s-title">逐对象分类，<b>该动的才动</b></h2>
+    <div class="engine-grid">
+      <div>
+        <div class="page-schema" aria-label="页面对象分类示意">
+          <div class="zone zt">正文段落 → 翻译后原坐标回填</div>
+          <div class="zone zf">公式 Attention(Q,K,V) = softmax(QKᵀ/√d)V → 冻结</div>
+          <div class="zcols">
+            <div class="zone zt">左栏正文 → 栏宽不变</div>
+            <div class="zone zt">右栏正文 → 栏宽不变</div>
+          </div>
+          <div class="zone zg">图 / 矢量图形 / 图内文字 → 冻结（图注翻译）</div>
+          <div class="zone zr">参考文献 [1][2][3] → 编号与格式冻结</div>
+        </div>
+        <div class="schema-legend">
+          <span><i class="lt"></i>可翻译文本</span>
+          <span><i class="lf"></i>公式保护区</span>
+          <span><i class="lg"></i>图形保护区</span>
+          <span><i class="lr"></i>引用保护区</span>
+        </div>
+      </div>
+      <div class="engine-points">
+        <div class="engine-point"><b>不是整页重排，是逐对象手术</b><span>页尺寸、图片、矢量图形一个字节不动；只有确认为可翻译的文本块被替换。</span></div>
+        <div class="engine-point gold"><b>公式、表格、算法伪代码零改动</b><span>连实验数字被意外改写都会被 QA 查出来——保护区是审计对象，不是尽力而为。</span></div>
+        <div class="engine-point warm"><b>译文回填自适应</b><span>控制字符清理、图注压缩、重叠检查兜底；CJK 字体子集嵌入，产物体积可控。</span></div>
+        <div class="engine-point green"><b>模板版式可学习</b><span>ACM / IEEE / Springer / ACL 等版式画像可从代表性 PDF 学习复用。</span></div>
+      </div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 保版式引擎</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S5 效果对比 1 -->
+  <section class="slide" data-title="效果对比 · Qwen-RobotWorld">
+    <span class="eyebrow gold">Evidence 1 / 3 · 整页对比</span>
+    <h2 class="s-title">Qwen-RobotWorld Technical Report</h2>
+    <div class="cmp-layout">
+      <div class="cmp-info">
+        <span class="chip">CC BY 4.0 · 25 页技术报告</span>
+        <div class="cmp-point"><b>第 1 页 · 门面页</b><span>标题、摘要、管线彩图：品牌元素、超链接、arXiv 侧边栏完整保留。</span></div>
+        <div class="cmp-point"><b>为什么难</b><span>图文混排 + 行内数学符号（s_t、a_t、s_{t+1}）夹在正文里，既要翻对、又不能碰坏。</span></div>
+        <div class="cmp-point"><b>看什么</b><span>左右页逐块对位：标题层级、段落栏宽、彩图位置分毫不差。</span></div>
+      </div>
+      <div class="cmp-pages">
+        <figure data-ph="assets/comparison/qwen_robotworld/original_p1.png">
+          <span class="ftag en">EN 原文</span>
+          <img src="assets/comparison/qwen_robotworld/original_p1.png" alt="Qwen-RobotWorld 第 1 页原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </figure>
+        <span class="cmp-vs">VS</span>
+        <figure data-ph="assets/comparison/qwen_robotworld/ours_p1.png">
+          <span class="ftag zh">ZH 译文</span>
+          <img src="assets/comparison/qwen_robotworld/ours_p1.png" alt="Qwen-RobotWorld 第 1 页译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </figure>
+      </div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 效果对比 1/3</span><span>主页可拖动分割线逐像素对比</span></div>
+  </section>
+
+  <!-- S6 效果对比 2 -->
+  <section class="slide" data-title="效果对比 · Cosmos 长文">
+    <span class="eyebrow gold">Evidence 2 / 3 · 长文档深处</span>
+    <h2 class="s-title">Cosmos：75 页第 34 页，质量不衰减</h2>
+    <div class="cmp-layout">
+      <div class="cmp-info">
+        <span class="chip">CC BY 4.0 · NVIDIA 75 页技术报告</span>
+        <div class="cmp-point"><b>第 34 页 · 文档深处</b><span>图 17 视频帧网格（4B/12B/5B/13B 四行）+ Prompt 说明文字翻译 + 加粗图注。</span></div>
+        <div class="cmp-point"><b>为什么难</b><span>超长文档的后段是质量重灾区：上下文漂移、版面积累误差都会在这里爆发。</span></div>
+        <div class="cmp-point"><b>结果</b><span>全篇正式 QA：75/75 页通过，793 个审计对象，0 issue。</span></div>
+        <span class="chip gold-chip">QA 75/75 · 0 issue</span>
+      </div>
+      <div class="cmp-pages">
+        <figure data-ph="assets/comparison/cosmos/original_p34.png">
+          <span class="ftag en">EN 原文 · p34</span>
+          <img src="assets/comparison/cosmos/original_p34.png" alt="Cosmos 第 34 页原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </figure>
+        <span class="cmp-vs">VS</span>
+        <figure data-ph="assets/comparison/cosmos/ours_p34.png">
+          <span class="ftag zh">ZH 译文 · p34</span>
+          <img src="assets/comparison/cosmos/ours_p34.png" alt="Cosmos 第 34 页译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </figure>
+      </div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 效果对比 2/3</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S7 效果对比 3 局部放大 -->
+  <section class="slide" data-title="效果对比 · 局部放大">
+    <span class="eyebrow gold">Evidence 3 / 3 · 局部放大</span>
+    <h2 class="s-title">经典论文，只看最难的细节</h2>
+    <div class="crops3">
+      <div class="crop-card">
+        <div class="ch"><b>Attention · 公式</b><span>p4 · 240dpi</span></div>
+        <div class="cr" data-ph="assets/comparison/attention/crop_formula_original.png">
+          <span class="rtag en">EN</span>
+          <img src="assets/comparison/attention/crop_formula_original.png" alt="Attention 公式原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="cr" data-ph="assets/comparison/attention/crop_formula_ours.png">
+          <span class="rtag zh">ZH</span>
+          <img src="assets/comparison/attention/crop_formula_ours.png" alt="Attention 公式译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="cf">公式 (1) 原样 · 15 页全篇 <b>0 error</b> · visual 0.9041</div>
+      </div>
+      <div class="crop-card">
+        <div class="ch"><b>Attention · 结构图</b><span>p4 · 240dpi</span></div>
+        <div class="cr" data-ph="assets/comparison/attention/crop_figure_original.png">
+          <span class="rtag en">EN</span>
+          <img src="assets/comparison/attention/crop_figure_original.png" alt="Attention 图 2 原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="cr" data-ph="assets/comparison/attention/crop_figure_ours.png">
+          <span class="rtag zh">ZH</span>
+          <img src="assets/comparison/attention/crop_figure_ours.png" alt="Attention 图 2 译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="cf">图内冻结，<b>图注翻译</b>且位置不动</div>
+      </div>
+      <div class="crop-card">
+        <div class="ch"><b>ResNet · 双栏首屏</b><span>p1 · 240dpi</span></div>
+        <div class="cr" data-ph="assets/comparison/resnet/crop_twocol_original.png">
+          <span class="rtag en">EN</span>
+          <img src="assets/comparison/resnet/crop_twocol_original.png" alt="ResNet 双栏首屏原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="cr" data-ph="assets/comparison/resnet/crop_twocol_ours.png">
+          <span class="rtag zh">ZH</span>
+          <img src="assets/comparison/resnet/crop_twocol_ours.png" alt="ResNet 双栏首屏译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="cf">CVPR 双栏 · 12 页全篇 <b>0 error</b> · visual 0.8621</div>
+      </div>
+    </div>
+    <p class="license-line"><b>遵守论文许可：</b>Attention / ResNet 为 arXiv 非独占许可（非 CC），按政策仅展示小幅局部对比与聚合指标；完整页展示仅用 CC BY 4.0 论文。</p>
+    <div class="footer-line"><span>SuperTranslate · 效果对比 3/3</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S8 QA 体系 -->
+  <section class="slide" data-title="QA 体系">
+    <span class="eyebrow">Quality · QA 体系</span>
+    <h2 class="s-title">不只翻译，<b>还要留下证据</b></h2>
+    <div class="qa-grid">
+      <div class="qa-cards">
+        <div class="qa-card"><small>DETECT 1</small><b>漏翻检测</b><span>正文、图注、公式说明、图框内多行说明仍是英文即标记。</span></div>
+        <div class="qa-card"><small>DETECT 2</small><b>保护区检测</b><span>表格、伪代码、参考文献被意外改动——连实验数字被篡改都报错。</span></div>
+        <div class="qa-card"><small>DETECT 3</small><b>版面检测</b><span>文本重叠、图片丢失、空白页、公式裁切，加视觉回归比对。</span></div>
+        <div class="qa-card"><small>DETECT 4</small><b>术语一致性</b><span>1000+ 顶会术语表注入提示词，译后审计是否使用标准译法。</span></div>
+      </div>
+      <div>
+        <div class="qa-loop">
+          <div class="ql-title">确定性质量环</div>
+          <div class="loop-flow">
+            <div class="loop-node"><b>翻译</b><span>mono + dual</span></div>
+            <i>→</i>
+            <div class="loop-node gold"><b>全量检测</b><span>4 类 detector</span></div>
+            <i>→</i>
+            <div class="loop-node"><b>定向修复</b><span>有界 · 快照</span></div>
+            <i>→</i>
+            <div class="loop-node green"><b>复检</b><span>直至干净</span></div>
+          </div>
+          <p class="loop-back">↺ 仅当错误分<b>严格下降</b>才替换产物，否则回滚快照 · 全程写入 *.qa.json</p>
+        </div>
+        <ul class="qa-rules">
+          <li><b>Golden pages 回归</b>：字体 / 平台变体的金样页面锁定既有质量</li>
+          <li><b>1855 个自动化测试用例</b>：聚焦 PDF fixture 逐类锁定缺陷</li>
+          <li><b>基准门控</b>：30 篇论文批次跑 translate → evaluate → gate 三段脚本</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · QA 体系</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S9 Web 模式 -->
+  <section class="slide" data-title="双模式 · Web">
+    <span class="eyebrow">Mode 1 / 2 · Web 部署</span>
+    <h2 class="s-title">浏览器里的论文翻译工作台</h2>
+    <div class="mode-layout">
+      <div class="mode-list">
+        <div class="mode-row"><i>UP</i><div><b>拖拽上传，批量排队</b><span>单文件 100MB，分块断点续传；实时进度条与逐步日志。</span></div></div>
+        <div class="mode-row"><i>KEY</i><div><b>每个账号自己的 API key</b><span>AES-GCM 加密落盘，不进日志、不回传浏览器。</span></div></div>
+        <div class="mode-row"><i>READ</i><div><b>双栏对照阅读</b><span>原文 / 译文同步滚动，分割线可拖；_zh 与 _dual 双 PDF 下载。</span></div></div>
+        <div class="mode-row"><i>OPS</i><div><b>一条命令起服务</b><span>docker compose up -d --build；OCR 扫描件、飞书通知、崩溃恢复内置。</span></div></div>
+      </div>
+      <div class="mode-shell">
+        <div class="shell-bar"><i></i><i></i><i></i><span>http://localhost:8001 · 双栏对照阅读</span></div>
+        <div class="dualpane">
+          <div class="pg en"><span class="pg-tag">EN 原文</span><i class="w85"></i><i></i><i class="w75"></i><i class="fx-box"></i><i class="w60"></i><i></i><i class="w85"></i><i class="w75"></i></div>
+          <div class="divider"></div>
+          <div class="pg zh"><span class="pg-tag">ZH 译文</span><i class="w85"></i><i></i><i class="w75"></i><i class="fx-box"></i><i class="w60"></i><i></i><i class="w85"></i><i class="w75"></i></div>
+        </div>
+        <div class="shell-note">示意：虚线框为公式保护区（原样保留）· 左右同步滚动 · 分割线可拖</div>
+      </div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · Web 模式</span><span>适合实验室 / 课题组共用一台服务器</span></div>
+  </section>
+
+  <!-- S10 Skill 模式 -->
+  <section class="slide" data-title="双模式 · Skill">
+    <span class="eyebrow warm">Mode 2 / 2 · Agent Skill</span>
+    <h2 class="s-title">在 Claude Code / Cursor 里<b>一句话翻译</b></h2>
+    <div class="mode-layout">
+      <div class="mode-list">
+        <div class="mode-row warm"><i>USE</i><div><b>链接进技能目录即用</b><span>skills/paper-translate 软链到 ~/.claude/skills 或项目 .cursor/skills。</span></div></div>
+        <div class="mode-row warm"><i>SOP</i><div><b>QA 门槛内置于 SOP</b><span>零错误 + 视觉分达标才算完成；不达标就继续修复或如实报告。</span></div></div>
+        <div class="mode-row warm"><i>REP</i><div><b>确定性可复现</b><span>翻译缓存可 cache-only 重放；基准批次自带 translate / evaluate / gate 门控。</span></div></div>
+        <div class="mode-row warm"><i>CLI</i><div><b>也可直接走命令行</b><span>python -m pdf_zh_translator translate paper.pdf out/ --backend deepseek。</span></div></div>
+      </div>
+      <div class="mode-shell">
+        <div class="shell-bar"><i></i><i></i><i></i><span>claude · skills/paper-translate</span></div>
+        <div class="term-feed">
+          <div class="cmd">把 paper.pdf 翻成中文，保留版式</div>
+          <div>[skill] <b>paper-translate</b> 已激活</div>
+          <div>corpus-lint --strict <span class="ok">✓ 术语库一致</span></div>
+          <div>translate --preserve-graphics-text</div>
+          <div>&nbsp;&nbsp;公式 / 图表 / 引用已冻结 · 正文分块翻译中…</div>
+          <div>QA 审计：漏翻 · 保护区 · 版面 · 术语 <span class="ok">✓ 全部通过</span></div>
+          <div>产出 <b>paper_zh.pdf</b> · <b>paper_dual.pdf</b> · <b>paper.qa.json</b></div>
+          <div class="muted">（示意输出：不达标时会继续修复或如实报告）</div>
+        </div>
+        <div class="shell-note">适合重度 agent 用户、批量翻译与可复现实验场景</div>
+      </div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · Skill 模式</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S11 30 篇基准 -->
+  <section class="slide" data-title="30 篇基准">
+    <span class="eyebrow">Benchmark · 基准集</span>
+    <h2 class="s-title">30 篇论文，<b>盯住每一种版式</b></h2>
+    <div class="bench-grid">
+      <div>
+        <div class="bench-stat">
+          <div class="big">20 <i>+</i> 10</div>
+          <p><b>classic20</b>：Attention、ResNet、BERT 等经典论文严格门控批次；<b>worldmodel10</b>：Cosmos、DreamGen 等世界模型前沿论文。</p>
+        </div>
+        <div class="axes">
+          <span>单栏</span><span>双栏</span><span>公式密集</span><span>算法块</span><span>表格密集</span>
+          <span>图表密集</span><span>长参考文献</span><span>附录厚重</span><span>短论文</span><span>长论文</span>
+        </div>
+        <p class="cloud-legend">10 个版式轴全覆盖 · 每篇每页跑同一套严格 QA 门槛</p>
+      </div>
+      <div>
+        <div class="paper-cloud">
+          <span>Attention</span><span>ResNet</span><span>BERT</span><span>GAN</span><span>Adam</span>
+          <span>ViT</span><span>CLIP</span><span>DDPM</span><span>U-Net</span><span>GPT-3</span>
+          <span>LoRA</span><span>SAM</span><span>LLaMA</span><span>Mamba</span><span>DPO</span>
+          <span>vLLM</span><span>InstructGPT</span><span>Faster R-CNN</span><span>word2vec</span><span>BatchNorm</span>
+          <span class="wm">Cosmos</span><span class="wm">DreamGen</span><span class="wm">MiniWorld</span><span class="wm">Vid2World</span>
+          <span class="wm">HunyuanWorld</span><span class="wm">Qwen-RobotWorld</span><span class="wm">1X Humanoid</span>
+          <span class="wm">Robot-Factored WM</span><span class="wm">Physics in Video WM</span><span class="wm">WM Survey</span>
+        </div>
+        <p class="cloud-legend">蓝 = classic20 经典批次 · <b>橙 = worldmodel10 世界模型批次</b></p>
+      </div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 30 篇基准</span><span>benchmarks/classic20/ · 清单入库可复核</span></div>
+  </section>
+
+  <!-- S12 数字成绩 -->
+  <section class="slide" data-title="数字成绩">
+    <span class="eyebrow gold">Numbers · 数字成绩</span>
+    <h2 class="s-title">每个数字，<b>都有证据指针</b></h2>
+    <div class="num-grid">
+      <div class="num gold"><b>75/75</b><span>Cosmos 75 页全篇翻译 QA 通过页数</span></div>
+      <div class="num gold"><b>0</b><span>上述全篇审计 issue 数（793 个审计对象）</span></div>
+      <div class="num"><b>30 篇</b><span>基准论文批次：经典 20 + 世界模型 10</span></div>
+      <div class="num"><b>1855</b><span>自动化测试用例</span></div>
+      <div class="num"><b>1000+</b><span>AI 顶会术语库条目（NeurIPS / ICML / CVPR / ACL…）</span></div>
+      <div class="num"><b>6</b><span>可切换 LLM 后端：DeepSeek / Kimi / OpenAI / Claude / GLM / Google</span></div>
+    </div>
+    <p class="num-caveat"><b>事实纪律：</b>数字对应仓库内基准清单、QA 报告与测试套件；不凭印象汇报，欢迎跑一遍复核。</p>
+    <div class="footer-line"><span>SuperTranslate · 数字成绩</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S13 快速开始 -->
+  <section class="slide" data-title="快速开始">
+    <span class="eyebrow">Quick Start · 快速开始</span>
+    <h2 class="s-title">两条路，<b>都是几分钟的事</b></h2>
+    <div class="qs-grid">
+      <div class="qs-card">
+        <div class="qk">WEB · DOCKER COMPOSE</div>
+        <h3>部署成课题组网站</h3>
+        <pre>git clone https://github.com/asimfish/super_translate.git
+cd super_translate
+cp .env.example .env   <span class="c"># 填 API key 与访问令牌</span>
+docker compose up -d --build</pre>
+        <p class="qnote">打开 <b>https://你的域名</b> 上传第一篇论文；VPS + HTTPS、备份与排障见 <b>docs/DEPLOYMENT.md</b>。</p>
+      </div>
+      <div class="qs-card warm">
+        <div class="qk">AGENT SKILL · CLAUDE CODE / CURSOR</div>
+        <h3>装进你的 AI 编辑器</h3>
+        <pre>git clone https://github.com/asimfish/super_translate.git
+mkdir -p ~/.claude/skills
+ln -s "$PWD/super_translate/skills/paper-translate" \
+      ~/.claude/skills/paper-translate</pre>
+        <p class="qnote">然后对话里说：<b>「把 paper.pdf 翻译成中文，保留原版式」</b>；Cursor 用户链到项目 .cursor/skills/ 即可。</p>
+      </div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 快速开始</span><span>asimfish.github.io/super_translate</span></div>
+  </section>
+
+  <!-- S14 Roadmap -->
+  <section class="slide" data-title="Roadmap">
+    <span class="eyebrow">Roadmap · 路线图</span>
+    <h2 class="s-title">接下来做什么（<b>规划中</b>）</h2>
+    <div class="road-list">
+      <div class="road-item"><span class="rno">R1</span><div><b>CC 经典论文效果页扩充</b><span>LLaMA、Mistral、Mamba、DPO、CoT、vLLM 六篇 CC 许可经典的完整页对比上线展示。</span></div></div>
+      <div class="road-item gold"><span class="rno">R2</span><div><b>更多语向与领域术语库</b><span>英→中之外的语向探索；术语库社区共建，corpus-lint 门禁保证一致性。</span></div></div>
+      <div class="road-item warm"><span class="rno">R3</span><div><b>更多后端与本地模型</b><span>探索 OpenAI 兼容端点之外的本地推理接入，让翻译完全离线。</span></div></div>
+      <div class="road-item green"><span class="rno">R4</span><div><b>多用户规模化</b><span>PostgreSQL + 外部任务队列，支撑更大团队的公网部署。</span></div></div>
+    </div>
+    <p class="road-note">以 <b>GitHub Issues</b> 为准，欢迎认领与讨论——AGPL-3.0，动手改就是你的。</p>
+    <div class="footer-line"><span>SuperTranslate · Roadmap</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S15 结尾 -->
+  <section class="slide" data-title="GitHub">
+    <div class="end-wrap">
+      <span class="eyebrow">Star · Issue · PR 都欢迎</span>
+      <div class="end-repo">github.com/<b>asimfish/super_translate</b></div>
+      <p class="end-slogan">让每一篇英文论文，都能<b>原版式读中文</b>。</p>
+      <div class="end-chips">
+        <span class="chip">AGPL-3.0-or-later</span>
+        <span class="chip gold-chip">Web + Agent Skill 双模式</span>
+        <span class="chip warm-chip">公式 · 图表 · 双栏 零破坏</span>
+      </div>
+      <p class="end-fine">项目主页：<a href="index.html">asimfish.github.io/super_translate</a> · 效果对比可在主页拖动分割线逐像素查看</p>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 谢谢观看</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+</div>
+
+<!-- HUD -->
+<div class="hud-progress" id="hudProgress"></div>
+<a class="hud-home" href="index.html">← 返回主页</a>
+<div class="hud-dots" id="hudDots" role="tablist" aria-label="幻灯片导航"></div>
+<div class="hud-right">
+  <span class="count" id="hudCount">1 / 15</span>
+  <button class="hud-btn" id="btnPrev" aria-label="上一页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+  <button class="hud-btn" id="btnNext" aria-label="下一页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+  <button class="hud-btn" id="btnFull" aria-label="全屏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3M16 21h3a2 2 0 002-2v-3"/></svg></button>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ===== 16:9 画布等比缩放 ===== */
+  function fitStage() {
+    var s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+    document.documentElement.style.setProperty('--stage-scale', s.toFixed(5));
+  }
+  window.addEventListener('resize', fitStage);
+  fitStage();
+
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var dotsBox = document.getElementById('hudDots');
+  var count = document.getElementById('hudCount');
+  var progress = document.getElementById('hudProgress');
+  var index = 0;
+
+  slides.forEach(function (s, i) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-label', '第 ' + (i + 1) + ' 页 · ' + (s.dataset.title || ''));
+    b.title = (i + 1) + ' · ' + (s.dataset.title || '');
+    b.addEventListener('click', function () { render(i); });
+    dotsBox.appendChild(b);
+  });
+  var dots = Array.prototype.slice.call(dotsBox.children);
+
+  function render(n) {
+    n = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach(function (s, i) {
+      s.classList.toggle('active', i === n);
+      s.classList.toggle('leaving', i < n);
+    });
+    dots.forEach(function (d, i) { d.classList.toggle('on', i === n); });
+    index = n;
+    count.textContent = (n + 1) + ' / ' + slides.length;
+    progress.style.width = ((n + 1) / slides.length * 100) + '%';
+    if (('' + (n + 1)) !== location.hash.slice(1)) location.hash = String(n + 1);
+    document.title = (n + 1) + '/' + slides.length + ' · SuperTranslate ' + (slides[n].dataset.title || '');
+  }
+  function go(delta) { render(index + delta); }
+
+  document.getElementById('btnPrev').addEventListener('click', function () { go(-1); });
+  document.getElementById('btnNext').addEventListener('click', function () { go(1); });
+  document.getElementById('btnFull').addEventListener('click', function () {
+    if (!document.fullscreenElement) { if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen(); }
+    else if (document.exitFullscreen) { document.exitFullscreen(); }
+  });
+
+  window.addEventListener('hashchange', function () {
+    var v = (parseInt(location.hash.slice(1), 10) || 1) - 1;
+    if (v !== index) render(v);
+  });
+
+  window.addEventListener('keydown', function (e) {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); go(1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(-1); }
+    else if (e.key === 'Home') { e.preventDefault(); render(0); }
+    else if (e.key === 'End') { e.preventDefault(); render(slides.length - 1); }
+    else if (e.key.toLowerCase() === 'f') { document.getElementById('btnFull').click(); }
+  });
+
+  /* 滚轮翻页（带节流） */
+  var wheelLock = 0;
+  window.addEventListener('wheel', function (e) {
+    var now = Date.now();
+    if (now - wheelLock < 650 || Math.abs(e.deltaY) < 24) return;
+    wheelLock = now;
+    go(e.deltaY > 0 ? 1 : -1);
+  }, { passive: true });
+
+  /* 触摸滑动翻页 */
+  var touchX = null, touchY = null;
+  window.addEventListener('touchstart', function (e) {
+    touchX = e.touches[0].clientX;
+    touchY = e.touches[0].clientY;
+  }, { passive: true });
+  window.addEventListener('touchend', function (e) {
+    if (touchX === null) return;
+    var dx = e.changedTouches[0].clientX - touchX;
+    var dy = e.changedTouches[0].clientY - touchY;
+    if (Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy)) go(dx < 0 ? 1 : -1);
+    touchX = null; touchY = null;
+  }, { passive: true });
+
+  /* 初始页：支持 #n 深链 */
+  var start = (parseInt(location.hash.slice(1), 10) || 1) - 1;
+  render(start);
+})();
+</script>
+</body>
+</html>

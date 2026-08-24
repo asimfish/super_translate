@@ -1,0 +1,81 @@
+{
+  "display_policy": {
+    "rule": "遵循 benchmarks/classic20/README.md 许可政策：仅 CC 许可论文（showcase_ok）公开展示完整翻译页；arXiv 非独占许可论文仅展示小幅局部 crop 与聚合指标",
+    "full_page_papers": ["qwen_robotworld", "cosmos"],
+    "crops_only_papers": ["attention", "resnet"]
+  },
+  "papers": [
+    {
+      "slug": "qwen_robotworld",
+      "title": "Qwen-RobotWorld Technical Report",
+      "license": "CC BY 4.0 (showcase_ok=true, benchmarks/classic20/worldmodel10.json)",
+      "display": "full_pages",
+      "pages_rendered": [1, 4],
+      "has_pdf2zh": false,
+      "crops": [],
+      "hero": "hero.gif",
+      "notes": "25 页技术报告（worldmodel10 基准）。p1 标题+摘要+管线彩图（品牌元素、链接、arXiv 侧边栏完整保留）；p4 大型数据混合结构图 + 图注翻译 + 行内数学符号（s_t、a_t、s_{t+1}）保留，验证复杂图文混排。hero.gif 为 p1 原文↔译文 1.2s 轮播（880px 宽）。",
+      "evidence": {
+        "ours_pdf": "internal:paper-china-repair-30-r3/worldmodel10/translations/qwen_robotworld-mono.pdf",
+        "original_pdf": "internal:paper-china-repair-30-r3/worldmodel10/papers/qwen_robotworld.pdf",
+        "qa_report": null
+      }
+    },
+    {
+      "slug": "cosmos",
+      "title": "Cosmos World Foundation Model Platform for Physical AI",
+      "license": "CC BY 4.0 (showcase_ok=true, benchmarks/classic20/worldmodel10.json)",
+      "display": "full_pages",
+      "pages_rendered": [1, 34],
+      "has_pdf2zh": false,
+      "crops": ["figure"],
+      "notes": "75 页 NVIDIA 技术报告，超长文档压力样本。p1 封面（NVIDIA logo+标题+摘要）；p34 位于文档深处，图17 视频帧网格（4B/12B/5B/13B 四行）+ Prompt 说明文字翻译 + 加粗图注，验证长文档后段质量不衰减。crop 区域取自 p34 图17 下半组，@240dpi。",
+      "evidence": {
+        "ours_pdf": "internal:paper-china-repair-30-r3/worldmodel10/translations/cosmos-mono-r9.pdf",
+        "original_pdf": "internal:paper-china-repair-30-r3/worldmodel10/papers/cosmos.pdf",
+        "qa_report": "internal:paper-china-stabilize-proof/cosmos-r9-formal-v2/summary.json (75/75 页, 793 对象, 0 issue, passed=true)"
+      }
+    },
+    {
+      "slug": "attention",
+      "title": "Attention Is All You Need",
+      "license": "arXiv non-exclusive license（非 CC）",
+      "display": "crops_only",
+      "pages_rendered": [],
+      "has_pdf2zh": false,
+      "crops": ["formula", "figure"],
+      "notes": "整页图按许可政策不公开展示，仅保留 p4 局部放大：formula=公式(1) Attention(Q,K,V)=softmax(QK^T/√dk)V 区域；figure=图2（缩放点积/多头注意力结构图）+图注。@240dpi。批次指标：15 页，visual_score 0.9041（risk low），error_count 0，strict_pass true，翻译耗时 135.1s。",
+      "evidence": {
+        "ours_pdf": "internal:classic20_final_r2_09f6992/translations/attention-mono.pdf",
+        "original_pdf": "internal:classic20_final_r2_09f6992/papers/attention.pdf",
+        "qa_report": "internal:classic20_final_r2_09f6992/reports/attention.json"
+      }
+    },
+    {
+      "slug": "resnet",
+      "title": "Deep Residual Learning for Image Recognition",
+      "license": "arXiv non-exclusive license（非 CC）",
+      "display": "crops_only",
+      "pages_rendered": [],
+      "has_pdf2zh": false,
+      "crops": ["twocol"],
+      "notes": "CVPR 双栏版式代表，整页图按许可政策不公开展示，仅保留 p1 上半部局部：中文标题+作者+双栏首屏（左摘要/右图1 训练曲线）。@240dpi。批次指标：12 页，visual_score 0.8621，error_count 0，strict_pass true，翻译耗时 240.2s。",
+      "evidence": {
+        "ours_pdf": "internal:classic20_final_r2_09f6992/translations/resnet-mono.pdf",
+        "original_pdf": "internal:classic20_final_r2_09f6992/papers/resnet.pdf",
+        "qa_report": "internal:classic20_final_r2_09f6992/reports/resnet.json"
+      }
+    }
+  ],
+  "planned": {
+    "showcase_cc_classics": ["llama", "mistral", "mamba", "dpo", "cot", "vllm"],
+    "note": "benchmarks/classic20/manifest.json 中 group=showcase_cc 的六篇 CC 许可经典论文，翻译产物生成后将替换/补充为完整页对比"
+  },
+  "generated_at": "2026-08-25T06:55:00+08:00",
+  "tools": {
+    "pdf2zh_version": null,
+    "pdf2zh_note": "基线运行失败：运行环境 .venv 位于 iCloud 同步盘，Python import 阶段 I/O 阻塞（70+ 分钟 CPU <1s、日志 0 字节），超 25 分钟预算放弃，详见 NOTES.md",
+    "renderer": "pdftoppm (poppler)：整页 -r 120，局部放大 -r 240 区域裁剪",
+    "gif": "system python3 + PIL（hero.gif：qwen_robotworld p1 original↔ours 1.2s 轮播，880px 宽，600KB）"
+  }
+}
