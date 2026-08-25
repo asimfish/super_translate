@@ -20,3 +20,6 @@ qa_render/
 .whalent_tmp/
 .claude/
 gta-web/
+# 内部协作文件与推广文案，不入库
+AGENT_BRIEF.md
+promo/

@@ -2,55 +2,50 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "opensource/**"]
   pull_request:
-    branches: [main]
+
+env:
+  UV_PYTHON: "3.13"
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
+          enable-cache: true
 
-      - name: Install PDF rendering dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk poppler-utils
+      - name: Sync dependencies
+        run: uv sync --frozen --extra dev
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          python -m playwright install --with-deps chromium
-
-      - name: Lint
-        run: ruff check app pdf_zh_translator tests
+      - name: Ruff lint
+        run: uv run ruff check app pdf_zh_translator tests scripts
 
       - name: Terminology corpus lint
-        run: python -m pdf_zh_translator corpus-lint --strict
+        run: uv run python -m pdf_zh_translator corpus-lint --strict
 
-      - name: Tests
-        run: python -m pytest -q
-
-  docker:
+  smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build image
-        run: docker build -t super-translate:ci .
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
 
-      - name: Smoke test container
-        run: |
-          docker run -d --rm --name st -p 8000:8000 super-translate:ci
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8000/health; then
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "health check never came up"
-          docker logs st
-          exit 1
+      # dry-run 排版需要一款 CJK 字体做子集化回退
+      - name: Install CJK fonts
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Smoke test
+        run: PYTHON=.venv/bin/python bash scripts/smoke_test.sh

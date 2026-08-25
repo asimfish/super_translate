@@ -25,6 +25,11 @@
       "should_activate": true
     },
     {
+      "id": "positive-legacy-alias",
+      "prompt": "用 pdf-china 把 ~/Downloads/attention.pdf 翻译成中文，公式和图表不能动。",
+      "should_activate": true
+    },
+    {
       "id": "negative-adjacent",
       "prompt": "请总结这篇论文的方法和实验结论，不需要翻译 PDF。",
       "should_activate": false

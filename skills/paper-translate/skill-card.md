@@ -1,8 +1,8 @@
 # Paper Translate skill card
 
 - Owner: paper-china maintainers
-- Status: project-local candidate
-- Provenance: independently synthesized for this repository on 2026-08-23 from the repository's CLI, benchmark, QA, and security contracts; no third-party skill text or executable content copied
+- Status: project-local, installable via symlink to `~/.claude/skills/` / `~/.cursor/skills/`
+- Provenance: independently synthesized for this repository on 2026-08-23 from the repository's CLI, benchmark, QA, and security contracts; modernized 2026-08-25 (Chinese-first SKILL.md, progressive-disclosure references, bundled helper scripts); no third-party skill text or executable content copied
 - Purpose: translate academic PDFs to Chinese and prove that protected content and layout remain intact
 
 ## Inputs and outputs
@@ -16,7 +16,7 @@
 |---|---|
 | Reads | Explicit PDF, manifest, cache, repository configuration, and generated QA artifacts |
 | Writes | Explicit local output, cache, report, preview, and benchmark work directories |
-| Executes | Repository Python CLI, benchmark harness, tests, linters, and read-only GitNexus analysis |
+| Executes | Repository Python CLI, benchmark harness, tests, linters, and the bundled helper scripts (`scripts/check_env.sh`, `scripts/translate_one.sh`) |
 | Network | Selected translation provider only; source prose may be transmitted for translation. Benchmark fetch is used only when explicitly requested. |
 | Credentials | Reads the selected provider key through an environment-variable name; the value must not enter commands, logs, artifacts, or model context |
 | External effects | None by default. Upload, publish, notify, or deploy requires a separate explicit user request and destination authorization. |
@@ -41,6 +41,6 @@
 ## Governance disposition
 
 - Third-party provenance/license: not applicable; independent project-local synthesis
-- Bundled executable code: none
-- Publication status: not published; project-local only
+- Bundled executable code: two repository-authored bash helpers (`scripts/check_env.sh` environment check, `scripts/translate_one.sh` translate-plus-inspect wrapper); both only invoke the repository CLI and never read or print credential values
+- Publication status: ships inside the open-source repository under `skills/paper-translate/`
 - Remaining uncertainty: provider behavior and document-specific layout risk require per-paper QA and cannot be guaranteed by skill validation alone

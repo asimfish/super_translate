@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用疑问 / 讨论
+    url: https://github.com/asimfish/super_translate/discussions
+    about: 安装、配置、使用方法类问题请到 Discussions 交流

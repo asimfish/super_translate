@@ -1,0 +1,68 @@
+name: Bug 报告
+description: 翻译结果异常、版式损坏、服务报错等问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 使用模式
+      options:
+        - Web 部署（浏览器上传翻译）
+        - Agent Skill（Claude Code / Cursor / Codex）
+        - 命令行（python -m pdf_zh_translator）
+        - Docker 部署
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / commit
+      description: 版本号（如 0.3.2）或 `git rev-parse --short HEAD` 的输出
+      placeholder: "0.3.2 / 0b1196e"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 完整命令或操作步骤（隐去 API key）
+      placeholder: |
+        1. .venv/bin/python -m pdf_zh_translator translate paper.pdf paper.zh.pdf --api-mode deepseek
+        2. 打开输出第 3 页
+    validations:
+      required: true
+
+  - type: textarea
+    id: pdf_profile
+    attributes:
+      label: 论文 PDF 特征
+      description: 公开论文请直接给 arXiv 链接；无法公开时描述特征（页数、单双栏、公式/图表密度、是否扫描件）
+      placeholder: "arXiv:1706.03762，15 页双栏，公式密集"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: 期望结果 vs 实际结果
+      placeholder: |
+        期望：公式 (3) 保持原样
+        实际：公式被中文占位文本覆盖（见截图）
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / QA 报告
+      description: 终端输出、`*.inspect.json` / `*.qa.json` 片段、服务端日志（注意隐去 key 与 token）
+      render: text
+
+  - type: textarea
+    id: env
+    attributes:
+      label: 运行环境
+      placeholder: "macOS 15 / Ubuntu 24.04，Python 3.13，uv 0.9，翻译后端 deepseek"
