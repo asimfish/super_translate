@@ -137,6 +137,14 @@ window.__ph = function (img) {
   .hero h1 { margin-top: var(--sp-2); font-size: var(--fs-hero); font-weight: 850; line-height: 1.18; letter-spacing: -.02em; }
   .hero .h1-line2 { display: block; margin-top: 6px; background: linear-gradient(92deg, var(--blue), var(--blue-soft) 52%, var(--warm)); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .hero .lede { margin-top: var(--sp-3); color: var(--muted); font-size: clamp(15px, 1.35vw, 17px); line-height: 1.75; max-width: 34em; }
+  .hero-quote { margin-top: var(--sp-3); padding: 14px 18px; border-left: 3px solid var(--gold); background: rgba(243, 201, 107, .05); border-radius: 0 12px 12px 0; max-width: 36em; }
+  .hero-quote em { display: block; font-style: normal; font-size: var(--fs-small); color: var(--faint); letter-spacing: .04em; margin-bottom: 6px; }
+  .hero-quote p { margin: 0; font-size: clamp(15.5px, 1.4vw, 18px); line-height: 1.7; color: var(--ink); }
+  .hero-vows { list-style: none; margin: var(--sp-2) 0 0; padding: 0; max-width: 34em; }
+  .hero-vows li { position: relative; padding: 5px 0 5px 22px; color: var(--muted); font-size: var(--fs-body); line-height: 1.65; }
+  .hero-vows li::before { content: ''; position: absolute; left: 2px; top: 13px; width: 10px; height: 2px; background: var(--blue); border-radius: 2px; }
+  .hero-formula { margin: var(--sp-2) 0 0; font-size: 13.5px; letter-spacing: .02em; color: var(--faint); font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+  .hero-formula b { color: var(--gold); font-weight: 600; }
   .hero .lede b { color: var(--ink); font-weight: 700; }
   .cta-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: var(--sp-4); }
   .btn {
@@ -275,7 +283,11 @@ window.__ph = function (img) {
 
   /* ============ 局部放大（crop 并排） ============ */
   .crop-block { margin-top: var(--sp-5); }
-  .crop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); margin-top: var(--sp-3); }
+  .crop-banner { margin-top: var(--sp-3); }
+  .crop-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); margin-top: var(--sp-3); }
+  /* 三列卡：图区锁定 2:1，contain 白底 letterbox，保证同排等高 */
+  .crop-row.fixed { aspect-ratio: 2 / 1; }
+  .crop-row.fixed img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; max-height: none; }
   .crop-card {
     border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
     background: var(--panel); margin: 0;
@@ -421,6 +433,37 @@ window.__ph = function (img) {
   .mech-item span { display: block; margin-top: 5px; color: var(--muted); font-size: 13px; line-height: 1.7; }
   .mech-item.gold { border-left-color: rgba(243, 201, 107, .45); }
 
+  /* ============ 专业术语库条带 ============ */
+  .term-band {
+    padding: var(--sp-5) 0;
+    background:
+      radial-gradient(720px 280px at 16% 0%, rgba(111, 157, 255, .07), transparent 70%),
+      var(--panel-deep);
+    border-top: 1px solid rgba(111, 157, 255, .12);
+    border-bottom: 1px solid rgba(111, 157, 255, .12);
+  }
+  .term-grid { display: grid; grid-template-columns: minmax(0, 38fr) minmax(0, 62fr); gap: var(--sp-5); align-items: start; }
+  .term-big { margin-top: var(--sp-2); font: 800 clamp(46px, 5vw, 66px)/1 var(--mono); letter-spacing: -.03em; font-variant-numeric: tabular-nums; background: linear-gradient(92deg, var(--blue), var(--blue-soft) 60%, var(--warm)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .term-sub { margin-top: 10px; color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+  .term-comp { margin: var(--sp-2) 0 0; padding: 0; list-style: none; }
+  .term-comp li { position: relative; padding-left: 18px; margin-top: 8px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+  .term-comp li::before { content: "▸"; position: absolute; left: 0; color: var(--blue); }
+  .term-comp li b { color: var(--blue-soft); font-family: var(--mono); font-weight: 750; }
+  .term-chips { display: flex; flex-wrap: wrap; gap: 10px; }
+  .term-chip {
+    display: inline-flex; align-items: baseline; gap: 9px;
+    padding: 8px 16px; border: 1px solid var(--line); border-radius: 999px;
+    background: rgba(17, 26, 49, .65);
+    transition: border-color .25s, transform .25s;
+  }
+  .term-chip:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+  .term-chip .en { font: 650 11.5px/1.6 var(--mono); color: var(--blue-soft); letter-spacing: .01em; }
+  .term-chip i { font-style: normal; color: var(--faint); font-size: 11px; }
+  .term-chip b { font-size: 13px; color: var(--ink); font-weight: 750; white-space: nowrap; }
+  .term-mech { margin-top: var(--sp-3); max-width: 640px; color: var(--muted); font-size: 13px; line-height: 1.85; border-left: 2px solid var(--line-strong); padding-left: 14px; }
+  .term-mech b { color: var(--ink); }
+  .term-mech code { font-size: 12px; color: var(--blue-soft); }
+
   /* ============ 产品界面 ============ */
   .ui-stage { max-width: 860px; margin: var(--sp-4) auto 0; }
   .demo-box { position: relative; aspect-ratio: 960 / 600; background: var(--panel-deep); }
@@ -490,6 +533,7 @@ window.__ph = function (img) {
     .mech-grid { grid-template-columns: 1fr; gap: var(--sp-2); }
     .shot-grid { grid-template-columns: repeat(2, 1fr); }
     .byok-grid { grid-template-columns: 1fr; }
+    .term-grid { grid-template-columns: 1fr; gap: var(--sp-3); }
   }
   /* ============ 响应式：480px ============ */
   @media (max-width: 480px) {
@@ -551,15 +595,22 @@ window.__ph = function (img) {
       <h1>英文论文，直接读中文版
         <span class="h1-line2">公式 · 图表 · 版式，一个像素不动</span>
       </h1>
-      <p class="lede">
-        逐对象冻结公式、图表与引用，正文翻译后<b>按原坐标回填</b>，输出纯中文与双语对照两种 PDF；
-        <b>确定性 QA 循环</b>逐页审计、只接受严格变好的修复——75 页技术报告全篇 <b>75/75 页 · 0 缺陷</b>交付。
-      </p>
+      <div class="hero-quote">
+        <em>一个再普通不过的需求 · 一位晚上还在读论文的研究生</em>
+        <p>“这篇 75 页的报告明天组会要讲，能不能给我一份中文版——公式别乱，图别丢，页码还能对上原文？”</p>
+      </div>
+      <p class="lede">市面上的工具会先把 PDF 拆开重排：正文是翻出来了，公式挤成一行、双栏变成单栏、图注对不上号。SuperTranslate 换了一条路——<b>不重排</b>。原文哪一块在哪，译文就在哪。</p>
+      <ul class="hero-vows">
+        <li>公式、图表、引用先冻结，一个字符都不交给模型</li>
+        <li>译文按原坐标回填，页面几何和原文完全一致</li>
+        <li>每页都过 QA 审计，修复只有严格变好才被接受</li>
+      </ul>
       <div class="cta-row">
         <a class="btn primary" href="https://github.com/asimfish/super_translate" target="_blank" rel="noopener">GitHub ↗</a>
         <a class="btn ghost" href="#quickstart">快速开始</a>
       </div>
-      <p class="proof-line">AGPL-3.0 开源<i>·</i><b>75/75</b> 页长文 QA 通过<i>·</i><b>30 篇</b>基准<i>·</i><b>1855</b> 个测试<i>·</i>数据全程留在本地</p>
+      <p class="hero-formula">对象冻结 + 原位回填 + 确定性 QA 循环 = <b>一份敢逐页对照检查的译文</b></p>
+      <p class="proof-line">75 页 Cosmos 实测 <b>75/75 页 · 0 缺陷</b><i>·</i><b>1,066</b> 条术语库<i>·</i><b>1855</b> 个测试<i>·</i>数据全程留在本地</p>
     </div>
     <div class="hero-visual fx">
       <div class="browser-card">
@@ -630,58 +681,58 @@ window.__ph = function (img) {
         <h2 class="sec-title" style="font-size: clamp(20px, 2.2vw, 26px);">经典论文，只看最难的细节</h2>
         <p class="sec-desc">公式、结构图、双栏首屏——版式最容易翻坏的地方，原文与译文并排对照（240 DPI 渲染）。</p>
       </header>
+      <figure class="crop-card crop-banner fx">
+        <div class="crop-head"><b>Attention Is All You Need · 公式 (1) 逐像素对照</b><span>attention · p4 · 240dpi</span></div>
+        <div class="crop-row" data-ph="assets/comparison/attention/crop_formula_original.png">
+          <span class="badge en">EN 原文</span>
+          <img src="assets/comparison/attention/crop_formula_original.png" alt="Attention 公式区域原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/attention/crop_formula_ours.png">
+          <span class="badge zh">ZH 译文</span>
+          <img src="assets/comparison/attention/crop_formula_ours.png" alt="Attention 公式区域译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-foot">公式 (1) 与变量原样保留 · 全篇 15 页：<b>0 error</b> · visual 0.9041 · 严格门通过</div>
+      </figure>
+
       <div class="crop-grid">
 
         <figure class="crop-card fx">
-          <div class="crop-head"><b>Attention Is All You Need · 公式</b><span>attention · p4</span></div>
-          <div class="crop-row" data-ph="assets/comparison/attention/crop_formula_original.png">
-            <span class="badge en">EN 原文</span>
-            <img src="assets/comparison/attention/crop_formula_original.png" alt="Attention 公式区域原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
-          </div>
-          <div class="crop-row" data-ph="assets/comparison/attention/crop_formula_ours.png">
-            <span class="badge zh">ZH 译文</span>
-            <img src="assets/comparison/attention/crop_formula_ours.png" alt="Attention 公式区域译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
-          </div>
-          <div class="crop-foot">公式 (1) 与变量原样保留 · 全篇 15 页：<b>0 error</b> · visual 0.9041 · 严格门通过</div>
-        </figure>
-
-        <figure class="crop-card fx">
-          <div class="crop-head"><b>Attention Is All You Need · 结构图</b><span>attention · p4</span></div>
-          <div class="crop-row" data-ph="assets/comparison/attention/crop_figure_original.png">
+          <div class="crop-head"><b>Attention · 结构图</b><span>attention · p4</span></div>
+          <div class="crop-row fixed" data-ph="assets/comparison/attention/crop_figure_original.png">
             <span class="badge en">EN 原文</span>
             <img src="assets/comparison/attention/crop_figure_original.png" alt="Attention 图 2 原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
           </div>
-          <div class="crop-row" data-ph="assets/comparison/attention/crop_figure_ours.png">
+          <div class="crop-row fixed" data-ph="assets/comparison/attention/crop_figure_ours.png">
             <span class="badge zh">ZH 译文</span>
             <img src="assets/comparison/attention/crop_figure_ours.png" alt="Attention 图 2 译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
           </div>
-          <div class="crop-foot">图 2 注意力结构图：图内原样冻结，<b>图注翻译</b>且位置不动</div>
+          <div class="crop-foot">图 2 结构图：图内冻结，<b>图注翻译</b>位置不动</div>
         </figure>
 
-        <figure class="crop-card fx">
+        <figure class="crop-card fx" style="--fxd:.06s">
           <div class="crop-head"><b>ResNet · 双栏首屏</b><span>resnet · p1</span></div>
-          <div class="crop-row" data-ph="assets/comparison/resnet/crop_twocol_original.png">
+          <div class="crop-row fixed" data-ph="assets/comparison/resnet/crop_twocol_original.png">
             <span class="badge en">EN 原文</span>
             <img src="assets/comparison/resnet/crop_twocol_original.png" alt="ResNet 双栏首屏原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
           </div>
-          <div class="crop-row" data-ph="assets/comparison/resnet/crop_twocol_ours.png">
+          <div class="crop-row fixed" data-ph="assets/comparison/resnet/crop_twocol_ours.png">
             <span class="badge zh">ZH 译文</span>
             <img src="assets/comparison/resnet/crop_twocol_ours.png" alt="ResNet 双栏首屏译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
           </div>
-          <div class="crop-foot">CVPR 双栏版式：栏宽、图 1 训练曲线原位 · 全篇 12 页：<b>0 error</b> · visual 0.8621</div>
+          <div class="crop-foot">CVPR 双栏：栏宽与图 1 原位 · 12 页：<b>0 error</b> · visual 0.8621</div>
         </figure>
 
-        <figure class="crop-card fx">
-          <div class="crop-head"><b>Cosmos · 长文档深处</b><span>cosmos · p34 图 17</span></div>
-          <div class="crop-row" data-ph="assets/comparison/cosmos/crop_figure_original.png">
+        <figure class="crop-card fx" style="--fxd:.12s">
+          <div class="crop-head"><b>Cosmos · 长文深处</b><span>cosmos · p34 图 17</span></div>
+          <div class="crop-row fixed" data-ph="assets/comparison/cosmos/crop_figure_original.png">
             <span class="badge en">EN 原文</span>
             <img src="assets/comparison/cosmos/crop_figure_original.png" alt="Cosmos 图 17 原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
           </div>
-          <div class="crop-row" data-ph="assets/comparison/cosmos/crop_figure_ours.png">
+          <div class="crop-row fixed" data-ph="assets/comparison/cosmos/crop_figure_ours.png">
             <span class="badge zh">ZH 译文</span>
             <img src="assets/comparison/cosmos/crop_figure_ours.png" alt="Cosmos 图 17 译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
           </div>
-          <div class="crop-foot">75 页第 34 页：视频帧网格 + Prompt 说明翻译 · <b>长文后段质量不衰减</b></div>
+          <div class="crop-foot">75 页第 34 页：帧网格 + Prompt 翻译 · <b>后段不衰减</b></div>
         </figure>
 
       </div>
@@ -719,6 +770,39 @@ window.__ph = function (img) {
       <div class="mech-item fx"><b>全部检测器每轮重跑</b><span>文本层、视觉墨迹与独立页面巡检共同输出结构化问题清单。</span></div>
       <div class="mech-item gold fx"><b>只接受严格变好的候选</b><span>修复前保存快照，问题分未严格下降就原子回滚并停止。</span></div>
       <div class="mech-item gold fx"><b>Golden 回归守住发布线</b><span>Golden case 与发布基准复用同一 QA，并由 strict gate 校验证据与回归。</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 专业术语库 ===== -->
+<section class="term-band" id="terminology">
+  <div class="wrap">
+    <div class="term-grid">
+      <div class="fx">
+        <span class="overline">Terminology · 专业术语库</span>
+        <div class="term-big">1,066</div>
+        <p class="term-sub">条精编术语 · 23 个分类 · 3 份语料</p>
+        <ul class="term-comp">
+          <li><b>348</b> 基础语料：cs / ml / math / general</li>
+          <li><b>251</b> AI 顶会语料：NeurIPS-ICML-ICLR、CVPR、ACL、agents-safety 等 5 类</li>
+          <li><b>467</b> 顶会分 track 语料：14 个 track（NeurIPS 理论、ICML 优化、CVPR 3D 重建…）</li>
+        </ul>
+      </div>
+      <div class="fx" style="--fxd:.08s">
+        <div class="term-chips">
+          <span class="term-chip"><span class="en">PAC-Bayes Bound</span><i>→</i><b>PAC-贝叶斯界</b></span>
+          <span class="term-chip"><span class="en">Rademacher Complexity</span><i>→</i><b>拉德马赫复杂度</b></span>
+          <span class="term-chip"><span class="en">Score-Based Generative Model</span><i>→</i><b>基于分数的生成模型</b></span>
+          <span class="term-chip"><span class="en">Partially Observable Markov Decision Process</span><i>→</i><b>部分可观测马尔可夫决策过程</b></span>
+          <span class="term-chip"><span class="en">Amortized Inference</span><i>→</i><b>摊销推断</b></span>
+          <span class="term-chip"><span class="en">Uniform Convergence</span><i>→</i><b>一致收敛</b></span>
+        </div>
+        <p class="term-mech">
+          专为学术翻译设计：翻译每个文本块时按<b>相关性检索术语注入</b>提示词（不整库硬塞）；
+          专有名词首现写作「<b>中文术语（English Term）</b>」、之后只用中文；
+          CI 以 <code>corpus-lint --strict</code> 做跨领域一致性门禁，译后再审计术语采用率。
+        </p>
+      </div>
     </div>
   </div>
 </section>
@@ -939,7 +1023,7 @@ window.__ph = function (img) {
       <div class="stat gold"><b>0</b><span>上述全篇审计 issue 数<br>（793 个审计对象）</span></div>
       <div class="stat"><b>30 篇</b><span>基准论文批次<br>经典 20 + 世界模型 10</span></div>
       <div class="stat"><b>1855</b><span>自动化测试用例</span></div>
-      <div class="stat"><b>1000+</b><span>AI 顶会术语库条目<br>NeurIPS / ICML / CVPR / ACL…</span></div>
+      <div class="stat"><b>1,066</b><span>专业术语库条目<br>23 个分类 · 3 份语料</span></div>
       <div class="stat"><b>6</b><span>可切换 LLM 后端</span></div>
     </div>
     <p class="stats-caveat fx"><b>事实纪律：</b>以上数字对应仓库内基准清单、QA 报告与测试套件，均可复核；「75/75 · 0 issue」指 75 页《Cosmos World Foundation Model Platform》全篇翻译的正式 QA 结果。</p>

@@ -507,7 +507,7 @@ window.__ph = function (img) {
       <i class="arr">→</i>
       <div class="flow-step gold"><small>FREEZE</small><b>保护区冻结</b><span>公式、图内文字、表格、引用编号原样锁定</span></div>
       <i class="arr">→</i>
-      <div class="flow-step"><small>TRANSLATE</small><b>LLM 翻译</b><span>正文分块翻译，注入 1000+ 顶会术语提示</span></div>
+      <div class="flow-step"><small>TRANSLATE</small><b>LLM 翻译</b><span>正文分块翻译，按相关性注入 1,066 条专业术语</span></div>
       <i class="arr">→</i>
       <div class="flow-step warm"><small>REFILL</small><b>原位回填</b><span>按原坐标写回，CJK 字体子集嵌入</span></div>
       <i class="arr">→</i>
@@ -664,7 +664,7 @@ window.__ph = function (img) {
         <div class="qa-card"><small>DETECT 1</small><b>漏翻检测</b><span>正文、图注、公式说明、图框内多行说明仍是英文即标记。</span></div>
         <div class="qa-card"><small>DETECT 2</small><b>保护区检测</b><span>表格、伪代码、参考文献被意外改动——连实验数字被篡改都报错。</span></div>
         <div class="qa-card"><small>DETECT 3</small><b>版面检测</b><span>文本重叠、图片丢失、空白页、公式裁切，加视觉回归比对。</span></div>
-        <div class="qa-card"><small>DETECT 4</small><b>术语一致性</b><span>1000+ 顶会术语表注入提示词，译后审计是否使用标准译法。</span></div>
+        <div class="qa-card"><small>DETECT 4</small><b>术语一致性</b><span>1,066 条专业术语按块注入提示词，译后审计是否使用标准译法。</span></div>
       </div>
       <div>
         <div class="qa-loop">
@@ -818,7 +818,7 @@ window.__ph = function (img) {
       <div class="num gold"><b>0</b><span>上述全篇审计 issue 数（793 个审计对象）</span></div>
       <div class="num"><b>30 篇</b><span>基准论文批次：经典 20 + 世界模型 10</span></div>
       <div class="num"><b>1855</b><span>自动化测试用例</span></div>
-      <div class="num"><b>1000+</b><span>AI 顶会术语库条目（NeurIPS / ICML / CVPR / ACL…）</span></div>
+      <div class="num"><b>1,066</b><span>专业术语库条目（23 个分类 · 3 份语料）</span></div>
       <div class="num"><b>6</b><span>可切换 LLM 后端：DeepSeek / Kimi / OpenAI / Claude / GLM / Google</span></div>
     </div>
     <p class="num-caveat"><b>事实纪律：</b>数字对应仓库内基准清单、QA 报告与测试套件；不凭印象汇报，欢迎跑一遍复核。</p>
