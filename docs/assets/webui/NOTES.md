@@ -1,6 +1,7 @@
 # Web UI 截图与 Demo 复现说明
 
-产出日期：2026-08-25。所有素材在本机离线生成，未使用任何真实 LLM API key。
+产出日期：2026-08-25（截图与初版 demo）；2026-08-26 高清重录 demo（v2，见文末）。
+所有素材在本机离线生成，未使用任何真实 LLM API key。
 
 ## 产物清单
 
@@ -10,9 +11,12 @@
 | `upload.png` | 上传界面：拖拽区 + 3 篇待上传队列（含文件大小） | 同上，134 KB |
 | `reader.png` | 双栏对照阅读器：左原文右译文，第 1 页摘要与作者栏可见 | 同上，256 色量化，477 KB |
 | `providers.png` | API 设置弹窗：DeepSeek 已配置（演示 key `sk-demo-xxxx`），其余 4 家未配置 | 同上，242 KB |
-| `demo.gif` | 论文库 → 打开 Attention → 双栏滚动（引言、公式页）→ 返回库 | 960×600，8fps（mpdecimate 变帧率），48 色无抖动，22.1s，6.9 MB |
+| `demo.mp4` | 主产物（主页 `<video>` 用）：库 → 打开 Attention → 双栏同步滚动（引言/架构）→ 公式页停留 → 返回库 | 1600×1000，H.264 CRF 20，12fps，24.4s，4.7 MB |
+| `demo.gif` | 兼容产物（README/GitHub 用），同内容紧凑版 | 1280×800，10fps，128 色 bayer 抖动，14.1s，7.1 MB |
 
-录屏原件：`/tmp/st-webui-work/demo-raw.webm`（1280×800，23.3s）。
+录屏原件与母版：`.local-work/webui-v2/`（gitignore）——`frames/` 59 张 2880×1800
+无损 PNG 帧 + `mp4.ffconcat` / `gif.ffconcat` 时间轴 + `demo-master-2880.mp4`
+（2880×1800 CRF 14 母版，12.8 MB，可重新调参转码而无需重录）。
 截图中不含任何真实 API key；providers 界面填写的是假 key `sk-demo-xxxx`。
 
 ## 环境与安装（需在交付说明中报告）
@@ -70,15 +74,52 @@ CLI 备用路径（未采用，但已验证可行）：
 注意要用 `python -m pdf_zh_translator`（不是 `pdf_zh_translator.cli`，后者无
 main guard 会静默退出）。
 
+### v2 重建速记（2026-08-26，/tmp 被清空后）
+
+- 合并缓存无需重新人工补译：上次 watcher 投放进任务目录的成品缓存仍在
+  `data/translations/40a9518c9905/<stem>.translation-cache.jsonl`（207 条，
+  占位符全部合法），直接回收存档为
+  `.local-work/webui-v2/attention-cache-merged.jsonl`，探针复验仍 **全命中、
+  vendor 零调用**。若 data/ 也丢，才需按上文方法用 r2 缓存（99/115）+ 人工补译
+  16 块重建。
+- **watcher v2**（`.local-work/webui-v2/watcher.py`）：去掉了初版按 spec 路径
+  去重的 seen 集合——重新翻译时 `cleanup_output_dir` 后 spec 路径不变，初版会
+  跳过补投导致缓存丢失；v2 每轮轮询只要目标缓存文件不存在就补投。
+- 凭证加密 key 现持久化在 `.local-work/webui-v2/cred-key.txt`，启动命令改为
+  `PAPER_CHINA_CREDENTIAL_ENCRYPTION_KEY="$(cat .local-work/webui-v2/cred-key.txt)"`。
+  若换了加密 key，DB 里旧凭证会解密失败（翻译接口 400），需先
+  `DELETE /api/provider-credentials/deepseek` 再重新保存假 key。
+- v2 重跑「重新翻译」全流程 45s 完成，缓存命中率 100%。
+
 ## 截图/录屏脚本位置
 
-- `/tmp/st-webui-work/act1_setup.py`：API 设置（providers.png）+ 上传（upload.png）
-- `/tmp/st-webui-work/act2_translate.py`：点翻译 → 等 completed → reader.png + library.png
-- `/tmp/st-webui-work/act3_demo.py`：录 demo webm（转 GIF 命令见下）
-- Playwright 参数：chromium headless，viewport 1440×900，deviceScaleFactor=2
-- GIF 转换：
-  `ffmpeg -i demo-raw.webm -vf "fps=8,scale=960:-1:flags=lanczos,mpdecimate=hi=200:lo=64:frac=0.1,split[s0][s1];[s0]palettegen=max_colors=48[p];[s1][p]paletteuse=dither=none" -fps_mode vfr -loop 0 demo.gif`
+- 截图脚本（2026-08-25 初版，/tmp 已被系统清空，方法见本文档即可复现）：
+  API 设置弹窗、上传队列、reader、library 四张图均为 Playwright chromium
+  headless，viewport 1440×900，deviceScaleFactor=2 直接 `page.screenshot`。
+- demo 录制脚本（v2，现存）：`.local-work/webui-v2/record_frames.py`
 - reader.png 压缩：PIL `quantize(colors=256, method=MEDIANCUT)`（886→477 KB）
+
+## demo 录制方法 v2（高清，2026-08-26）
+
+初版直接用 Playwright `record_video` 输出 1280×800，被反馈模糊。根因有二：
+(a) **Playwright 录屏只吐 CSS 逻辑像素帧**——`deviceScaleFactor=2` 对录屏无效，
+`record_video_size` 设 2880×1800 只会把 1440×900 的帧 letterbox 进大画布（实测
+左上角 1/4 有内容，其余灰边）；(b) GIF 为压体积用了 960px/48 色。
+
+v2 改为**全分辨率截图序列 + ffmpeg concat 时间轴**（`record_frames.py`）：
+
+1. viewport 1440×900、DSF=2，先把滚动路径预滚一遍让 pdf.js 渲染并缓存所有页
+   canvas（防懒加载空白帧），再回到顶部正式录制；
+2. 滚动段按 smoothstep 缓动逐步设置 `scrollTop`，每步 `page.screenshot` 一张
+   2880×1800 无损 PNG（12fps 时间轴）；停留段只截 1 帧，在 ffconcat 清单里用
+   `duration` 拉长——59 张帧覆盖 21.6s（mp4）/12.9s（gif）两条时间轴；
+3. 转码：
+   - mp4：`ffmpeg -f concat -i mp4.ffconcat -vf "fps=12,scale=1600:-2:flags=lanczos,format=yuv420p" -c:v libx264 -crf 20 -preset slow -movflags +faststart demo.mp4`
+   - gif：`ffmpeg -f concat -i gif.ffconcat -vf "fps=10,scale=1280:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5" -loop 0 demo.gif`
+   - 母版：同 concat 源不缩放 CRF 14 → `demo-master-2880.mp4`（重新调参不用重录）
+
+注意 pdf.js 渲染上限 `MAX_CANVAS_DPR = 1.5`（app.js），PDF 页 canvas 在 DSF=2
+下实际按 1.5x 位图渲染，是当前清晰度上限（对 1600px 输出足够）。
 
 ## 发现的 UI / 引擎问题清单（建议开 issue）
 
@@ -102,6 +143,9 @@ main guard 会静默退出）。
    无 tooltip/title 属性，鼠标悬停看不到全名。
 7. **译文页作者姓名音译不一致**（数据侧观察）：r2 时代缓存把 Llion Jones 译为
    「利昂·琼斯」，而术语惯例通常保留原文人名。非本次代码问题，但展示时可见。
+8. **卡片时间戳显示 UTC 而非本地时区**（2026-08-26 重录时发现）：翻译于本地
+   01:36（UTC+8）完成，卡片显示「翻译完成 8/25 17:37」；上传时间同样偏差 8 小时
+   （8/25 11:44 实为本地 19:44）。前端渲染时间前应做时区转换。
 
 ## 数据落位说明
 
