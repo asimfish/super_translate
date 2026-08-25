@@ -9,7 +9,7 @@
 
 **Layout-preserving academic PDF translation** (English → Chinese): translation happens in place on the original PDF, with zero damage to formulas, figures, tables, and two-column layouts — and every run ships a machine-readable QA audit report. Two ways to use it: a **web app** (FastAPI + built-in side-by-side reader) and an **agent skill** (one sentence in Claude Code / Cursor).
 
-![SuperTranslate result: Qwen-RobotWorld page 1, original alternating with the translation](docs/assets/comparison/qwen_robotworld/hero.gif)
+![SuperTranslate result: Cosmos page 1, original alternating with the translation](docs/assets/comparison/cosmos/hero.gif)
 
 ## Contents
 
@@ -55,16 +55,12 @@ Two columns: **original on the left, SuperTranslate output on the right** — cl
     <th width="50%">SuperTranslate</th>
   </tr>
   <tr>
-    <td><a href="docs/assets/comparison/qwen_robotworld/original_p1.png"><img src="docs/assets/comparison/qwen_robotworld/original_p1.png" alt="Qwen-RobotWorld original page 1"></a></td>
-    <td><a href="docs/assets/comparison/qwen_robotworld/ours_p1.png"><img src="docs/assets/comparison/qwen_robotworld/ours_p1.png" alt="Qwen-RobotWorld SuperTranslate page 1"></a></td>
-  </tr>
-  <tr>
     <td><a href="docs/assets/comparison/qwen_robotworld/original_p4.png"><img src="docs/assets/comparison/qwen_robotworld/original_p4.png" alt="Qwen-RobotWorld original page 4 (data-mixture diagram)"></a></td>
     <td><a href="docs/assets/comparison/qwen_robotworld/ours_p4.png"><img src="docs/assets/comparison/qwen_robotworld/ours_p4.png" alt="Qwen-RobotWorld SuperTranslate page 4"></a></td>
   </tr>
 </table>
 
-**What to look for**: on page 1, the title, abstract, and pipeline artwork — branding, links, and the arXiv sidebar all intact; on page 4, the large data-mixture diagram — captions translated into Chinese while inline math symbols `s_t`, `a_t`, `s_{t+1}` are preserved as-is, exercising dense mixed figure-and-text layout.
+**What to look for**: the large data-mixture diagram on page 4 — captions translated into Chinese while inline math symbols `s_t`, `a_t`, `s_{t+1}` are preserved as-is, exercising dense mixed figure-and-text layout.
 
 ### Cosmos World Foundation Model (75 pages, CC BY 4.0)
 

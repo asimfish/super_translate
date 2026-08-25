@@ -9,7 +9,7 @@
 
 **保版式学术论文 PDF 翻译系统**：直接在原版 PDF 上做英→中翻译，公式、图表、表格、双栏排版零破坏；每一次翻译都产出机器可读的 QA 审计报告。提供两种用法——**Web 应用**（FastAPI + 内置双栏对照阅读器）与 **Agent Skill**（Claude Code / Cursor 里一句话触发）。
 
-![SuperTranslate 翻译效果：Qwen-RobotWorld 第 1 页原文与译文轮播](docs/assets/comparison/qwen_robotworld/hero.gif)
+![SuperTranslate 翻译效果：Cosmos 第 1 页原文与译文轮播](docs/assets/comparison/cosmos/hero.gif)
 
 ## 目录
 
@@ -55,16 +55,12 @@ SuperTranslate 的三条设计原则：
     <th width="50%">SuperTranslate</th>
   </tr>
   <tr>
-    <td><a href="docs/assets/comparison/qwen_robotworld/original_p1.png"><img src="docs/assets/comparison/qwen_robotworld/original_p1.png" alt="Qwen-RobotWorld 原文第 1 页"></a></td>
-    <td><a href="docs/assets/comparison/qwen_robotworld/ours_p1.png"><img src="docs/assets/comparison/qwen_robotworld/ours_p1.png" alt="Qwen-RobotWorld SuperTranslate 译文第 1 页"></a></td>
-  </tr>
-  <tr>
     <td><a href="docs/assets/comparison/qwen_robotworld/original_p4.png"><img src="docs/assets/comparison/qwen_robotworld/original_p4.png" alt="Qwen-RobotWorld 原文第 4 页（数据混合结构图）"></a></td>
     <td><a href="docs/assets/comparison/qwen_robotworld/ours_p4.png"><img src="docs/assets/comparison/qwen_robotworld/ours_p4.png" alt="Qwen-RobotWorld SuperTranslate 译文第 4 页"></a></td>
   </tr>
 </table>
 
-**看什么**：第 1 页的标题、摘要与管线彩图——品牌元素、链接、arXiv 侧边栏完整保留；第 4 页的大型数据混合结构图——图注译为中文，行内数学符号 `s_t`、`a_t`、`s_{t+1}` 原样保留，验证复杂图文混排。
+**看什么**：第 4 页的大型数据混合结构图——图注译为中文，行内数学符号 `s_t`、`a_t`、`s_{t+1}` 原样保留，验证复杂图文混排。
 
 ### Cosmos World Foundation Model（75 页 · CC BY 4.0）
 
