@@ -1,0 +1,260 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">SuperTranslate 实现机制与确定性质量循环</title>
+  <desc id="desc">从 PDF 结构解析、运行时源对象清单、多供应商批量翻译与原位回填，到检测、缺陷规划、有界修复、严格分数比较、接受或回滚的质量循环，并展示 Golden pages 与发布基准门禁。</desc>
+  <defs>
+    <linearGradient id="bgGlow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="0.55" stop-color="#090d1a"/>
+      <stop offset="1" stop-color="#0c1224"/>
+    </linearGradient>
+    <linearGradient id="bluePanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#172542"/>
+      <stop offset="1" stop-color="#101a31"/>
+    </linearGradient>
+    <linearGradient id="warmPanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a1c27"/>
+      <stop offset="1" stop-color="#15172a"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#6f9dff" stroke-opacity="0.035" stroke-width="1"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000814" flood-opacity="0.42"/>
+    </filter>
+    <marker id="arrowBlue" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L9 4.5L0 9Z" fill="#6f9dff"/>
+    </marker>
+    <marker id="arrowWarm" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L9 4.5L0 9Z" fill="#ff8f6b"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L9 4.5L0 9Z" fill="#5fe6a8"/>
+    </marker>
+    <style>
+      .title { fill: #eef2fc; font-size: 25px; font-weight: 760; letter-spacing: -0.3px; }
+      .subtitle { fill: #94a2c6; font-size: 12.5px; }
+      .section { fill: #eef2fc; font-size: 14px; font-weight: 760; }
+      .section-en { fill: #6f9dff; font-size: 9px; font-weight: 700; letter-spacing: 1.25px; }
+      .node-title { fill: #eef2fc; font-size: 14px; font-weight: 740; }
+      .node-sub { fill: #94a2c6; font-size: 10.5px; }
+      .micro { fill: #94a2c6; font-size: 9.5px; }
+      .mono { fill: #9ec3ff; font-size: 9px; font-weight: 680; letter-spacing: 0.55px; }
+      .chip { fill: #eef2fc; font-size: 10px; font-weight: 680; }
+      .arrow-label { fill: #9ec3ff; font-size: 9px; font-weight: 650; }
+      .warm { fill: #ff8f6b; }
+      .green { fill: #5fe6a8; }
+      .muted { fill: #6b7899; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="760" fill="url(#bgGlow)"/>
+  <rect width="1280" height="760" fill="url(#grid)"/>
+  <circle cx="1110" cy="40" r="210" fill="#6f9dff" opacity="0.045"/>
+  <circle cx="90" cy="675" r="190" fill="#ff8f6b" opacity="0.025"/>
+
+  <g font-family="system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+    <text x="28" y="35" class="title">SuperTranslate：从源 PDF 到可审计译文</text>
+    <text x="28" y="59" class="subtitle">原位替换，不重排页面；每个候选都必须经过可重复的检测与比较。</text>
+    <g transform="translate(1037 23)">
+      <rect width="215" height="31" rx="15.5" fill="#111a31" stroke="#6f9dff" stroke-opacity="0.35"/>
+      <circle cx="17" cy="15.5" r="4" fill="#5fe6a8"/>
+      <text x="29" y="19.5" class="mono">DETERMINISTIC QA LOOP</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="24" y="78" width="1232" height="132" rx="18" fill="#0f172c" stroke="#6f9dff" stroke-opacity="0.2"/>
+    </g>
+    <text x="43" y="102" class="section">① 输入与解析</text>
+    <text x="151" y="102" class="section-en">PARSE &amp; INVENTORY</text>
+
+    <g transform="translate(45 122)">
+      <rect width="130" height="66" rx="13" fill="#111a31" stroke="#6f9dff" stroke-opacity="0.46"/>
+      <path d="M26 14h42l18 18v21H26Z" fill="none" stroke="#9ec3ff" stroke-width="1.5"/>
+      <path d="M68 14v18h18" fill="none" stroke="#9ec3ff" stroke-width="1.5"/>
+      <text x="96" y="31" class="node-title" text-anchor="middle">源 PDF</text>
+      <text x="96" y="48" class="node-sub" text-anchor="middle">pages · coordinates</text>
+    </g>
+    <path d="M180 155H211" fill="none" stroke="#6f9dff" stroke-width="1.7" marker-end="url(#arrowBlue)"/>
+
+    <g transform="translate(221 110)">
+      <rect width="710" height="87" rx="14" fill="url(#bluePanel)" stroke="#6f9dff" stroke-opacity="0.42"/>
+      <text x="18" y="23" class="node-title">运行时源对象清单</text>
+      <text x="160" y="23" class="mono">SOURCE OBJECT INVENTORY</text>
+      <text x="674" y="23" class="micro" text-anchor="end">in-memory · per page</text>
+      <g transform="translate(18 35)">
+        <rect width="154" height="37" rx="9" fill="#0d1526" stroke="#6f9dff" stroke-opacity="0.24"/>
+        <text x="12" y="16" class="chip">文本块与坐标</text>
+        <text x="12" y="29" class="micro">TextBlock · bbox · role</text>
+      </g>
+      <g transform="translate(184 35)">
+        <rect width="154" height="37" rx="9" fill="#0d1526" stroke="#6f9dff" stroke-opacity="0.24"/>
+        <text x="12" y="16" class="chip">公式保护区</text>
+        <text x="12" y="29" class="micro">math atoms · keepouts</text>
+      </g>
+      <g transform="translate(350 35)">
+        <rect width="154" height="37" rx="9" fill="#0d1526" stroke="#6f9dff" stroke-opacity="0.24"/>
+        <text x="12" y="16" class="chip">图像与矢量区</text>
+        <text x="12" y="29" class="micro">images · drawings · tables</text>
+      </g>
+      <g transform="translate(516 35)">
+        <rect width="176" height="37" rx="9" fill="#0d1526" stroke="#6f9dff" stroke-opacity="0.24"/>
+        <text x="12" y="16" class="chip">引用 / 算法 / 参考文献</text>
+        <text x="12" y="29" class="micro">classify → translate / freeze</text>
+      </g>
+    </g>
+
+    <path d="M938 155H970" fill="none" stroke="#6f9dff" stroke-width="1.7" marker-end="url(#arrowBlue)"/>
+    <g transform="translate(980 122)">
+      <rect width="248" height="66" rx="13" fill="#111a31" stroke="#6f9dff" stroke-opacity="0.36"/>
+      <text x="16" y="23" class="node-title">冻结不可改对象</text>
+      <text x="16" y="40" class="node-sub">页面尺寸 · 图形 · 原公式字形 · 引用标记</text>
+      <text x="16" y="55" class="mono">FREEZE / KEEP ORIGINAL GEOMETRY</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="24" y="224" width="1232" height="142" rx="18" fill="#0f172c" stroke="#6f9dff" stroke-opacity="0.2"/>
+    </g>
+    <text x="43" y="249" class="section">② 翻译层</text>
+    <text x="113" y="249" class="section-en">TRANSLATE &amp; REFILL</text>
+
+    <g transform="translate(45 271)">
+      <rect width="148" height="70" rx="13" fill="#111a31" stroke="#6f9dff" stroke-opacity="0.42"/>
+      <text x="74" y="23" class="node-title" text-anchor="middle">可翻译正文</text>
+      <text x="74" y="41" class="node-sub" text-anchor="middle">title · body · caption</text>
+      <text x="74" y="57" class="mono" text-anchor="middle">⟦n⟧ PROTECTED</text>
+    </g>
+    <path d="M198 306H230" fill="none" stroke="#6f9dff" stroke-width="1.7" marker-end="url(#arrowBlue)"/>
+
+    <g transform="translate(240 257)">
+      <rect width="690" height="96" rx="14" fill="url(#bluePanel)" stroke="#6f9dff" stroke-opacity="0.44"/>
+      <text x="18" y="23" class="node-title">多供应商 LLM 适配层</text>
+      <text x="181" y="23" class="mono">DEEPSEEK · KIMI · OPENAI-COMPATIBLE · ANTHROPIC · GLM</text>
+      <g transform="translate(18 36)">
+        <rect width="202" height="44" rx="9" fill="#0d1526" stroke="#6f9dff" stroke-opacity="0.24"/>
+        <text x="12" y="18" class="chip">相关术语按块注入</text>
+        <text x="12" y="33" class="micro">terminology + structure hints</text>
+      </g>
+      <g transform="translate(234 36)">
+        <rect width="202" height="44" rx="9" fill="#0d1526" stroke="#6f9dff" stroke-opacity="0.24"/>
+        <text x="12" y="18" class="chip">分批并发 + JSONL 缓存</text>
+        <text x="12" y="33" class="micro">batch · cache · deterministic replay</text>
+      </g>
+      <g transform="translate(450 36)">
+        <rect width="222" height="44" rx="9" fill="#0d1526" stroke="#6f9dff" stroke-opacity="0.24"/>
+        <text x="12" y="18" class="chip">占位符校验 + 有界重试</text>
+        <text x="12" y="33" class="micro">split / single fallback · backoff</text>
+      </g>
+    </g>
+
+    <path d="M938 306H970" fill="none" stroke="#6f9dff" stroke-width="1.7" marker-end="url(#arrowBlue)"/>
+    <g transform="translate(980 271)">
+      <rect width="248" height="70" rx="13" fill="#111a31" stroke="#6f9dff" stroke-opacity="0.42"/>
+      <text x="16" y="23" class="node-title">原坐标回填中文</text>
+      <text x="16" y="41" class="node-sub">仅清除可替换文字 · CJK 字体回退与子集化</text>
+      <text x="16" y="57" class="mono">REDACT TEXT → TYPESET IN BBOX</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="24" y="381" width="1232" height="288" rx="20" fill="#0e162b" stroke="#ff8f6b" stroke-opacity="0.26"/>
+    </g>
+    <text x="43" y="408" class="section">③ 确定性质量循环</text>
+    <text x="181" y="408" class="section-en warm">DETERMINISTIC QUALITY LOOP</text>
+    <g transform="translate(663 391)">
+      <rect width="250" height="28" rx="14" fill="#17213a" stroke="#6f9dff" stroke-opacity="0.34"/>
+      <text x="125" y="18.5" class="mono" text-anchor="middle">迭代 QA 默认 4 轮 · API 可配 1–8</text>
+    </g>
+
+    <path d="M1104 341V374H135V469" fill="none" stroke="#6f9dff" stroke-width="1.7" stroke-dasharray="5 5" marker-end="url(#arrowBlue)"/>
+    <text x="1081" y="373" class="arrow-label" text-anchor="end">候选译文</text>
+
+    <g transform="translate(48 470)">
+      <rect width="175" height="78" rx="13" fill="#111a31" stroke="#6f9dff" stroke-opacity="0.42"/>
+      <text x="87.5" y="24" class="node-title" text-anchor="middle">当前结果 + 快照</text>
+      <text x="87.5" y="43" class="node-sub" text-anchor="middle">mono / dual PDF bytes</text>
+      <text x="87.5" y="60" class="mono" text-anchor="middle">CURRENT + SNAPSHOT</text>
+    </g>
+    <path d="M223 509H260" fill="none" stroke="#6f9dff" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
+
+    <g transform="translate(270 438)">
+      <rect width="258" height="137" rx="15" fill="#13203a" stroke="#6f9dff" stroke-opacity="0.54"/>
+      <text x="16" y="24" class="node-title">QA 检测器</text>
+      <text x="104" y="24" class="mono">ALL DETECTORS RERUN</text>
+      <text x="16" y="47" class="node-sub">漏翻 · 保护区内容变更 · 文本重叠 / 空页</text>
+      <text x="16" y="65" class="node-sub">图片 / 矢量 / 公式缺失 · 页面尺寸</text>
+      <text x="16" y="83" class="node-sub">墨迹视觉回归 · 字号 / 表格 / 引用巡检</text>
+      <line x1="16" y1="98" x2="242" y2="98" stroke="#6f9dff" stroke-opacity="0.18"/>
+      <text x="16" y="118" class="node-sub">术语一致性</text>
+      <text x="88" y="118" class="micro muted">advisory，不进入 issue score</text>
+    </g>
+    <path d="M528 506H555" fill="none" stroke="#6f9dff" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
+
+    <g transform="translate(565 459)">
+      <rect width="160" height="98" rx="14" fill="#111a31" stroke="#6f9dff" stroke-opacity="0.38"/>
+      <text x="80" y="25" class="node-title" text-anchor="middle">结构化缺陷清单</text>
+      <text x="80" y="45" class="node-sub" text-anchor="middle">TranslationIssue[]</text>
+      <text x="80" y="63" class="node-sub" text-anchor="middle">code · page · severity</text>
+      <text x="80" y="81" class="mono" text-anchor="middle">STABLE FINGERPRINT</text>
+    </g>
+    <path d="M725 508H755" fill="none" stroke="#ff8f6b" stroke-width="1.8" marker-end="url(#arrowWarm)"/>
+
+    <g transform="translate(765 459)">
+      <rect width="160" height="98" rx="14" fill="url(#warmPanel)" stroke="#ff8f6b" stroke-opacity="0.62"/>
+      <text x="80" y="25" class="node-title" text-anchor="middle">有界修复</text>
+      <text x="80" y="45" class="node-sub" text-anchor="middle">重叠 → 保守版面修复</text>
+      <text x="80" y="63" class="node-sub" text-anchor="middle">漏翻 → 有界重译</text>
+      <text x="80" y="81" class="mono warm" text-anchor="middle">TYPED ACTION ONLY</text>
+    </g>
+    <path d="M925 508H938" fill="none" stroke="#ff8f6b" stroke-width="1.8" marker-end="url(#arrowWarm)"/>
+
+    <path d="M1031 448L1124 508L1031 568L938 508Z" fill="#17213a" stroke="#ff8f6b" stroke-width="1.5" stroke-opacity="0.76"/>
+    <text x="1031" y="487" class="node-title" text-anchor="middle">候选分数比较</text>
+    <text x="1031" y="508" class="node-sub" text-anchor="middle">score = (error 数, issue 总数)</text>
+    <text x="1031" y="528" class="mono warm" text-anchor="middle">CANDIDATE &lt; PREVIOUS ?</text>
+
+    <g transform="translate(1092 398)">
+      <rect width="142" height="42" rx="11" fill="#102b2a" stroke="#5fe6a8" stroke-opacity="0.68"/>
+      <text x="71" y="17" class="node-title green" text-anchor="middle">无 error：交付</text>
+      <text x="71" y="31.5" class="micro" text-anchor="middle">WEB QA PASS</text>
+    </g>
+    <path d="M528 458C680 414 899 414 1081 418" fill="none" stroke="#5fe6a8" stroke-width="1.7" marker-end="url(#arrowGreen)"/>
+    <text x="773" y="421" class="arrow-label green" text-anchor="middle">issues 为空 / 无错误级缺陷</text>
+
+    <g transform="translate(738 596)">
+      <rect width="192" height="45" rx="11" fill="#102b2a" stroke="#5fe6a8" stroke-opacity="0.7"/>
+      <text x="96" y="18" class="node-title green" text-anchor="middle">严格下降：接受候选</text>
+      <text x="96" y="33" class="micro" text-anchor="middle">ACCEPT → next inspection</text>
+    </g>
+    <path d="M997 565C966 588 948 606 932 615" fill="none" stroke="#5fe6a8" stroke-width="1.8" marker-end="url(#arrowGreen)"/>
+    <text x="966" y="590" class="arrow-label green" text-anchor="end">yes</text>
+    <path d="M738 619C625 658 375 653 373 578" fill="none" stroke="#5fe6a8" stroke-width="1.8" marker-end="url(#arrowGreen)"/>
+    <text x="547" y="651" class="arrow-label green" text-anchor="middle">复检全部检测器 · until clean / pass limit</text>
+
+    <g transform="translate(987 596)">
+      <rect width="229" height="45" rx="11" fill="#2a1c27" stroke="#ff8f6b" stroke-opacity="0.72"/>
+      <text x="114.5" y="18" class="node-title warm" text-anchor="middle">持平或变差：回滚快照</text>
+      <text x="114.5" y="33" class="micro" text-anchor="middle">ROLLBACK + STOP (no progress)</text>
+    </g>
+    <path d="M1066 565C1081 577 1090 586 1098 596" fill="none" stroke="#ff8f6b" stroke-width="1.8" marker-end="url(#arrowWarm)"/>
+    <text x="1091" y="579" class="arrow-label warm">no</text>
+
+    <text x="46" y="656" class="micro">版面候选在本轮严格比较；漏翻等错误由外层恢复预算触发重译，并跨尝试保留最佳快照。</text>
+
+    <g>
+      <rect x="24" y="683" width="1232" height="61" rx="16" fill="#0d1526" stroke="#6f9dff" stroke-opacity="0.24"/>
+      <text x="43" y="706" class="section">回归与发布</text>
+      <text x="43" y="726" class="section-en">REGRESSION / RELEASE</text>
+      <g transform="translate(200 692)">
+        <rect width="306" height="43" rx="11" fill="#111a31" stroke="#6f9dff" stroke-opacity="0.38"/>
+        <text x="14" y="18" class="node-title">Golden pages 回归</text>
+        <text x="14" y="33" class="micro">同一 issues + visual score；全部 case 通过才 ready</text>
+      </g>
+      <path d="M506 713H529" fill="none" stroke="#6f9dff" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <g transform="translate(538 692)">
+        <rect width="694" height="43" rx="11" fill="#13203a" stroke="#5fe6a8" stroke-opacity="0.45"/>
+        <text x="14" y="17" class="node-title">发布严格门禁</text>
+        <text x="118" y="17" class="mono green">STRICT GATE · CURRENT CODE</text>
+        <text x="14" y="33" class="micro">50 篇清单报告齐全 · ≥20 strict pass · 10 布局轴 / provenance / no regression；worldmodel10 另作 10 篇验收集</text>
+      </g>
+    </g>
+  </g>
+</svg>
