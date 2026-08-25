@@ -1,131 +1,52 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
-  <title id="title">SuperTranslate 独立审查与修复协议</title>
-  <desc id="desc">修复方只写候选 PDF，独立 QA 审查方只读源文件和候选并输出结构化缺陷；候选必须经过严格比较、快照和全局最佳保留，最后由 strict gate 决定是否发布。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 560" role="img" aria-labelledby="title desc">
+  <title id="title">修复者不能给自己打分</title>
+  <desc id="desc">修复方只写候选，审查方只读挑错，双方互不信任，最终由 strict gate 决定是否交付。</desc>
   <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0b1020"/>
-      <stop offset="1" stop-color="#080c18"/>
-    </linearGradient>
-    <linearGradient id="blueCard" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#162a4b"/>
-      <stop offset="1" stop-color="#101a31"/>
-    </linearGradient>
-    <linearGradient id="goldCard" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#302819"/>
-      <stop offset="1" stop-color="#171a2a"/>
-    </linearGradient>
-    <filter id="shadow" x="-20%" y="-25%" width="140%" height="160%">
-      <feDropShadow dx="0" dy="11" stdDeviation="14" flood-color="#02050d" flood-opacity=".58"/>
-    </filter>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0L10 5L0 10Z" fill="#78a9ff"/>
-    </marker>
-    <marker id="arrowGold" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0L10 5L0 10Z" fill="#f1c75b"/>
+    <marker id="arrow-gold" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L8 4L0 8Z" fill="#f3c96b"/>
     </marker>
     <style>
-      .eyebrow { fill: #78a9ff; font-size: 12px; font-weight: 760; letter-spacing: 2.4px; }
-      .title { fill: #f5f7ff; font-size: 36px; font-weight: 800; letter-spacing: -.8px; }
-      .subtitle { fill: #9baaca; font-size: 16px; }
-      .side-title { fill: #f5f7ff; font-size: 27px; font-weight: 820; }
-      .side-en { fill: #78a9ff; font-size: 11px; font-weight: 800; letter-spacing: 1.5px; }
-      .side-sub { fill: #b5c0d8; font-size: 16px; }
-      .rule { fill: #dce4f5; font-size: 16px; font-weight: 680; }
-      .rule-en { fill: #7e8ead; font-size: 10px; font-weight: 760; letter-spacing: 1.1px; }
-      .center { fill: #f5f7ff; font-size: 19px; font-weight: 820; }
-      .center-en { fill: #f1c75b; font-size: 10px; font-weight: 820; letter-spacing: 1.2px; }
-      .route { fill: #a5b2cc; font-size: 12px; font-weight: 730; }
-      .bottom-title { fill: #f5f7ff; font-size: 19px; font-weight: 800; }
-      .bottom-sub { fill: #aab7d2; font-size: 13px; }
-      .bottom-en { fill: #78a9ff; font-size: 9px; font-weight: 800; letter-spacing: 1.15px; }
-      .gate { fill: #f1c75b; font-size: 11px; font-weight: 820; letter-spacing: 1.25px; }
-      .source { fill: #697999; font-size: 9px; font-weight: 620; }
+      .figure-title { fill: #f7f9ff; font-size: 48px; font-weight: 760; letter-spacing: -1px; }
+      .figure-subtitle { fill: #a9b4ca; font-size: 19px; font-weight: 450; }
+      .side-title { fill: #f7f9ff; font-size: 30px; font-weight: 720; }
+      .side-subtitle { fill: #a9b4ca; font-size: 18px; font-weight: 500; }
+      .center-title { fill: #f7f9ff; font-size: 25px; font-weight: 720; }
+      .gate-title { fill: #f3c96b; font-size: 28px; font-weight: 740; }
+      .gate-subtitle { fill: #f7f9ff; font-size: 16px; font-weight: 560; }
     </style>
   </defs>
 
-  <rect width="1280" height="640" fill="#0b1020"/>
-  <rect width="1280" height="640" fill="url(#background)"/>
-  <path d="M640 145V452" stroke="#f1c75b" stroke-opacity=".1" stroke-dasharray="5 8"/>
-  <circle cx="1100" cy="45" r="210" fill="#78a9ff" opacity=".04"/>
-  <circle cx="120" cy="625" r="190" fill="#f1c75b" opacity=".025"/>
+  <rect width="1280" height="560" fill="#0b1020"/>
 
   <g font-family="system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
-    <text x="56" y="46" class="eyebrow">INDEPENDENT REVIEW–REPAIR PROTOCOL · SEPARATION OF POWERS</text>
-    <text x="56" y="90" class="title">修复者不能给自己打分</text>
-    <text x="56" y="119" class="subtitle">一方只能写候选，一方只能读并挑错；是否采用，由快照比较与 strict gate 裁决。</text>
+    <text x="64" y="70" class="figure-title">修复者不能给自己打分</text>
+    <text x="64" y="108" class="figure-subtitle">修复方只写候选，审查方只读挑错，交付由终审门禁决定。</text>
 
-    <g filter="url(#shadow)">
-      <rect x="56" y="168" width="430" height="260" rx="24" fill="url(#blueCard)" stroke="#78a9ff" stroke-opacity=".68" stroke-width="1.6"/>
-      <rect x="794" y="168" width="430" height="260" rx="24" fill="url(#goldCard)" stroke="#f1c75b" stroke-opacity=".72" stroke-width="1.6"/>
+    <path d="M264 355V397H620V420" fill="none" stroke="#f3c96b" stroke-opacity=".7" stroke-width="2.5" marker-end="url(#arrow-gold)"/>
+    <path d="M1016 355V397H660V420" fill="none" stroke="#f3c96b" stroke-opacity=".7" stroke-width="2.5" marker-end="url(#arrow-gold)"/>
+
+    <g>
+      <rect x="64" y="185" width="400" height="170" rx="22" fill="#6f9dff" fill-opacity=".08" stroke="#6f9dff" stroke-opacity=".72" stroke-width="2"/>
+      <text x="264" y="257" class="side-title" text-anchor="middle">修复方 · 只写候选</text>
+      <text x="264" y="299" class="side-subtitle" text-anchor="middle">可写 PDF，不得自评</text>
     </g>
 
-    <g transform="translate(80 193)">
-      <rect width="102" height="28" rx="14" fill="#78a9ff"/>
-      <text x="51" y="19" fill="#0b1020" font-size="12" font-weight="850" text-anchor="middle">WRITE</text>
-      <text x="0" y="68" class="side-title">修复方 · 可写候选</text>
-      <text x="0" y="92" class="side-en">REPAIRER · CANDIDATE WRITER</text>
-      <line x1="0" y1="111" x2="380" y2="111" stroke="#78a9ff" stroke-opacity=".2"/>
-      <text x="0" y="143" class="rule">① 接收已验证的结构化缺陷</text>
-      <text x="0" y="169" class="rule">② 只执行登记过的有界动作</text>
-      <text x="0" y="195" class="rule">③ 只产出候选 PDF，不决定通过</text>
-      <text x="0" y="224" class="rule-en">TYPED ACTIONS · NO SELF-ACCEPTANCE</text>
+    <g>
+      <path d="M640 170V390" fill="none" stroke="#f3c96b" stroke-opacity=".32" stroke-width="2"/>
+      <rect x="536" y="220" width="208" height="100" rx="20" fill="#f3c96b" fill-opacity=".08" stroke="#f3c96b" stroke-width="2"/>
+      <text x="640" y="280" class="center-title" text-anchor="middle">互不信任</text>
     </g>
 
-    <g transform="translate(818 193)">
-      <rect width="136" height="28" rx="14" fill="#f1c75b"/>
-      <text x="68" y="19" fill="#0b1020" font-size="12" font-weight="850" text-anchor="middle">QA-READONLY</text>
-      <text x="0" y="68" class="side-title">审查方 · 只读复核</text>
-      <text x="0" y="92" class="side-en" style="fill:#f1c75b">INDEPENDENT QA REVIEWER</text>
-      <line x1="0" y1="111" x2="380" y2="111" stroke="#f1c75b" stroke-opacity=".2"/>
-      <text x="0" y="143" class="rule">① 只读源 PDF + 候选 PDF</text>
-      <text x="0" y="169" class="rule">② 隔离重跑同一组检测器</text>
-      <text x="0" y="195" class="rule">③ 只输出 TranslationIssue[]，不改 PDF</text>
-      <text x="0" y="224" class="rule-en" style="fill:#a9955d">READ ONLY · ISSUES, NOT MUTATIONS</text>
+    <g>
+      <rect x="816" y="185" width="400" height="170" rx="22" fill="#6f9dff" fill-opacity=".08" stroke="#6f9dff" stroke-opacity=".72" stroke-width="2"/>
+      <text x="1016" y="257" class="side-title" text-anchor="middle">审查方 · 只读挑错</text>
+      <text x="1016" y="299" class="side-subtitle" text-anchor="middle">只返回缺陷清单</text>
     </g>
 
-    <path d="M486 226C563 188 717 188 794 226" fill="none" stroke="#78a9ff" stroke-width="2.4" marker-end="url(#arrow)"/>
-    <text x="640" y="181" class="route" text-anchor="middle">候选副本 · CANDIDATE PDF</text>
-    <path d="M794 390C717 436 563 436 486 390" fill="none" stroke="#f1c75b" stroke-width="2.4" marker-end="url(#arrowGold)"/>
-    <text x="640" y="449" class="route" text-anchor="middle">结构化缺陷 · VERIFIED ISSUES</text>
-
-    <g filter="url(#shadow)">
-      <circle cx="640" cy="307" r="92" fill="#0e172b" stroke="#f1c75b" stroke-opacity=".8" stroke-width="1.8"/>
-      <circle cx="640" cy="307" r="75" fill="none" stroke="#78a9ff" stroke-opacity=".26"/>
+    <g>
+      <rect x="440" y="430" width="400" height="94" rx="22" fill="#f3c96b" fill-opacity=".1" stroke="#f3c96b" stroke-width="2"/>
+      <text x="640" y="472" class="gate-title" text-anchor="middle">STRICT GATE</text>
+      <text x="640" y="502" class="gate-subtitle" text-anchor="middle">终审通过才交付</text>
     </g>
-    <path d="M640 244l34 13v30c0 29-14 51-34 62-20-11-34-33-34-62v-30Z" fill="#111c34" stroke="#f1c75b" stroke-width="1.8"/>
-    <path d="M622 291H658M640 273V309" stroke="#f1c75b" stroke-width="2" stroke-linecap="round"/>
-    <text x="640" y="373" class="center" text-anchor="middle">权限隔离 · 互不信任</text>
-    <text x="640" y="394" class="center-en" text-anchor="middle">NO SELF-GRADING</text>
-
-    <path d="M640 428V474" fill="none" stroke="#f1c75b" stroke-width="2.2" marker-end="url(#arrowGold)"/>
-
-    <g filter="url(#shadow)">
-      <rect x="56" y="480" width="350" height="112" rx="21" fill="#111c34" stroke="#78a9ff" stroke-opacity=".55" stroke-width="1.4"/>
-      <rect x="438" y="474" width="280" height="124" rx="21" fill="#171b2b" stroke="#f1c75b" stroke-opacity=".72" stroke-width="1.5"/>
-      <rect x="750" y="464" width="474" height="144" rx="22" fill="url(#goldCard)" stroke="#f1c75b" stroke-opacity=".8" stroke-width="1.7"/>
-    </g>
-
-    <text x="80" y="515" class="bottom-title">快照保险库 + 全局最佳</text>
-    <text x="80" y="539" class="bottom-en">SNAPSHOT VAULT · GLOBAL BEST</text>
-    <text x="80" y="565" class="bottom-sub">修复前：mono / dual PDF 快照</text>
-    <text x="80" y="585" class="bottom-sub">跨尝试：best PDF + best score 始终保留</text>
-
-    <text x="578" y="510" class="bottom-title" text-anchor="middle">候选裁决</text>
-    <text x="578" y="533" class="bottom-en" text-anchor="middle">STRICTLY BETTER?</text>
-    <text x="578" y="558" class="bottom-sub" text-anchor="middle">更好 → 更新 best</text>
-    <text x="578" y="579" class="bottom-sub" text-anchor="middle">持平 / 变差 → 原子回滚</text>
-
-    <path d="M406 536H438" fill="none" stroke="#78a9ff" stroke-width="2.2" marker-end="url(#arrow)"/>
-    <path d="M718 536H750" fill="none" stroke="#f1c75b" stroke-width="2.2" marker-end="url(#arrowGold)"/>
-
-    <text x="778" y="497" class="gate">STRICT GATE · FINAL VERDICT</text>
-    <text x="778" y="526" class="bottom-title">终审门禁：证据不够，就不发布</text>
-    <text x="778" y="552" class="bottom-sub">单篇：0 error · 0 actionable warning · visual ≥ 0.55</text>
-    <text x="778" y="575" class="bottom-sub">发布：报告齐全 · provenance · no regression · ≥20 strict pass</text>
-    <rect x="1074" y="486" width="122" height="38" rx="19" fill="#f1c75b"/>
-    <text x="1135" y="511" fill="#0b1020" font-size="14" font-weight="850" text-anchor="middle">PASS → 交付</text>
-    <text x="1074" y="596" class="bottom-en" style="fill:#a9955d">FAIL → REFUSE RELEASE</text>
-
-    <text x="56" y="626" class="source">FACT BASIS · ADR-0001 · app/api/papers.py · app/services/quality_agent.py · scripts/classic_benchmark.py · docs/assets/comparison/NOTES.md</text>
   </g>
 </svg>

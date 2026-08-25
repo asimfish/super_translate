@@ -17,9 +17,9 @@
 
 </div>
 
-**English paper in, Chinese paper out — an agent-native, layout-preserving translation engine. Formulas, figures, and layout stay untouched to the pixel.**
+**Racing through papers, but stuck on slow English reading? SuperTranslate — a pixel-faithful, agent-native translation engine for research papers.**
 
-Everyone who reads papers knows the dilemma: the original is slow going, but machine-translated PDFs are unreadable — formulas collapse into garbage, two columns become one, captions drift away from their figures.
+"I have to present this 75-page report at tomorrow's group meeting — can I get a Chinese version where the formulas stay intact, no figures go missing, and the page numbers still match the original?" Machine-translated PDFs cannot deliver that: formulas collapse into garbage, two columns become one, captions drift away from their figures.
 
 SuperTranslate takes a different route: **it never re-flows the page**. Formulas, figures, and citations are frozen first — not a single character of them is handed to the model. The translated text is placed back at the original coordinates, so everything sits exactly where it was, and a corpus of 1,066 academic terms pins down the terminology. Every page then has to pass a QA audit, and a repair is only accepted if it is strictly better — measured on the 75-page Cosmos technical report: **75/75 pages, 793 objects, 0 issues**.
 
@@ -147,21 +147,27 @@ Neither paper has error-severity issues; the only findings are non-blocking layo
 
 Comparison assets follow the licensing policy of [benchmarks/classic20/README.md](benchmarks/classic20/README.md): **only Creative Commons licensed papers get full translated pages in public** (Qwen-RobotWorld and Cosmos in this section are both CC BY 4.0); papers under the arXiv non-exclusive license are shown only as small close-up crops plus aggregate metrics. Once translations of the six CC-licensed classics in the benchmark's `showcase_cc` group (LLaMA / Mistral / Mamba / DPO / CoT / vLLM) are ready, they will be added as full-page comparisons.
 
-### Capability Matrix
+### How It Compares to Other Ways of Reading Papers
 
-| Capability | SuperTranslate | pdf2zh (PDFMathTranslate) | Immersive Translate | Google Translate (documents) | GPT / Kimi copy-paste |
-|---|---|---|---|---|---|
-| Layout preservation (in-place) | ● keeps page size / images / text-block positions | ● stated goal¹ | ◐ primarily side-by-side output¹ | ◐ approximate¹ | ○ plain text |
-| Formula integrity | ● protected regions + QA re-verification | ● claims formula preservation¹ | ◐ no dedicated mechanism found¹ | ○ no special handling¹ | ○ easily lost or garbled |
-| Figures and tables | ● figure text protected by default, captions translated | ● claims chart preservation¹ | ◐ depends on document type¹ | ◐ images not translated¹ | ○ not applicable |
-| Two-column layouts | ● a fixed coverage axis in the benchmark | ● supported¹ | ◐ varies by PDF¹ | ◐ no specific claims found¹ | ○ not applicable |
-| Long documents (75-page class) | ● Cosmos 75 pages, all objects audited | ◐ no long-document claims found¹ | ◐ no specific claims found¹ | ◐ file-size limits¹ | ○ context-length bound |
-| Self-hosting | ● Docker / uv | ● local runs supported¹ | ○ browser extension + cloud¹ | ○ cloud service | ○ cloud service |
-| Batch processing | ● parallel web jobs + governed batch harness | ● CLI available¹ | ◐ mostly per-document¹ | ○ per-document upload | ○ manual pasting |
-| Post-translation QA audit | ● object-level audit + visual scoring + `*.qa.json` | ○ no built-in post-run audit found¹ | ○ none found¹ | ○ none | ○ none |
-| Open source | ● AGPL-3.0 | ● AGPL-3.0¹ | ◐ extension itself closed-source¹ | ○ closed | ○ closed |
+Each approach has a different job: reading the original is the most faithful but the slowest; chat-paste is the lightest but loses the layout; re-flow tools translate fast but distort the page. SuperTranslate fills the missing layer between them — **a translation you can check against the original pixel by pixel, with quality that proves itself**. This table is a positioning comparison, not a ranking; other tools are described from their public documentation (checked 2026-08).
 
-●&nbsp;full&nbsp;&nbsp;◐&nbsp;partial / depends&nbsp;&nbsp;○&nbsp;none / not applicable
+| Capability | Reading the original | GPT / Kimi copy-paste | Google Translate (docs) | Immersive Translate | pdf2zh (PDFMathTranslate) | SuperTranslate (this project) |
+|---|---|---|---|---|---|---|
+| **Native-language reading speed** | — all English | ✓ plain-text Chinese | ✓ readable output | ✓ bilingual web | ✓ translated PDF | ✓ Chinese-only / bilingual PDF |
+| **Layout preservation** | ✓ the original is the layout | — layout lost | ◐ approximate¹ | ◐ mostly side-by-side¹ | ◐ stated goal, via re-flow¹ | ✓ in-place replacement, pixel-identical geometry |
+| **Display formulas** | ✓ | — easily garbled | — no special handling¹ | ◐ no dedicated mechanism¹ | ◐ claimed¹ | ✓ frozen, never touch the model |
+| **Inline math inside Chinese sentences** | n/a | — | — | ◐¹ | ◐¹ | ✓ preserved through re-wrapped lines (see DDPM above) |
+| **Figures and captions** | ✓ | — not applicable | ◐ images untranslated¹ | ◐ depends on document¹ | ◐ claimed¹ | ✓ figure text protected + captions translated |
+| **Long documents (75-page class)** | ✓ but slowest | — context-bound | ◐ size limits¹ | ◐ unstated¹ | ◐ unstated¹ | ✓ Cosmos 75/75 pages, 0 issues measured |
+| **Terminology consistency** | depends on reader | — drifts | — | — | — | ✓ 1,066-term corpus, per-block injection, extensible |
+| **Side-by-side reader** | — | — | — | ◐ interleaved web view | ◐ bilingual PDF output¹ | ✓ built-in synced dual-pane reader |
+| **Post-translation QA audit** | n/a | — | — | — | — none found¹ | ✓ object-level audit + `*.qa.json` + strictly-better loop |
+| **One-sentence agent integration** | — | ◐ chat only, no layout | — | — | — | ✓ Claude Code / Cursor skill |
+| **Batch processing** | — | — manual pasting | — per-document upload | ◐ mostly per-document¹ | ✓ CLI available¹ | ✓ parallel web jobs + governed batch harness |
+| **Self-hosted, data stays local** | ✓ | — cloud | — cloud | ◐ extension + cloud API¹ | ✓ local runs¹ | ✓ Docker / uv self-hosting |
+| **Open source, auditable** | n/a | — closed | — closed | ◐ extension closed-source¹ | ✓ AGPL-3.0¹ | ✓ AGPL-3.0, QA evidence ships with the code |
+
+✓ available · ◐ partial / depends · — not provided
 
 > ¹ Descriptions of other tools are based on their public documentation and product pages (checked 2026-08) and may change with versions; corrections are welcome via issues.
 >

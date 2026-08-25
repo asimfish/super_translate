@@ -136,6 +136,8 @@ window.__ph = function (img) {
   .hero .wrap { display: grid; grid-template-columns: minmax(0, 54fr) minmax(0, 46fr); gap: var(--sp-5); align-items: center; }
   .hero h1 { margin-top: var(--sp-2); font-size: var(--fs-hero); font-weight: 850; line-height: 1.18; letter-spacing: -.02em; }
   .hero .h1-line2 { display: block; margin-top: 6px; background: linear-gradient(92deg, var(--blue), var(--blue-soft) 52%, var(--warm)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero-ident { margin: var(--sp-3) 0 0; font-size: clamp(19px, 2.1vw, 27px); font-weight: 850; letter-spacing: -.015em; background: linear-gradient(92deg, var(--blue), var(--blue-soft) 52%, var(--warm)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero-ident span { font-weight: 780; }
   .hero .lede { margin-top: var(--sp-3); color: var(--muted); font-size: clamp(15px, 1.35vw, 17px); line-height: 1.75; max-width: 34em; }
   .hero-quote { margin-top: var(--sp-3); padding: 14px 18px; border-left: 3px solid var(--gold); background: rgba(243, 201, 107, .05); border-radius: 0 12px 12px 0; max-width: 36em; }
   .hero-quote em { display: block; font-style: normal; font-size: var(--fs-small); color: var(--faint); letter-spacing: .04em; margin-bottom: 6px; }
@@ -188,7 +190,7 @@ window.__ph = function (img) {
   .browser-live { flex: none; display: inline-flex; align-items: center; gap: 6px; font: 750 10px/1 var(--mono); color: var(--blue-soft); letter-spacing: .12em; }
   .browser-live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 10px var(--blue); animation: pulse 1.8s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
-  .wipe { position: relative; aspect-ratio: 993 / 1404; max-height: 540px; margin: 0 auto; background: #fff; overflow: hidden; }
+  .wipe { position: relative; aspect-ratio: 836 / 1289; max-height: 540px; margin: 0 auto; background: #fff; overflow: hidden; }
   .wipe img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; background: #fff; }
   .wipe .wipe-top { clip-path: inset(0 50% 0 0); animation: wipeClip 7.5s ease-in-out infinite; }
   .wipe .wipe-bar { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; background: var(--blue); box-shadow: 0 0 10px var(--blue), 0 0 26px rgba(111, 157, 255, .6); animation: wipeBar 7.5s ease-in-out infinite; }
@@ -432,6 +434,23 @@ window.__ph = function (img) {
   .mech-item b { display: block; font-size: 15px; font-weight: 780; letter-spacing: -.01em; }
   .mech-item span { display: block; margin-top: 5px; color: var(--muted); font-size: 13px; line-height: 1.7; }
   .mech-item.gold { border-left-color: rgba(243, 201, 107, .45); }
+  /* ============ 优势对比表 ============ */
+  .vs-scroll { margin-top: var(--sp-3); overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--panel-deep); -webkit-overflow-scrolling: touch; }
+  .vs-table { width: 100%; min-width: 880px; border-collapse: collapse; font-size: 13px; }
+  .vs-table th, .vs-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; line-height: 1.5; }
+  .vs-table thead th { font-size: 12px; letter-spacing: .03em; color: var(--muted); background: rgba(111, 157, 255, .06); white-space: nowrap; }
+  .vs-table tbody td:first-child { font-weight: 700; color: var(--ink); white-space: nowrap; }
+  .vs-table tbody td { color: var(--muted); }
+  .vs-table tbody tr:last-child td { border-bottom: none; }
+  .vs-table .us { background: rgba(243, 201, 107, .07); border-left: 1px solid rgba(243, 201, 107, .25); color: var(--ink); }
+  .vs-table thead .us { color: var(--gold); font-weight: 800; }
+  .vs-table i { font-style: normal; font-weight: 800; margin-right: 2px; }
+  .vs-table i.yes { color: #7fe0a7; }
+  .vs-table i.mid { color: var(--gold); }
+  .vs-table i.no { color: var(--faint); }
+  .vs-table i.na { color: var(--faint); font-weight: 600; font-size: 12px; }
+  .vs-note { margin-top: var(--sp-2); color: var(--faint); font-size: var(--fs-small); line-height: 1.7; max-width: var(--w-text, 720px); }
+
   .mech-duo { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); margin-top: var(--sp-3); }
   .mech-duo-card { background: var(--panel-deep); border: 1px solid var(--line); border-radius: 16px; padding: 18px 18px 14px; }
   .mech-duo-card h3 { margin: 0 0 4px; font-size: var(--fs-h3); letter-spacing: -.01em; }
@@ -594,13 +613,12 @@ window.__ph = function (img) {
   <div class="wrap">
     <div class="fx">
       <span class="overline">Open Source · AGPL-3.0 · Web 应用 + Agent Skill</span>
-      <h1>英文论文，直接读中文版
-        <span class="h1-line2">Agent-Native 的保版式翻译引擎</span>
-      </h1>
+      <h1>速刷论文，却卡在英文太慢？</h1>
       <div class="hero-quote">
         <em>一个再普通不过的需求 · 一位晚上还在读论文的研究生</em>
         <p>“这篇 75 页的报告明天组会要讲，能不能给我一份中文版——公式别乱，图别丢，页码还能对上原文？”</p>
       </div>
+      <p class="hero-ident">SuperTranslate<span> · 像素级保真的 Agent-Native 论文翻译引擎</span></p>
       <p class="lede">市面上的工具会先把 PDF 拆开重排：正文是翻出来了，公式挤成一行、双栏变成单栏、图注对不上号。SuperTranslate 换了一条路——<b>不重排</b>。原文哪一块在哪，译文就在哪：<b>公式、图表、版式，一个像素不动</b>。</p>
       <ul class="hero-vows">
         <li>公式、图表、引用先冻结，一个字符都不交给模型</li>
@@ -621,9 +639,9 @@ window.__ph = function (img) {
           <span class="browser-addr">localhost:8001 · cosmos_zh.pdf</span>
           <span class="browser-live">LIVE</span>
         </div>
-        <div class="wipe" data-ph="assets/comparison/cosmos/original_p1.png / ours_p1.png">
-          <img src="assets/comparison/cosmos/ours_p1.png" alt="Cosmos 第 1 页译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
-          <img class="wipe-top" src="assets/comparison/cosmos/original_p1.png" alt="Cosmos 第 1 页原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        <div class="wipe" data-ph="assets/comparison/cosmos/original_p1_trim.png / ours_p1_trim.png">
+          <img src="assets/comparison/cosmos/ours_p1_trim.png" alt="Cosmos 第 1 页译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+          <img class="wipe-top" src="assets/comparison/cosmos/original_p1_trim.png" alt="Cosmos 第 1 页原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
           <span class="wipe-bar" aria-hidden="true"></span>
           <span class="badge en" style="position:absolute; top:10px; left:10px; z-index:3;">EN 原文</span>
           <span class="badge zh" style="position:absolute; top:10px; right:10px; z-index:3;">ZH 译文</span>
@@ -756,6 +774,48 @@ window.__ph = function (img) {
         arXiv 非独占许可论文（Attention、ResNet）只展示小幅局部对比与聚合指标。
       </p>
     </div>
+  </div>
+</section>
+
+<!-- ===== 优势对比 ===== -->
+<section class="alt" id="vs">
+  <div class="wrap">
+    <header class="sec-head fx">
+      <span class="overline gold">Positioning · 优势对比</span>
+      <h2 class="sec-title">相比其他读论文的方式，<b>优势在哪里</b></h2>
+      <p class="sec-desc">各方式定位并不相同：硬读原文最忠实但最慢；聊天粘贴最轻但丢版式；重排式工具翻得快但版面失真。SuperTranslate 补的是它们之间缺失的一层——译文与原文逐像素可对照、质量可自证。此表为定位对照而非优劣评判，别家能力基于公开文档（2026-08 查阅）。</p>
+    </header>
+    <div class="vs-scroll fx">
+      <table class="vs-table">
+        <thead>
+          <tr>
+            <th>能力</th>
+            <th>硬读英文原文</th>
+            <th>GPT / Kimi 粘贴</th>
+            <th>Google 文档翻译</th>
+            <th>沉浸式翻译</th>
+            <th>pdf2zh</th>
+            <th class="us">SuperTranslate</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>中文母语阅读速度</td><td><i class="no">—</i></td><td><i class="yes">✓</i></td><td><i class="yes">✓</i></td><td><i class="yes">✓</i></td><td><i class="yes">✓</i></td><td class="us"><i class="yes">✓</i> 纯中文 / 双语 PDF</td></tr>
+          <tr><td>版式保持</td><td><i class="yes">✓</i> 原文即版式</td><td><i class="no">—</i></td><td><i class="mid">◐</i> 近似¹</td><td><i class="mid">◐</i> 对照式¹</td><td><i class="mid">◐</i> 重排实现¹</td><td class="us"><i class="yes">✓</i> 逐像素一致</td></tr>
+          <tr><td>独立公式完整</td><td><i class="yes">✓</i></td><td><i class="no">—</i> 易乱码</td><td><i class="no">—</i>¹</td><td><i class="mid">◐</i>¹</td><td><i class="mid">◐</i> 声明保留¹</td><td class="us"><i class="yes">✓</i> 冻结不经模型</td></tr>
+          <tr><td>行内公式嵌中文句</td><td><i class="na">n/a</i></td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="mid">◐</i>¹</td><td><i class="mid">◐</i>¹</td><td class="us"><i class="yes">✓</i> 断行后仍原样</td></tr>
+          <tr><td>图表与图注</td><td><i class="yes">✓</i></td><td><i class="no">—</i></td><td><i class="mid">◐</i> 图不翻¹</td><td><i class="mid">◐</i>¹</td><td><i class="mid">◐</i>¹</td><td class="us"><i class="yes">✓</i> 图文保护+图注翻译</td></tr>
+          <tr><td>长文档（75 页级）</td><td><i class="yes">✓</i> 但最耗时</td><td><i class="no">—</i> 上下文受限</td><td><i class="mid">◐</i> 大小限制¹</td><td><i class="mid">◐</i>¹</td><td><i class="mid">◐</i>¹</td><td class="us"><i class="yes">✓</i> 75/75 页实测</td></tr>
+          <tr><td>术语一致性</td><td><i class="mid">◐</i> 取决于读者</td><td><i class="no">—</i> 漂移</td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="no">—</i></td><td class="us"><i class="yes">✓</i> 1,066 条语料+可扩展</td></tr>
+          <tr><td>双栏对照阅读器</td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="mid">◐</i> 网页交错</td><td><i class="mid">◐</i> 双语 PDF¹</td><td class="us"><i class="yes">✓</i> 同步滚动</td></tr>
+          <tr><td>译后 QA 审计</td><td><i class="na">n/a</i></td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="no">—</i>¹</td><td class="us"><i class="yes">✓</i> 对象级+严格变好循环</td></tr>
+          <tr><td>Agent 一句话集成</td><td><i class="no">—</i></td><td><i class="mid">◐</i> 无版式</td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="no">—</i></td><td class="us"><i class="yes">✓</i> Claude Code / Cursor Skill</td></tr>
+          <tr><td>批量处理</td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="mid">◐</i>¹</td><td><i class="yes">✓</i> CLI¹</td><td class="us"><i class="yes">✓</i> 并行+治理型批处理</td></tr>
+          <tr><td>本地部署 · 数据不出机</td><td><i class="yes">✓</i></td><td><i class="no">—</i> 云</td><td><i class="no">—</i> 云</td><td><i class="mid">◐</i> 扩展+云¹</td><td><i class="yes">✓</i>¹</td><td class="us"><i class="yes">✓</i> Docker / uv 自托管</td></tr>
+          <tr><td>开源可审计</td><td><i class="na">n/a</i></td><td><i class="no">—</i></td><td><i class="no">—</i></td><td><i class="mid">◐</i> 本体闭源¹</td><td><i class="yes">✓</i> AGPL¹</td><td class="us"><i class="yes">✓</i> AGPL + QA 证据公开</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="vs-note fx">✓ 具备 · ◐ 部分具备/视情况 · — 不提供 · ¹ 基于各工具公开文档（2026-08 查阅），欢迎指正；pdf2zh 同机图像基线因环境 I/O 未能产出，本表为文字性对比。</p>
   </div>
 </section>
 
@@ -1175,7 +1235,7 @@ ln -s "$PWD/super_translate/skills/paper-translate" ~/.claude/skills/paper-trans
   var $ = function (id) { return document.getElementById(id); };
   var frame = $('baFrame'), under = $('baUnder'), over = $('baOver');
 
-  function imgSrc(slug, kind, n) { return ROOT + slug + '/' + kind + '_p' + n + '.png'; }
+  function imgSrc(slug, kind, n) { return ROOT + slug + '/' + kind + '_p' + n + '_trim.png'; }
 
   /* ============ 滑块交互 ============ */
   function setPos(p) {
