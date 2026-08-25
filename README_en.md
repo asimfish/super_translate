@@ -29,7 +29,7 @@ Deploy it as a web app and you get a built-in side-by-side reader; install it as
 
 ![SuperTranslate result: Cosmos page 1, original alternating with the translation](docs/assets/comparison/cosmos/hero.gif)
 
-Want to see it in action? [22-second web UI demo →](#web-interface)
+Want to see it in action? [24-second web UI demo →](#web-interface)
 
 ## Contents
 
@@ -301,9 +301,9 @@ All screenshots below are real application captures (recorded with headless Play
   </tr>
 </table>
 
-![22-second demo: library, open a paper, synced two-pane scrolling to a formula page, back](docs/assets/webui/demo.gif)
+![13-second condensed demo: library, open a paper, synced two-pane scrolling to a formula page, back](docs/assets/webui/demo.gif)
 
-<sub>22-second end-to-end demo: library → open Attention → synced two-pane scrolling (introduction, formula page) → back to the library.</sub>
+<sub>13-second condensed GIF: library → open Attention → synced two-pane scrolling (introduction, formula page) → back; the 24-second HD MP4 is on the <a href="https://asimfish.github.io/super_translate/#ui">project site</a>.</sub>
 
 ## Features
 

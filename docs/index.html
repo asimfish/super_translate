@@ -613,13 +613,13 @@ window.__ph = function (img) {
   <div class="wrap">
     <div class="fx">
       <span class="overline">Open Source · AGPL-3.0 · Web 应用 + Agent Skill</span>
-      <h1>速刷论文，却卡在英文太慢？</h1>
+      <h1>速刷论文，却卡在英文阅读上？</h1>
       <div class="hero-quote">
-        <em>一个再普通不过的需求 · 一位晚上还在读论文的研究生</em>
+        <em>一个再普通不过的需求 · 一位深夜还在读论文的研究生</em>
         <p>“这篇 75 页的报告明天组会要讲，能不能给我一份中文版——公式别乱，图别丢，页码还能对上原文？”</p>
       </div>
       <p class="hero-ident">SuperTranslate<span> · 像素级保真的 Agent-Native 论文翻译引擎</span></p>
-      <p class="lede">市面上的工具会先把 PDF 拆开重排：正文是翻出来了，公式挤成一行、双栏变成单栏、图注对不上号。SuperTranslate 换了一条路——<b>不重排</b>。原文哪一块在哪，译文就在哪：<b>公式、图表、版式，一个像素不动</b>。</p>
+      <p class="lede">市面上的工具会先把 PDF 拆开重排：正文是翻出来了，公式挤成一行、双栏变成单栏、图注对不上号。SuperTranslate 走了另一条路——<b>不重排</b>。原文哪一块在哪，译文就在哪：<b>公式、图表、版式，一个像素不动</b>。</p>
       <ul class="hero-vows">
         <li>公式、图表、引用先冻结，一个字符都不交给模型</li>
         <li>译文按原坐标回填，页面几何和原文完全一致</li>
@@ -662,7 +662,7 @@ window.__ph = function (img) {
       <span class="overline">Evidence · 效果对比</span>
       <h2 class="sec-title">拖动分割线，<b>逐像素检查</b></h2>
       <p class="sec-desc">
-        每一页都是真实翻译产物的<b>整页渲染</b>，未经修饰：左侧原文、右侧译文，分割线随你拖动。
+        每一页都是真实翻译产物的<b>整页渲染</b>，未做修饰：左侧原文、右侧译文，分割线随你拖动。
         两篇展示论文均为 CC BY 4.0 许可（worldmodel10 基准批次）。
       </p>
     </header>
@@ -711,7 +711,7 @@ window.__ph = function (img) {
           <span class="badge zh">ZH 译文</span>
           <img src="assets/comparison/attention/banner_formula_ours.png" alt="Attention 公式 (1) 上下文译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
         </div>
-        <div class="crop-foot">上下两条对照：段落译成了中文，公式 (1) 与编号<b>一个像素没动</b> · 全篇 15 页：<b>0 error</b> · visual 0.9041 · 严格门通过</div>
+        <div class="crop-foot">上下两条对照：段落译成了中文，公式 (1) 与编号<b>一个像素没动</b> · 全篇 15 页：<b>0 error</b> · visual 0.9041 · 严格门禁通过</div>
       </figure>
 
       <figure class="crop-card crop-banner fx">
@@ -724,7 +724,7 @@ window.__ph = function (img) {
           <span class="badge zh">ZH 译文</span>
           <img src="assets/comparison/ddpm/crop_inline_ours.png" alt="DDPM 行内公式段落译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
         </div>
-        <div class="crop-foot">行内数学比独立公式更难：p<sub>θ</sub>(x<sub>0</sub>)、x<sub>0</sub>∼q(x<sub>0</sub>) 要嵌进重新断行的中文句子里，还得跟上标注 [53] 一起原样保留</div>
+        <div class="crop-foot">行内数学比独立公式更难：p<sub>θ</sub>(x<sub>0</sub>)、x<sub>0</sub>∼q(x<sub>0</sub>) 要嵌进重新断行的中文句子里，还得与引用标注 [53] 一起原样保留</div>
       </figure>
 
       <div class="crop-grid">
@@ -783,7 +783,7 @@ window.__ph = function (img) {
     <header class="sec-head fx">
       <span class="overline gold">Positioning · 优势对比</span>
       <h2 class="sec-title">相比其他读论文的方式，<b>优势在哪里</b></h2>
-      <p class="sec-desc">各方式定位并不相同：硬读原文最忠实但最慢；聊天粘贴最轻但丢版式；重排式工具翻得快但版面失真。SuperTranslate 补的是它们之间缺失的一层——译文与原文逐像素可对照、质量可自证。此表为定位对照而非优劣评判，别家能力基于公开文档（2026-08 查阅）。</p>
+      <p class="sec-desc">各方式定位并不相同：硬读原文最忠实但最慢；聊天粘贴最轻但丢版式；重排式工具翻得快但版面失真。SuperTranslate 补的是它们之间缺失的一层——译文与原文逐像素可对照、质量可自证。此表为定位对照而非优劣评判，别家能力描述基于公开文档（2026-08 查阅）。</p>
     </header>
     <div class="vs-scroll fx">
       <table class="vs-table">
@@ -839,7 +839,7 @@ window.__ph = function (img) {
     <div class="mech-duo">
       <div class="mech-duo-card fx">
         <h3>只接受严格变好的翻译</h3>
-        <p class="cap">每轮 QA 重跑同一组检测器；候选只有严格减少错误与问题总数才会被接受，否则立即恢复修复前快照。</p>
+        <p class="cap">每轮 QA 重跑同一组检测器；候选只有严格减少错误与问题总数才被接受，否则立即恢复修复前快照。</p>
         <a class="figlink" href="assets/qa_loop.svg" target="_blank" rel="noopener" data-ph="assets/qa_loop.svg">
           <img src="assets/qa_loop.svg" alt="确定性 QA 循环图：检测、缺陷清单、有界修复、候选分数比较，严格更好才接受，否则回滚快照" loading="lazy" onerror="window.__ph&&window.__ph(this)">
         </a>
@@ -1069,7 +1069,7 @@ window.__ph = function (img) {
   <div class="wrap">
     <header class="sec-head fx">
       <span class="overline">Bring Your Own Key · 自带 API Key</span>
-      <h2 class="sec-title">用自己的 key，<b>数据不出自己机器</b></h2>
+      <h2 class="sec-title">用自己的 key，<b>数据不出本机</b></h2>
       <p class="sec-desc">本地部署：论文、译文与 API key 都留在你的服务器上，key 加密存进本机 SQLite，界面只显示尾号。</p>
     </header>
     <div class="byok-grid">

@@ -17,19 +17,19 @@
 
 </div>
 
-**速刷论文，却卡在英文太慢？SuperTranslate —— 像素级保真的 Agent-Native 论文翻译引擎。**
+**速刷论文，却卡在英文阅读上？SuperTranslate —— 像素级保真的 Agent-Native 论文翻译引擎。**
 
-「这篇 75 页的报告明天组会要讲，能不能给我一份中文版——公式别乱，图别丢，页码还能对上原文？」市面上的机翻 PDF 做不到：公式挤成乱码、双栏变成单栏、图注对不上号。
+「这篇 75 页的报告明天组会要讲，能不能给我一份中文版——公式别乱，图别丢，页码还能对上原文？」市面上的 PDF 翻译工具做不到：公式挤成乱码、双栏变成单栏、图注对不上号。
 
-SuperTranslate 换了一条路：**不重排页面**。公式、图表、引用先冻结，一个字符都不交给模型；正文翻译后按原坐标回填，原文哪一块在哪，译文就在哪；1,066 条学术术语库把译名钉住。每一页翻完都要过 QA 审计，修复只有严格变好才会被接受——75 页的 Cosmos 技术报告实测下来，**75/75 页通过、793 个对象、0 缺陷**。
+SuperTranslate 走了另一条路：**不重排页面**。公式、图表、引用先冻结，一个字符都不交给模型；正文翻译后按原坐标回填，原文哪一块在哪，译文就在哪；1,066 条学术术语库把译名钉住。每一页翻完都要过 QA 审计，修复只有严格变好才被接受——75 页的 Cosmos 技术报告实测：**75/75 页通过、793 个对象、0 缺陷**。
 
-部署成 Web 应用，就有内置的双栏对照阅读器；装成 Agent Skill，在 Claude Code / Cursor 里说一句"帮我把这篇论文翻成中文"就够了。
+部署成 Web 应用，自带双栏对照阅读器；装成 Agent Skill，在 Claude Code / Cursor 里说一句「帮我把这篇论文翻成中文」就够了。
 
 [看翻译效果](#翻译效果对比) · [五分钟跑起来](#快速开始--web-模式) · [了解实现机制](#实现机制从原页到可信译文)
 
 ![SuperTranslate 翻译效果：Cosmos 第 1 页原文与译文轮播](docs/assets/comparison/cosmos/hero.gif)
 
-想看真实使用过程？[22 秒 Web 界面演示 →](#web-界面)
+想看真实使用过程？[24 秒 Web 界面演示 →](#web-界面)
 
 ## 目录
 
@@ -50,11 +50,11 @@ SuperTranslate 换了一条路：**不重排页面**。公式、图表、引用�
 
 ## 为什么做这个
 
-读英文论文的人每天都在重复同一套动作：左边开原文，右边开翻译工具，来回对照。而现有工具在学术 PDF 上各有各的塌法：
+读英文论文的人每天都在重复同一套动作：左边开原文，右边开翻译工具，来回对照。而现有工具在学术 PDF 上各有各的短板：
 
-- **粘贴进对话式 AI**：得到一段纯文本，版式、公式、图表、交叉引用全部丢失；
+- **粘贴进对话式 AI**：得到的只是纯文本，版式、公式、图表、交叉引用全丢；
 - **浏览器翻译插件**：为网页设计，PDF 的双栏与行内公式常被打散串行；
-- **在线文档翻译**：版式近似还原，但公式没有专门保护，容易被当普通文本改写。
+- **在线文档翻译**：版式近似还原，但公式没有专门保护，易被当作普通文本改写。
 
 学术 PDF 恰恰是版式最密集的文体——编号公式、算法伪代码、双栏排版、图注表格、参考文献，翻坏任何一处都直接影响可读性与可信度。
 
@@ -62,11 +62,11 @@ SuperTranslate 的三条设计原则：
 
 1. **不重排版面**。自研 native 引擎在原 PDF 上原位替换文本，页面尺寸、图像、矢量图形、文本块位置全部保持；公式、表格、算法伪代码、引用标记 `[1][2]` 划入保护区，原样保留。
 2. **翻完必须自证**。每次翻译后自动运行 QA：漏翻检测、保护区改动检测（连实验数字被篡改都能查出）、文本重叠、图片丢失、视觉回归、术语一致性，结果写入 `*.qa.json`。
-3. **不达标不算完成**。确定性质量循环对缺陷做有界修复，候选结果只有在错误分数严格改善时才会替换旧输出，否则回滚快照。
+3. **不达标不算完成**。确定性质量循环对缺陷做有界修复，候选结果只有错误分数严格改善才替换旧输出，否则回滚快照。
 
 ## 翻译效果对比
 
-两列并排：**左原文，右 SuperTranslate 译文**，点击图片查看原始分辨率。所有对比图直接从真实翻译产物渲染（`pdftoppm`，整页 120 DPI、局部放大 240 DPI）；保版式翻译不改变页面几何，同一位置左右直接可比。素材清单与证据指针见 [docs/assets/comparison/manifest.json](docs/assets/comparison/manifest.json)。
+两列并排：**左原文，右 SuperTranslate 译文**，点击图片查看原始分辨率。所有对比图均渲染自真实翻译产物（`pdftoppm`，整页 120 DPI、局部放大 240 DPI）；保版式翻译不改变页面几何，同一位置左右直接可比。素材清单与证据指针见 [docs/assets/comparison/manifest.json](docs/assets/comparison/manifest.json)。
 
 ### Qwen-RobotWorld Technical Report（25 页 · CC BY 4.0）
 
@@ -107,7 +107,7 @@ SuperTranslate 的三条设计原则：
   </tr>
 </table>
 
-**看什么**：第 34 页已在这份 75 页 NVIDIA 技术报告的深处——图 17 视频帧网格（4B/12B/5B/13B 四行）原样保留，Prompt 说明段落与加粗图注译为中文，长文档后段质量不衰减。这篇论文的发布验收通过逐对象审计：**75/75 页、793 个翻译对象、0 缺陷**（详见[质量保障](#质量保障)）。
+**看什么**：第 34 页已在这份 75 页 NVIDIA 技术报告深处——图 17 视频帧网格（4B/12B/5B/13B 四行）原样保留，Prompt 说明段落与加粗图注译为中文，长文档后段质量不衰减。这篇论文的发布验收通过逐对象审计：**75/75 页、793 个翻译对象、0 缺陷**（详见[质量保障](#质量保障)）。
 
 ### 经典论文：局部放大对比（Attention / DDPM / ResNet）
 
@@ -141,7 +141,7 @@ Attention、DDPM 与 ResNet 采用 arXiv 非独占许可（非 CC），按下方
 | Attention Is All You Need | 15 | 0.9041 | 0 | 通过 | 135.1s |
 | Deep Residual Learning (ResNet) | 12 | 0.8621 | 0 | 通过 | 240.2s |
 
-两篇均无错误级缺陷，仅有不阻断门禁的版面风险提示（`high_risk_layout`）；视觉评分为渲染墨迹相似度，严格门禁过线为 ≥ 0.55。
+两篇均无错误级缺陷，仅有不阻断门禁的版面风险提示（`high_risk_layout`）；视觉评分为渲染墨迹相似度，严格门禁要求 ≥ 0.55。
 
 ### 展示政策
 
@@ -181,7 +181,7 @@ Attention、DDPM 与 ResNet 采用 arXiv 非独占许可（非 CC），按下方
 
 SuperTranslate 先冻结原 PDF 中不可改的结构对象，只翻译可替换正文，再按原坐标回填并通过 QA 审计，输出纯中文与双语两种 PDF。
 
-- 文本块携带页码、`bbox`、字号和语义角色；公式、引用与 URL 会先变成可逆占位符，保护区不进入自由改写。（`pdf_zh_translator/pdf_layout.py:370-426`；`pdf_zh_translator/pdf_layout.py:19545-19601`）
+- 文本块携带页码、`bbox`、字号和语义角色；公式、引用与 URL 会先变成可逆占位符，保护区不交给模型改写。（`pdf_zh_translator/pdf_layout.py:370-426`；`pdf_zh_translator/pdf_layout.py:19545-19601`）
 - 术语按当前文本块注入提示词；标题、正文、图注使用结构提示，多供应商层共享同一约束。（`pdf_zh_translator/translators.py:543-647`；`pdf_zh_translator/translators.py:832-923`）
 - 请求同时受批次数和字符数约束；JSONL 缓存、占位符校验与单块回退让同一输入可以确定性重放。（`pdf_zh_translator/translators.py:92-167`；`pdf_zh_translator/translators.py:390-450`）
 - 渲染只擦除可替换文字，再用 CJK 字体链在原 `bbox` 内排版；页面尺寸、图像、矢量、链接与源公式继续沿用原页。（`pdf_zh_translator/pdf_layout.py:1338-1393`；`pdf_zh_translator/pdf_layout.py:8012-8042`；`pdf_zh_translator/pdf_layout.py:25343-25370`）
@@ -193,13 +193,13 @@ SuperTranslate 先冻结原 PDF 中不可改的结构对象，只翻译可替换
 
 <img src="docs/assets/qa_loop.svg" alt="QA 循环：检测、缺陷清单、有界修复、候选比较；只接受严格变好的候选，否则恢复快照" width="100%">
 
-每轮 QA 都重跑同一组检测器；候选只有严格减少错误与问题总数才会被接受，否则立即恢复修复前快照。
+每轮 QA 都重跑同一组检测器；候选只有严格减少错误与问题总数才被接受，否则立即恢复修复前快照。
 
 - 检测覆盖漏翻、保护区变更、重叠与空页、图片/矢量/公式缺失、视觉墨迹、字号、表格与引用；术语审计当前只给提示，不进入问题分。（`pdf_zh_translator/pdf_layout.py:2706-2718`；`pdf_zh_translator/page_inspector.py:2295-2558`；`app/api/papers.py:2890-2922`）
 - QA 输出稳定的 `TranslationIssue[]`；规划器只允许 `accept`、`repair_layout`、`retranslate`、`stop` 四类登记动作。（`app/services/quality_agent.py:11-87`；`docs/adr/0001-independent-translation-quality-loop.md:68-75`）
 - 迭代模式默认最多 4 轮，API 明确限制为 1–8；每轮都从隔离检测开始。（`app/api/papers.py:1201-1241`；`app/api/papers.py:2306-2382`）
 - 修复前同时快照 mono 与 dual PDF；修复后重跑检测器，并按 `(error 数, issue 总数)` 做字典序比较。（`app/api/papers.py:2445-2475`；`app/api/papers.py:2746-2788`）
-- 候选持平或变差会被原子回滚并停止无进展循环；外层恢复尝试另行保留跨尝试全局最佳。（`app/api/papers.py:2476-2494`；`app/api/papers.py:2059-2206`；`app/api/papers.py:2791-2802`）
+- 候选持平或变差会被原子回滚并停止无进展循环；外层恢复循环另存跨尝试的全局最佳。（`app/api/papers.py:2476-2494`；`app/api/papers.py:2059-2206`；`app/api/papers.py:2791-2802`）
 
 ### 修复者不能给自己打分
 
@@ -217,7 +217,7 @@ SuperTranslate 先冻结原 PDF 中不可改的结构对象，只翻译可替换
 
 ### 专业术语库
 
-上文翻译层提到的「术语按块注入提示词」，背后是一个专门为学术翻译设计的语料库。通用翻译最伤专业性的就是术语：同一个概念在一篇论文里被翻出好几种说法，或者按字面直译成中文文献里不存在的叫法。SuperTranslate 用内置语料库把译名钉住。
+上文翻译层提到的「术语按块注入提示词」，背后是一个专门为学术翻译设计的语料库。通用翻译最伤专业性的就是术语：同一个概念在一篇论文里被译出好几种说法，或者按字面直译成中文文献里不存在的叫法。SuperTranslate 用内置语料库把译名钉住。
 
 **规模与构成**：共 **1,066 条术语、23 个分类**，分三份语料文件维护——
 
@@ -225,7 +225,7 @@ SuperTranslate 先冻结原 PDF 中不可改的结构对象，只翻译可替换
 - [`pdf_zh_translator/corpora/ai_conferences.json`](pdf_zh_translator/corpora/ai_conferences.json)：251 条，5 个分类（NeurIPS·ICML·ICLR / CVPR 视觉 / ACL NLP / Agent·对齐·安全 / 论文版式与写作）
 - [`pdf_zh_translator/corpora/top_venue_tracks.json`](pdf_zh_translator/corpora/top_venue_tracks.json)：467 条，按顶会分 track 细分 14 类（NeurIPS 基础理论、ICML 优化与学习理论、CVPR 3D 几何重建等）
 
-**如何参与翻译**：不是把 1,066 条全部塞进提示词——翻译每个文本块时，引擎从语料库检索与该块内容相关的术语拼入 prompt（`pdf_zh_translator/translators.py:832-905`；`pdf_zh_translator/corpus.py`）；再配合首现规则：专有名词首次出现译为「中文术语（English Term）」，之后全篇只用中文。
+**语料如何参与翻译**：不是把 1,066 条全部塞进提示词——翻译每个文本块时，引擎从语料库检索与该块内容相关的术语拼入 prompt（`pdf_zh_translator/translators.py:832-905`；`pdf_zh_translator/corpus.py`）；再配合首现规则：专有名词首次出现译为「中文术语（English Term）」，之后全篇只用中文。
 
 **质量怎么守**：语料库本身由 `corpus-lint --strict` 做跨领域冲突检查，是 CI 门禁之一；译后 QA 会审计译文是否采用规范译法（提示级，不进错误分）。
 
@@ -279,8 +279,8 @@ flowchart LR
 
 两条翻译路径：
 
-- **native 自研引擎**（默认，`PAPER_CHINA_TRANSLATION_ENGINE=native`）：版式保持、保护区、术语注入、QA 修复循环的完整能力，供 DeepSeek / Kimi / OpenAI / Anthropic / GLM 使用。Kimi / Anthropic / GLM 强制走 native 引擎。
-- **pdf2zh 路径**：复用捆绑的 [pdf2zh (PDFMathTranslate)](https://github.com/Byaidu/PDFMathTranslate) 管线，支撑 Google（免 API key 的 `fast` 档）、DeepL、Ollama 本地模型。
+- **native 自研引擎**（默认，`PAPER_CHINA_TRANSLATION_ENGINE=native`）：版式保持、保护区、术语注入、QA 修复循环的完整能力，覆盖 DeepSeek / Kimi / OpenAI / Anthropic / GLM。Kimi / Anthropic / GLM 强制走 native 引擎。
+- **pdf2zh 路径**：复用捆绑的 [pdf2zh (PDFMathTranslate)](https://github.com/Byaidu/PDFMathTranslate) 管线，支持 Google（免 API key 的 `fast` 档）、DeepL、Ollama 本地模型。
 
 设计决策记录见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/adr/](docs/adr/)。完整单图版技术细节见 [docs/assets/mechanism.svg](docs/assets/mechanism.svg)。
 
@@ -299,9 +299,9 @@ flowchart LR
   </tr>
 </table>
 
-![22 秒使用演示：论文库 → 打开论文 → 双栏同步滚动到公式页 → 返回](docs/assets/webui/demo.gif)
+![13 秒精简演示：论文库 → 打开论文 → 双栏同步滚动到公式页 → 返回](docs/assets/webui/demo.gif)
 
-<sub>22 秒完整流程演示：论文库 → 打开 Attention → 双栏同步滚动（引言、公式页）→ 返回论文库。</sub>
+<sub>13 秒精简动图：论文库 → 打开 Attention → 双栏同步滚动（引言、公式页）→ 返回论文库；24 秒高清 MP4 版见<a href="https://asimfish.github.io/super_translate/#ui">项目主页</a>。</sub>
 
 ## 特性
 
@@ -310,7 +310,7 @@ flowchart LR
 - **原位版式保持**：native 引擎保持原页面尺寸、图像、矢量图形与文本块位置，不重排、不重构页面
 - **保护区机制**：公式、表格、算法伪代码、参考文献、引用标记 `[1][2]` 原样保留；图内文字默认保护（可选翻译图内可编辑文本）
 - **纯中文输出**：术语首次出现给出「中文术语（English Term）」，之后统一用中文；粗体/斜体/标题层级保留
-- **专业术语库**：内置 **1,066 条、23 个分类**的学术术语库（顶会分 track 术语 + CS/ML/数学基础词表），翻译时逐块相关注入，译后审计规范译法，`corpus-lint` 作 CI 门禁——详见[专业术语库](#专业术语库)
+- **专业术语库**：内置 **1,066 条、23 个分类**的学术术语库（顶会分 track 术语 + CS/ML/数学基础词表），翻译时按块注入相关术语，译后审计规范译法，`corpus-lint` 作 CI 门禁——详见[专业术语库](#专业术语库)
 - **双输出**：`_zh.pdf`（纯中文）+ `_dual.pdf`（原文/译文对照）
 - **OCR 后备**：扫描版（纯图片）PDF 可先 OCR 再翻译（基于 Tesseract）
 
@@ -481,7 +481,7 @@ CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）每次提交在 Pyth
 | 单篇严格门禁 | 0 错误级缺陷 + 0 可执行警告 + 视觉分 ≥ 0.55 | 另要求页数一致、无空白页、无图片/矢量图/公式丢失 |
 | 发布门禁 | 50 篇清单，默认 ≥ 20 篇 strict pass | gate 另校验报告齐全、证据来源与回归，不达标拒绝发布展示；worldmodel10 另设 10 篇验收集 |
 
-基准产物是内容寻址的：源 PDF SHA-256、译文 SHA-256、QA 代码指纹、引擎与字体指纹全部记录，术语库或提示词变更会强制重建而不是复用旧产物。
+基准产物是内容寻址的：源 PDF SHA-256、译文 SHA-256、QA 代码指纹、引擎与字体指纹全部记录，术语库或提示词变更会强制重建而非复用旧产物。
 
 ## 基准集
 
