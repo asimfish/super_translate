@@ -58,9 +58,10 @@
       "has_pdf2zh": false,
       "crops": [
         "formula",
-        "figure"
+        "figure",
+        "banner_formula"
       ],
-      "notes": "整页图按许可政策不公开展示，仅保留 p4 局部放大：formula=公式(1) Attention(Q,K,V)=softmax(QK^T/√dk)V 区域；figure=图2（缩放点积/多头注意力结构图）+图注。@240dpi。批次指标：15 页，visual_score 0.9041（risk low），error_count 0，strict_pass true，翻译耗时 135.1s。",
+      "notes": "整页图按许可政策不公开展示，仅保留 p4 局部放大：formula=公式(1) Attention(Q,K,V)=softmax(QK^T/√dk)V 区域；figure=图2（缩放点积/多头注意力结构图）+图注。@240dpi。批次指标：15 页，visual_score 0.9041（risk low），error_count 0，strict_pass true，翻译耗时 135.1s。 banner_formula_* 为带上下文版本（段落译文+冻结公式，y1374 H330 @240dpi），主页/README 的独立公式展示用它。",
       "evidence": {
         "ours_pdf": "internal:classic20_final_r2_09f6992/translations/attention-mono.pdf",
         "original_pdf": "internal:classic20_final_r2_09f6992/papers/attention.pdf",
@@ -83,6 +84,23 @@
         "original_pdf": "internal:classic20_final_r2_09f6992/papers/resnet.pdf",
         "qa_report": "internal:classic20_final_r2_09f6992/reports/resnet.json"
       }
+    },
+    {
+      "slug": "ddpm",
+      "title": "Denoising Diffusion Probabilistic Models",
+      "license": "arXiv non-exclusive license（非 CC）",
+      "display": "crops_only",
+      "pages_rendered": [],
+      "has_pdf2zh": false,
+      "crops": [
+        "inline"
+      ],
+      "notes": "行内公式展示样本：p2「2 背景」节首段，p_θ(x_0)、x_0∼q(x_0)、N(x_T;0,I) 等行内数学嵌在重新断行的中文句子里，引用 [53] 保留。crop x200 y1445 W1640 H193 @240dpi。批次：classic20 r2（20/20 完成）。",
+      "evidence": {
+        "ours_pdf": "internal:classic20_final_r2_09f6992/translations/ddpm-mono.pdf",
+        "original_pdf": "internal:classic20_final_r2_09f6992/papers/ddpm.pdf",
+        "qa_report": "internal:classic20_final_r2_09f6992/reports/ddpm.json"
+      }
     }
   ],
   "planned": {
@@ -96,7 +114,7 @@
     ],
     "note": "benchmarks/classic20/manifest.json 中 group=showcase_cc 的六篇 CC 许可经典论文，翻译产物生成后将替换/补充为完整页对比"
   },
-  "generated_at": "2026-08-25T19:15:00+08:00",
+  "generated_at": "2026-08-26T01:40:00+08:00",
   "tools": {
     "pdf2zh_version": null,
     "pdf2zh_note": "基线运行失败：运行环境 .venv 位于 iCloud 同步盘，Python import 阶段 I/O 阻塞（70+ 分钟 CPU <1s、日志 0 字节），超 25 分钟预算放弃，详见 NOTES.md",

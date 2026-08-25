@@ -591,15 +591,15 @@ window.__ph = function (img) {
 <section class="hero" id="top">
   <div class="wrap">
     <div class="fx">
-      <span class="overline">Open Source · AGPL-3.0 · English → Chinese</span>
+      <span class="overline">Open Source · AGPL-3.0 · Web 应用 + Agent Skill</span>
       <h1>英文论文，直接读中文版
-        <span class="h1-line2">公式 · 图表 · 版式，一个像素不动</span>
+        <span class="h1-line2">Agent-Native 的保版式翻译引擎</span>
       </h1>
       <div class="hero-quote">
         <em>一个再普通不过的需求 · 一位晚上还在读论文的研究生</em>
         <p>“这篇 75 页的报告明天组会要讲，能不能给我一份中文版——公式别乱，图别丢，页码还能对上原文？”</p>
       </div>
-      <p class="lede">市面上的工具会先把 PDF 拆开重排：正文是翻出来了，公式挤成一行、双栏变成单栏、图注对不上号。SuperTranslate 换了一条路——<b>不重排</b>。原文哪一块在哪，译文就在哪。</p>
+      <p class="lede">市面上的工具会先把 PDF 拆开重排：正文是翻出来了，公式挤成一行、双栏变成单栏、图注对不上号。SuperTranslate 换了一条路——<b>不重排</b>。原文哪一块在哪，译文就在哪：<b>公式、图表、版式，一个像素不动</b>。</p>
       <ul class="hero-vows">
         <li>公式、图表、引用先冻结，一个字符都不交给模型</li>
         <li>译文按原坐标回填，页面几何和原文完全一致</li>
@@ -682,16 +682,29 @@ window.__ph = function (img) {
         <p class="sec-desc">公式、结构图、双栏首屏——版式最容易翻坏的地方，原文与译文并排对照（240 DPI 渲染）。</p>
       </header>
       <figure class="crop-card crop-banner fx">
-        <div class="crop-head"><b>Attention Is All You Need · 公式 (1) 逐像素对照</b><span>attention · p4 · 240dpi</span></div>
-        <div class="crop-row" data-ph="assets/comparison/attention/crop_formula_original.png">
+        <div class="crop-head"><b>Attention Is All You Need · 独立公式：正文照译，公式冻结</b><span>attention · p4 · 240dpi</span></div>
+        <div class="crop-row" data-ph="assets/comparison/attention/banner_formula_original.png">
           <span class="badge en">EN 原文</span>
-          <img src="assets/comparison/attention/crop_formula_original.png" alt="Attention 公式区域原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+          <img src="assets/comparison/attention/banner_formula_original.png" alt="Attention 公式 (1) 上下文原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
         </div>
-        <div class="crop-row" data-ph="assets/comparison/attention/crop_formula_ours.png">
+        <div class="crop-row" data-ph="assets/comparison/attention/banner_formula_ours.png">
           <span class="badge zh">ZH 译文</span>
-          <img src="assets/comparison/attention/crop_formula_ours.png" alt="Attention 公式区域译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+          <img src="assets/comparison/attention/banner_formula_ours.png" alt="Attention 公式 (1) 上下文译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
         </div>
-        <div class="crop-foot">公式 (1) 与变量原样保留 · 全篇 15 页：<b>0 error</b> · visual 0.9041 · 严格门通过</div>
+        <div class="crop-foot">上下两条对照：段落译成了中文，公式 (1) 与编号<b>一个像素没动</b> · 全篇 15 页：<b>0 error</b> · visual 0.9041 · 严格门通过</div>
+      </figure>
+
+      <figure class="crop-card crop-banner fx">
+        <div class="crop-head"><b>DDPM · 行内公式：数学嵌在中文句子里</b><span>ddpm · p2 · 240dpi · 难度更高</span></div>
+        <div class="crop-row" data-ph="assets/comparison/ddpm/crop_inline_original.png">
+          <span class="badge en">EN 原文</span>
+          <img src="assets/comparison/ddpm/crop_inline_original.png" alt="DDPM 行内公式段落原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/ddpm/crop_inline_ours.png">
+          <span class="badge zh">ZH 译文</span>
+          <img src="assets/comparison/ddpm/crop_inline_ours.png" alt="DDPM 行内公式段落译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-foot">行内数学比独立公式更难：p<sub>θ</sub>(x<sub>0</sub>)、x<sub>0</sub>∼q(x<sub>0</sub>) 要嵌进重新断行的中文句子里，还得跟上标注 [53] 一起原样保留</div>
       </figure>
 
       <div class="crop-grid">
@@ -801,6 +814,11 @@ window.__ph = function (img) {
           专为学术翻译设计：翻译每个文本块时按<b>相关性检索术语注入</b>提示词（不整库硬塞）；
           专有名词首现写作「<b>中文术语（English Term）</b>」、之后只用中文；
           CI 以 <code>corpus-lint --strict</code> 做跨领域一致性门禁，译后再审计术语采用率。
+        </p>
+        <p class="term-mech">
+          而且<b>随你扩展</b>：一条 <code>corpus-add</code> 命令加词；或把自己领域的词表 JSON 丢进
+          <code>corpora/</code> 目录即自动加载，同名条目<b>以你的为准</b>；翻译中收集的术语候选还有
+          review → audit → promote 流水线批量入库——改完 <code>corpus-lint --strict</code> 把关即生效。
         </p>
       </div>
     </div>

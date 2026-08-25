@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![GitHub stars](https://img.shields.io/github/stars/asimfish/super_translate?style=flat&logo=github&label=Stars)](https://github.com/asimfish/super_translate/stargazers)
 
-**英文论文 → 中文版：公式、图表、版式一个像素不动。**
+**英文论文 → 中文版，Agent-Native 的保版式翻译引擎：公式、图表、版式，一个像素不动。**
 
 读论文的人都遇到过这个两难：读英文原文太慢，机翻出来的 PDF 又没法看——公式挤成乱码、双栏变成单栏、图注对不上号。
 
@@ -100,15 +100,21 @@ SuperTranslate 的三条设计原则：
 
 **看什么**：第 34 页已在这份 75 页 NVIDIA 技术报告的深处——图 17 视频帧网格（4B/12B/5B/13B 四行）原样保留，Prompt 说明段落与加粗图注译为中文，长文档后段质量不衰减。这篇论文的发布验收通过逐对象审计：**75/75 页、793 个翻译对象、0 缺陷**（详见[质量保障](#质量保障)）。
 
-### 经典论文：局部放大对比（Attention / ResNet）
+### 经典论文：局部放大对比（Attention / DDPM / ResNet）
 
-Attention Is All You Need 与 ResNet 采用 arXiv 非独占许可（非 CC），按下方[展示政策](#展示政策)只展示小幅局部对比与聚合指标，不公开整页译文。
+Attention、DDPM 与 ResNet 采用 arXiv 非独占许可（非 CC），按下方[展示政策](#展示政策)只展示小幅局部对比与聚合指标，不公开整页译文。
+
+**独立公式**——上为原文、下为译文：段落译成了中文，公式 (1) 与编号一个像素没动。
+
+<a href="docs/assets/comparison/attention/banner_formula_original.png"><img src="docs/assets/comparison/attention/banner_formula_original.png" alt="Attention 公式(1) 上下文：原文"></a>
+<a href="docs/assets/comparison/attention/banner_formula_ours.png"><img src="docs/assets/comparison/attention/banner_formula_ours.png" alt="Attention 公式(1) 上下文：译文"></a>
+
+**行内公式（难度更高）**——`p_θ(x_0)`、`x_0 ∼ q(x_0)` 这类数学要嵌进重新断行的中文句子里，还要与引用标记 `[53]` 一起原样保留：
+
+<a href="docs/assets/comparison/ddpm/crop_inline_original.png"><img src="docs/assets/comparison/ddpm/crop_inline_original.png" alt="DDPM 行内公式段落：原文"></a>
+<a href="docs/assets/comparison/ddpm/crop_inline_ours.png"><img src="docs/assets/comparison/ddpm/crop_inline_ours.png" alt="DDPM 行内公式段落：译文"></a>
 
 <table>
-  <tr>
-    <td align="center" width="50%"><a href="docs/assets/comparison/attention/crop_formula_original.png"><img src="docs/assets/comparison/attention/crop_formula_original.png" alt="Attention 公式(1) 区域：原文"></a><br/><sub>Attention · 公式(1) 区域 · 原文</sub></td>
-    <td align="center" width="50%"><a href="docs/assets/comparison/attention/crop_formula_ours.png"><img src="docs/assets/comparison/attention/crop_formula_ours.png" alt="Attention 公式(1) 区域：译文"></a><br/><sub>Attention · 公式(1) 区域 · 译文（公式原样保留）</sub></td>
-  </tr>
   <tr>
     <td align="center"><a href="docs/assets/comparison/attention/crop_figure_original.png"><img src="docs/assets/comparison/attention/crop_figure_original.png" alt="Attention 图 2 结构图：原文"></a><br/><sub>Attention · 图 2 注意力结构图 · 原文</sub></td>
     <td align="center"><a href="docs/assets/comparison/attention/crop_figure_ours.png"><img src="docs/assets/comparison/attention/crop_figure_ours.png" alt="Attention 图 2 结构图：译文"></a><br/><sub>Attention · 图 2 注意力结构图 · 译文（图内文字保留，图注翻译）</sub></td>
@@ -193,7 +199,24 @@ Golden set 复用同一问题检测与视觉评分；发布基准当前为 50 �
 | Partially Observable Markov Decision Process | 部分可观测马尔可夫决策过程 |
 | Amortized Inference | 摊销推断 |
 
-术语库欢迎 PR 补充：新增条目通过 `corpus-lint --strict` 即可，批量变更流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+**自己扩展术语库**——术语库不是只读的，三种方式按需选：
+
+```bash
+# 方式一：一条命令加词（FIELD 是分类名，如 ml、acl_nlp，也可以起自己的）
+python -m pdf_zh_translator corpus-add ml "world model=世界模型" --source my-lab
+
+# 方式二：整包挂载——把自己的词表 JSON 放进 corpora/ 目录即自动加载，
+# 与官方条目同名时以你的为准（适合团队/领域私有词表）
+cat > pdf_zh_translator/corpora/my_domain.json << 'EOF'
+{"robotics_lab": {"visuomotor policy": "视觉运动策略", "teleoperation": "遥操作"}}
+EOF
+
+# 方式三：候选审阅流水线——翻译过程会收集未入库的术语候选，
+# 去重（corpus-review）→ 自动分类（corpus-audit）→ 批量入库（corpus-promote）
+python -m pdf_zh_translator corpus-lint --strict   # 任何方式改完都用它把关
+```
+
+改完跑 `corpus-lint --strict` 校验冲突即可生效，无需改代码。也欢迎把通用性强的条目 PR 回上游，批量变更流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ### 模块视图（Web 应用全链路）
 

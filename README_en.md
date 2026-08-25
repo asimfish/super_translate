@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![GitHub stars](https://img.shields.io/github/stars/asimfish/super_translate?style=flat&logo=github&label=Stars)](https://github.com/asimfish/super_translate/stargazers)
 
-**English paper in, Chinese paper out — formulas, figures, and layout untouched.**
+**English paper in, Chinese paper out — an agent-native, layout-preserving translation engine. Formulas, figures, and layout stay untouched to the pixel.**
 
 Everyone who reads papers knows the dilemma: the original is slow going, but machine-translated PDFs are unreadable — formulas collapse into garbage, two columns become one, captions drift away from their figures.
 
@@ -100,15 +100,21 @@ Two columns: **original on the left, SuperTranslate output on the right** — cl
 
 **What to look for**: page 34 sits deep inside this 75-page NVIDIA technical report — the Figure 17 video-frame grid (4B/12B/5B/13B rows) is untouched while the prompt paragraphs and bold captions are translated, showing that quality does not decay in the depths of a long document. This paper's release acceptance passed a per-object audit: **75/75 pages, 793 translation objects, 0 issues** (see [Quality Assurance](#quality-assurance)).
 
-### Classic Papers: Close-Up Comparisons (Attention / ResNet)
+### Classic Papers: Close-Up Comparisons (Attention / DDPM / ResNet)
 
-Attention Is All You Need and ResNet are distributed under the arXiv non-exclusive license (not CC), so per the [display policy](#display-policy) below only small close-up crops and aggregate metrics are shown — no full translated pages.
+Attention, DDPM and ResNet are distributed under the arXiv non-exclusive license (not CC), so per the [display policy](#display-policy) below only small close-up crops and aggregate metrics are shown — no full translated pages.
+
+**Display formula** — original above, translation below: the paragraph is translated into Chinese while Equation (1) and its number stay pixel-identical.
+
+<a href="docs/assets/comparison/attention/banner_formula_original.png"><img src="docs/assets/comparison/attention/banner_formula_original.png" alt="Attention Equation (1) in context: original"></a>
+<a href="docs/assets/comparison/attention/banner_formula_ours.png"><img src="docs/assets/comparison/attention/banner_formula_ours.png" alt="Attention Equation (1) in context: translation"></a>
+
+**Inline math (the harder case)** — expressions like `p_θ(x_0)` and `x_0 ∼ q(x_0)` must be embedded into re-wrapped Chinese sentences, together with the citation marker `[53]`, all preserved as-is:
+
+<a href="docs/assets/comparison/ddpm/crop_inline_original.png"><img src="docs/assets/comparison/ddpm/crop_inline_original.png" alt="DDPM inline-math paragraph: original"></a>
+<a href="docs/assets/comparison/ddpm/crop_inline_ours.png"><img src="docs/assets/comparison/ddpm/crop_inline_ours.png" alt="DDPM inline-math paragraph: translation"></a>
 
 <table>
-  <tr>
-    <td align="center" width="50%"><a href="docs/assets/comparison/attention/crop_formula_original.png"><img src="docs/assets/comparison/attention/crop_formula_original.png" alt="Attention Equation 1 region: original"></a><br/><sub>Attention · Equation (1) region · original</sub></td>
-    <td align="center" width="50%"><a href="docs/assets/comparison/attention/crop_formula_ours.png"><img src="docs/assets/comparison/attention/crop_formula_ours.png" alt="Attention Equation 1 region: translation"></a><br/><sub>Attention · Equation (1) region · translation (formula untouched)</sub></td>
-  </tr>
   <tr>
     <td align="center"><a href="docs/assets/comparison/attention/crop_figure_original.png"><img src="docs/assets/comparison/attention/crop_figure_original.png" alt="Attention Figure 2: original"></a><br/><sub>Attention · Figure 2 attention diagrams · original</sub></td>
     <td align="center"><a href="docs/assets/comparison/attention/crop_figure_ours.png"><img src="docs/assets/comparison/attention/crop_figure_ours.png" alt="Attention Figure 2: translation"></a><br/><sub>Attention · Figure 2 attention diagrams · translation (figure text preserved, caption translated)</sub></td>
@@ -193,7 +199,26 @@ Sample entries (real records):
 | Partially Observable Markov Decision Process | 部分可观测马尔可夫决策过程 |
 | Amortized Inference | 摊销推断 |
 
-Contributions are welcome: add entries that pass `corpus-lint --strict`; the batch-change workflow is described in [CONTRIBUTING.md](CONTRIBUTING.md).
+**Extending the corpus yourself** — the corpus is not read-only; pick whichever route fits:
+
+```bash
+# Route 1: add a term with one command (FIELD is a category such as ml or acl_nlp — or your own)
+python -m pdf_zh_translator corpus-add ml "world model=世界模型" --source my-lab
+
+# Route 2: mount a whole vocabulary — drop your own JSON into corpora/ and it is
+# loaded automatically; your entries override official ones with the same term
+# (ideal for team- or domain-private glossaries)
+cat > pdf_zh_translator/corpora/my_domain.json << 'EOF'
+{"robotics_lab": {"visuomotor policy": "视觉运动策略", "teleoperation": "遥操作"}}
+EOF
+
+# Route 3: the candidate-review pipeline — translation runs collect out-of-corpus
+# candidates; dedupe (corpus-review) → auto-classify (corpus-audit) → batch-promote
+# (corpus-promote)
+python -m pdf_zh_translator corpus-lint --strict   # gate every change with this
+```
+
+Run `corpus-lint --strict` after any change and it takes effect — no code changes needed. Upstream PRs for broadly useful entries are welcome; the batch-change workflow is described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Module View (the Full Web-App Path)
 
