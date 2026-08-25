@@ -2,30 +2,38 @@
 
 中文 | [English](README_en.md)
 
+[![在线演示](https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E6%BC%94%E7%A4%BA-Live%20Demo-2ea44f)](https://asimfish.github.io/super_translate/)
 [![CI](https://github.com/asimfish/super_translate/actions/workflows/ci.yml/badge.svg)](https://github.com/asimfish/super_translate/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![GitHub stars](https://img.shields.io/github/stars/asimfish/super_translate?style=flat&logo=github&label=Stars)](https://github.com/asimfish/super_translate/stargazers)
 
-**保版式学术论文 PDF 翻译系统**：直接在原版 PDF 上做英→中翻译，公式、图表、表格、双栏排版零破坏；每一次翻译都产出机器可读的 QA 审计报告。提供两种用法——**Web 应用**（FastAPI + 内置双栏对照阅读器）与 **Agent Skill**（Claude Code / Cursor 里一句话触发）。
+**英文论文 → 中文版：公式、图表、版式一个像素不动。**
+
+翻译在原版 PDF 上原位完成，公式、图表、表格、双栏排版全部保持原样；每次翻译都经过确定性 QA 循环自检自修，并产出机器可读的审计报告——75 页的 Cosmos 技术报告实测 **75/75 页、793 个翻译对象、0 缺陷**。可以部署成 Web 应用（内置双栏对照阅读器），也可以作为 Agent Skill 在 Claude Code / Cursor 里一句话触发。
+
+[看翻译效果](#翻译效果对比) · [五分钟跑起来](#快速开始--web-模式) · [了解实现机制](#实现机制)
 
 ![SuperTranslate 翻译效果：Cosmos 第 1 页原文与译文轮播](docs/assets/comparison/cosmos/hero.gif)
+
+想看真实使用过程？[22 秒 Web 界面演示 →](#web-界面)
 
 ## 目录
 
 1. [为什么做这个](#为什么做这个)
 2. [翻译效果对比](#翻译效果对比)
-3. [特性](#特性)
-4. [架构](#架构)
-5. [快速开始 · Web 模式](#快速开始--web-模式)
-6. [快速开始 · Agent Skill 模式](#快速开始--agent-skill-模式)
-7. [命令行](#命令行)
-8. [质量保障](#质量保障)
-9. [基准集](#基准集)
-10. [支持的翻译后端](#支持的翻译后端)
-11. [FAQ](#faq)
-12. [Roadmap](#roadmap)
-13. [License 与引用](#license-与引用)
+3. [实现机制](#实现机制)
+4. [Web 界面](#web-界面)
+5. [特性](#特性)
+6. [快速开始 · Web 模式](#快速开始--web-模式)
+7. [快速开始 · Agent Skill 模式](#快速开始--agent-skill-模式)
+8. [使用自己的 API Key 与供应商](#使用自己的-api-key-与供应商)
+9. [命令行](#命令行)
+10. [质量保障](#质量保障)
+11. [基准集](#基准集)
+12. [FAQ](#faq)
+13. [Roadmap](#roadmap)
+14. [License 与引用](#license-与引用)
 
 ## 为什么做这个
 
@@ -140,34 +148,25 @@ Attention Is All You Need 与 ResNet 采用 arXiv 非独占许可（非 CC），
 >
 > 诚实说明：上文对比图暂无 pdf2zh 的同机图像基线——制图环境的 I/O 限制导致 pdf2zh 未能在时限内完成运行（记录见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)），本表仅为基于公开文档的文字性对比，欢迎社区提交对比样张。
 
-## 特性
+## 实现机制
 
-**翻译引擎**
+<img src="docs/assets/mechanism.svg" alt="SuperTranslate 从源 PDF 解析、翻译、原位回填到确定性 QA 质量循环的机制图" width="100%">
 
-- **原位版式保持**：native 引擎保持原页面尺寸、图像、矢量图形与文本块位置，不重排、不重构页面
-- **保护区机制**：公式、表格、算法伪代码、参考文献、引用标记 `[1][2]` 原样保留；图内文字默认保护（可选翻译图内可编辑文本）
-- **纯中文输出**：术语首次出现给出「中文术语（English Term）」，之后统一用中文；粗体/斜体/标题层级保留
-- **术语一致性**：内置 1,000+ 条术语库（NeurIPS / ICML / ICLR / CVPR / ACL 等顶会分轨术语 + CS/ML/数学基础词表），翻译时注入提示词，译后审计是否使用标准译法，`corpus-lint` 作为 CI 门禁
-- **双输出**：`_zh.pdf`（纯中文）+ `_dual.pdf`（原文/译文对照）
-- **OCR 后备**：扫描版（纯图片）PDF 可先 OCR 再翻译（基于 Tesseract）
+SuperTranslate 先从原 PDF 提取带页码、坐标、字号和语义角色的文本块，在内存中建立翻译单元与保护区映射；公式、引用和 URL 被替换为可逆的 `⟦n⟧` 占位符，图形、表格、算法与参考文献区域按规则冻结。（`pdf_zh_translator/pdf_layout.py:370-426`；`pdf_zh_translator/pdf_layout.py:8531-8801`；`pdf_zh_translator/pdf_layout.py:19545-19601`）
 
-**质量与可靠性**
+可翻译正文按标题、段落、图注等角色送入多供应商适配层；相关术语按块注入提示词，批处理受条数与字符数双重约束，JSONL 缓存支持确定性重放，占位符异常则降级为单块或分段重试。（`pdf_zh_translator/translators.py:92-167`；`pdf_zh_translator/translators.py:390-450`；`pdf_zh_translator/translators.py:832-923`）
 
-- **译后 QA**：漏翻、保护区改动（含实验数字被篡改）、文本重叠、图片/矢量图/公式丢失、空白页、视觉回归、术语一致性；报告写入机器可读的 `*.qa.json`
-- **确定性修复循环**：单轮或迭代模式，快照 + 有界修复 + 全检测器重跑，仅当错误分数严格改善才替换输出
-- **任务持久化**：任务历史、心跳、取消、进度实时推送；进程重启后排队任务自动重新调度，修不好的任务保留最佳产物并标记 `repair_pending`
-- **断点续传上传**：8 MiB 以上 PDF 自动分块（4 MiB/块，SHA256 校验），代理中断可续传，按内容哈希去重（单文件上限 100 MB）
+渲染阶段只擦除可替换文字，在原 `bbox` 内用 CJK 字体回退链排版；原页尺寸、图像、矢量图形、链接及源公式字形继续沿用原 PDF。（`pdf_zh_translator/pdf_layout.py:1338-1393`；`pdf_zh_translator/pdf_layout.py:8012-8042`；`pdf_zh_translator/pdf_layout.py:25343-25370`）
 
-**部署与协作**
+译文随后在隔离子进程中重建同一源对象视图，检查漏翻、保护区变更、重叠与空页、图像/矢量/公式缺失、视觉墨迹、字号、表格和引用；术语审计当前只记录提示，不进入错误分。（`app/api/papers.py:1763-1836`；`pdf_zh_translator/pdf_layout.py:2706-2718`；`pdf_zh_translator/page_inspector.py:2295-2558`；`app/api/papers.py:2890-2922`）
 
-- **多 LLM 后端**：DeepSeek / Kimi K3 / OpenAI（及兼容端点）/ Anthropic Claude / GLM / Google / DeepL / Ollama，详见[支持的翻译后端](#支持的翻译后端)
-- **按用户加密的 API Key**：每个账号的密钥 AES-GCM 加密存储，不回传浏览器、不写入任务文件
-- **多用户与隔离**：用户名密码账号（PBKDF2）、workspace token 轻量隔离、API bearer token、内置限流
-- **双栏对照阅读器**：原文/译文同步滚动，分割线可拖动，暗色主题，移动端自适应
-- **基准展示页**：`/showcase` 只读展示基准指标与 CC 许可论文的翻译预览
-- **飞书通知**：翻译完成 webhook 推送
+迭代 QA 默认最多 4 轮（API 可配 1–8）：确定性规划器只选择登记过的动作；修复前快照纯中文与双语 PDF，修复后重跑全部检测器，仅当 `(error 数, issue 总数)` 严格下降才接受，否则原子回滚并停止无进展循环。无错误则交付，轮次历史写入 `*.qa.json`；漏翻类错误还可在外层恢复预算内重译，并最终恢复全局最佳快照。（`app/services/quality_agent.py:11-87`；`app/api/papers.py:1201-1241`；`app/api/papers.py:2306-2536`；`app/api/papers.py:2569-2603`；`app/api/papers.py:2746-2802`；`app/api/papers.py:2059-2206`）
 
-## 架构
+Golden set 复用同一问题检测与视觉评分；发布基准当前为 50 篇清单，报告须齐全且默认至少 20 篇 strict pass，单篇要求 0 error、0 actionable warning、视觉分不低于 0.55，并校验证据来源与回归。（`pdf_zh_translator/golden_eval.py:125-152`；`benchmarks/classic20/manifest.json:1-16`；`scripts/classic_benchmark.py:185-200`；`scripts/classic_benchmark.py:1363-1529`；`scripts/classic_benchmark.py:1566-1567`）
+
+### 模块视图（Web 应用全链路）
+
+上面是翻译引擎的机制视图；放到 Web 应用里，一次翻译任务的完整链路如下：
 
 ```mermaid
 flowchart LR
@@ -189,6 +188,52 @@ flowchart LR
 - **pdf2zh 路径**：复用捆绑的 [pdf2zh (PDFMathTranslate)](https://github.com/Byaidu/PDFMathTranslate) 管线，支撑 Google（免 API key 的 `fast` 档）、DeepL、Ollama 本地模型。
 
 设计决策记录见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/adr/](docs/adr/)。
+
+## Web 界面
+
+以下全部为真实运行截图（Playwright 无头浏览器对本仓库 main 分支实录，复现步骤见 [docs/assets/webui/NOTES.md](docs/assets/webui/NOTES.md)）。
+
+<table>
+  <tr>
+    <td width="50%"><a href="docs/assets/webui/library.png"><img src="docs/assets/webui/library.png" alt="论文库界面"></a><br/><sub>论文库：翻译完成的论文卡片直接提供「译文 / 双语」阅读入口</sub></td>
+    <td width="50%"><a href="docs/assets/webui/upload.png"><img src="docs/assets/webui/upload.png" alt="上传界面"></a><br/><sub>上传：拖拽即传、可多选排队，大文件自动分块断点续传</sub></td>
+  </tr>
+  <tr>
+    <td><a href="docs/assets/webui/reader.png"><img src="docs/assets/webui/reader.png" alt="双栏对照阅读器"></a><br/><sub>双栏对照阅读器：左原文右译文，同步滚动，分割线可拖动</sub></td>
+    <td><a href="docs/assets/webui/providers.png"><img src="docs/assets/webui/providers.png" alt="API 设置界面"></a><br/><sub>API 设置：五家供应商各自存 key，已存 key 只显示末 4 位</sub></td>
+  </tr>
+</table>
+
+![22 秒使用演示：论文库 → 打开论文 → 双栏同步滚动到公式页 → 返回](docs/assets/webui/demo.gif)
+
+<sub>22 秒完整流程演示：论文库 → 打开 Attention → 双栏同步滚动（引言、公式页）→ 返回论文库。</sub>
+
+## 特性
+
+**翻译引擎**
+
+- **原位版式保持**：native 引擎保持原页面尺寸、图像、矢量图形与文本块位置，不重排、不重构页面
+- **保护区机制**：公式、表格、算法伪代码、参考文献、引用标记 `[1][2]` 原样保留；图内文字默认保护（可选翻译图内可编辑文本）
+- **纯中文输出**：术语首次出现给出「中文术语（English Term）」，之后统一用中文；粗体/斜体/标题层级保留
+- **术语一致性**：内置 1,000+ 条术语库（NeurIPS / ICML / ICLR / CVPR / ACL 等顶会分轨术语 + CS/ML/数学基础词表），翻译时注入提示词，译后审计是否使用标准译法，`corpus-lint` 作为 CI 门禁
+- **双输出**：`_zh.pdf`（纯中文）+ `_dual.pdf`（原文/译文对照）
+- **OCR 后备**：扫描版（纯图片）PDF 可先 OCR 再翻译（基于 Tesseract）
+
+**质量与可靠性**
+
+- **译后 QA**：漏翻、保护区改动（含实验数字被篡改）、文本重叠、图片/矢量图/公式丢失、空白页、视觉回归、术语一致性；报告写入机器可读的 `*.qa.json`
+- **确定性修复循环**：单轮或迭代模式，快照 + 有界修复 + 全检测器重跑，仅当错误分数严格改善才替换输出
+- **任务持久化**：任务历史、心跳、取消、进度实时推送；进程重启后排队任务自动重新调度，修不好的任务保留最佳产物并标记 `repair_pending`
+- **断点续传上传**：8 MiB 以上 PDF 自动分块（4 MiB/块，SHA256 校验），代理中断可续传，按内容哈希去重（单文件上限 100 MB）
+
+**部署与协作**
+
+- **多 LLM 后端**：DeepSeek / Kimi K3 / OpenAI（及兼容端点）/ Anthropic Claude / GLM / Google / DeepL / Ollama，详见[使用自己的 API Key 与供应商](#使用自己的-api-key-与供应商)
+- **按用户加密的 API Key**：每个账号的密钥 AES-GCM 加密存储，不回传浏览器、不写入任务文件
+- **多用户与隔离**：用户名密码账号（PBKDF2）、workspace token 轻量隔离、API bearer token、内置限流
+- **双栏对照阅读器**：原文/译文同步滚动，分割线可拖动，暗色主题，移动端自适应
+- **基准展示页**：`/showcase` 只读展示基准指标与 CC 许可论文的翻译预览
+- **飞书通知**：翻译完成 webhook 推送
 
 ## 快速开始 · Web 模式
 
@@ -246,6 +291,59 @@ mkdir -p .cursor/skills && cp -r skills/paper-translate .cursor/skills/
 
 Skill 会自动完成：术语库预检 → native 引擎翻译（含翻译缓存）→ 文本/视觉双重 QA → 汇报源文件与产物哈希、QA 计数与视觉评分。
 
+## 使用自己的 API Key 与供应商
+
+SuperTranslate 不内置任何共享 key：你用自己的供应商账号，用量与成本完全自控。三种配置方式任选：
+
+### 方式一：Web 界面「API 设置」
+
+登录后打开右上角「API 设置」，为 DeepSeek / Kimi / OpenAI / Anthropic / GLM 分别保存 key（界面见[上方截图](#web-界面)）：
+
+- key 经 AES-GCM 加密后只存在**本机 SQLite**（`data/` 目录），不回传浏览器，也不写入任务文件；
+- 界面上已保存的 key 只显示 `••••` + 末 4 位；
+- 保存后自动拉取该账号实际可用的模型列表，拉取失败时回退到内置离线目录。
+
+### 方式二：环境变量 / `.env`
+
+服务器管理员可在 `.env`（或 shell 环境）配置回退 key，完整变量清单见 [.env.example](.env.example)：
+
+```bash
+PAPER_CHINA_DEEPSEEK_API_KEY=sk-...     # DeepSeek（默认后端）
+PAPER_CHINA_OPENAI_API_KEY=sk-...      # OpenAI 及兼容端点
+PAPER_CHINA_MOONSHOT_API_KEY=sk-...    # Kimi K3
+PAPER_CHINA_ANTHROPIC_API_KEY=sk-...   # Anthropic Claude
+PAPER_CHINA_GLM_API_KEY=...            # GLM
+```
+
+不带前缀的裸名（`DEEPSEEK_API_KEY` 等）同样被识别；`PAPER_CHINA_DEEPL_API_KEY` 供 pdf2zh 路径的 DeepL 使用。模型与端点可用 `PAPER_CHINA_DEEPSEEK_MODEL`、`PAPER_CHINA_OPENAI_BASE_URL` 等变量覆盖。
+
+### 方式三：CLI / Skill 的 `--api-key-env`
+
+命令行与 Agent Skill 只接受环境变量名、不接受明文 key，避免密钥进入命令行历史与日志：
+
+```bash
+export PAPER_CHINA_DEEPSEEK_API_KEY="sk-..."
+uv run python -m pdf_zh_translator translate paper.pdf paper_zh.pdf \
+  --api-mode deepseek --api-key-env PAPER_CHINA_DEEPSEEK_API_KEY
+```
+
+### 支持的供应商与默认模型
+
+| 后端 | 引擎路径 | API Key | 默认模型 |
+|---|---|---|---|
+| DeepSeek（默认后端） | native | 需要 | `deepseek-v4-pro` |
+| Kimi K3 | native（强制） | 需要 | `kimi-k3` |
+| OpenAI 及兼容端点 | native | 需要 | `gpt-4o-mini`，可配 `BASE_URL`/`MODEL` 接任意兼容端点 |
+| Anthropic Claude | native（强制） | 需要 | `claude-sonnet-5` |
+| GLM | native（强制） | 需要 | `glm-5.2` |
+| Google 翻译 | pdf2zh | 免 key | —（即 `fast` 质量档） |
+| DeepL | pdf2zh | 需要 | — |
+| Ollama | pdf2zh | 免 key | 本地模型，配 `PAPER_CHINA_OLLAMA_HOST` |
+
+Web 界面另提供三个质量档：`fast`（Google，免 key）/ `balanced`（默认，DeepSeek）/ `quality`（DeepSeek 全量选项 + 定制学术提示词）。模型目录的官方来源与维护规则见 [docs/PROVIDER_MODEL_CATALOG.md](docs/PROVIDER_MODEL_CATALOG.md)。
+
+**隐私**：全部自托管——key 加密存在本机，只在直连你所选供应商时用于鉴权，不经过任何中转服务，也不出现在 URL 与日志里。
+
 ## 命令行
 
 Web 与 Skill 之外，引擎本身可以直接从命令行调用（批量脚本、CI 集成）：
@@ -286,7 +384,7 @@ CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）每次提交在 Pyth
 |---|---|---|
 | 长文档逐对象审计 | **75/75 页 · 793 对象 · 0 缺陷** | Cosmos（arXiv 2501.03575，75 页）发布验收，对象级审计策略 `object-qa-2026.08-v1`，逐对象核对标题/摘要/正文/图注的翻译与保护区完整性 |
 | 单篇严格门禁 | 0 错误级缺陷 + 0 可执行警告 + 视觉分 ≥ 0.55 | 另要求页数一致、无空白页、无图片/矢量图/公式丢失 |
-| 公开展示门槛 | ≥ 20 篇 strict pass | 基准 gate 不达标即拒绝发布展示 |
+| 发布门禁 | 50 篇清单，默认 ≥ 20 篇 strict pass | gate 另校验报告齐全、证据来源与回归，不达标拒绝发布展示；worldmodel10 另设 10 篇验收集 |
 
 基准产物是内容寻址的：源 PDF SHA-256、译文 SHA-256、QA 代码指纹、引擎与字体指纹全部记录，术语库或提示词变更会强制重建而不是复用旧产物。
 
@@ -309,21 +407,6 @@ uv run python scripts/classic_benchmark.py gate
 ### worldmodel10（验收集）
 
 [benchmarks/classic20/worldmodel10.json](benchmarks/classic20/worldmodel10.json) 固化 10 篇 2025–2026 年世界模型方向论文（视频/机器人/人形/物理 AI），从 6 页短文到 75 页的 Cosmos 技术报告，全部用带版本号的 arXiv ID 冻结源文件修订，10 篇中 8 篇为 CC BY 4.0。
-
-## 支持的翻译后端
-
-| 后端 | 引擎路径 | API Key | 说明 |
-|---|---|---|---|
-| DeepSeek | native | 需要 | 默认后端，默认模型 `deepseek-v4-pro` |
-| Kimi K3 | native（强制） | 需要 | Moonshot OpenAI 兼容端点 |
-| OpenAI 及兼容端点 | native | 需要 | 可自定义 `OPENAI_BASE_URL` / `OPENAI_MODEL` |
-| Anthropic Claude | native（强制） | 需要 | |
-| GLM | native（强制） | 需要 | |
-| Google 翻译 | pdf2zh | 免 key | 即 `fast` 质量档，速度优先 |
-| DeepL | pdf2zh | 需要 | |
-| Ollama | pdf2zh | 免 key | 本地模型，配 `OLLAMA_HOST` |
-
-Web 界面还提供三个质量档：`fast`（Google，免 key）/ `balanced`（默认，DeepSeek）/ `quality`（DeepSeek 全量选项 + 定制学术提示词）。「API 设置」页展示离线核验的模型目录（最新/质量/均衡/经济分组），保存 key 后还会拉取该账号实际可用的模型列表。目录维护规则见 [docs/PROVIDER_MODEL_CATALOG.md](docs/PROVIDER_MODEL_CATALOG.md)。
 
 ## FAQ
 

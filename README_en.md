@@ -2,30 +2,38 @@
 
 [中文](README.md) | English
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-asimfish.github.io-2ea44f)](https://asimfish.github.io/super_translate/)
 [![CI](https://github.com/asimfish/super_translate/actions/workflows/ci.yml/badge.svg)](https://github.com/asimfish/super_translate/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![GitHub stars](https://img.shields.io/github/stars/asimfish/super_translate?style=flat&logo=github&label=Stars)](https://github.com/asimfish/super_translate/stargazers)
 
-**Layout-preserving academic PDF translation** (English → Chinese): translation happens in place on the original PDF, with zero damage to formulas, figures, tables, and two-column layouts — and every run ships a machine-readable QA audit report. Two ways to use it: a **web app** (FastAPI + built-in side-by-side reader) and an **agent skill** (one sentence in Claude Code / Cursor).
+**English paper in, Chinese paper out — formulas, figures, and layout untouched.**
+
+Translation happens in place on the original PDF: formulas, figures, tables, and two-column layouts stay exactly where they were. Every run passes through a deterministic QA loop that checks and repairs its own output, and ships a machine-readable audit report — measured on the 75-page Cosmos technical report: **75/75 pages, 793 translation objects, 0 issues**. Run it as a web app (with a built-in side-by-side reader) or trigger it as an agent skill with one sentence in Claude Code / Cursor.
+
+[See the results](#translation-quality-side-by-side) · [Run it in five minutes](#quick-start-web-mode) · [How it works](#how-it-works)
 
 ![SuperTranslate result: Cosmos page 1, original alternating with the translation](docs/assets/comparison/cosmos/hero.gif)
+
+Want to see it in action? [22-second web UI demo →](#web-interface)
 
 ## Contents
 
 1. [Why This Exists](#why-this-exists)
 2. [Translation Quality, Side by Side](#translation-quality-side-by-side)
-3. [Features](#features)
-4. [Architecture](#architecture)
-5. [Quick Start: Web Mode](#quick-start-web-mode)
-6. [Quick Start: Agent Skill Mode](#quick-start-agent-skill-mode)
-7. [Command Line](#command-line)
-8. [Quality Assurance](#quality-assurance)
-9. [Benchmarks](#benchmarks)
-10. [Supported Translation Backends](#supported-translation-backends)
-11. [FAQ](#faq)
-12. [Roadmap](#roadmap)
-13. [License and Citation](#license-and-citation)
+3. [How It Works](#how-it-works)
+4. [Web Interface](#web-interface)
+5. [Features](#features)
+6. [Quick Start: Web Mode](#quick-start-web-mode)
+7. [Quick Start: Agent Skill Mode](#quick-start-agent-skill-mode)
+8. [Bring Your Own API Key](#bring-your-own-api-key)
+9. [Command Line](#command-line)
+10. [Quality Assurance](#quality-assurance)
+11. [Benchmarks](#benchmarks)
+12. [FAQ](#faq)
+13. [Roadmap](#roadmap)
+14. [License and Citation](#license-and-citation)
 
 ## Why This Exists
 
@@ -140,34 +148,25 @@ Comparison assets follow the licensing policy of [benchmarks/classic20/README.md
 >
 > Honest note: the comparison images above include no same-machine pdf2zh baseline — I/O constraints in the rendering environment kept pdf2zh from completing within the time budget (see [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)). The table above is therefore a documentation-based comparison only; community-contributed side-by-side samples are welcome.
 
-## Features
+## How It Works
 
-**Translation engine**
+<img src="docs/assets/mechanism.svg" alt="SuperTranslate mechanism: source-PDF parsing, translation, in-place refill, and the deterministic QA loop" width="100%">
 
-- **In-place layout preservation**: the native engine keeps original page dimensions, images, vector graphics, and text-block positions — no re-flow, no page reconstruction
-- **Protected regions**: formulas, tables, algorithm pseudo-code, references, and citation markers `[1][2]` stay untouched; text inside figures is protected by default (optionally translatable)
-- **Clean Chinese output**: first occurrence renders as "中文术语（English Term）", then Chinese only; bold/italic/heading structure preserved
-- **Terminology consistency**: 1,000+ built-in terms (NeurIPS / ICML / ICLR / CVPR / ACL venue tracks plus CS/ML/math foundations) injected at translation time and audited afterwards, with `corpus-lint` as a CI gate
-- **Dual outputs**: `_zh.pdf` (Chinese-only) and `_dual.pdf` (side-by-side original + translation)
-- **OCR fallback**: scanned image-only PDFs can be OCR'd before translation (Tesseract-based)
+SuperTranslate first extracts text blocks with page, bounding-box, font-size, and semantic-role metadata, then builds an in-memory inventory of translation units and protected regions. Formulas, citations, and URLs become reversible `⟦n⟧` placeholders, while graphics, tables, algorithms, and bibliography regions are frozen by rule. (`pdf_zh_translator/pdf_layout.py:370-426`; `pdf_zh_translator/pdf_layout.py:8531-8801`; `pdf_zh_translator/pdf_layout.py:19545-19601`)
 
-**Quality and reliability**
+Translatable text is sent to a multi-provider adapter with title, body, and caption roles. Relevant terminology is injected per batch; item-count and character-count limits bound requests; a JSONL cache enables deterministic replay; placeholder failures fall back to single-item or prose-segment retries. (`pdf_zh_translator/translators.py:92-167`; `pdf_zh_translator/translators.py:390-450`; `pdf_zh_translator/translators.py:832-923`)
 
-- **Post-translation QA**: untranslated prose, tampered protected regions (including silently altered experimental numbers), text overlap, missing images/vector graphics/formulas, empty pages, visual regressions, terminology adherence — reported in machine-readable `*.qa.json`
-- **Deterministic repair loop**: single-pass or iterative; snapshot + bounded repair + full detector rerun, output replaced only on strict error-score improvement
-- **Durable jobs**: history, heartbeat, cancellation, live progress; queued jobs are rescheduled after restarts, and unrepairable jobs keep their best output flagged `repair_pending`
-- **Resumable uploads**: PDFs ≥ 8 MiB upload in 4 MiB SHA256-verified chunks, survive proxy interruptions, and deduplicate by content hash (100 MB per-file cap)
+During rendering, only replaceable source text is removed. Chinese is typeset inside the original `bbox` through a CJK fallback chain, while page geometry, images, vector graphics, links, and source formula glyphs remain anchored to the original PDF. (`pdf_zh_translator/pdf_layout.py:1338-1393`; `pdf_zh_translator/pdf_layout.py:8012-8042`; `pdf_zh_translator/pdf_layout.py:25343-25370`)
 
-**Deployment and collaboration**
+An isolated subprocess then reconstructs the same source-object view and checks untranslated text, protected-region changes, overlaps and blank pages, missing images/vectors/formulas, rendered-ink regression, font sizing, tables, and references. Terminology auditing is currently advisory and does not enter the issue score. (`app/api/papers.py:1763-1836`; `pdf_zh_translator/pdf_layout.py:2706-2718`; `pdf_zh_translator/page_inspector.py:2295-2558`; `app/api/papers.py:2890-2922`)
 
-- **Multiple LLM backends**: DeepSeek / Kimi K3 / OpenAI (and compatible endpoints) / Anthropic Claude / GLM / Google / DeepL / Ollama — see [Supported Translation Backends](#supported-translation-backends)
-- **Per-user encrypted API keys**: AES-GCM at rest, never returned to the browser, never written into job files
-- **Multi-user and isolation**: username/password accounts (PBKDF2), lightweight workspace-token isolation, API bearer tokens, built-in rate limiting
-- **Side-by-side reader**: synchronized scrolling, draggable split, dark theme, mobile-friendly
-- **Benchmark showcase**: a read-only `/showcase` page with benchmark metrics and previews of CC-licensed papers
-- **Feishu/Lark notifications**: webhook push when a translation finishes
+Iterative QA defaults to at most four rounds (the API accepts 1–8). A deterministic planner chooses only registered actions; mono and dual PDFs are snapshotted before repair; every detector reruns afterward; and a candidate is accepted only when the lexicographic score `(error count, total issue count)` strictly decreases. Otherwise, the snapshot is atomically restored and the no-progress loop stops. Clean output is delivered, pass history is written to `*.qa.json`, and untranslated-text errors may also trigger bounded outer retranslation while retaining the globally best snapshot. (`app/services/quality_agent.py:11-87`; `app/api/papers.py:1201-1241`; `app/api/papers.py:2306-2536`; `app/api/papers.py:2569-2603`; `app/api/papers.py:2746-2802`; `app/api/papers.py:2059-2206`)
 
-## Architecture
+Golden-set regression reuses the same issue detectors and visual score. The current release manifest contains 50 papers: reports must be complete, at least 20 papers must pass the strict gate by default, and each strict pass requires zero errors, zero actionable warnings, and a visual score of at least 0.55, with provenance and regression checks enforced. (`pdf_zh_translator/golden_eval.py:125-152`; `benchmarks/classic20/manifest.json:1-16`; `scripts/classic_benchmark.py:185-200`; `scripts/classic_benchmark.py:1363-1529`; `scripts/classic_benchmark.py:1566-1567`)
+
+### Module View (the Full Web-App Path)
+
+The section above is the engine's mechanism view; inside the web app, one translation job travels this path:
 
 ```mermaid
 flowchart LR
@@ -189,6 +188,52 @@ Two translation paths:
 - **pdf2zh path**: reuses the bundled [pdf2zh (PDFMathTranslate)](https://github.com/Byaidu/PDFMathTranslate) pipeline, powering Google (the key-free `fast` preset), DeepL, and local models via Ollama.
 
 Design decisions are recorded in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/adr/](docs/adr/).
+
+## Web Interface
+
+All screenshots below are real application captures (recorded with headless Playwright against this repository's main branch; reproduction steps in [docs/assets/webui/NOTES.md](docs/assets/webui/NOTES.md)).
+
+<table>
+  <tr>
+    <td width="50%"><a href="docs/assets/webui/library.png"><img src="docs/assets/webui/library.png" alt="Paper library"></a><br/><sub>Library: finished papers offer direct "Chinese / bilingual" reading entries on the card</sub></td>
+    <td width="50%"><a href="docs/assets/webui/upload.png"><img src="docs/assets/webui/upload.png" alt="Upload view"></a><br/><sub>Upload: drag-and-drop, multi-file queue; large files upload in resumable chunks</sub></td>
+  </tr>
+  <tr>
+    <td><a href="docs/assets/webui/reader.png"><img src="docs/assets/webui/reader.png" alt="Side-by-side reader"></a><br/><sub>Side-by-side reader: original left, translation right, synchronized scrolling, draggable split</sub></td>
+    <td><a href="docs/assets/webui/providers.png"><img src="docs/assets/webui/providers.png" alt="API settings"></a><br/><sub>API settings: one key per provider; saved keys show only the last four characters</sub></td>
+  </tr>
+</table>
+
+![22-second demo: library, open a paper, synced two-pane scrolling to a formula page, back](docs/assets/webui/demo.gif)
+
+<sub>22-second end-to-end demo: library → open Attention → synced two-pane scrolling (introduction, formula page) → back to the library.</sub>
+
+## Features
+
+**Translation engine**
+
+- **In-place layout preservation**: the native engine keeps original page dimensions, images, vector graphics, and text-block positions — no re-flow, no page reconstruction
+- **Protected regions**: formulas, tables, algorithm pseudo-code, references, and citation markers `[1][2]` stay untouched; text inside figures is protected by default (optionally translatable)
+- **Clean Chinese output**: first occurrence renders as "中文术语（English Term）", then Chinese only; bold/italic/heading structure preserved
+- **Terminology consistency**: 1,000+ built-in terms (NeurIPS / ICML / ICLR / CVPR / ACL venue tracks plus CS/ML/math foundations) injected at translation time and audited afterwards, with `corpus-lint` as a CI gate
+- **Dual outputs**: `_zh.pdf` (Chinese-only) and `_dual.pdf` (side-by-side original + translation)
+- **OCR fallback**: scanned image-only PDFs can be OCR'd before translation (Tesseract-based)
+
+**Quality and reliability**
+
+- **Post-translation QA**: untranslated prose, tampered protected regions (including silently altered experimental numbers), text overlap, missing images/vector graphics/formulas, empty pages, visual regressions, terminology adherence — reported in machine-readable `*.qa.json`
+- **Deterministic repair loop**: single-pass or iterative; snapshot + bounded repair + full detector rerun, output replaced only on strict error-score improvement
+- **Durable jobs**: history, heartbeat, cancellation, live progress; queued jobs are rescheduled after restarts, and unrepairable jobs keep their best output flagged `repair_pending`
+- **Resumable uploads**: PDFs ≥ 8 MiB upload in 4 MiB SHA256-verified chunks, survive proxy interruptions, and deduplicate by content hash (100 MB per-file cap)
+
+**Deployment and collaboration**
+
+- **Multiple LLM backends**: DeepSeek / Kimi K3 / OpenAI (and compatible endpoints) / Anthropic Claude / GLM / Google / DeepL / Ollama — see [Bring Your Own API Key](#bring-your-own-api-key)
+- **Per-user encrypted API keys**: AES-GCM at rest, never returned to the browser, never written into job files
+- **Multi-user and isolation**: username/password accounts (PBKDF2), lightweight workspace-token isolation, API bearer tokens, built-in rate limiting
+- **Side-by-side reader**: synchronized scrolling, draggable split, dark theme, mobile-friendly
+- **Benchmark showcase**: a read-only `/showcase` page with benchmark metrics and previews of CC-licensed papers
+- **Feishu/Lark notifications**: webhook push when a translation finishes
 
 ## Quick Start: Web Mode
 
@@ -247,6 +292,59 @@ Then trigger it with one sentence in your agent chat:
 
 The skill runs the full contract: terminology preflight → native-engine translation (with a translation cache) → text and visual QA → a handoff report with source/output hashes, QA counts, and the visual score.
 
+## Bring Your Own API Key
+
+SuperTranslate ships no shared key: you use your own provider accounts, so usage and cost stay fully under your control. Pick any of three configuration paths:
+
+### Option 1: "API Settings" in the Web UI
+
+After logging in, open **API Settings** (top-right) and save a key per provider — DeepSeek / Kimi / OpenAI / Anthropic / GLM (screenshot in the [Web Interface](#web-interface) section):
+
+- keys are AES-GCM encrypted and stored only in the **local SQLite database** (the `data/` directory); they are never returned to the browser and never written into job files;
+- a saved key is displayed only as `••••` plus its last four characters;
+- after saving, the app fetches the models actually available to your account, falling back to the built-in offline catalog if the fetch fails.
+
+### Option 2: Environment Variables / `.env`
+
+Server administrators can configure fallback keys in `.env` (or the shell environment); the full variable list lives in [.env.example](.env.example):
+
+```bash
+PAPER_CHINA_DEEPSEEK_API_KEY=sk-...     # DeepSeek (default backend)
+PAPER_CHINA_OPENAI_API_KEY=sk-...      # OpenAI and compatible endpoints
+PAPER_CHINA_MOONSHOT_API_KEY=sk-...    # Kimi K3
+PAPER_CHINA_ANTHROPIC_API_KEY=sk-...   # Anthropic Claude
+PAPER_CHINA_GLM_API_KEY=...            # GLM
+```
+
+Bare names without the prefix (`DEEPSEEK_API_KEY`, etc.) are recognized as well; `PAPER_CHINA_DEEPL_API_KEY` serves DeepL on the pdf2zh path. Models and endpoints can be overridden with variables such as `PAPER_CHINA_DEEPSEEK_MODEL` and `PAPER_CHINA_OPENAI_BASE_URL`.
+
+### Option 3: `--api-key-env` for CLI / Skill
+
+The command line and the agent skill accept only an environment-variable *name*, never a plaintext key, keeping secrets out of shell history and logs:
+
+```bash
+export PAPER_CHINA_DEEPSEEK_API_KEY="sk-..."
+uv run python -m pdf_zh_translator translate paper.pdf paper_zh.pdf \
+  --api-mode deepseek --api-key-env PAPER_CHINA_DEEPSEEK_API_KEY
+```
+
+### Supported Providers and Default Models
+
+| Backend | Engine path | API key | Default model |
+|---|---|---|---|
+| DeepSeek (default backend) | native | required | `deepseek-v4-pro` |
+| Kimi K3 | native (always) | required | `kimi-k3` |
+| OpenAI and compatible endpoints | native | required | `gpt-4o-mini`; set `BASE_URL`/`MODEL` for any compatible endpoint |
+| Anthropic Claude | native (always) | required | `claude-sonnet-5` |
+| GLM | native (always) | required | `glm-5.2` |
+| Google Translate | pdf2zh | key-free | — (the `fast` quality preset) |
+| DeepL | pdf2zh | required | — |
+| Ollama | pdf2zh | key-free | local models, via `PAPER_CHINA_OLLAMA_HOST` |
+
+The web UI also offers three quality presets: `fast` (Google, no key) / `balanced` (default, DeepSeek) / `quality` (DeepSeek with full options and a custom academic prompt). Official sources and maintenance rules for the model catalog: [docs/PROVIDER_MODEL_CATALOG.md](docs/PROVIDER_MODEL_CATALOG.md).
+
+**Privacy**: fully self-hosted — keys are stored encrypted on your machine, used only to authenticate direct calls to the provider you chose, never routed through any relay, and never placed in URLs or logs.
+
 ## Command Line
 
 Beyond the web app and the skill, the engine is directly scriptable (batch jobs, CI integration):
@@ -287,7 +385,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `ruff`, the termi
 |---|---|---|
 | Long-document per-object audit | **75/75 pages · 793 objects · 0 issues** | Cosmos (arXiv 2501.03575, 75 pages) release acceptance under audit policy `object-qa-2026.08-v1`, checking every heading/abstract/body/caption object for translation and protected-region integrity |
 | Per-paper strict gate | 0 error-severity issues + 0 actionable warnings + visual score ≥ 0.55 | Also requires identical page count, no empty pages, no missing images/vector graphics/formulas |
-| Public showcase threshold | ≥ 20 papers passing the strict gate | The benchmark gate refuses to publish otherwise |
+| Release gate | 50-paper manifest, ≥ 20 strict passes by default | The gate also verifies report completeness, provenance, and regressions, and refuses to publish otherwise; worldmodel10 is a separate 10-paper acceptance set |
 
 Benchmark artifacts are content-addressed: source PDF SHA-256, translated PDF SHA-256, QA-code fingerprint, and engine plus font fingerprints are all recorded — a terminology or prompt change forces a real rebuild instead of silently recycling old output.
 
@@ -310,21 +408,6 @@ Every step is resumable; multi-paper translation gives each paper a fresh interp
 ### worldmodel10 (acceptance set)
 
 [benchmarks/classic20/worldmodel10.json](benchmarks/classic20/worldmodel10.json) freezes 10 papers from the 2025–2026 world-model literature (video / robotics / humanoid / physical AI), ranging from a 6-page short paper to the 75-page Cosmos technical report. Versioned arXiv IDs pin the exact source revisions; 8 of 10 are CC BY 4.0.
-
-## Supported Translation Backends
-
-| Backend | Engine path | API key | Notes |
-|---|---|---|---|
-| DeepSeek | native | required | default backend; default model `deepseek-v4-pro` |
-| Kimi K3 | native (always) | required | Moonshot OpenAI-compatible endpoint |
-| OpenAI and compatible endpoints | native | required | custom `OPENAI_BASE_URL` / `OPENAI_MODEL` |
-| Anthropic Claude | native (always) | required | |
-| GLM | native (always) | required | |
-| Google Translate | pdf2zh | key-free | the `fast` quality preset, speed-first |
-| DeepL | pdf2zh | required | |
-| Ollama | pdf2zh | key-free | local models, via `OLLAMA_HOST` |
-
-The web UI also offers three quality presets: `fast` (Google, no key) / `balanced` (default, DeepSeek) / `quality` (DeepSeek with full options and a custom academic prompt). The **API Settings** page shows a curated offline model catalog (latest / quality / balanced / economy groups) and, once a key is saved, augments it with the models actually available to your account. Catalog maintenance rules: [docs/PROVIDER_MODEL_CATALOG.md](docs/PROVIDER_MODEL_CATALOG.md).
 
 ## FAQ
 
