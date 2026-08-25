@@ -398,6 +398,73 @@ window.__ph = function (img) {
   .foot-fine a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
   .foot-badge { padding: 7px 16px; border: 1px solid rgba(243, 201, 107, .45); border-radius: 999px; color: var(--gold); font: 750 11.5px/1.7 var(--mono); white-space: nowrap; }
 
+  /* ============ 实现机制 ============ */
+  .mech-figure {
+    position: relative; margin-top: var(--sp-4);
+    border: 1px solid var(--line-strong); border-radius: var(--radius);
+    background: linear-gradient(180deg, rgba(17, 26, 49, .9), rgba(13, 21, 38, .9));
+    padding: 10px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .5), 0 0 40px rgba(111, 157, 255, .06);
+  }
+  .mech-figure img { width: 100%; border-radius: var(--radius-sm); }
+  .mech-open {
+    position: absolute; top: 20px; right: 20px; z-index: 2;
+    padding: 5px 14px; border: 1px solid var(--line-strong); border-radius: 999px;
+    background: rgba(9, 13, 26, .88); color: var(--blue-soft);
+    font: 700 11px/1.7 var(--mono); letter-spacing: .05em;
+    transition: border-color .2s, color .2s;
+  }
+  .mech-open:hover { border-color: var(--blue); color: var(--ink); }
+  .mech-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3) var(--sp-4); margin-top: var(--sp-4); }
+  .mech-item { border-left: 3px solid rgba(111, 157, 255, .38); padding: 2px 0 2px 16px; }
+  .mech-item b { display: block; font-size: 15px; font-weight: 780; letter-spacing: -.01em; }
+  .mech-item span { display: block; margin-top: 5px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+  .mech-item.gold { border-left-color: rgba(243, 201, 107, .45); }
+
+  /* ============ 产品界面 ============ */
+  .ui-stage { max-width: 860px; margin: var(--sp-4) auto 0; }
+  .demo-box { position: relative; aspect-ratio: 960 / 600; background: var(--panel-deep); }
+  .demo-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .demo-box::before {
+    content: "演示动图按需加载…"; position: absolute; inset: 0; z-index: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--faint); font: 650 12px/1.6 var(--mono);
+  }
+  .demo-box img { position: relative; z-index: 1; }
+  .live-row { display: flex; justify-content: center; margin-top: var(--sp-3); }
+  .live-tag {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 7px 17px; border: 1px solid rgba(243, 201, 107, .5); border-radius: 999px;
+    color: var(--gold); font: 700 12px/1.7 var(--mono); letter-spacing: .04em;
+  }
+  .live-tag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 10px var(--gold); }
+  .shot-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-2); margin-top: var(--sp-3); }
+  .shot-card { margin: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel); transition: transform .3s var(--ease), border-color .3s, box-shadow .3s; }
+  .shot-card:hover { transform: translateY(-4px); border-color: var(--line-strong); box-shadow: 0 20px 54px rgba(0, 0, 0, .42); }
+  .shot-card .thumb { display: block; aspect-ratio: 16 / 10; overflow: hidden; background: var(--panel-deep); }
+  .shot-card .thumb img { width: 100%; height: 100%; object-fit: cover; transition: transform .4s var(--ease); }
+  .shot-card:hover .thumb img { transform: scale(1.03); }
+  .shot-card figcaption { padding: 12px 14px 13px; border-top: 1px solid var(--line); }
+  .shot-card figcaption b { display: block; font-size: 13.5px; color: var(--ink); letter-spacing: -.01em; }
+  .shot-card figcaption span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.65; }
+
+  /* ============ 用自己的 API key ============ */
+  .byok-grid { display: grid; grid-template-columns: minmax(0, 52fr) minmax(0, 48fr); gap: var(--sp-4); margin-top: var(--sp-4); align-items: start; }
+  .key-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .key-item { display: flex; gap: 16px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 18px 20px; transition: border-color .25s; }
+  .key-item:hover { border-color: var(--line-strong); }
+  .key-item i {
+    flex: none; display: grid; place-items: center; width: 42px; height: 42px;
+    border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+    color: var(--blue-soft); font: 800 11px/1 var(--mono); font-style: normal;
+    background: rgba(111, 157, 255, .07);
+  }
+  .key-item b { display: block; font-size: 14.5px; letter-spacing: -.01em; }
+  .key-item span { display: block; margin-top: 4px; color: var(--muted); font-size: 12.8px; line-height: 1.7; }
+  .key-item code { font-size: 11.5px; color: var(--blue-soft); }
+  .provider-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: var(--sp-3); }
+  .provider-row span { padding: 5px 14px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: 650 12px/1.7 var(--mono); }
+
   /* ============ 入场动效（无 JS 时全部可见） ============ */
   body.fx-on .fx { opacity: 0; transform: translateY(18px); transition: opacity .65s var(--ease), transform .65s var(--ease); transition-delay: var(--fxd, 0s); }
   body.fx-on .fx.in { opacity: 1; transform: none; }
@@ -420,6 +487,9 @@ window.__ph = function (img) {
     .mode-grid { grid-template-columns: 1fr; }
     .stats-grid { grid-template-columns: repeat(3, 1fr); }
     .foot-grid { grid-template-columns: 1fr; }
+    .mech-grid { grid-template-columns: 1fr; gap: var(--sp-2); }
+    .shot-grid { grid-template-columns: repeat(2, 1fr); }
+    .byok-grid { grid-template-columns: 1fr; }
   }
   /* ============ 响应式：480px ============ */
   @media (max-width: 480px) {
@@ -438,6 +508,9 @@ window.__ph = function (img) {
     .qs-panel pre { padding: 16px 14px; font-size: 12px; }
     .cmp-tab { flex: 1 1 100%; }
     .crop-row img { max-height: 190px; }
+    .shot-grid { grid-template-columns: 1fr; }
+    .mech-open { top: 16px; right: 16px; }
+    .key-item { padding: 15px 16px; }
   }
 </style>
 </head>
@@ -461,8 +534,8 @@ window.__ph = function (img) {
     </a>
     <nav class="top-nav">
       <a href="#compare">效果对比</a>
-      <a href="#features">特性</a>
-      <a href="#modes">双模式</a>
+      <a href="#mechanism">机制</a>
+      <a href="#ui">界面</a>
       <a href="#quickstart" class="keep">快速开始</a>
       <a href="slides.html">Slides</a>
       <a class="gh" href="https://github.com/asimfish/super_translate" target="_blank" rel="noopener">GitHub ↗</a>
@@ -475,12 +548,12 @@ window.__ph = function (img) {
   <div class="wrap">
     <div class="fx">
       <span class="overline">Open Source · AGPL-3.0 · English → Chinese</span>
-      <h1>英文论文，原版式读中文
-        <span class="h1-line2">公式 · 图表 · 双栏排版 零破坏</span>
+      <h1>英文论文，直接读中文版
+        <span class="h1-line2">公式 · 图表 · 版式，一个像素不动</span>
       </h1>
       <p class="lede">
-        逐对象冻结公式、图表、表格与引用，LLM 翻译正文后<b>按原坐标回填</b>，
-        输出<b>纯中文</b>与<b>双语对照</b>两种 PDF——每次翻译都附带可机读的对象级 QA 审计报告。
+        逐对象冻结公式、图表与引用，正文翻译后<b>按原坐标回填</b>，输出纯中文与双语对照两种 PDF；
+        <b>确定性 QA 循环</b>逐页审计、只接受严格变好的修复——75 页技术报告全篇 <b>75/75 页 · 0 缺陷</b>交付。
       </p>
       <div class="cta-row">
         <a class="btn primary" href="https://github.com/asimfish/super_translate" target="_blank" rel="noopener">GitHub ↗</a>
@@ -492,7 +565,7 @@ window.__ph = function (img) {
       <div class="browser-card">
         <div class="browser-bar">
           <i></i><i></i><i></i>
-          <span class="browser-addr">localhost:8001 · qwen_robotworld_zh.pdf</span>
+          <span class="browser-addr">localhost:8001 · cosmos_zh.pdf</span>
           <span class="browser-live">LIVE</span>
         </div>
         <div class="wipe" data-ph="assets/comparison/cosmos/original_p1.png / ours_p1.png">
@@ -503,7 +576,7 @@ window.__ph = function (img) {
           <span class="badge zh" style="position:absolute; top:10px; right:10px; z-index:3;">ZH 译文</span>
         </div>
         <div class="hero-caption">
-          <span><b>Qwen-RobotWorld Technical Report</b> · 第 1 页整页渲染，自动扫视</span>
+          <span><b>Cosmos World Foundation Model Platform</b> · 第 1 页整页渲染，自动扫视</span>
           <a href="#compare">拖动对比 ↓</a>
         </div>
       </div>
@@ -620,8 +693,38 @@ window.__ph = function (img) {
   </div>
 </section>
 
+<!-- ===== 实现机制 ===== -->
+<section id="mechanism">
+  <div class="wrap">
+    <header class="sec-head fx">
+      <span class="overline">How It Works · 实现机制</span>
+      <h2 class="sec-title">一条确定性流水线，<b>从解析到回滚</b></h2>
+      <p class="sec-desc">
+        从 PDF 结构解析、多供应商翻译、原位回填到确定性 QA 循环的完整链路——
+        版式「一个像素不动」靠的不是运气，是下面这 8 条设计。
+      </p>
+    </header>
+    <div class="mech-figure fx" data-ph="assets/mechanism.svg">
+      <a class="mech-open" href="assets/mechanism.svg" target="_blank" rel="noopener">查看原图 ↗</a>
+      <a href="assets/mechanism.svg" target="_blank" rel="noopener" aria-label="打开机制图原图">
+        <img src="assets/mechanism.svg" alt="SuperTranslate 实现机制图：从 PDF 结构解析、源对象清单、多供应商批量翻译与原位回填，到检测、有界修复、严格分数比较、接受或回滚的质量循环" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+      </a>
+    </div>
+    <div class="mech-grid">
+      <div class="mech-item fx"><b>逐对象解析，不重排页面</b><span>文本块携带页码、坐标、字号与语义角色，后续始终以原页为几何基准。</span></div>
+      <div class="mech-item fx"><b>公式与引用先冻结</b><span>数学片段、引用和 URL 先转为可逆占位符，保护区不交给模型改写。</span></div>
+      <div class="mech-item fx"><b>多模型共用一套约束</b><span>DeepSeek、OpenAI 兼容端点与 Anthropic 协议共享结构提示和术语注入。</span></div>
+      <div class="mech-item fx"><b>批处理缓存减少重复调用</b><span>双阈值分批、JSONL 缓存和有界网络重试共同控制成本与失败面。</span></div>
+      <div class="mech-item fx"><b>原坐标回填，字体自适应</b><span>只擦除可替换文字，再以 CJK 字体链在原 bbox 内排版。</span></div>
+      <div class="mech-item fx"><b>全部检测器每轮重跑</b><span>文本层、视觉墨迹与独立页面巡检共同输出结构化问题清单。</span></div>
+      <div class="mech-item gold fx"><b>只接受严格变好的候选</b><span>修复前保存快照，问题分未严格下降就原子回滚并停止。</span></div>
+      <div class="mech-item gold fx"><b>Golden 回归守住发布线</b><span>Golden case 与发布基准复用同一 QA，并由 strict gate 校验证据与回归。</span></div>
+    </div>
+  </div>
+</section>
+
 <!-- ===== 特性 ===== -->
-<section id="features">
+<section id="features" class="alt">
   <div class="wrap">
     <header class="sec-head fx">
       <span class="overline">Features · 核心能力</span>
@@ -674,7 +777,7 @@ window.__ph = function (img) {
 </section>
 
 <!-- ===== 双模式 ===== -->
-<section class="alt" id="modes">
+<section id="modes">
   <div class="wrap">
     <header class="sec-head fx">
       <span class="overline">Two Modes · 双模式</span>
@@ -724,6 +827,101 @@ window.__ph = function (img) {
           <li>也可脱离编辑器直接走 CLI：<b>python -m pdf_zh_translator translate</b></li>
         </ul>
         <p class="mode-fit"><b>适合</b> 重度 agent 用户、批量翻译与可复现实验场景</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 产品界面 ===== -->
+<section class="alt" id="ui">
+  <div class="wrap">
+    <header class="sec-head fx">
+      <span class="overline">Product · 产品界面</span>
+      <h2 class="sec-title">真实界面，<b>真实速度</b></h2>
+      <p class="sec-desc">
+        以下全部为<b>真实运行截图</b>（本机离线复现，未做修饰）；
+        演示动图是「上传 → 翻译 → 双栏阅读」的完整流程。
+      </p>
+    </header>
+    <div class="ui-stage fx">
+      <div class="browser-card">
+        <div class="browser-bar">
+          <i></i><i></i><i></i>
+          <span class="browser-addr">localhost:8001 · 论文库 → 翻译 → 双栏阅读</span>
+          <span class="browser-live">DEMO</span>
+        </div>
+        <div class="demo-box" data-ph="assets/webui/demo.gif">
+          <img id="demoGif" data-src="assets/webui/demo.gif" alt="SuperTranslate 全流程演示：论文库、打开 Attention 译文、双栏同步滚动" onerror="window.__ph&&window.__ph(this)">
+        </div>
+      </div>
+      <div class="live-row"><span class="live-tag">真实运行截图 · 全流程 75 秒演示</span></div>
+    </div>
+    <div class="shot-grid">
+      <figure class="shot-card fx">
+        <a class="thumb" href="assets/webui/library.png" target="_blank" rel="noopener" data-ph="assets/webui/library.png">
+          <img src="assets/webui/library.png" alt="论文库界面截图" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </a>
+        <figcaption><b>论文库</b><span>状态、标签与「译文 / 双语」入口一目了然</span></figcaption>
+      </figure>
+      <figure class="shot-card fx" style="--fxd:.06s">
+        <a class="thumb" href="assets/webui/upload.png" target="_blank" rel="noopener" data-ph="assets/webui/upload.png">
+          <img src="assets/webui/upload.png" alt="上传界面截图" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </a>
+        <figcaption><b>拖拽上传</b><span>多篇排队，大文件分块断点续传</span></figcaption>
+      </figure>
+      <figure class="shot-card fx" style="--fxd:.12s">
+        <a class="thumb" href="assets/webui/reader.png" target="_blank" rel="noopener" data-ph="assets/webui/reader.png">
+          <img src="assets/webui/reader.png" alt="双栏对照阅读器截图" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </a>
+        <figcaption><b>双栏对照阅读</b><span>左原文右译文，同步滚动、分割线可拖</span></figcaption>
+      </figure>
+      <figure class="shot-card fx" style="--fxd:.18s">
+        <a class="thumb" href="assets/webui/providers.png" target="_blank" rel="noopener" data-ph="assets/webui/providers.png">
+          <img src="assets/webui/providers.png" alt="API 设置界面截图" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </a>
+        <figcaption><b>API 设置</b><span>每个账号配自己的供应商 key</span></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 用自己的 API key ===== -->
+<section id="byok">
+  <div class="wrap">
+    <header class="sec-head fx">
+      <span class="overline">Bring Your Own Key · 自带 API Key</span>
+      <h2 class="sec-title">用自己的 key，<b>数据不出自己机器</b></h2>
+      <p class="sec-desc">本地部署：论文、译文与 API key 都留在你的服务器上，key 加密存进本机 SQLite，界面只显示尾号。</p>
+    </header>
+    <div class="byok-grid">
+      <div class="fx">
+        <div class="browser-card">
+          <div class="browser-bar">
+            <i></i><i></i><i></i>
+            <span class="browser-addr">localhost:8001 · API 设置</span>
+            <span class="browser-live">LIVE</span>
+          </div>
+          <a href="assets/webui/providers.png" target="_blank" rel="noopener" data-ph="assets/webui/providers.png" style="display:block;">
+            <img src="assets/webui/providers.png" alt="API 设置弹窗：DeepSeek 已配置（演示 key），其余供应商待配置" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+          </a>
+        </div>
+        <div class="provider-row">
+          <span>DeepSeek</span><span>Kimi</span><span>OpenAI 兼容</span><span>Anthropic</span><span>GLM</span>
+        </div>
+      </div>
+      <div class="key-list fx" style="--fxd:.08s">
+        <div class="key-item">
+          <i>WEB</i>
+          <div><b>Web 界面配置</b><span>登录后在「API 设置」里按账号填写；AES-GCM 加密落盘，不进任务文件、不回传浏览器。</span></div>
+        </div>
+        <div class="key-item">
+          <i>ENV</i>
+          <div><b>.env 环境变量</b><span>服务器级兜底（本机管理员用），如 <code>PAPER_CHINA_DEEPSEEK_API_KEY</code>；docker compose 一并读取。</span></div>
+        </div>
+        <div class="key-item">
+          <i>CLI</i>
+          <div><b>命令行 --api-key-env</b><span>只传<b>环境变量名</b>不传值，key 不出现在命令行、日志与翻译缓存里。</span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -798,6 +996,7 @@ ln -s "$PWD/super_translate/skills/paper-translate" ~/.claude/skills/paper-trans
         <p class="foot-desc">保版式学术论文 PDF 翻译系统（英→中）。让每一篇英文论文，都能原版式读中文。</p>
         <div class="foot-links">
           <a href="https://github.com/asimfish/super_translate" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/asimfish/super_translate#readme" target="_blank" rel="noopener">README</a>
           <a href="slides.html">项目 Slides</a>
           <a href="https://github.com/asimfish/super_translate/blob/main/docs/DEPLOYMENT.md" target="_blank" rel="noopener">部署指南</a>
           <a href="https://github.com/asimfish/super_translate/blob/main/docs/TUTORIAL.zh-CN.md" target="_blank" rel="noopener">使用教程</a>
@@ -992,6 +1191,22 @@ ln -s "$PWD/super_translate/skills/paper-translate" ~/.claude/skills/paper-trans
   window.addEventListener('scroll', function () {
     topbar.classList.toggle('scrolled', window.scrollY > 8);
   }, { passive: true });
+
+  /* ============ demo.gif 视口懒挂载（6.9MB，不抢首屏带宽） ============ */
+  var demoGif = $('demoGif');
+  if (demoGif) {
+    var mountGif = function () { if (!demoGif.src) demoGif.src = demoGif.dataset.src; };
+    if ('IntersectionObserver' in window) {
+      var gio = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (en.isIntersecting) { mountGif(); gio.disconnect(); }
+        });
+      }, { rootMargin: '300px 0px' });
+      gio.observe(demoGif);
+    } else {
+      mountGif();
+    }
+  }
 
   /* ============ 入场动效 ============ */
   if ('IntersectionObserver' in window) {

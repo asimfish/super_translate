@@ -314,6 +314,20 @@ window.__ph = function (img) {
   .term-feed .ok { color: var(--green); }
   .term-feed b { color: var(--blue-soft); font-weight: 700; }
 
+  /* ===== 实现机制页 ===== */
+  .mech-wrap { display: flex; justify-content: center; margin-top: 26px; }
+  .mech-wrap a { display: block; border: 1px solid var(--line-strong); border-radius: var(--radius); background: rgba(13, 21, 38, .92); padding: 10px; box-shadow: 0 26px 76px rgba(0, 0, 0, .5); }
+  .mech-wrap img { display: block; height: 600px; width: auto; max-width: 100%; border-radius: 10px; }
+  .mech-notes { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 24px; }
+  .mech-note { border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: var(--radius); background: var(--panel); padding: 16px 22px; color: var(--muted); font-size: 18.5px; line-height: 1.65; }
+  .mech-note b { color: var(--ink); }
+  .mech-note.gold { border-left-color: var(--gold); }
+
+  /* ===== 产品界面页 ===== */
+  .ui-shell { width: 1030px; margin: 24px auto 0; border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden; background: var(--panel2); box-shadow: 0 30px 84px rgba(0, 0, 0, .55); }
+  .ui-shell .frame-view img { height: auto; max-height: 640px; width: 100%; object-fit: cover; }
+  .ui-chips { display: flex; gap: 16px; justify-content: center; margin-top: 22px; }
+
   /* ===== S11 基准 ===== */
   .bench-grid { display: grid; grid-template-columns: 40fr 60fr; gap: 46px; margin-top: 36px; align-items: start; }
   .bench-stat { border: 1px solid var(--line-strong); border-radius: 16px; background: rgba(10, 14, 28, .8); padding: 26px 28px; }
@@ -729,7 +743,41 @@ window.__ph = function (img) {
     <div class="footer-line"><span>SuperTranslate · Skill 模式</span><span>github.com/asimfish/super_translate</span></div>
   </section>
 
-  <!-- S11 30 篇基准 -->
+  <!-- S11 实现机制 -->
+  <section class="slide" data-title="实现机制">
+    <span class="eyebrow">How It Works · 实现机制</span>
+    <h2 class="s-title">一条确定性流水线，<b>从解析到回滚</b></h2>
+    <div class="mech-wrap" data-ph="assets/mechanism.svg">
+      <a href="assets/mechanism.svg" target="_blank" rel="noopener" aria-label="打开机制图原图">
+        <img src="assets/mechanism.svg" alt="SuperTranslate 实现机制图：解析、翻译、原位回填与确定性 QA 循环" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+      </a>
+    </div>
+    <div class="mech-notes">
+      <div class="mech-note"><b>保护区不交给模型：</b>公式、引用与 URL 先替换为可逆占位符，图形、表格、算法按规则冻结，译文只在原 bbox 内回填。</div>
+      <div class="mech-note gold"><b>只接受严格变好：</b>修复前快照、修复后全部检测器重跑，问题分未严格下降就原子回滚——每一轮都写入 *.qa.json。</div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 实现机制</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S12 产品界面 -->
+  <section class="slide" data-title="产品界面">
+    <span class="eyebrow warm">Product · 产品界面</span>
+    <h2 class="s-title">真实界面，<b>真实速度</b></h2>
+    <div class="ui-shell">
+      <div class="frame-bar"><i></i><i></i><i></i><span>localhost:8001 · 双栏对照阅读器</span><em>LIVE</em></div>
+      <div class="frame-view" data-ph="assets/webui/reader.png">
+        <img src="assets/webui/reader.png" alt="双栏对照阅读器真实截图：左原文右译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+      </div>
+    </div>
+    <div class="ui-chips">
+      <span class="chip gold-chip">真实运行截图 · 未做修饰</span>
+      <span class="chip">上传 → 翻译 → 完成，实测 75 秒</span>
+      <span class="chip warm-chip">左原文右译文 · 同步滚动</span>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 产品界面</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- S13 30 篇基准 -->
   <section class="slide" data-title="30 篇基准">
     <span class="eyebrow">Benchmark · 基准集</span>
     <h2 class="s-title">30 篇论文，<b>盯住每一种版式</b></h2>
