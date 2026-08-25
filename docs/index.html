@@ -432,6 +432,15 @@ window.__ph = function (img) {
   .mech-item b { display: block; font-size: 15px; font-weight: 780; letter-spacing: -.01em; }
   .mech-item span { display: block; margin-top: 5px; color: var(--muted); font-size: 13px; line-height: 1.7; }
   .mech-item.gold { border-left-color: rgba(243, 201, 107, .45); }
+  .mech-duo { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); margin-top: var(--sp-3); }
+  .mech-duo-card { background: var(--panel-deep); border: 1px solid var(--line); border-radius: 16px; padding: 18px 18px 14px; }
+  .mech-duo-card h3 { margin: 0 0 4px; font-size: var(--fs-h3); letter-spacing: -.01em; }
+  .mech-duo-card .cap { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.65; }
+  .mech-duo-card a.figlink { display: block; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+  .mech-duo-card img { display: block; width: 100%; height: auto; }
+  .mech-appendix { margin-top: var(--sp-2); color: var(--faint); font-size: var(--fs-small); }
+  .mech-appendix a { color: var(--blue-soft); }
+  @media (max-width: 768px) { .mech-duo { grid-template-columns: 1fr; } }
 
   /* ============ 专业术语库条带 ============ */
   .term-band {
@@ -466,15 +475,17 @@ window.__ph = function (img) {
 
   /* ============ 产品界面 ============ */
   .ui-stage { max-width: 860px; margin: var(--sp-4) auto 0; }
-  .demo-box { position: relative; aspect-ratio: 960 / 600; background: var(--panel-deep); }
-  .demo-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .demo-box { position: relative; aspect-ratio: 1600 / 1000; background: var(--panel-deep); }
+  .demo-box img, .demo-box video { width: 100%; height: 100%; object-fit: cover; display: block; position: relative; z-index: 1; }
   .demo-box::before {
     content: "演示动图按需加载…"; position: absolute; inset: 0; z-index: 0;
     display: flex; align-items: center; justify-content: center;
     color: var(--faint); font: 650 12px/1.6 var(--mono);
   }
   .demo-box img { position: relative; z-index: 1; }
-  .live-row { display: flex; justify-content: center; margin-top: var(--sp-3); }
+  .live-row { display: flex; justify-content: center; align-items: center; gap: 14px; margin-top: var(--sp-3); }
+  .live-alt { color: var(--faint); font-size: var(--fs-small); text-decoration: none; border-bottom: 1px dashed var(--line-strong); }
+  .live-alt:hover { color: var(--blue-soft); }
   .live-tag {
     display: inline-flex; align-items: center; gap: 9px;
     padding: 7px 17px; border: 1px solid rgba(243, 201, 107, .5); border-radius: 999px;
@@ -557,23 +568,14 @@ window.__ph = function (img) {
     .key-item { padding: 15px 16px; }
   }
 </style>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 </head>
 <body>
 
 <header class="topbar" id="topbar">
   <div class="wrap">
     <a class="brand" href="#top" aria-label="SuperTranslate 首页">
-      <svg viewBox="0 0 64 64" aria-hidden="true">
-        <rect x="8" y="6" width="48" height="52" rx="8" fill="none" stroke="#6f9dff" stroke-width="2.6"/>
-        <line x1="32" y1="10" x2="32" y2="54" stroke="#6f9dff" stroke-width="2" stroke-dasharray="3 4" opacity=".8"/>
-        <line x1="14" y1="18" x2="27" y2="18" stroke="#9ec3ff" stroke-width="2.6" stroke-linecap="round"/>
-        <line x1="14" y1="27" x2="25" y2="27" stroke="#9ec3ff" stroke-width="2.6" stroke-linecap="round" opacity=".7"/>
-        <line x1="14" y1="36" x2="27" y2="36" stroke="#9ec3ff" stroke-width="2.6" stroke-linecap="round" opacity=".45"/>
-        <line x1="37" y1="18" x2="50" y2="18" stroke="#ff8f6b" stroke-width="2.6" stroke-linecap="round"/>
-        <line x1="37" y1="27" x2="48" y2="27" stroke="#ff8f6b" stroke-width="2.6" stroke-linecap="round" opacity=".7"/>
-        <line x1="37" y1="36" x2="50" y2="36" stroke="#ff8f6b" stroke-width="2.6" stroke-linecap="round" opacity=".45"/>
-        <rect x="14" y="43" width="36" height="8" rx="2" fill="none" stroke="#f3c96b" stroke-width="2" opacity=".85"/>
-      </svg>
+      <img src="assets/logo-icon.svg" alt="" width="30" height="30" aria-hidden="true">
       <span><b>SUPERTRANSLATE</b><small>保版式论文翻译 · EN → ZH</small></span>
     </a>
     <nav class="top-nav">
@@ -762,17 +764,33 @@ window.__ph = function (img) {
   <div class="wrap">
     <header class="sec-head fx">
       <span class="overline">How It Works · 实现机制</span>
-      <h2 class="sec-title">一条确定性流水线，<b>从解析到回滚</b></h2>
+      <h2 class="sec-title">从原页，<b>到可信译文</b></h2>
       <p class="sec-desc">
-        从 PDF 结构解析、多供应商翻译、原位回填到确定性 QA 循环的完整链路——
-        版式「一个像素不动」靠的不是运气，是下面这 8 条设计。
+        结构先冻结、正文再翻译，最后由独立 QA 与 strict gate 验收——
+        版式「一个像素不动」靠的不是运气，是这三张图里的设计。
       </p>
     </header>
-    <div class="mech-figure fx" data-ph="assets/mechanism.svg">
-      <a class="mech-open" href="assets/mechanism.svg" target="_blank" rel="noopener">查看原图 ↗</a>
-      <a href="assets/mechanism.svg" target="_blank" rel="noopener" aria-label="打开机制图原图">
-        <img src="assets/mechanism.svg" alt="SuperTranslate 实现机制图：从 PDF 结构解析、源对象清单、多供应商批量翻译与原位回填，到检测、有界修复、严格分数比较、接受或回滚的质量循环" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+    <div class="mech-figure fx" data-ph="assets/arch_overview.svg">
+      <a class="mech-open" href="assets/arch_overview.svg" target="_blank" rel="noopener">查看原图 ↗</a>
+      <a href="assets/arch_overview.svg" target="_blank" rel="noopener" aria-label="打开架构总图原图">
+        <img src="assets/arch_overview.svg" alt="SuperTranslate 架构总图：源 PDF、解析并冻结对象、术语注入与多供应商翻译、原坐标回填、QA 审计，产出纯中文与双语两种 PDF" loading="lazy" onerror="window.__ph&&window.__ph(this)">
       </a>
+    </div>
+    <div class="mech-duo">
+      <div class="mech-duo-card fx">
+        <h3>只接受严格变好的翻译</h3>
+        <p class="cap">每轮 QA 重跑同一组检测器；候选只有严格减少错误与问题总数才会被接受，否则立即恢复修复前快照。</p>
+        <a class="figlink" href="assets/qa_loop.svg" target="_blank" rel="noopener" data-ph="assets/qa_loop.svg">
+          <img src="assets/qa_loop.svg" alt="确定性 QA 循环图：检测、缺陷清单、有界修复、候选分数比较，严格更好才接受，否则回滚快照" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </a>
+      </div>
+      <div class="mech-duo-card fx">
+        <h3>修复者不能给自己打分</h3>
+        <p class="cap">修复方只写候选、审查方只读挑错，双方都不能自行放行；快照比较保留全局最佳，最终由 strict gate 决定是否交付。</p>
+        <a class="figlink" href="assets/adversarial_review.svg" target="_blank" rel="noopener" data-ph="assets/adversarial_review.svg">
+          <img src="assets/adversarial_review.svg" alt="独立审查-修复协议图：可写修复方与只读审查方权限隔离，快照保险库、候选裁决与 strict gate 终审" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </a>
+      </div>
     </div>
     <div class="mech-grid">
       <div class="mech-item fx"><b>逐对象解析，不重排页面</b><span>文本块携带页码、坐标、字号与语义角色，后续始终以原页为几何基准。</span></div>
@@ -780,10 +798,9 @@ window.__ph = function (img) {
       <div class="mech-item fx"><b>多模型共用一套约束</b><span>DeepSeek、OpenAI 兼容端点与 Anthropic 协议共享结构提示和术语注入。</span></div>
       <div class="mech-item fx"><b>批处理缓存减少重复调用</b><span>双阈值分批、JSONL 缓存和有界网络重试共同控制成本与失败面。</span></div>
       <div class="mech-item fx"><b>原坐标回填，字体自适应</b><span>只擦除可替换文字，再以 CJK 字体链在原 bbox 内排版。</span></div>
-      <div class="mech-item fx"><b>全部检测器每轮重跑</b><span>文本层、视觉墨迹与独立页面巡检共同输出结构化问题清单。</span></div>
-      <div class="mech-item gold fx"><b>只接受严格变好的候选</b><span>修复前保存快照，问题分未严格下降就原子回滚并停止。</span></div>
       <div class="mech-item gold fx"><b>Golden 回归守住发布线</b><span>Golden case 与发布基准复用同一 QA，并由 strict gate 校验证据与回归。</span></div>
     </div>
+    <p class="mech-appendix fx">想要一张图看完整技术细节？<a href="assets/mechanism.svg" target="_blank" rel="noopener">完整单图版 ↗</a>，代码级讲解见 <a href="https://github.com/asimfish/super_translate/blob/main/docs/MECHANISM.md" target="_blank" rel="noopener">MECHANISM.md</a>。</p>
   </div>
 </section>
 
@@ -952,11 +969,11 @@ window.__ph = function (img) {
           <span class="browser-addr">localhost:8001 · 论文库 → 翻译 → 双栏阅读</span>
           <span class="browser-live">DEMO</span>
         </div>
-        <div class="demo-box" data-ph="assets/webui/demo.gif">
-          <img id="demoGif" data-src="assets/webui/demo.gif" alt="SuperTranslate 全流程演示：论文库、打开 Attention 译文、双栏同步滚动" onerror="window.__ph&&window.__ph(this)">
+        <div class="demo-box" data-ph="assets/webui/demo.mp4">
+          <video id="demoVid" data-src="assets/webui/demo.mp4" poster="assets/webui/reader.png" muted loop playsinline controls preload="none" style="display:block;width:100%;height:auto;" aria-label="SuperTranslate 全流程演示：论文库、打开 Attention 译文、双栏同步滚动"></video>
         </div>
       </div>
-      <div class="live-row"><span class="live-tag">真实运行截图 · 全流程 75 秒演示</span></div>
+      <div class="live-row"><span class="live-tag">真实运行录屏 · 1600px 高清 · 24 秒（全流程实测 75 秒）</span><a class="live-alt" href="assets/webui/demo.gif" target="_blank" rel="noopener">GIF 版 ↗</a></div>
     </div>
     <div class="shot-grid">
       <figure class="shot-card fx">
@@ -1294,19 +1311,24 @@ ln -s "$PWD/super_translate/skills/paper-translate" ~/.claude/skills/paper-trans
     topbar.classList.toggle('scrolled', window.scrollY > 8);
   }, { passive: true });
 
-  /* ============ demo.gif 视口懒挂载（6.9MB，不抢首屏带宽） ============ */
-  var demoGif = $('demoGif');
-  if (demoGif) {
-    var mountGif = function () { if (!demoGif.src) demoGif.src = demoGif.dataset.src; };
+  /* ============ demo.mp4 视口懒挂载（4.7MB，不抢首屏带宽） ============ */
+  var demoVid = $('demoVid');
+  if (demoVid) {
+    var mountVid = function () {
+      if (!demoVid.src) {
+        demoVid.src = demoVid.dataset.src;
+        demoVid.play && demoVid.play().catch(function () {});
+      }
+    };
     if ('IntersectionObserver' in window) {
       var gio = new IntersectionObserver(function (entries) {
         entries.forEach(function (en) {
-          if (en.isIntersecting) { mountGif(); gio.disconnect(); }
+          if (en.isIntersecting) { mountVid(); gio.disconnect(); }
         });
       }, { rootMargin: '300px 0px' });
-      gio.observe(demoGif);
+      gio.observe(demoVid);
     } else {
-      mountGif();
+      mountVid();
     }
   }
 
