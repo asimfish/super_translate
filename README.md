@@ -10,7 +10,11 @@
 
 **英文论文 → 中文版：公式、图表、版式一个像素不动。**
 
-翻译在原版 PDF 上原位完成，公式、图表、表格、双栏排版全部保持原样；每次翻译都经过确定性 QA 循环自检自修，并产出机器可读的审计报告——75 页的 Cosmos 技术报告实测 **75/75 页、793 个翻译对象、0 缺陷**。可以部署成 Web 应用（内置双栏对照阅读器），也可以作为 Agent Skill 在 Claude Code / Cursor 里一句话触发。
+读论文的人都遇到过这个两难：读英文原文太慢，机翻出来的 PDF 又没法看——公式挤成乱码、双栏变成单栏、图注对不上号。
+
+SuperTranslate 换了一条路：**不重排页面**。公式、图表、引用先冻结，一个字符都不交给模型；正文翻译后按原坐标回填，原文哪一块在哪，译文就在哪；1,066 条学术术语库把译名钉住。每一页翻完都要过 QA 审计，修复只有严格变好才会被接受——75 页的 Cosmos 技术报告实测下来，**75/75 页通过、793 个对象、0 缺陷**。
+
+部署成 Web 应用，就有内置的双栏对照阅读器；装成 Agent Skill，在 Claude Code / Cursor 里说一句"帮我把这篇论文翻成中文"就够了。
 
 [看翻译效果](#翻译效果对比) · [五分钟跑起来](#快速开始--web-模式) · [了解实现机制](#实现机制)
 
@@ -164,6 +168,33 @@ SuperTranslate 先从原 PDF 提取带页码、坐标、字号和语义角色的
 
 Golden set 复用同一问题检测与视觉评分；发布基准当前为 50 篇清单，报告须齐全且默认至少 20 篇 strict pass，单篇要求 0 error、0 actionable warning、视觉分不低于 0.55，并校验证据来源与回归。（`pdf_zh_translator/golden_eval.py:125-152`；`benchmarks/classic20/manifest.json:1-16`；`scripts/classic_benchmark.py:185-200`；`scripts/classic_benchmark.py:1363-1529`；`scripts/classic_benchmark.py:1566-1567`）
 
+### 专业术语库
+
+上文翻译层提到的「术语按块注入提示词」，背后是一个专门为学术翻译设计的语料库。通用翻译最伤专业性的就是术语：同一个概念在一篇论文里被翻出好几种说法，或者按字面直译成中文文献里不存在的叫法。SuperTranslate 用内置语料库把译名钉住。
+
+**规模与构成**：共 **1,066 条术语、23 个分类**，分三份语料文件维护——
+
+- [`pdf_zh_translator/corpus.json`](pdf_zh_translator/corpus.json)：348 条，CS / ML / 数学 / 通用 4 个基础分类
+- [`pdf_zh_translator/corpora/ai_conferences.json`](pdf_zh_translator/corpora/ai_conferences.json)：251 条，5 个分类（NeurIPS·ICML·ICLR / CVPR 视觉 / ACL NLP / Agent·对齐·安全 / 论文版式与写作）
+- [`pdf_zh_translator/corpora/top_venue_tracks.json`](pdf_zh_translator/corpora/top_venue_tracks.json)：467 条，按顶会分 track 细分 14 类（NeurIPS 基础理论、ICML 优化与学习理论、CVPR 3D 几何重建等）
+
+**如何参与翻译**：不是把 1,066 条全部塞进提示词——翻译每个文本块时，引擎从语料库检索与该块内容相关的术语拼入 prompt（`pdf_zh_translator/translators.py:832-905`；`pdf_zh_translator/corpus.py`）；再配合首现规则：专有名词首次出现译为「中文术语（English Term）」，之后全篇只用中文。
+
+**质量怎么守**：语料库本身由 `corpus-lint --strict` 做跨领域冲突检查，是 CI 门禁之一；译后 QA 会审计译文是否采用规范译法（提示级，不进错误分）。
+
+样例（真实条目）：
+
+| English | 规范译法 |
+|---|---|
+| PAC-Bayes Bound | PAC-贝叶斯界 |
+| Rademacher Complexity | 拉德马赫复杂度 |
+| Uniform Convergence | 一致收敛 |
+| Score-Based Generative Model | 基于分数的生成模型 |
+| Partially Observable Markov Decision Process | 部分可观测马尔可夫决策过程 |
+| Amortized Inference | 摊销推断 |
+
+术语库欢迎 PR 补充：新增条目通过 `corpus-lint --strict` 即可，批量变更流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ### 模块视图（Web 应用全链路）
 
 上面是翻译引擎的机制视图；放到 Web 应用里，一次翻译任务的完整链路如下：
@@ -215,7 +246,7 @@ flowchart LR
 - **原位版式保持**：native 引擎保持原页面尺寸、图像、矢量图形与文本块位置，不重排、不重构页面
 - **保护区机制**：公式、表格、算法伪代码、参考文献、引用标记 `[1][2]` 原样保留；图内文字默认保护（可选翻译图内可编辑文本）
 - **纯中文输出**：术语首次出现给出「中文术语（English Term）」，之后统一用中文；粗体/斜体/标题层级保留
-- **术语一致性**：内置 1,000+ 条术语库（NeurIPS / ICML / ICLR / CVPR / ACL 等顶会分轨术语 + CS/ML/数学基础词表），翻译时注入提示词，译后审计是否使用标准译法，`corpus-lint` 作为 CI 门禁
+- **专业术语库**：内置 **1,066 条、23 个分类**的学术术语库（顶会分 track 术语 + CS/ML/数学基础词表），翻译时逐块相关注入，译后审计规范译法，`corpus-lint` 作 CI 门禁——详见[专业术语库](#专业术语库)
 - **双输出**：`_zh.pdf`（纯中文）+ `_dual.pdf`（原文/译文对照）
 - **OCR 后备**：扫描版（纯图片）PDF 可先 OCR 再翻译（基于 Tesseract）
 

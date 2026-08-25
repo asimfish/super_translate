@@ -10,7 +10,11 @@
 
 **English paper in, Chinese paper out — formulas, figures, and layout untouched.**
 
-Translation happens in place on the original PDF: formulas, figures, tables, and two-column layouts stay exactly where they were. Every run passes through a deterministic QA loop that checks and repairs its own output, and ships a machine-readable audit report — measured on the 75-page Cosmos technical report: **75/75 pages, 793 translation objects, 0 issues**. Run it as a web app (with a built-in side-by-side reader) or trigger it as an agent skill with one sentence in Claude Code / Cursor.
+Everyone who reads papers knows the dilemma: the original is slow going, but machine-translated PDFs are unreadable — formulas collapse into garbage, two columns become one, captions drift away from their figures.
+
+SuperTranslate takes a different route: **it never re-flows the page**. Formulas, figures, and citations are frozen first — not a single character of them is handed to the model. The translated text is placed back at the original coordinates, so everything sits exactly where it was, and a corpus of 1,066 academic terms pins down the terminology. Every page then has to pass a QA audit, and a repair is only accepted if it is strictly better — measured on the 75-page Cosmos technical report: **75/75 pages, 793 objects, 0 issues**.
+
+Deploy it as a web app and you get a built-in side-by-side reader; install it as an agent skill and one sentence in Claude Code / Cursor — "translate this paper into Chinese" — is all it takes.
 
 [See the results](#translation-quality-side-by-side) · [Run it in five minutes](#quick-start-web-mode) · [How it works](#how-it-works)
 
@@ -164,6 +168,33 @@ Iterative QA defaults to at most four rounds (the API accepts 1–8). A determin
 
 Golden-set regression reuses the same issue detectors and visual score. The current release manifest contains 50 papers: reports must be complete, at least 20 papers must pass the strict gate by default, and each strict pass requires zero errors, zero actionable warnings, and a visual score of at least 0.55, with provenance and regression checks enforced. (`pdf_zh_translator/golden_eval.py:125-152`; `benchmarks/classic20/manifest.json:1-16`; `scripts/classic_benchmark.py:185-200`; `scripts/classic_benchmark.py:1363-1529`; `scripts/classic_benchmark.py:1566-1567`)
 
+### Terminology Corpus
+
+Behind the per-block terminology injection mentioned in the translation stage sits a corpus designed specifically for academic translation. Terminology is where generic translators hurt precision most: the same concept gets rendered several different ways within one paper, or a term is translated literally into a name that does not exist in the Chinese literature. SuperTranslate pins renderings down with a built-in corpus.
+
+**Size and structure**: **1,066 terms in 23 categories**, maintained across three corpus files —
+
+- [`pdf_zh_translator/corpus.json`](pdf_zh_translator/corpus.json): 348 terms in 4 foundational categories (CS / ML / math / general)
+- [`pdf_zh_translator/corpora/ai_conferences.json`](pdf_zh_translator/corpora/ai_conferences.json): 251 terms in 5 categories (NeurIPS·ICML·ICLR / CVPR vision / ACL NLP / agents·alignment·safety / paper layout and reporting)
+- [`pdf_zh_translator/corpora/top_venue_tracks.json`](pdf_zh_translator/corpora/top_venue_tracks.json): 467 terms in 14 venue-track categories (NeurIPS foundations & theory, ICML optimization & learning theory, CVPR 3D geometry & reconstruction, and more)
+
+**How it enters a translation**: the engine does not dump all 1,066 terms into the prompt — for each text block it retrieves the terms relevant to that block and injects only those (`pdf_zh_translator/translators.py:832-905`; `pdf_zh_translator/corpus.py`), combined with the first-occurrence rule: a technical term first renders as "中文术语（English Term）", then Chinese only for the rest of the paper.
+
+**How quality is enforced**: the corpus itself is checked for cross-field conflicts by `corpus-lint --strict`, one of the CI gates; post-translation QA additionally audits whether the standard renderings were used (advisory level — it does not enter the error score).
+
+Sample entries (real records):
+
+| English | Standard Chinese rendering |
+|---|---|
+| PAC-Bayes Bound | PAC-贝叶斯界 |
+| Rademacher Complexity | 拉德马赫复杂度 |
+| Uniform Convergence | 一致收敛 |
+| Score-Based Generative Model | 基于分数的生成模型 |
+| Partially Observable Markov Decision Process | 部分可观测马尔可夫决策过程 |
+| Amortized Inference | 摊销推断 |
+
+Contributions are welcome: add entries that pass `corpus-lint --strict`; the batch-change workflow is described in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ### Module View (the Full Web-App Path)
 
 The section above is the engine's mechanism view; inside the web app, one translation job travels this path:
@@ -215,7 +246,7 @@ All screenshots below are real application captures (recorded with headless Play
 - **In-place layout preservation**: the native engine keeps original page dimensions, images, vector graphics, and text-block positions — no re-flow, no page reconstruction
 - **Protected regions**: formulas, tables, algorithm pseudo-code, references, and citation markers `[1][2]` stay untouched; text inside figures is protected by default (optionally translatable)
 - **Clean Chinese output**: first occurrence renders as "中文术语（English Term）", then Chinese only; bold/italic/heading structure preserved
-- **Terminology consistency**: 1,000+ built-in terms (NeurIPS / ICML / ICLR / CVPR / ACL venue tracks plus CS/ML/math foundations) injected at translation time and audited afterwards, with `corpus-lint` as a CI gate
+- **Terminology corpus**: **1,066 terms in 23 categories** (venue-track terminology plus CS/ML/math foundations), injected per block at translation time and audited afterwards, with `corpus-lint` as a CI gate — see [Terminology Corpus](#terminology-corpus)
 - **Dual outputs**: `_zh.pdf` (Chinese-only) and `_dual.pdf` (side-by-side original + translation)
 - **OCR fallback**: scanned image-only PDFs can be OCR'd before translation (Tesseract-based)
 
