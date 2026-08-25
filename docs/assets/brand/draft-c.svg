@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" role="img" aria-labelledby="title desc">
+  <title id="title">Concept C - Synchronized Columns</title>
+  <desc id="desc">Two equal-height columns are crossed by one audit scan line, expressing synchronized source and translation.</desc>
+  <rect width="320" height="240" fill="#090d1a"/>
+  <g fill="none" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M48 34h94v172H48zM178 34h94v172h-94z" fill="#0d1526" stroke="#6f9dff" stroke-width="4"/>
+    <g stroke="#9ec3ff" stroke-width="7">
+      <path d="M68 62h52M68 86h40M68 110h52M68 134h34M68 158h52M68 182h42"/>
+    </g>
+    <g stroke="#eef2fc" stroke-width="7">
+      <path d="M198 62h20M230 62h22M198 86h54M198 110h26M236 110h16M198 134h54M198 158h18M228 158h24M198 182h54"/>
+    </g>
+    <path d="M30 122h260" stroke="#f3c96b" stroke-width="5"/>
+    <rect x="151" y="113" width="18" height="18" fill="#090d1a" stroke="#f3c96b" stroke-width="5"/>
+    <path d="M160 34v70M160 140v66" stroke="#6f9dff" stroke-width="3" stroke-dasharray="5 8" opacity=".65"/>
+  </g>
+</svg>

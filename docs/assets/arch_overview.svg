@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">SuperTranslate 整体架构：从源 PDF 到两种可交付译文</title>
+  <desc id="desc">源 PDF 经过对象解析与冻结、术语注入和多供应商翻译、原坐标回填、QA 审计，最终输出纯中文 PDF 与双语 PDF。</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#080d19"/>
+    </linearGradient>
+    <linearGradient id="blueCard" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#152747"/>
+      <stop offset="1" stop-color="#101b34"/>
+    </linearGradient>
+    <linearGradient id="goldCard" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a2519"/>
+      <stop offset="1" stop-color="#171b2b"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-25%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#02050d" flood-opacity=".55"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#78a9ff"/>
+    </marker>
+    <marker id="arrowGold" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#f1c75b"/>
+    </marker>
+    <style>
+      .eyebrow { fill: #78a9ff; font-size: 12px; font-weight: 750; letter-spacing: 2.4px; }
+      .title { fill: #f5f7ff; font-size: 36px; font-weight: 780; letter-spacing: -.8px; }
+      .subtitle { fill: #9aa9c9; font-size: 17px; }
+      .number { fill: #0b1020; font-size: 13px; font-weight: 850; }
+      .node-title { fill: #f5f7ff; font-size: 22px; font-weight: 760; }
+      .node-sub { fill: #a9b6d3; font-size: 14px; }
+      .node-en { fill: #78a9ff; font-size: 10px; font-weight: 760; letter-spacing: 1.35px; }
+      .arrow-label { fill: #7f90b3; font-size: 12px; font-weight: 650; }
+      .output-title { fill: #f5f7ff; font-size: 20px; font-weight: 780; }
+      .output-en { fill: #f1c75b; font-size: 10px; font-weight: 800; letter-spacing: 1.4px; }
+      .principle { fill: #c9d3e9; font-size: 14px; font-weight: 680; }
+      .principle-en { fill: #7181a3; font-size: 8.5px; font-weight: 700; letter-spacing: .9px; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="640" fill="#0b1020"/>
+  <rect width="1280" height="640" fill="url(#background)"/>
+  <path d="M0 132H1280M0 552H1280" stroke="#78a9ff" stroke-opacity=".06"/>
+  <circle cx="1120" cy="34" r="230" fill="#78a9ff" opacity=".045"/>
+  <circle cx="80" cy="620" r="190" fill="#f1c75b" opacity=".025"/>
+
+  <g font-family="system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
+    <text x="56" y="50" class="eyebrow">ARCHITECTURE OVERVIEW · ONE GEOMETRY, TWO DELIVERABLES</text>
+    <text x="56" y="94" class="title">从源 PDF，到两种可交付译文</text>
+    <text x="56" y="124" class="subtitle">先冻结不可改对象，再翻译可改文字；原页几何始终是唯一坐标系。</text>
+
+    <path d="M190 313H226" fill="none" stroke="#78a9ff" stroke-width="2.3" marker-end="url(#arrow)"/>
+    <path d="M440 313H476" fill="none" stroke="#78a9ff" stroke-width="2.3" marker-end="url(#arrow)"/>
+    <path d="M726 313H762" fill="none" stroke="#78a9ff" stroke-width="2.3" marker-end="url(#arrow)"/>
+    <path d="M966 313H1002" fill="none" stroke="#f1c75b" stroke-width="2.3" marker-end="url(#arrowGold)"/>
+    <text x="208" y="292" class="arrow-label" text-anchor="middle">读取结构</text>
+    <text x="458" y="292" class="arrow-label" text-anchor="middle">只送正文</text>
+    <text x="744" y="292" class="arrow-label" text-anchor="middle">译文返回</text>
+    <text x="984" y="292" class="arrow-label" text-anchor="middle">全量复核</text>
+
+    <g filter="url(#shadow)">
+      <rect x="52" y="248" width="138" height="130" rx="22" fill="#101a31" stroke="#78a9ff" stroke-opacity=".6" stroke-width="1.4"/>
+      <rect x="226" y="228" width="214" height="170" rx="22" fill="url(#blueCard)" stroke="#78a9ff" stroke-opacity=".55" stroke-width="1.4"/>
+      <rect x="476" y="214" width="250" height="198" rx="22" fill="url(#blueCard)" stroke="#78a9ff" stroke-opacity=".68" stroke-width="1.5"/>
+      <rect x="762" y="228" width="204" height="170" rx="22" fill="url(#blueCard)" stroke="#78a9ff" stroke-opacity=".55" stroke-width="1.4"/>
+      <rect x="1002" y="228" width="218" height="170" rx="22" fill="url(#goldCard)" stroke="#f1c75b" stroke-opacity=".75" stroke-width="1.6"/>
+    </g>
+
+    <g>
+      <circle cx="72" cy="268" r="13" fill="#78a9ff"/>
+      <text x="72" y="273" class="number" text-anchor="middle">1</text>
+      <path d="M86 286h48l18 18v45H86Z" fill="none" stroke="#b9d0ff" stroke-width="2"/>
+      <path d="M134 286v18h18" fill="none" stroke="#b9d0ff" stroke-width="2"/>
+      <text x="121" y="336" class="node-title" text-anchor="middle">源 PDF</text>
+      <text x="121" y="358" class="node-en" text-anchor="middle">SOURCE PDF</text>
+    </g>
+
+    <g>
+      <circle cx="248" cy="250" r="13" fill="#78a9ff"/>
+      <text x="248" y="255" class="number" text-anchor="middle">2</text>
+      <text x="333" y="274" class="node-title" text-anchor="middle">解析并冻结对象</text>
+      <text x="333" y="298" class="node-en" text-anchor="middle">PARSE · INVENTORY · FREEZE</text>
+      <line x1="252" y1="316" x2="414" y2="316" stroke="#78a9ff" stroke-opacity=".18"/>
+      <text x="333" y="342" class="node-sub" text-anchor="middle">文本块 · bbox · 语义角色</text>
+      <text x="333" y="367" class="node-sub" text-anchor="middle">公式 · 引用 · 图形保护区</text>
+    </g>
+
+    <g>
+      <circle cx="498" cy="236" r="13" fill="#78a9ff"/>
+      <text x="498" y="241" class="number" text-anchor="middle">3</text>
+      <text x="601" y="266" class="node-title" text-anchor="middle">术语注入 + 多供应商翻译</text>
+      <text x="601" y="291" class="node-en" text-anchor="middle">TERM-AWARE · MULTI-PROVIDER</text>
+      <line x1="502" y1="311" x2="700" y2="311" stroke="#78a9ff" stroke-opacity=".18"/>
+      <text x="601" y="337" class="node-sub" text-anchor="middle">标题 · 正文 · 图注分角色</text>
+      <text x="601" y="362" class="node-sub" text-anchor="middle">批次约束 · JSONL 缓存</text>
+      <text x="601" y="387" class="node-sub" text-anchor="middle">⟦n⟧ 校验 · 有界重试</text>
+    </g>
+
+    <g>
+      <circle cx="784" cy="250" r="13" fill="#78a9ff"/>
+      <text x="784" y="255" class="number" text-anchor="middle">4</text>
+      <text x="864" y="281" class="node-title" text-anchor="middle">原坐标回填</text>
+      <text x="864" y="306" class="node-en" text-anchor="middle">REFILL IN ORIGINAL BBOX</text>
+      <line x1="788" y1="324" x2="940" y2="324" stroke="#78a9ff" stroke-opacity=".18"/>
+      <text x="864" y="350" class="node-sub" text-anchor="middle">仅擦除可替换文字</text>
+      <text x="864" y="375" class="node-sub" text-anchor="middle">CJK 字体链自适应排版</text>
+    </g>
+
+    <g>
+      <circle cx="1024" cy="250" r="13" fill="#f1c75b"/>
+      <text x="1024" y="255" class="number" text-anchor="middle">5</text>
+      <path d="M1111 266l31 12v25c0 24-13 43-31 52-18-9-31-28-31-52v-25Z" fill="none" stroke="#f1c75b" stroke-width="2"/>
+      <path d="M1097 308l10 10 20-24" fill="none" stroke="#f1c75b" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1084" y="282" class="node-title" text-anchor="end">QA 审计</text>
+      <text x="1084" y="305" class="node-en" text-anchor="end">QUALITY AUDIT</text>
+      <text x="1111" y="374" class="node-sub" text-anchor="middle">文本 · 结构 · 视觉</text>
+    </g>
+
+    <path d="M1111 398V438H950V470" fill="none" stroke="#f1c75b" stroke-width="2.2" marker-end="url(#arrowGold)"/>
+    <path d="M1111 438H1151V470" fill="none" stroke="#f1c75b" stroke-width="2.2" marker-end="url(#arrowGold)"/>
+    <text x="1111" y="428" class="arrow-label" text-anchor="middle">通过才交付</text>
+    <text x="1038" y="576" class="arrow-label" text-anchor="middle">未通过 → 恢复全局最佳译文并等待系统修复</text>
+
+    <g filter="url(#shadow)">
+      <rect x="844" y="470" width="212" height="80" rx="20" fill="#111c34" stroke="#f1c75b" stroke-opacity=".62" stroke-width="1.4"/>
+      <rect x="1070" y="470" width="162" height="80" rx="20" fill="#111c34" stroke="#f1c75b" stroke-opacity=".62" stroke-width="1.4"/>
+    </g>
+    <text x="950" y="507" class="output-title" text-anchor="middle">纯中文 PDF</text>
+    <text x="950" y="531" class="output-en" text-anchor="middle">MONOLINGUAL</text>
+    <text x="1151" y="507" class="output-title" text-anchor="middle">双语 PDF</text>
+    <text x="1151" y="531" class="output-en" text-anchor="middle">BILINGUAL</text>
+
+    <g transform="translate(56 490)">
+      <line x1="0" y1="0" x2="706" y2="0" stroke="#78a9ff" stroke-opacity=".14"/>
+      <text x="0" y="32" class="principle">冻结不可改对象</text>
+      <text x="0" y="52" class="principle-en">PROTECTED OBJECTS STAY ORIGINAL</text>
+      <text x="268" y="32" class="principle">模型只处理可翻译正文</text>
+      <text x="268" y="52" class="principle-en">MODEL TOUCHES TRANSLATABLE TEXT ONLY</text>
+      <text x="602" y="32" class="principle">原页几何不重排</text>
+      <text x="602" y="52" class="principle-en">NO PAGE REFLOW</text>
+    </g>
+  </g>
+</svg>

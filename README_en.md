@@ -1,4 +1,11 @@
-# SuperTranslate
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo.svg">
+    <img src="docs/assets/logo-light.svg" alt="SuperTranslate" width="420">
+  </picture>
+</p>
+
+<div align="center">
 
 [中文](README.md) | English
 
@@ -8,6 +15,8 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![GitHub stars](https://img.shields.io/github/stars/asimfish/super_translate?style=flat&logo=github&label=Stars)](https://github.com/asimfish/super_translate/stargazers)
 
+</div>
+
 **English paper in, Chinese paper out — an agent-native, layout-preserving translation engine. Formulas, figures, and layout stay untouched to the pixel.**
 
 Everyone who reads papers knows the dilemma: the original is slow going, but machine-translated PDFs are unreadable — formulas collapse into garbage, two columns become one, captions drift away from their figures.
@@ -16,7 +25,7 @@ SuperTranslate takes a different route: **it never re-flows the page**. Formulas
 
 Deploy it as a web app and you get a built-in side-by-side reader; install it as an agent skill and one sentence in Claude Code / Cursor — "translate this paper into Chinese" — is all it takes.
 
-[See the results](#translation-quality-side-by-side) · [Run it in five minutes](#quick-start-web-mode) · [How it works](#how-it-works)
+[See the results](#translation-quality-side-by-side) · [Run it in five minutes](#quick-start-web-mode) · [How it works](#how-it-works-from-original-page-to-trusted-translation)
 
 ![SuperTranslate result: Cosmos page 1, original alternating with the translation](docs/assets/comparison/cosmos/hero.gif)
 
@@ -26,7 +35,7 @@ Want to see it in action? [22-second web UI demo →](#web-interface)
 
 1. [Why This Exists](#why-this-exists)
 2. [Translation Quality, Side by Side](#translation-quality-side-by-side)
-3. [How It Works](#how-it-works)
+3. [How It Works: From Original Page to Trusted Translation](#how-it-works-from-original-page-to-trusted-translation)
 4. [Web Interface](#web-interface)
 5. [Features](#features)
 6. [Quick Start: Web Mode](#quick-start-web-mode)
@@ -158,21 +167,47 @@ Comparison assets follow the licensing policy of [benchmarks/classic20/README.md
 >
 > Honest note: the comparison images above include no same-machine pdf2zh baseline — I/O constraints in the rendering environment kept pdf2zh from completing within the time budget (see [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)). The table above is therefore a documentation-based comparison only; community-contributed side-by-side samples are welcome.
 
-## How It Works
+## How It Works: From Original Page to Trusted Translation
 
-<img src="docs/assets/mechanism.svg" alt="SuperTranslate mechanism: source-PDF parsing, translation, in-place refill, and the deterministic QA loop" width="100%">
+Structure is frozen first, prose is translated second, and independent QA plus the strict gate issue the final verdict. The three figures answer three questions: how the pipeline flows, how quality converges, and who holds the power to approve.
 
-SuperTranslate first extracts text blocks with page, bounding-box, font-size, and semantic-role metadata, then builds an in-memory inventory of translation units and protected regions. Formulas, citations, and URLs become reversible `⟦n⟧` placeholders, while graphics, tables, algorithms, and bibliography regions are frozen by rule. (`pdf_zh_translator/pdf_layout.py:370-426`; `pdf_zh_translator/pdf_layout.py:8531-8801`; `pdf_zh_translator/pdf_layout.py:19545-19601`)
+<img src="docs/assets/arch_overview.svg" alt="SuperTranslate architecture: freeze structural objects, translate replaceable prose, refill at original coordinates, deliver two PDFs after QA" width="100%">
 
-Translatable text is sent to a multi-provider adapter with title, body, and caption roles. Relevant terminology is injected per batch; item-count and character-count limits bound requests; a JSONL cache enables deterministic replay; placeholder failures fall back to single-item or prose-segment retries. (`pdf_zh_translator/translators.py:92-167`; `pdf_zh_translator/translators.py:390-450`; `pdf_zh_translator/translators.py:832-923`)
+SuperTranslate freezes non-editable source objects, translates only replaceable prose, refills it in the original coordinates, and delivers monolingual and bilingual PDFs only after QA.
 
-During rendering, only replaceable source text is removed. Chinese is typeset inside the original `bbox` through a CJK fallback chain, while page geometry, images, vector graphics, links, and source formula glyphs remain anchored to the original PDF. (`pdf_zh_translator/pdf_layout.py:1338-1393`; `pdf_zh_translator/pdf_layout.py:8012-8042`; `pdf_zh_translator/pdf_layout.py:25343-25370`)
+- Text blocks carry page, `bbox`, font size, and semantic role; formulas, citations, and URLs first become reversible placeholders, and protected regions never enter free rewriting. (`pdf_zh_translator/pdf_layout.py:370-426`; `pdf_zh_translator/pdf_layout.py:19545-19601`)
+- Terminology is injected per current text block; titles, body, and captions use structural prompts, and every provider shares the same constraints. (`pdf_zh_translator/translators.py:543-647`; `pdf_zh_translator/translators.py:832-923`)
+- Requests are bounded by both item count and character count; the JSONL cache, placeholder validation, and single-block fallback make the same input deterministically replayable. (`pdf_zh_translator/translators.py:92-167`; `pdf_zh_translator/translators.py:390-450`)
+- Rendering erases only replaceable text, then typesets Chinese inside the original `bbox` through a CJK fallback chain; page size, images, vectors, links, and source formulas stay on the original page. (`pdf_zh_translator/pdf_layout.py:1338-1393`; `pdf_zh_translator/pdf_layout.py:8012-8042`; `pdf_zh_translator/pdf_layout.py:25343-25370`)
+- QA re-examines the candidate in an isolated subprocess; the monolingual and bilingual PDFs come from the same translation result and enter snapshot protection together. (`app/api/papers.py:1763-1836`; `app/api/papers.py:2767-2802`)
 
-An isolated subprocess then reconstructs the same source-object view and checks untranslated text, protected-region changes, overlaps and blank pages, missing images/vectors/formulas, rendered-ink regression, font sizing, tables, and references. Terminology auditing is currently advisory and does not enter the issue score. (`app/api/papers.py:1763-1836`; `pdf_zh_translator/pdf_layout.py:2706-2718`; `pdf_zh_translator/page_inspector.py:2295-2558`; `app/api/papers.py:2890-2922`)
+### Only Strictly Better Translations Are Accepted
 
-Iterative QA defaults to at most four rounds (the API accepts 1–8). A deterministic planner chooses only registered actions; mono and dual PDFs are snapshotted before repair; every detector reruns afterward; and a candidate is accepted only when the lexicographic score `(error count, total issue count)` strictly decreases. Otherwise, the snapshot is atomically restored and the no-progress loop stops. Clean output is delivered, pass history is written to `*.qa.json`, and untranslated-text errors may also trigger bounded outer retranslation while retaining the globally best snapshot. (`app/services/quality_agent.py:11-87`; `app/api/papers.py:1201-1241`; `app/api/papers.py:2306-2536`; `app/api/papers.py:2569-2603`; `app/api/papers.py:2746-2802`; `app/api/papers.py:2059-2206`)
+Every repair reruns the same detectors; a tie or a regression rolls back immediately.
 
-Golden-set regression reuses the same issue detectors and visual score. The current release manifest contains 50 papers: reports must be complete, at least 20 papers must pass the strict gate by default, and each strict pass requires zero errors, zero actionable warnings, and a visual score of at least 0.55, with provenance and regression checks enforced. (`pdf_zh_translator/golden_eval.py:125-152`; `benchmarks/classic20/manifest.json:1-16`; `scripts/classic_benchmark.py:185-200`; `scripts/classic_benchmark.py:1363-1529`; `scripts/classic_benchmark.py:1566-1567`)
+<img src="docs/assets/qa_loop.svg" alt="QA loop: detection, issue list, bounded repair, candidate comparison; only strictly better candidates are accepted, otherwise the snapshot is restored" width="100%">
+
+Every QA pass reruns the same detectors; a candidate is accepted only if it strictly reduces the error-and-issue score, otherwise the pre-repair snapshot is restored.
+
+- Detection covers untranslated text, protected-region changes, overlaps and blank pages, missing images/vectors/formulas, rendered ink, font sizing, tables, and references; terminology auditing is advisory only and does not enter the issue score. (`pdf_zh_translator/pdf_layout.py:2706-2718`; `pdf_zh_translator/page_inspector.py:2295-2558`; `app/api/papers.py:2890-2922`)
+- QA emits a stable `TranslationIssue[]`; the planner may only choose the four registered actions `accept`, `repair_layout`, `retranslate`, and `stop`. (`app/services/quality_agent.py:11-87`; `docs/adr/0001-independent-translation-quality-loop.md:68-75`)
+- Iterative mode defaults to at most 4 rounds and the API enforces 1–8; every round starts from isolated detection. (`app/api/papers.py:1201-1241`; `app/api/papers.py:2306-2382`)
+- Mono and dual PDFs are snapshotted together before a repair; detectors rerun afterward, and candidates are compared lexicographically on `(error count, total issue count)`. (`app/api/papers.py:2445-2475`; `app/api/papers.py:2746-2788`)
+- A tied or worse candidate is atomically rolled back and the no-progress loop stops; the outer recovery attempt separately keeps the cross-attempt global best. (`app/api/papers.py:2476-2494`; `app/api/papers.py:2059-2206`; `app/api/papers.py:2791-2802`)
+
+### The Repairer Cannot Grade Its Own Work
+
+A writable repairer and a read-only reviewer split the powers; evidence decides delivery.
+
+<img src="docs/assets/adversarial_review.svg" alt="Independent review vs. repair: the repairer only writes candidates, the reviewer only inspects; snapshots keep the global best and the strict gate issues the final verdict" width="100%">
+
+The repairer may write candidates while the reviewer may only inspect and report issues; neither can self-approve, with snapshots preserving the global best and the strict gate issuing the final verdict.
+
+- The ADR requires that visual or model review may only raise issues, never edit the PDF directly; the canonical output is an independent `TranslationIssue[]`, and an issue passes deterministic verification before it can block. (`docs/adr/0001-independent-translation-quality-loop.md:20-27`; `docs/adr/0001-independent-translation-quality-loop.md:56-62`)
+- Current QA reads `original_path` and `translated_path` in an isolated subprocess and only deserializes detection results into an issue list; public acceptance artifacts are likewise recorded under a `qa-readonly` role. (`app/api/papers.py:1763-1836`; `docs/assets/comparison/NOTES.md:56-61`)
+- The repairer may only execute code-registered actions; a layout repair writes a candidate mono PDF and rebuilds the dual PDF when needed — it cannot declare itself passed. (`app/services/quality_agent.py:11-87`; `app/api/papers.py:2421-2470`; `app/api/papers.py:2767-2780`)
+- The pre-repair snapshot handles single-round atomic rollback; the outer recovery loop keeps `best_result`, `best_snapshots`, and `best_score`, restoring the global best even when the budget runs out. (`app/api/papers.py:2445-2494`; `app/api/papers.py:2059-2206`; `app/api/papers.py:2783-2802`)
+- A strict pass requires zero errors, zero actionable warnings, and a visual score of at least 0.55; the release gate additionally checks report completeness, provenance, layout axes, and regressions, and by default requires at least 20 strict passes. (`scripts/classic_benchmark.py:185-200`; `scripts/classic_benchmark.py:1363-1529`; `scripts/classic_benchmark.py:1566-1567`)
 
 ### Terminology Corpus
 
@@ -243,7 +278,7 @@ Two translation paths:
 - **Native engine** (default, `PAPER_CHINA_TRANSLATION_ENGINE=native`): the full layout-preservation, protected-region, terminology, and QA-repair capability, used by DeepSeek / Kimi / OpenAI / Anthropic / GLM. Kimi / Anthropic / GLM always run on the native engine.
 - **pdf2zh path**: reuses the bundled [pdf2zh (PDFMathTranslate)](https://github.com/Byaidu/PDFMathTranslate) pipeline, powering Google (the key-free `fast` preset), DeepL, and local models via Ollama.
 
-Design decisions are recorded in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/adr/](docs/adr/).
+Design decisions are recorded in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/adr/](docs/adr/). The complete single-figure technical version lives in [docs/assets/mechanism.svg](docs/assets/mechanism.svg).
 
 ## Web Interface
 

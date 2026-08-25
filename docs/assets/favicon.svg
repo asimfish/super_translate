@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision">
+  <title id="title">SuperTranslate favicon</title>
+  <desc id="desc">A simplified registered bilingual page.</desc>
+  <rect width="64" height="64" fill="#090d1a"/>
+  <path d="M11 5h29l13 13v41H11z" fill="#0d1526" stroke="#6f9dff" stroke-width="3" stroke-linejoin="miter"/>
+  <path d="M40 5v13h13" fill="#111a31" stroke="#6f9dff" stroke-width="3" stroke-linejoin="miter"/>
+  <path d="M18 29h9M18 40h9" stroke="#9ec3ff" stroke-width="4" stroke-linecap="square"/>
+  <path d="M37 27h5v5h-5zM45 27h4v5h-4zM37 38h4v5h-4zM44 38h5v5h-5z" fill="#eef2fc"/>
+  <path d="M32 20v34" stroke="#f3c96b" stroke-width="3"/>
+  <rect x="29" y="31" width="6" height="6" fill="#f3c96b"/>
+  <rect x="29" y="45" width="6" height="6" fill="#f3c96b"/>
+</svg>

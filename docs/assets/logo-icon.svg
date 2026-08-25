@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision">
+  <title id="title">SuperTranslate icon</title>
+  <desc id="desc">A split document keeps English and Chinese content on one registration grid while a gold rail records QA checkpoints.</desc>
+  <rect width="128" height="128" fill="#090d1a"/>
+  <path d="M20 10h62l26 26v82H20z" fill="#0d1526" stroke="#6f9dff" stroke-width="4" stroke-linejoin="miter"/>
+  <path d="M82 10v26h26" fill="#111a31" stroke="#6f9dff" stroke-width="4" stroke-linejoin="miter"/>
+  <g stroke="#6f9dff" stroke-width="2" opacity=".2">
+    <path d="M30 56h68M30 80h68M30 104h68"/>
+  </g>
+  <g fill="#9ec3ff">
+    <rect x="31" y="41" width="23" height="5"/>
+    <rect x="31" y="49" width="17" height="4" opacity=".72"/>
+    <rect x="31" y="65" width="18" height="5"/>
+    <rect x="31" y="73" width="24" height="4" opacity=".72"/>
+    <rect x="31" y="89" width="24" height="5"/>
+    <rect x="31" y="97" width="14" height="4" opacity=".72"/>
+  </g>
+  <g fill="#eef2fc">
+    <path d="M74 40h7v7h-7zM84 40h13v7H84zM74 49h13v5H74zM90 49h7v5h-7z"/>
+    <path d="M74 64h13v7H74zM90 64h7v7h-7zM74 73h7v5h-7zM84 73h13v5H84z"/>
+    <path d="M74 88h7v7h-7zM84 88h13v7H84zM74 97h13v5H74zM90 97h7v5h-7z"/>
+  </g>
+  <path d="M64 32v74" stroke="#f3c96b" stroke-width="4"/>
+  <g fill="#f3c96b">
+    <rect x="60" y="52" width="8" height="8"/>
+    <rect x="60" y="76" width="8" height="8"/>
+    <rect x="60" y="100" width="8" height="8"/>
+  </g>
+  <path d="M31 110h66M31 105v10M97 105v10" fill="none" stroke="#f3c96b" stroke-width="3"/>
+</svg>

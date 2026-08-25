@@ -1,4 +1,11 @@
-# SuperTranslate
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo.svg">
+    <img src="docs/assets/logo-light.svg" alt="SuperTranslate" width="420">
+  </picture>
+</p>
+
+<div align="center">
 
 中文 | [English](README_en.md)
 
@@ -8,6 +15,8 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![GitHub stars](https://img.shields.io/github/stars/asimfish/super_translate?style=flat&logo=github&label=Stars)](https://github.com/asimfish/super_translate/stargazers)
 
+</div>
+
 **英文论文 → 中文版，Agent-Native 的保版式翻译引擎：公式、图表、版式，一个像素不动。**
 
 读论文的人都遇到过这个两难：读英文原文太慢，机翻出来的 PDF 又没法看——公式挤成乱码、双栏变成单栏、图注对不上号。
@@ -16,7 +25,7 @@ SuperTranslate 换了一条路：**不重排页面**。公式、图表、引用�
 
 部署成 Web 应用，就有内置的双栏对照阅读器；装成 Agent Skill，在 Claude Code / Cursor 里说一句"帮我把这篇论文翻成中文"就够了。
 
-[看翻译效果](#翻译效果对比) · [五分钟跑起来](#快速开始--web-模式) · [了解实现机制](#实现机制)
+[看翻译效果](#翻译效果对比) · [五分钟跑起来](#快速开始--web-模式) · [了解实现机制](#实现机制从原页到可信译文)
 
 ![SuperTranslate 翻译效果：Cosmos 第 1 页原文与译文轮播](docs/assets/comparison/cosmos/hero.gif)
 
@@ -26,7 +35,7 @@ SuperTranslate 换了一条路：**不重排页面**。公式、图表、引用�
 
 1. [为什么做这个](#为什么做这个)
 2. [翻译效果对比](#翻译效果对比)
-3. [实现机制](#实现机制)
+3. [实现机制：从原页到可信译文](#实现机制从原页到可信译文)
 4. [Web 界面](#web-界面)
 5. [特性](#特性)
 6. [快速开始 · Web 模式](#快速开始--web-模式)
@@ -158,21 +167,47 @@ Attention、DDPM 与 ResNet 采用 arXiv 非独占许可（非 CC），按下方
 >
 > 诚实说明：上文对比图暂无 pdf2zh 的同机图像基线——制图环境的 I/O 限制导致 pdf2zh 未能在时限内完成运行（记录见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)），本表仅为基于公开文档的文字性对比，欢迎社区提交对比样张。
 
-## 实现机制
+## 实现机制：从原页到可信译文
 
-<img src="docs/assets/mechanism.svg" alt="SuperTranslate 从源 PDF 解析、翻译、原位回填到确定性 QA 质量循环的机制图" width="100%">
+结构先冻结、正文再翻译，最后由独立 QA 与 strict gate 验收。三张图分别回答三个问题：整体流程怎么走、质量怎么收敛、裁决权在谁手里。
 
-SuperTranslate 先从原 PDF 提取带页码、坐标、字号和语义角色的文本块，在内存中建立翻译单元与保护区映射；公式、引用和 URL 被替换为可逆的 `⟦n⟧` 占位符，图形、表格、算法与参考文献区域按规则冻结。（`pdf_zh_translator/pdf_layout.py:370-426`；`pdf_zh_translator/pdf_layout.py:8531-8801`；`pdf_zh_translator/pdf_layout.py:19545-19601`）
+<img src="docs/assets/arch_overview.svg" alt="SuperTranslate 整体架构：冻结结构对象、翻译可替换正文、原坐标回填、QA 审计后输出双 PDF" width="100%">
 
-可翻译正文按标题、段落、图注等角色送入多供应商适配层；相关术语按块注入提示词，批处理受条数与字符数双重约束，JSONL 缓存支持确定性重放，占位符异常则降级为单块或分段重试。（`pdf_zh_translator/translators.py:92-167`；`pdf_zh_translator/translators.py:390-450`；`pdf_zh_translator/translators.py:832-923`）
+SuperTranslate 先冻结原 PDF 中不可改的结构对象，只翻译可替换正文，再按原坐标回填并通过 QA 审计，输出纯中文与双语两种 PDF。
 
-渲染阶段只擦除可替换文字，在原 `bbox` 内用 CJK 字体回退链排版；原页尺寸、图像、矢量图形、链接及源公式字形继续沿用原 PDF。（`pdf_zh_translator/pdf_layout.py:1338-1393`；`pdf_zh_translator/pdf_layout.py:8012-8042`；`pdf_zh_translator/pdf_layout.py:25343-25370`）
+- 文本块携带页码、`bbox`、字号和语义角色；公式、引用与 URL 会先变成可逆占位符，保护区不进入自由改写。（`pdf_zh_translator/pdf_layout.py:370-426`；`pdf_zh_translator/pdf_layout.py:19545-19601`）
+- 术语按当前文本块注入提示词；标题、正文、图注使用结构提示，多供应商层共享同一约束。（`pdf_zh_translator/translators.py:543-647`；`pdf_zh_translator/translators.py:832-923`）
+- 请求同时受批次数和字符数约束；JSONL 缓存、占位符校验与单块回退让同一输入可以确定性重放。（`pdf_zh_translator/translators.py:92-167`；`pdf_zh_translator/translators.py:390-450`）
+- 渲染只擦除可替换文字，再用 CJK 字体链在原 `bbox` 内排版；页面尺寸、图像、矢量、链接与源公式继续沿用原页。（`pdf_zh_translator/pdf_layout.py:1338-1393`；`pdf_zh_translator/pdf_layout.py:8012-8042`；`pdf_zh_translator/pdf_layout.py:25343-25370`）
+- QA 在隔离子进程中复核候选，纯中文与双语 PDF 由同一翻译结果生成并一起进入快照保护。（`app/api/papers.py:1763-1836`；`app/api/papers.py:2767-2802`）
 
-译文随后在隔离子进程中重建同一源对象视图，检查漏翻、保护区变更、重叠与空页、图像/矢量/公式缺失、视觉墨迹、字号、表格和引用；术语审计当前只记录提示，不进入错误分。（`app/api/papers.py:1763-1836`；`pdf_zh_translator/pdf_layout.py:2706-2718`；`pdf_zh_translator/page_inspector.py:2295-2558`；`app/api/papers.py:2890-2922`）
+### 只接受严格变好的翻译
 
-迭代 QA 默认最多 4 轮（API 可配 1–8）：确定性规划器只选择登记过的动作；修复前快照纯中文与双语 PDF，修复后重跑全部检测器，仅当 `(error 数, issue 总数)` 严格下降才接受，否则原子回滚并停止无进展循环。无错误则交付，轮次历史写入 `*.qa.json`；漏翻类错误还可在外层恢复预算内重译，并最终恢复全局最佳快照。（`app/services/quality_agent.py:11-87`；`app/api/papers.py:1201-1241`；`app/api/papers.py:2306-2536`；`app/api/papers.py:2569-2603`；`app/api/papers.py:2746-2802`；`app/api/papers.py:2059-2206`）
+每次修复都重跑同一组检测器；持平或变差，立即回滚。
 
-Golden set 复用同一问题检测与视觉评分；发布基准当前为 50 篇清单，报告须齐全且默认至少 20 篇 strict pass，单篇要求 0 error、0 actionable warning、视觉分不低于 0.55，并校验证据来源与回归。（`pdf_zh_translator/golden_eval.py:125-152`；`benchmarks/classic20/manifest.json:1-16`；`scripts/classic_benchmark.py:185-200`；`scripts/classic_benchmark.py:1363-1529`；`scripts/classic_benchmark.py:1566-1567`）
+<img src="docs/assets/qa_loop.svg" alt="QA 循环：检测、缺陷清单、有界修复、候选比较；只接受严格变好的候选，否则恢复快照" width="100%">
+
+每轮 QA 都重跑同一组检测器；候选只有严格减少错误与问题总数才会被接受，否则立即恢复修复前快照。
+
+- 检测覆盖漏翻、保护区变更、重叠与空页、图片/矢量/公式缺失、视觉墨迹、字号、表格与引用；术语审计当前只给提示，不进入问题分。（`pdf_zh_translator/pdf_layout.py:2706-2718`；`pdf_zh_translator/page_inspector.py:2295-2558`；`app/api/papers.py:2890-2922`）
+- QA 输出稳定的 `TranslationIssue[]`；规划器只允许 `accept`、`repair_layout`、`retranslate`、`stop` 四类登记动作。（`app/services/quality_agent.py:11-87`；`docs/adr/0001-independent-translation-quality-loop.md:68-75`）
+- 迭代模式默认最多 4 轮，API 明确限制为 1–8；每轮都从隔离检测开始。（`app/api/papers.py:1201-1241`；`app/api/papers.py:2306-2382`）
+- 修复前同时快照 mono 与 dual PDF；修复后重跑检测器，并按 `(error 数, issue 总数)` 做字典序比较。（`app/api/papers.py:2445-2475`；`app/api/papers.py:2746-2788`）
+- 候选持平或变差会被原子回滚并停止无进展循环；外层恢复尝试另行保留跨尝试全局最佳。（`app/api/papers.py:2476-2494`；`app/api/papers.py:2059-2206`；`app/api/papers.py:2791-2802`）
+
+### 修复者不能给自己打分
+
+可写的修复方与只读审查方分权，是否交付由证据裁决。
+
+<img src="docs/assets/adversarial_review.svg" alt="独立审查—修复分权：修复方只写候选，审查方只读挑错，快照保底，strict gate 终审" width="100%">
+
+修复方只写候选、审查方只读挑错，双方都不能自行放行；快照比较保留全局最佳，最终由 strict gate 决定是否交付。
+
+- ADR 明确要求视觉或模型审查只能提出问题、不能直接修改 PDF；规范输出是独立的 `TranslationIssue[]`，成为阻断项前还要经过确定性验证。（`docs/adr/0001-independent-translation-quality-loop.md:20-27`；`docs/adr/0001-independent-translation-quality-loop.md:56-62`）
+- 当前 QA 通过隔离子进程读取 `original_path` 与 `translated_path`，仅把检测结果反序列化为问题清单；公开验收产物也使用 `qa-readonly` 角色记录。（`app/api/papers.py:1763-1836`；`docs/assets/comparison/NOTES.md:56-61`）
+- 修复方只能执行代码登记的动作；布局修复写候选 mono PDF，并在需要时重建 dual PDF，不能自行判定通过。（`app/services/quality_agent.py:11-87`；`app/api/papers.py:2421-2470`；`app/api/papers.py:2767-2780`）
+- 修复前快照负责单轮原子回滚；外层恢复循环持续保存 `best_result`、`best_snapshots` 与 `best_score`，预算耗尽也恢复全局最佳。（`app/api/papers.py:2445-2494`；`app/api/papers.py:2059-2206`；`app/api/papers.py:2783-2802`）
+- 单篇 strict pass 要求 0 error、0 actionable warning、视觉分不低于 0.55；发布 gate 还检查报告齐全、来源、布局轴与回归，并默认要求至少 20 篇 strict pass。（`scripts/classic_benchmark.py:185-200`；`scripts/classic_benchmark.py:1363-1529`；`scripts/classic_benchmark.py:1566-1567`）
 
 ### 专业术语库
 
@@ -241,7 +276,7 @@ flowchart LR
 - **native 自研引擎**（默认，`PAPER_CHINA_TRANSLATION_ENGINE=native`）：版式保持、保护区、术语注入、QA 修复循环的完整能力，供 DeepSeek / Kimi / OpenAI / Anthropic / GLM 使用。Kimi / Anthropic / GLM 强制走 native 引擎。
 - **pdf2zh 路径**：复用捆绑的 [pdf2zh (PDFMathTranslate)](https://github.com/Byaidu/PDFMathTranslate) 管线，支撑 Google（免 API key 的 `fast` 档）、DeepL、Ollama 本地模型。
 
-设计决策记录见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/adr/](docs/adr/)。
+设计决策记录见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/adr/](docs/adr/)。完整单图版技术细节见 [docs/assets/mechanism.svg](docs/assets/mechanism.svg)。
 
 ## Web 界面
 

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" role="img" aria-labelledby="title desc">
+  <title id="title">Concept A - Registered Page</title>
+  <desc id="desc">A split academic page keeps English lines and Chinese blocks on the same registration grid, with a gold QA rail.</desc>
+  <rect width="320" height="240" fill="#090d1a"/>
+  <g transform="translate(78 14)">
+    <path d="M14 6h104l32 32v182H14z" fill="#0d1526" stroke="#6f9dff" stroke-width="4" stroke-linejoin="miter"/>
+    <path d="M118 6v32h32" fill="#111a31" stroke="#6f9dff" stroke-width="4" stroke-linejoin="miter"/>
+    <g fill="none" stroke="#6f9dff" stroke-width="2" opacity=".22">
+      <path d="M28 70h108M28 112h108M28 154h108"/>
+    </g>
+    <g fill="#9ec3ff">
+      <rect x="30" y="55" width="40" height="6"/>
+      <rect x="30" y="65" width="29" height="5" opacity=".72"/>
+      <rect x="30" y="97" width="34" height="6"/>
+      <rect x="30" y="107" width="42" height="5" opacity=".72"/>
+      <rect x="30" y="139" width="42" height="6"/>
+      <rect x="30" y="149" width="25" height="5" opacity=".72"/>
+    </g>
+    <g fill="#eef2fc">
+      <rect x="92" y="53" width="12" height="9"/>
+      <rect x="108" y="53" width="17" height="9"/>
+      <rect x="92" y="66" width="18" height="6" opacity=".72"/>
+      <rect x="114" y="66" width="11" height="6" opacity=".72"/>
+      <rect x="92" y="95" width="17" height="9"/>
+      <rect x="113" y="95" width="12" height="9"/>
+      <rect x="92" y="108" width="12" height="6" opacity=".72"/>
+      <rect x="108" y="108" width="17" height="6" opacity=".72"/>
+      <rect x="92" y="137" width="12" height="9"/>
+      <rect x="108" y="137" width="17" height="9"/>
+      <rect x="92" y="150" width="18" height="6" opacity=".72"/>
+      <rect x="114" y="150" width="11" height="6" opacity=".72"/>
+    </g>
+    <path d="M82 42v132" stroke="#f3c96b" stroke-width="4"/>
+    <g fill="#f3c96b">
+      <rect x="77" y="65" width="10" height="10"/>
+      <rect x="77" y="107" width="10" height="10"/>
+      <rect x="77" y="149" width="10" height="10"/>
+    </g>
+    <path d="M30 184h96" stroke="#f3c96b" stroke-width="4"/>
+    <path d="M30 176v16M126 176v16" stroke="#f3c96b" stroke-width="4"/>
+  </g>
+</svg>

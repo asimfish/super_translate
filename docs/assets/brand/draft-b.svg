@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" role="img" aria-labelledby="title desc">
+  <title id="title">Concept B - Pixel ST Folio</title>
+  <desc id="desc">A geometric ST monogram is built from a document fold and a precise pixel grid.</desc>
+  <rect width="320" height="240" fill="#090d1a"/>
+  <g fill="none" stroke-linejoin="miter">
+    <path d="M58 24h150l42 42v150H58z" fill="#0d1526" stroke="#6f9dff" stroke-width="4"/>
+    <path d="M208 24v42h42" fill="#111a31" stroke="#6f9dff" stroke-width="4"/>
+    <g stroke="#6f9dff" stroke-width="1.5" opacity=".16">
+      <path d="M86 48v140M114 48v140M142 48v140M170 48v140M198 76v112M226 76v112"/>
+      <path d="M86 76h140M86 104h140M86 132h140M86 160h140M86 188h140"/>
+    </g>
+    <path d="M154 76H94v28h60v28H94v28h60" stroke="#6f9dff" stroke-width="12" stroke-linecap="square"/>
+    <path d="M166 76h60M196 76v84" stroke="#f3c96b" stroke-width="12" stroke-linecap="square"/>
+    <path d="M94 188h132" stroke="#eef2fc" stroke-width="4"/>
+    <rect x="90" y="184" width="8" height="8" fill="#eef2fc" stroke="none"/>
+    <rect x="222" y="184" width="8" height="8" fill="#eef2fc" stroke="none"/>
+  </g>
+</svg>
