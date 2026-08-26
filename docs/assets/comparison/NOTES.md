@@ -96,3 +96,14 @@
 
 - 2026-08-26 加入 dpo 后 comparison 目录总计 **14MB**（上限 25MB）：dpo 4.0MB（17 张：4 整页 + 4 trim + 3 trio + 6 detail）、cosmos ~4.4MB、qwen_robotworld ~2.5MB、attention ~0.6MB、resnet 488KB。
 - 最大单图 `cosmos/crop_figure_ours.png` 1.03MB（上限 1.5MB）。
+
+## 2026-08-26 晚 DPO 素材升级（200dpi 重渲 + 大模型直译列 + 定义/引理三联）
+
+用户反馈三点，对应处理：
+
+1. **公式观感模糊**：核查 240dpi 渲染，原文与译文公式锐度一致（公式冻结、矢量原样），模糊源于展示图仅 120dpi——retina 屏 ~800px 显示位需要 ~1600 物理像素，120dpi 图被放大近一倍。DPO 整页素材（original/ours 全页 + trim + trio 三方）全部重渲为 **200dpi**（`pdftoppm -r 200`，union-trim 同框），detail crops 维持 240dpi。qwen/cosmos 源 PDF 在内部仓库，暂维持 120dpi（后续同批升级）。
+2. **新增「直接丢给大模型」列**（`trio_p4_rawllm.png`）：`pdftotext -f 4 -l 4 -layout` 提取 p4 全页文本，单轮直译（同后端 deepseek-v4-pro，提示词「请把这页论文翻译成中文：」，输出 2339 字符，存 `local:.local-work/p4_raw_llm.md`）。呈现方式：marked 解析 markdown + KaTeX auto-render（解析前保护 `\(\)\[\]` 定界符，避免 marked 吞反斜杠误伤模型输出），排成 1441×1959（与 trio 列同尺度）页面后 Playwright 截图。观察：正文流畅、公式 (4)(5) 可渲染；(6)(7) 模型自身输出的 LaTeX 破损退化为源码、`_` 触发整段误斜体；版式/双栏/页码/引用锚点全部丢失。渲染管线曾误吞定界符（marked 把 `\(` 转成 `(`），已修复后重截——失败处均为模型自身缺陷，非管线伪影。
+3. **细节③ 定义与引理（p5）**：`crop_lemmas_{original,pdf2zh,ours}.png`，240dpi 固定框 x300-1790 y1930-2365。pdf2zh 将 Definition 1 / Lemma 1 / Lemma 2 正文整段留英（标签「定义 1.」却翻了）；我们全部译出、粗体标签保留、行内数学原样。诚实备注：我们的定义 1 因行内公式锚定原位，中文语序有迁就（「当且仅当存 …… 在某个函数 f」），内容正确可读，属已知取舍，未在展示文案中回避。
+4. **机制图**：`arch_overview.svg` v2——新增术语库节点（绿色，1,066 条 · 用户可扩展，「逐块注入」箭头入翻译节点）与 Agentic 修复循环回环（金色虚线，QA 未过检 → 回翻译节点，标注「只接受严格变好 · 否则回滚快照」），画布 520→640 高。
+
+体积：comparison/ 由 14MB 增至 18MB（200dpi 升级 + rawllm 列 + lemmas 三联）。

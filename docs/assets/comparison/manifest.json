@@ -17,15 +17,17 @@
       "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
       "license": "CC BY 4.0（arXiv 2305.18290v3 abs 页 license 链接 creativecommons.org/licenses/by/4.0，2026-08-26 核验）",
       "display": "full_pages",
-      "pages_rendered": [1, 4],
+      "pages_rendered": [1, 4, 5],
       "has_pdf2zh": true,
-      "crops": ["abstract(三方)", "boldlead(三方)", "trio_p4(三方整页)"],
-      "notes": "showcase_cc 六篇中首篇完成。2026-08-26 本地快盘实测：SuperTranslate 单遍翻译（deepseek 后端，默认 deepseek-v4-pro，--preserve-graphics-text），27 页 216 块翻译 / 301 块保护跳过，耗时约 24 分钟（含限速重试）；inspect 全篇 3 报告（p17 公式横移 16pt 警告 + p22 附录 GPT-4 样例框 2 处 font_size_drift 错误），展示页 p1/p4 零缺陷。pdf2zh v1.9.11（默认 Google 后端）同机约 1.5 分钟完成，观察缺陷：Abstract→「抽象的」且丢标题粗体、加粗导语丢失、Eq./引用链接框脱离文字漂浮成空框、arXiv 侧边栏字符竖排乱序、定义/引理段未翻译（p5）。trio_* 为三方同框（x155-1020 y98-1273 @120dpi）；detail crops @240dpi。",
+      "has_raw_llm": true,
+      "crops": ["abstract(三方)", "boldlead(三方)", "lemmas(三方)", "trio_p4(四方整页)"],
+      "notes": "showcase_cc 六篇中首篇完成。2026-08-26 本地快盘实测：SuperTranslate 单遍翻译（deepseek 后端，默认 deepseek-v4-pro，--preserve-graphics-text），27 页 216 块翻译 / 301 块保护跳过，耗时约 24 分钟（含限速重试）；inspect 全篇 3 报告（p17 公式横移 16pt 警告 + p22 附录 GPT-4 样例框 2 处 font_size_drift 错误），展示页 p1/p4/p5 零缺陷。pdf2zh v1.9.11（默认 Google 后端）同机约 1.5 分钟完成，观察缺陷：Abstract→「抽象的」且丢标题粗体、加粗导语丢失、Eq./引用链接框脱离文字漂浮成空框、arXiv 侧边栏字符竖排乱序、定义/引理正文整段未翻译（p5，crop_lemmas_* 240dpi 固定框 x300-1790 y1930-2365）。整页与 trio 素材 2026-08-26 由 120dpi 升级重渲为 200dpi（retina 下 120dpi 被放大导致公式观感模糊，用户反馈）；trio_* 为同框裁切（union-trim box 259,164-1700,2123 @200dpi）；detail crops @240dpi。trio_p4_rawllm 为「直接丢给大模型」列：同后端 deepseek-v4-pro 对 p4 全页 pdftotext 文本单轮翻译（提示词「请把这页论文翻译成中文：」，输出 2339 字符），以 marked+KaTeX（保护 \\( \\) \\[ \\] 定界符后渲染）排成 1441x1959 页面截图；公式(6)(7)渲染失败为模型自身 LaTeX 输出缺陷，如实保留。",
       "evidence": {
         "ours_pdf": "local:.local-work/showcase/dpo-mono.pdf（61.5MB，未入库）",
         "original_pdf": "arXiv 2305.18290 官方 PDF（下载副本 local:.local-work/showcase/dpo.pdf）",
         "qa_report": "local:.local-work/showcase/dpo.inspect.json（3 issues / 2 errors，均在附录）",
-        "pdf2zh_pdf": "local:.local-work/baseline/dpo-mono.pdf（v1.9.11 google 后端）"
+        "pdf2zh_pdf": "local:.local-work/baseline/dpo-mono.pdf（v1.9.11 google 后端）",
+        "raw_llm_output": "local:.local-work/p4_raw_llm.md（deepseek-v4-pro 单轮直译）"
       }
     },
     {

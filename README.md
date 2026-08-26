@@ -66,24 +66,28 @@ SuperTranslate 的三条设计原则：
 
 ## 翻译效果对比
 
-两列并排：**左原文，右 SuperTranslate 译文**，点击图片查看原始分辨率。所有对比图均渲染自真实翻译产物（`pdftoppm`，整页 120 DPI、局部放大 240 DPI）；保版式翻译不改变页面几何，同一位置左右直接可比。素材清单与证据指针见 [docs/assets/comparison/manifest.json](docs/assets/comparison/manifest.json)。
+两列并排：**左原文，右 SuperTranslate 译文**，点击图片查看原始分辨率。所有对比图均渲染自真实翻译产物（`pdftoppm`，DPO 整页 200 DPI、其余整页 120 DPI、局部放大 240 DPI）；保版式翻译不改变页面几何，同一位置左右直接可比。素材清单与证据指针见 [docs/assets/comparison/manifest.json](docs/assets/comparison/manifest.json)。
 
-### Direct Preference Optimization（27 页 · CC BY 4.0）· 含 pdf2zh 横向实测
+### Direct Preference Optimization（27 页 · CC BY 4.0）· 横向实测
 
-DPO 第 4 页同时含**小节标题、加粗导语与公式 (4)–(7)**，最能暴露版式问题。同一份原文，三种输出——中列为 [pdf2zh](https://github.com/Byaidu/PDFMathTranslate)（v1.9.11，默认 Google 翻译后端，同机实测），右列为 SuperTranslate（DeepSeek 后端）：
+DPO 第 4 页同时含**小节标题、加粗导语与公式 (4)–(7)**，最能暴露版式问题。同一页原文，三条路各走一遍：把整页文本**直接贴给大模型**（deepseek-v4-pro，与我们同一后端）、交给 [pdf2zh](https://github.com/Byaidu/PDFMathTranslate)（v1.9.11，默认 Google 翻译后端，同机实测）、交给 SuperTranslate（DeepSeek 后端）：
 
 <table>
   <tr>
-    <th width="33%">原文</th>
-    <th width="33%">pdf2zh</th>
-    <th width="33%">SuperTranslate</th>
+    <th width="25%">原文</th>
+    <th width="25%">直接丢给大模型</th>
+    <th width="25%">pdf2zh</th>
+    <th width="25%">SuperTranslate</th>
   </tr>
   <tr>
     <td><a href="docs/assets/comparison/dpo/trio_p4_original.png"><img src="docs/assets/comparison/dpo/trio_p4_original.png" alt="DPO 第 4 页原文"></a></td>
+    <td><a href="docs/assets/comparison/dpo/trio_p4_rawllm.png"><img src="docs/assets/comparison/dpo/trio_p4_rawllm.png" alt="同一页文本直接交给 DeepSeek 翻译：正文可读但版式全无，公式 (6) 起退化为 LaTeX 源码"></a></td>
     <td><a href="docs/assets/comparison/dpo/trio_p4_pdf2zh.png"><img src="docs/assets/comparison/dpo/trio_p4_pdf2zh.png" alt="DPO 第 4 页 pdf2zh 译文：加粗导语丢失、引用链接框漂移"></a></td>
     <td><a href="docs/assets/comparison/dpo/trio_p4_ours.png"><img src="docs/assets/comparison/dpo/trio_p4_ours.png" alt="DPO 第 4 页 SuperTranslate 译文：公式冻结、粗体与标题字重保真"></a></td>
   </tr>
 </table>
+
+**怎么读这四列**：「直接丢给大模型」——同一个模型译文本身不差，公式 (4)(5) 也还能渲染，但从 (6) 起模型自己写的 LaTeX 退化成源码、下划线触发整段误斜体，且产物只是一段聊天文本，双栏、页码、引用锚点全部消失；「pdf2zh」——保住了「像一页论文」，但整页重排：加粗导语丢失、引用链接框漂移；「SuperTranslate」——公式冻结不经过模型，正文按原坐标回填，与原文逐像素对应。
 
 **细节 ① 摘要标题**——pdf2zh 把「Abstract」逐词直译成**「抽象的」**且丢失标题粗体；SuperTranslate 术语库给出学术惯用的**「摘要」**并保留标题字重（上原文 / 中 pdf2zh / 下 SuperTranslate）：
 
@@ -97,7 +101,22 @@ DPO 第 4 页同时含**小节标题、加粗导语与公式 (4)–(7)**，最�
 <a href="docs/assets/comparison/dpo/crop_boldlead_pdf2zh.png"><img src="docs/assets/comparison/dpo/crop_boldlead_pdf2zh.png" alt="DPO 加粗导语：pdf2zh 粗体丢失、链接框漂浮"></a>
 <a href="docs/assets/comparison/dpo/crop_boldlead_ours.png"><img src="docs/assets/comparison/dpo/crop_boldlead_ours.png" alt="DPO 加粗导语：SuperTranslate 粗体保真"></a>
 
-**本轮实测口径**：SuperTranslate 为单遍翻译 + inspect 审计——27 页全篇共 3 处报告（1 条版面警告 + 2 处错误，均集中在附录 GPT-4 样例框），**展示页 p1 / p4 零缺陷**；pdf2zh 同机约 1.5 分钟完成。两侧完整命令、版本与环境见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)。本对比聚焦**版式与结构保真**；pdf2zh 默认后端为逐句机器翻译，译文文采差异应主要归因于各自后端。
+**细节 ③ 定义与引理（p5）：漏翻检测**——定理体例的斜体段最容易被整段跳过：pdf2zh 把**定义 1、引理 1、引理 2 的正文原封不动留成英文**（编号却翻了）；SuperTranslate 全部译出，「定义 1。」「引理 1。」粗体保留，`r(x,y)−r′(x,y)=f(x)` 等行内数学原样。我们的 QA 按块统计中文覆盖率，这类整段漏翻会被判为缺陷、带清单打回重译：
+
+<a href="docs/assets/comparison/dpo/crop_lemmas_original.png"><img src="docs/assets/comparison/dpo/crop_lemmas_original.png" alt="DPO 第 5 页原文：Definition 1 与 Lemma 1/2"></a>
+<a href="docs/assets/comparison/dpo/crop_lemmas_pdf2zh.png"><img src="docs/assets/comparison/dpo/crop_lemmas_pdf2zh.png" alt="pdf2zh：定义与引理正文整段保留英文未翻译"></a>
+<a href="docs/assets/comparison/dpo/crop_lemmas_ours.png"><img src="docs/assets/comparison/dpo/crop_lemmas_ours.png" alt="SuperTranslate：定义与引理全部译为中文，编号粗体与行内数学保留"></a>
+
+**相比重排式工具，差异不止在单页**：
+
+- **术语成体系**——1,066 条学术语料逐块注入，「Abstract→摘要」「preference→偏好」全文一致，不靠单次运气（细节①）；
+- **结构字重保真**——粗体导语、小节标题、hyperref 链接框都在原位（细节②）;
+- **漏翻会被打回**——对象级 QA 统计每块中文覆盖率，整段漏翻直接判缺陷重译（细节③）;
+- **页面几何逐像素一致**——导师说「看第 4 页式 (5)」，中英两版位置相同，重排式译文无法与原文互相定位；
+- **质量可自证**——每份产物附 `*.qa.json` 与 inspect 审计，未过检进入只接受严格变好的修复循环，改坏即回滚；
+- **不止一个翻译器**——双语对照阅读器、Agent Skill、断点续跑批处理，是一套读论文的工作流。
+
+**本轮实测口径**：「直接丢给大模型」列为同一后端（deepseek-v4-pro）对整页 `pdftotext` 文本的单轮翻译，输出按聊天界面的真实能力呈现（markdown + KaTeX 渲染，渲染失败处即模型自身输出的 LaTeX 缺陷）；SuperTranslate 为单遍翻译 + inspect 审计——27 页全篇共 3 处报告（1 条版面警告 + 2 处错误，均集中在附录 GPT-4 样例框），**展示页 p1 / p4 / p5 零缺陷**；pdf2zh 同机约 1.5 分钟完成。三侧完整命令、提示词、版本与环境见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)。本对比聚焦**版式与结构保真**；pdf2zh 默认后端为逐句机器翻译，译文文采差异应主要归因于各自后端。
 
 ### Qwen-RobotWorld Technical Report（25 页 · CC BY 4.0）
 
@@ -206,11 +225,11 @@ Attention、DDPM 与 ResNet 采用 arXiv 非独占许可（非 CC），按下方
 
 ## 实现机制：从原页到可信译文
 
-结构先冻结、正文再翻译，最后由独立 QA 与 strict gate 验收。三张图分别回答三个问题：整体流程怎么走、质量怎么收敛、裁决权在谁手里。
+结构先冻结、术语库逐块注入、正文才翻译；QA 未过检就进入 Agentic 修复循环，只接受严格变好，否则回滚。三张图分别回答三个问题：整体流程怎么走、质量怎么收敛、裁决权在谁手里。
 
-<img src="docs/assets/arch_overview.svg" alt="SuperTranslate 整体架构：冻结结构对象、翻译可替换正文、原坐标回填、QA 审计后输出双 PDF" width="100%">
+<img src="docs/assets/arch_overview.svg" alt="SuperTranslate 整体架构：冻结结构对象、术语库注入下翻译正文、原坐标回填、QA 审计；未过检进入 Agentic 修复循环，通过后输出双 PDF" width="100%">
 
-SuperTranslate 先冻结原 PDF 中不可改的结构对象，只翻译可替换正文，再按原坐标回填并通过 QA 审计，输出纯中文与双语两种 PDF。
+SuperTranslate 先冻结原 PDF 中不可改的结构对象，在术语库（1,066 条 · 用户可扩展）逐块注入下只翻译可替换正文，再按原坐标回填并通过 QA 审计；未过检的对象带缺陷清单进入 Agentic 修复循环，只接受严格变好、否则回滚快照，通过后输出纯中文与双语两种 PDF。
 
 - 文本块携带页码、`bbox`、字号和语义角色；公式、引用与 URL 会先变成可逆占位符，保护区不交给模型改写。（`pdf_zh_translator/pdf_layout.py:370-426`；`pdf_zh_translator/pdf_layout.py:19545-19601`）
 - 术语按当前文本块注入提示词；标题、正文、图注使用结构提示，多供应商层共享同一约束。（`pdf_zh_translator/translators.py:543-647`；`pdf_zh_translator/translators.py:832-923`）

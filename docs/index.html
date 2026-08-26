@@ -329,9 +329,9 @@ window.__ph = function (img) {
   .license-note { margin-top: var(--sp-3); max-width: var(--w-text); color: var(--faint); font-size: 12px; line-height: 1.8; border-left: 2px solid rgba(243, 201, 107, .5); padding-left: 14px; }
   .license-note b { color: var(--gold); }
 
-  /* ============ 横向实测（原文 / pdf2zh / SuperTranslate 三列） ============ */
+  /* ============ 横向实测（原文 / 大模型直译 / pdf2zh / SuperTranslate 四列） ============ */
   .trio-block { margin-top: var(--sp-5); }
-  .trio-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-2); margin-top: var(--sp-3); }
+  .trio-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-2); margin-top: var(--sp-3); }
   .trio-col { margin: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel); transition: transform .3s var(--ease), border-color .3s; }
   .trio-col:hover { transform: translateY(-3px); border-color: var(--line-strong); }
   .trio-col.us { border-color: rgba(111, 157, 255, .55); }
@@ -343,6 +343,14 @@ window.__ph = function (img) {
   .trio-col img { display: block; width: 100%; background: #fff; }
   .badge.base { color: #b9c2d9; border: 1px solid rgba(185, 194, 217, .5); }
   .badge.base::before { background: #b9c2d9; box-shadow: 0 0 8px rgba(185, 194, 217, .55); }
+
+  /* 相比重排式工具的差异清单 */
+  .why-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-2); margin-top: var(--sp-3); }
+  .why-item { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 18px 20px; }
+  .why-item b { display: block; font-size: 14.5px; font-weight: 760; color: var(--ink); margin-bottom: 6px; }
+  .why-item p { margin: 0; font-size: 12.5px; line-height: 1.75; color: var(--muted); }
+  .why-item p a { color: var(--blue-soft); text-decoration: none; }
+  .why-item p a:hover { text-decoration: underline; }
 
   /* ============ 特性 ============ */
   .feat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-2); margin-top: var(--sp-4); }
@@ -592,7 +600,8 @@ window.__ph = function (img) {
     .ba-shell { height: auto; }
     .ba-frame { height: auto; width: min(100%, calc(72vh * var(--ar))); margin: 0 auto; }
     .crop-grid { grid-template-columns: 1fr; }
-    .trio-grid { grid-template-columns: 1fr; }
+    .trio-grid { grid-template-columns: repeat(2, 1fr); }
+    .why-grid { grid-template-columns: 1fr; }
     .feat-grid { grid-template-columns: repeat(2, 1fr); }
     .mode-grid { grid-template-columns: 1fr; }
     .stats-grid { grid-template-columns: repeat(3, 1fr); }
@@ -613,6 +622,7 @@ window.__ph = function (img) {
     .proof-line i { padding: 0 .4em; }
     .wipe { max-height: 400px; }
     .feat-grid { grid-template-columns: 1fr; }
+    .trio-grid { grid-template-columns: 1fr; }
     .stats-grid { grid-template-columns: repeat(2, 1fr); gap: var(--sp-3) var(--sp-2); }
     .qs-tab { flex: 1; text-align: center; padding: 10px 12px; font-size: 13px; }
     .qs-panel { padding: 18px 16px; }
@@ -835,8 +845,9 @@ window.__ph = function (img) {
         <span class="overline gold">Head-to-Head · 横向实测</span>
         <h2 class="sec-title" style="font-size: clamp(20px, 2.2vw, 26px);">同一篇论文，交给别的工具会怎样</h2>
         <p class="sec-desc">
-          DPO（27 页 · CC BY 4.0）同一份原文，分别交给 <b>pdf2zh</b>（v1.9.11，默认 Google 翻译后端，同机实测）
-          与 <b>SuperTranslate</b>（DeepSeek 后端）。三列均为第 4 页原样渲染——这一页同时有小节标题、加粗导语与公式 (4)–(7)，点击可看原图。
+          DPO（27 页 · CC BY 4.0）同一页原文（第 4 页：小节标题 + 加粗导语 + 公式 (4)–(7)），三条路各走一遍：
+          把整页文本<b>直接贴给大模型</b>（deepseek-v4-pro，与我们同一后端）、交给 <b>pdf2zh</b>（v1.9.11，默认 Google 翻译后端，同机实测）、
+          交给 <b>SuperTranslate</b>（DeepSeek 后端）。四列点击可看原图。
         </p>
       </header>
       <div class="trio-grid fx">
@@ -844,6 +855,12 @@ window.__ph = function (img) {
           <div class="trio-head"><b>原文</b><span>dpo · p4</span></div>
           <a href="assets/comparison/dpo/trio_p4_original.png" target="_blank" rel="noopener">
             <img src="assets/comparison/dpo/trio_p4_original.png" alt="DPO 第 4 页原文：小节标题、加粗导语与公式 (4)-(7)" loading="lazy">
+          </a>
+        </figure>
+        <figure class="trio-col">
+          <div class="trio-head"><b>直接丢给大模型</b><span>deepseek · 纯文本</span></div>
+          <a href="assets/comparison/dpo/trio_p4_rawllm.png" target="_blank" rel="noopener">
+            <img src="assets/comparison/dpo/trio_p4_rawllm.png" alt="同一页文本直接交给 DeepSeek 翻译：正文可读但版式全无，公式 (6) 起退化为 LaTeX 源码" loading="lazy">
           </a>
         </figure>
         <figure class="trio-col">
@@ -859,6 +876,12 @@ window.__ph = function (img) {
           </a>
         </figure>
       </div>
+      <p class="sec-desc fx" style="margin-top: var(--sp-2); font-size: 13px;">
+        怎么读这四列：<b>直接丢给大模型</b>——同一个模型译文本身不差，公式 (4)(5) 也还能渲染，但从 (6) 起模型自己写的
+        LaTeX 退化成源码、下划线触发整段误斜体，且产物只是一段聊天文本，双栏、页码、引用锚点全部消失；
+        <b>pdf2zh</b>——保住了「像一页论文」，但整页重排：加粗导语丢失、引用链接框漂移；
+        <b>SuperTranslate</b>——公式冻结不经过模型，正文按原坐标回填，与原文逐像素对应。
+      </p>
 
       <figure class="crop-card crop-banner fx">
         <div class="crop-head"><b>细节 ① 摘要标题：术语库的价值</b><span>dpo · p1 · 240dpi</span></div>
@@ -894,10 +917,37 @@ window.__ph = function (img) {
         <div class="crop-foot">pdf2zh：导语粗体丢失，Eq. 3 与引用的链接框脱离文字漂浮成空框；SuperTranslate：<b>「推导直接偏好优化目标。」粗体保真</b>，[31,30,19,15] 与式 3 原位嵌入重新断行的中文句。</div>
       </figure>
 
+      <figure class="crop-card crop-banner fx">
+        <div class="crop-head"><b>细节 ③ 定义与引理：漏翻检测</b><span>dpo · p5 · 240dpi</span></div>
+        <div class="crop-row" data-ph="assets/comparison/dpo/crop_lemmas_original.png">
+          <span class="badge en">EN 原文</span>
+          <img src="assets/comparison/dpo/crop_lemmas_original.png" alt="DPO 第 5 页原文：Definition 1 与 Lemma 1/2，斜体定理体例" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/dpo/crop_lemmas_pdf2zh.png">
+          <span class="badge base">PDF2ZH</span>
+          <img src="assets/comparison/dpo/crop_lemmas_pdf2zh.png" alt="pdf2zh 输出：定义 1 与引理 1/2 的正文整段保留英文未翻译" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/dpo/crop_lemmas_ours.png">
+          <span class="badge zh">ZH 译文</span>
+          <img src="assets/comparison/dpo/crop_lemmas_ours.png" alt="SuperTranslate 输出：定义与引理全部译为中文，编号粗体与行内数学保留" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-foot">定理体例的斜体段最容易被整段跳过：pdf2zh 把<b>定义 1、引理 1、引理 2 的正文原封不动留成英文</b>（编号却翻了）；SuperTranslate 全部译出，「定义 1。」「引理 1。」粗体保留，r(x,y)−r′(x,y)=f(x) 等行内数学原样。我们的 QA 会按块统计中文覆盖率，漏翻会被当作缺陷打回重译——这类整段漏翻过不了检。</div>
+      </figure>
+
+      <div class="why-grid fx">
+        <div class="why-item"><b>术语成体系</b><p>1,066 条学术语料逐块注入提示词，「Abstract→摘要」「preference→偏好」全文一致，不靠单次运气（细节①）。</p></div>
+        <div class="why-item"><b>结构字重保真</b><p>粗体导语、小节标题、hyperref 链接框都在原位；重排式工具最常丢的就是这些（细节②）。</p></div>
+        <div class="why-item"><b>漏翻会被打回</b><p>对象级 QA 统计每块中文覆盖率，定义/引理这类整段漏翻直接判缺陷、带清单重译（细节③）。</p></div>
+        <div class="why-item"><b>页面几何逐像素一致</b><p>导师说「看第 4 页式 (5)」，中英两版位置相同——重排式译文做不到与原文互相定位（<a href="#compare">滑块对比</a>）。</p></div>
+        <div class="why-item"><b>质量可自证</b><p>每份产物附 QA 报告与 inspect 审计，未过检进入只接受严格变好的修复循环，改坏即回滚（<a href="#mechanism">机制</a>）。</p></div>
+        <div class="why-item"><b>不止一个翻译器</b><p>双语对照阅读器、Agent Skill、断点续跑的批处理——是一套读论文的工作流，不是一次性转换（<a href="#modes">两种形态</a>）。</p></div>
+      </div>
+
       <p class="license-note fx">
-        <b>口径说明：</b>pdf2zh 是同类开源方案中的优秀代表，其默认后端为逐句机器翻译，本对比聚焦<b>版式与结构保真</b>而非译文文采；
+        <b>口径说明：</b>「直接丢给大模型」列为同一后端（deepseek-v4-pro）对整页 pdftotext 文本的单轮翻译，输出按聊天界面的真实能力呈现（markdown + KaTeX 渲染，渲染失败处即模型自身输出的 LaTeX 缺陷）；
+        pdf2zh 是同类开源方案中的优秀代表，其默认后端为逐句机器翻译，本对比聚焦<b>版式与结构保真</b>而非译文文采；
         SuperTranslate 产物为单遍翻译 + inspect 审计（展示页 0 缺陷，全篇 3 处报告集中在附录样例框）。
-        两侧完整命令、版本与环境记录于 <a href="https://github.com/asimfish/super_translate/blob/main/docs/assets/comparison/NOTES.md" target="_blank" rel="noopener">NOTES.md</a>，欢迎复现。
+        三侧完整命令、提示词、版本与环境记录于 <a href="https://github.com/asimfish/super_translate/blob/main/docs/assets/comparison/NOTES.md" target="_blank" rel="noopener">NOTES.md</a>，欢迎复现。
       </p>
     </div>
   </div>
@@ -952,14 +1002,14 @@ window.__ph = function (img) {
       <span class="overline">How It Works · 实现机制</span>
       <h2 class="sec-title">从原页，<b>到可信译文</b></h2>
       <p class="sec-desc">
-        结构先冻结、正文再翻译，最后由独立 QA 与 strict gate 验收——
-        版式「一个像素不动」靠的不是运气，是这三张图里的设计。
+        结构先冻结、术语库逐块注入、正文才翻译；QA 未过检就进入 Agentic 修复循环，
+        只接受严格变好，否则回滚——版式「一个像素不动」靠的不是运气，是这三张图里的设计。
       </p>
     </header>
     <div class="mech-figure fx" data-ph="assets/arch_overview.svg">
       <a class="mech-open" href="assets/arch_overview.svg" target="_blank" rel="noopener">查看原图 ↗</a>
       <a href="assets/arch_overview.svg" target="_blank" rel="noopener" aria-label="打开架构总图原图">
-        <img src="assets/arch_overview.svg" alt="SuperTranslate 架构总图：源 PDF、解析并冻结对象、术语注入与多供应商翻译、原坐标回填、QA 审计，产出纯中文与双语两种 PDF" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        <img src="assets/arch_overview.svg" alt="SuperTranslate 架构总图：源 PDF 冻结不可译对象后，术语库逐块注入翻译，按原坐标回填并做 QA 审计；未过检进入 Agentic 修复循环，只接受严格变好，通过后交付中文与双语 PDF" loading="lazy" onerror="window.__ph&&window.__ph(this)">
       </a>
     </div>
     <div class="mech-duo">

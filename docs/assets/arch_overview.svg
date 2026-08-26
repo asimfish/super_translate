@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 520" role="img" aria-labelledby="title desc">
-  <title id="title">SuperTranslate 六步翻译主线</title>
-  <desc id="desc">源 PDF 依次经过不可译对象冻结、正文翻译、原坐标回填和 QA 审计，最终交付中文或双语 PDF。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">SuperTranslate 翻译主线：术语库注入与 Agentic 修复循环</title>
+  <desc id="desc">源 PDF 依次经过不可译对象冻结、术语库注入下的正文翻译、原坐标回填和 QA 审计；未过检时进入 Agentic 修复循环，只接受严格变好，通过后交付中文或双语 PDF。</desc>
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
       <path d="M0 0L8 4L0 8Z" fill="#6f9dff"/>
@@ -8,61 +8,85 @@
     <marker id="arrow-gold" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
       <path d="M0 0L8 4L0 8Z" fill="#f3c96b"/>
     </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L8 4L0 8Z" fill="#67d19b"/>
+    </marker>
     <style>
       .figure-title { fill: #f7f9ff; font-size: 48px; font-weight: 760; letter-spacing: -1px; }
       .figure-subtitle { fill: #a9b4ca; font-size: 20px; font-weight: 450; }
       .node-title { fill: #f7f9ff; font-size: 24px; font-weight: 720; }
       .node-subtitle { fill: #a9b4ca; font-size: 16px; font-weight: 500; }
       .output-title { fill: #f3c96b; font-size: 22px; }
+      .corpus-title { fill: #67d19b; font-size: 22px; font-weight: 720; }
+      .loop-label { fill: #f3c96b; font-size: 18px; font-weight: 650; }
+      .loop-sublabel { fill: #a9b4ca; font-size: 15px; font-weight: 500; }
+      .pass-label { fill: #f3c96b; font-size: 15px; font-weight: 650; }
     </style>
   </defs>
 
-  <rect width="1280" height="520" fill="#0b1020"/>
+  <rect width="1280" height="640" fill="#0b1020"/>
 
   <g font-family="system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
     <text x="42" y="72" class="figure-title">从原页到可信译文</text>
-    <text x="42" y="110" class="figure-subtitle">冻结结构，只翻译正文，最后按原坐标交付。</text>
+    <text x="42" y="110" class="figure-subtitle">冻结结构 · 术语库注入 · 只接受严格变好的修复循环</text>
 
-    <path d="M218 306H238" fill="none" stroke="#6f9dff" stroke-width="2.5" marker-end="url(#arrow)"/>
-    <path d="M422 306H442" fill="none" stroke="#6f9dff" stroke-width="2.5" marker-end="url(#arrow)"/>
-    <path d="M626 306H646" fill="none" stroke="#6f9dff" stroke-width="2.5" marker-end="url(#arrow)"/>
-    <path d="M830 306H850" fill="none" stroke="#6f9dff" stroke-width="2.5" marker-end="url(#arrow)"/>
-    <path d="M1034 306H1054" fill="none" stroke="#f3c96b" stroke-width="2.5" marker-end="url(#arrow-gold)"/>
-
+    <!-- 术语库支线 -->
     <g>
-      <rect x="42" y="230" width="176" height="152" rx="20" fill="#6f9dff" fill-opacity=".07" stroke="#6f9dff" stroke-opacity=".64" stroke-width="2"/>
-      <text x="130" y="295" class="node-title" text-anchor="middle">源 PDF</text>
-      <text x="130" y="329" class="node-subtitle" text-anchor="middle">读取原始页面</text>
+      <rect x="450" y="120" width="176" height="100" rx="18" fill="#67d19b" fill-opacity=".07" stroke="#67d19b" stroke-opacity=".7" stroke-width="2"/>
+      <text x="538" y="163" class="corpus-title" text-anchor="middle">术语库</text>
+      <text x="538" y="193" class="node-subtitle" text-anchor="middle">1,066 条 · 用户可扩展</text>
+    </g>
+    <path d="M538 220V268" fill="none" stroke="#67d19b" stroke-width="2.5" marker-end="url(#arrow-green)"/>
+    <text x="552" y="252" class="node-subtitle" fill="#67d19b">逐块注入</text>
+
+    <!-- 主线箭头 -->
+    <path d="M218 348H238" fill="none" stroke="#6f9dff" stroke-width="2.5" marker-end="url(#arrow)"/>
+    <path d="M422 348H442" fill="none" stroke="#6f9dff" stroke-width="2.5" marker-end="url(#arrow)"/>
+    <path d="M626 348H646" fill="none" stroke="#6f9dff" stroke-width="2.5" marker-end="url(#arrow)"/>
+    <path d="M830 348H850" fill="none" stroke="#6f9dff" stroke-width="2.5" marker-end="url(#arrow)"/>
+    <path d="M1034 348H1054" fill="none" stroke="#f3c96b" stroke-width="2.5" marker-end="url(#arrow-gold)"/>
+    <text x="1044" y="332" class="pass-label" text-anchor="middle">通过</text>
+
+    <!-- 主线节点 -->
+    <g>
+      <rect x="42" y="272" width="176" height="152" rx="20" fill="#6f9dff" fill-opacity=".07" stroke="#6f9dff" stroke-opacity=".64" stroke-width="2"/>
+      <text x="130" y="337" class="node-title" text-anchor="middle">源 PDF</text>
+      <text x="130" y="371" class="node-subtitle" text-anchor="middle">读取原始页面</text>
     </g>
 
     <g>
-      <rect x="246" y="230" width="176" height="152" rx="20" fill="#6f9dff" fill-opacity=".07" stroke="#6f9dff" stroke-opacity=".64" stroke-width="2"/>
-      <text x="334" y="295" class="node-title" text-anchor="middle">冻结不可译对象</text>
-      <text x="334" y="329" class="node-subtitle" text-anchor="middle">公式·引用·图形保留</text>
+      <rect x="246" y="272" width="176" height="152" rx="20" fill="#6f9dff" fill-opacity=".07" stroke="#6f9dff" stroke-opacity=".64" stroke-width="2"/>
+      <text x="334" y="337" class="node-title" text-anchor="middle">冻结不可译对象</text>
+      <text x="334" y="371" class="node-subtitle" text-anchor="middle">公式·引用·图形保留</text>
     </g>
 
     <g>
-      <rect x="450" y="230" width="176" height="152" rx="20" fill="#6f9dff" fill-opacity=".07" stroke="#6f9dff" stroke-opacity=".64" stroke-width="2"/>
-      <text x="538" y="295" class="node-title" text-anchor="middle">翻译正文</text>
-      <text x="538" y="329" class="node-subtitle" text-anchor="middle">按块注入术语</text>
+      <rect x="450" y="272" width="176" height="152" rx="20" fill="#6f9dff" fill-opacity=".07" stroke="#6f9dff" stroke-opacity=".64" stroke-width="2"/>
+      <text x="538" y="337" class="node-title" text-anchor="middle">翻译正文</text>
+      <text x="538" y="371" class="node-subtitle" text-anchor="middle">任选 LLM 供应商</text>
     </g>
 
     <g>
-      <rect x="654" y="230" width="176" height="152" rx="20" fill="#6f9dff" fill-opacity=".07" stroke="#6f9dff" stroke-opacity=".64" stroke-width="2"/>
-      <text x="742" y="295" class="node-title" text-anchor="middle">原坐标回填</text>
-      <text x="742" y="329" class="node-subtitle" text-anchor="middle">原页几何不重排</text>
+      <rect x="654" y="272" width="176" height="152" rx="20" fill="#6f9dff" fill-opacity=".07" stroke="#6f9dff" stroke-opacity=".64" stroke-width="2"/>
+      <text x="742" y="337" class="node-title" text-anchor="middle">原坐标回填</text>
+      <text x="742" y="371" class="node-subtitle" text-anchor="middle">原页几何不重排</text>
     </g>
 
     <g>
-      <rect x="858" y="230" width="176" height="152" rx="20" fill="#f3c96b" fill-opacity=".07" stroke="#f3c96b" stroke-opacity=".74" stroke-width="2"/>
-      <text x="946" y="295" class="node-title" text-anchor="middle">QA 审计</text>
-      <text x="946" y="329" class="node-subtitle" text-anchor="middle">文本·结构·视觉复核</text>
+      <rect x="858" y="272" width="176" height="152" rx="20" fill="#f3c96b" fill-opacity=".07" stroke="#f3c96b" stroke-opacity=".74" stroke-width="2"/>
+      <text x="946" y="337" class="node-title" text-anchor="middle">QA 审计</text>
+      <text x="946" y="371" class="node-subtitle" text-anchor="middle">文本·结构·视觉复核</text>
     </g>
 
     <g>
-      <rect x="1062" y="230" width="176" height="152" rx="20" fill="#f3c96b" fill-opacity=".1" stroke="#f3c96b" stroke-width="2"/>
-      <text x="1150" y="295" class="node-title output-title" text-anchor="middle">中文 / 双语 PDF</text>
-      <text x="1150" y="329" class="node-subtitle" text-anchor="middle">通过后交付</text>
+      <rect x="1062" y="272" width="176" height="152" rx="20" fill="#f3c96b" fill-opacity=".1" stroke="#f3c96b" stroke-width="2"/>
+      <text x="1150" y="337" class="node-title output-title" text-anchor="middle">中文 / 双语 PDF</text>
+      <text x="1150" y="371" class="node-subtitle" text-anchor="middle">通过后交付</text>
     </g>
+
+    <!-- Agentic 修复循环：QA 未过检 → 回到翻译正文 -->
+    <path d="M946 424 C946 520, 538 520, 538 428" fill="none" stroke="#f3c96b" stroke-width="2.5" stroke-dasharray="7 6" marker-end="url(#arrow-gold)"/>
+    <text x="742" y="548" class="loop-label" text-anchor="middle">未过检 → Agentic 修复循环</text>
+    <text x="742" y="576" class="loop-sublabel" text-anchor="middle">带缺陷清单重新翻译该对象 · 只接受严格变好 · 否则回滚快照</text>
   </g>
 </svg>

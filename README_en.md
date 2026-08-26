@@ -66,24 +66,28 @@ SuperTranslate follows three design rules:
 
 ## Translation Quality, Side by Side
 
-Two columns: **original on the left, SuperTranslate output on the right** — click any image for full resolution. All comparison images are rendered directly from real translation artifacts (`pdftoppm`, full pages at 120 DPI, close-ups at 240 DPI); since layout-preserving translation keeps page geometry unchanged, the same spot on both sides is directly comparable. The asset inventory and evidence pointers live in [docs/assets/comparison/manifest.json](docs/assets/comparison/manifest.json).
+Two columns: **original on the left, SuperTranslate output on the right** — click any image for full resolution. All comparison images are rendered directly from real translation artifacts (`pdftoppm`, DPO full pages at 200 DPI, other full pages at 120 DPI, close-ups at 240 DPI); since layout-preserving translation keeps page geometry unchanged, the same spot on both sides is directly comparable. The asset inventory and evidence pointers live in [docs/assets/comparison/manifest.json](docs/assets/comparison/manifest.json).
 
-### Direct Preference Optimization (27 pages, CC BY 4.0) — with a measured pdf2zh baseline
+### Direct Preference Optimization (27 pages, CC BY 4.0) — head-to-head
 
-Page 4 of DPO packs **section headings, bold paragraph lead-ins, and equations (4)–(7)** onto a single page — the kind of page that exposes layout problems fastest. The same source PDF was fed to [pdf2zh](https://github.com/Byaidu/PDFMathTranslate) (v1.9.11, default Google Translate backend, run on the same machine) and to SuperTranslate (DeepSeek backend):
+Page 4 of DPO packs **section headings, bold paragraph lead-ins, and equations (4)–(7)** onto a single page — the kind of page that exposes layout problems fastest. The same source page went down three paths: pasting the full page text **directly into an LLM** (deepseek-v4-pro, the same backend we use), [pdf2zh](https://github.com/Byaidu/PDFMathTranslate) (v1.9.11, default Google Translate backend, run on the same machine), and SuperTranslate (DeepSeek backend):
 
 <table>
   <tr>
-    <th width="33%">Original</th>
-    <th width="33%">pdf2zh</th>
-    <th width="33%">SuperTranslate</th>
+    <th width="25%">Original</th>
+    <th width="25%">Raw LLM paste</th>
+    <th width="25%">pdf2zh</th>
+    <th width="25%">SuperTranslate</th>
   </tr>
   <tr>
     <td><a href="docs/assets/comparison/dpo/trio_p4_original.png"><img src="docs/assets/comparison/dpo/trio_p4_original.png" alt="DPO page 4, original"></a></td>
+    <td><a href="docs/assets/comparison/dpo/trio_p4_rawllm.png"><img src="docs/assets/comparison/dpo/trio_p4_rawllm.png" alt="Same page text pasted directly into DeepSeek: readable prose but no layout; LaTeX degrades to source from Eq. (6)"></a></td>
     <td><a href="docs/assets/comparison/dpo/trio_p4_pdf2zh.png"><img src="docs/assets/comparison/dpo/trio_p4_pdf2zh.png" alt="DPO page 4, pdf2zh: bold lead-in lost, reference link boxes drifting"></a></td>
     <td><a href="docs/assets/comparison/dpo/trio_p4_ours.png"><img src="docs/assets/comparison/dpo/trio_p4_ours.png" alt="DPO page 4, SuperTranslate: formulas frozen, bold and heading weights preserved"></a></td>
   </tr>
 </table>
+
+**How to read the four columns**: *Raw LLM paste* — the prose itself is fine (it is the same model), and equations (4)–(5) still render, but from (6) onward the model's own LaTeX degrades into source code, underscores trigger runaway italics, and the deliverable is just chat text — two-column layout, page numbers, and citation anchors are all gone. *pdf2zh* — it still "looks like a paper page", but the page is re-typeset: bold lead-ins are lost and link boxes drift. *SuperTranslate* — formulas are frozen and never pass through the model; prose is refilled at the original coordinates, pixel-aligned with the source.
 
 **Detail 1 — the abstract heading**: pdf2zh renders "Abstract" as the word-for-word "抽象的" ("abstract" as in abstract art) and drops the bold; SuperTranslate's terminology corpus produces the standard academic "摘要" with the heading weight intact (top: original / middle: pdf2zh / bottom: SuperTranslate):
 
@@ -97,7 +101,22 @@ Page 4 of DPO packs **section headings, bold paragraph lead-ins, and equations (
 <a href="docs/assets/comparison/dpo/crop_boldlead_pdf2zh.png"><img src="docs/assets/comparison/dpo/crop_boldlead_pdf2zh.png" alt="DPO bold lead-in: pdf2zh, bold lost and link boxes floating"></a>
 <a href="docs/assets/comparison/dpo/crop_boldlead_ours.png"><img src="docs/assets/comparison/dpo/crop_boldlead_ours.png" alt="DPO bold lead-in: SuperTranslate, bold preserved"></a>
 
-**Methodology for this run**: SuperTranslate output is a single translation pass plus the `inspect` audit — 3 findings across all 27 pages (1 layout warning, plus 2 errors confined to GPT-4 sample boxes in the appendix); **the showcased pages p1/p4 have zero findings**. pdf2zh completed in about 1.5 minutes on the same machine. Full commands, versions, and environment are recorded in [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md). This comparison focuses on **layout and structural fidelity**; prose quality differences are mostly attributable to the respective translation backends.
+**Detail 3 — definitions and lemmas (p5): untranslated-block detection**: theorem-style italic blocks are the easiest to skip wholesale. pdf2zh leaves the body of **Definition 1, Lemma 1 and Lemma 2 entirely in English** (while translating the labels); SuperTranslate translates all of them, keeps the bold "定义 1。" / "引理 1。" labels, and preserves inline math like `r(x,y)−r′(x,y)=f(x)` verbatim. Our QA computes per-block Chinese coverage, so a skipped block like this is flagged as a defect and sent back for re-translation:
+
+<a href="docs/assets/comparison/dpo/crop_lemmas_original.png"><img src="docs/assets/comparison/dpo/crop_lemmas_original.png" alt="DPO page 5, original: Definition 1 and Lemmas 1/2"></a>
+<a href="docs/assets/comparison/dpo/crop_lemmas_pdf2zh.png"><img src="docs/assets/comparison/dpo/crop_lemmas_pdf2zh.png" alt="pdf2zh: definition and lemma bodies left untranslated in English"></a>
+<a href="docs/assets/comparison/dpo/crop_lemmas_ours.png"><img src="docs/assets/comparison/dpo/crop_lemmas_ours.png" alt="SuperTranslate: definitions and lemmas fully translated, bold labels and inline math preserved"></a>
+
+**Beyond a single page, what separates us from re-typesetting tools**:
+
+- **Systematic terminology** — 1,066 curated academic terms injected per block; "Abstract→摘要" and "preference→偏好" stay consistent across the whole paper, not by luck (Detail 1);
+- **Structural weight fidelity** — bold lead-ins, section headings and hyperref link boxes stay in place (Detail 2);
+- **Skipped blocks get bounced** — object-level QA computes per-block Chinese coverage; wholesale untranslated blocks are flagged and re-translated (Detail 3);
+- **Pixel-aligned page geometry** — when your advisor says "look at Eq. (5) on page 4", both versions have it in the same spot; re-typeset output can't be cross-located against the source;
+- **Self-certifying quality** — every artifact ships with `*.qa.json` and an `inspect` audit; failed objects enter an agentic repair loop that only accepts strict improvements and rolls back otherwise;
+- **More than a converter** — bilingual side-by-side reader, Agent Skill, resumable batching: a full paper-reading workflow.
+
+**Methodology for this run**: the *Raw LLM paste* column is a single-turn translation of the full-page `pdftotext` text by the same backend (deepseek-v4-pro), presented at the realistic capability of a chat UI (markdown + KaTeX rendering; where rendering fails, that is the model's own LaTeX defect). SuperTranslate output is a single translation pass plus the `inspect` audit — 3 findings across all 27 pages (1 layout warning, plus 2 errors confined to GPT-4 sample boxes in the appendix); **the showcased pages p1/p4/p5 have zero findings**. pdf2zh completed in about 1.5 minutes on the same machine. Full commands, prompts, versions, and environment are recorded in [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md). This comparison focuses on **layout and structural fidelity**; prose quality differences are mostly attributable to the respective translation backends.
 
 ### Qwen-RobotWorld Technical Report (25 pages, CC BY 4.0)
 
@@ -206,11 +225,11 @@ Each approach has a different job: reading the original is the most faithful but
 
 ## How It Works: From Original Page to Trusted Translation
 
-Structure is frozen first, prose is translated second, and independent QA plus the strict gate issue the final verdict. The three figures answer three questions: how the pipeline flows, how quality converges, and who holds the power to approve.
+Structure is frozen first, the terminology corpus is injected per block, and only then is prose translated; when QA fails, the object enters an agentic repair loop that only accepts strict improvements and rolls back otherwise. The three figures answer three questions: how the pipeline flows, how quality converges, and who holds the power to approve.
 
-<img src="docs/assets/arch_overview.svg" alt="SuperTranslate architecture: freeze structural objects, translate replaceable prose, refill at original coordinates, deliver two PDFs after QA" width="100%">
+<img src="docs/assets/arch_overview.svg" alt="SuperTranslate architecture: freeze structural objects, translate prose under terminology injection, refill at original coordinates, QA audit with an agentic repair loop, deliver two PDFs" width="100%">
 
-SuperTranslate freezes non-editable source objects, translates only replaceable prose, refills it in the original coordinates, and delivers monolingual and bilingual PDFs only after QA.
+SuperTranslate freezes non-editable source objects, translates only replaceable prose under per-block terminology injection (1,066 curated terms, user-extensible), refills it in the original coordinates, and audits with QA; failed objects enter an agentic repair loop with a strict-improvement-only rule and snapshot rollback, and only then are the monolingual and bilingual PDFs delivered.
 
 - Text blocks carry page, `bbox`, font size, and semantic role; formulas, citations, and URLs first become reversible placeholders, and protected regions never enter free rewriting. (`pdf_zh_translator/pdf_layout.py:370-426`; `pdf_zh_translator/pdf_layout.py:19545-19601`)
 - Terminology is injected per current text block; titles, body, and captions use structural prompts, and every provider shares the same constraints. (`pdf_zh_translator/translators.py:543-647`; `pdf_zh_translator/translators.py:832-923`)
