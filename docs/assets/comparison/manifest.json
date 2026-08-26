@@ -21,7 +21,7 @@
       ],
       "has_pdf2zh": false,
       "crops": [],
-      "notes": "25 页技术报告（worldmodel10 基准）。p4 大型数据混合结构图 + 图注翻译 + 行内数学符号（s_t、a_t、s_{t+1}）保留，验证复杂图文混排。p1 因译文摘要粗体行内片段有换行错位（引擎待优化项），撤下展示。",
+      "notes": "25 页技术报告（worldmodel10 基准）。p4 trim 已收窄至上半区（整页 120dpi 的 y<900，公共空白带切线）：保留大型数据混合结构图 + 粗体图注翻译 + 正文段（s_t、a_t、s_{t+1} 行内符号保留）。下半区编号列表的粗体导语在译文中丢失加粗（引擎待优化项，与 p1 摘要粗体错位同类），按 2026-08-26 用户反馈移出展示。",
       "evidence": {
         "ours_pdf": "internal:paper-china-repair-30-r3/worldmodel10/translations/qwen_robotworld-mono.pdf",
         "original_pdf": "internal:paper-china-repair-30-r3/worldmodel10/papers/qwen_robotworld.pdf",
@@ -39,9 +39,10 @@
       ],
       "has_pdf2zh": false,
       "crops": [
-        "figure"
+        "figure",
+        "title"
       ],
-      "notes": "75 页 NVIDIA 技术报告，超长文档压力样本。p1 封面（NVIDIA logo+标题+摘要）；p34 位于文档深处，图17 视频帧网格（4B/12B/5B/13B 四行）+ Prompt 说明文字翻译 + 加粗图注，验证长文档后段质量不衰减。crop 区域取自 p34 图17 下半组，@240dpi。 hero.gif 为 p1 封面原文↔译文 1.2s 轮播（880px 宽）。",
+      "notes": "75 页 NVIDIA 技术报告，超长文档压力样本。crop_title_* 为 p1 论文大标题迷你条（从已入库整页 120dpi 图裁切，box x85-867 y127-182，两侧同框），主页滑块左列「切片速览」用。p1 封面（NVIDIA logo+标题+摘要）；p34 位于文档深处，图17 视频帧网格（4B/12B/5B/13B 四行）+ Prompt 说明文字翻译 + 加粗图注，验证长文档后段质量不衰减。crop 区域取自 p34 图17 下半组，@240dpi。 hero.gif 为 p1 封面原文↔译文 1.2s 轮播（880px 宽）。",
       "evidence": {
         "ours_pdf": "internal:paper-china-repair-30-r3/worldmodel10/translations/cosmos-mono-r9.pdf",
         "original_pdf": "internal:paper-china-repair-30-r3/worldmodel10/papers/cosmos.pdf",
@@ -59,9 +60,11 @@
       "crops": [
         "formula",
         "figure",
-        "banner_formula"
+        "banner_formula",
+        "heading",
+        "formula_tight"
       ],
-      "notes": "整页图按许可政策不公开展示，仅保留 p4 局部放大：formula=公式(1) Attention(Q,K,V)=softmax(QK^T/√dk)V 区域；figure=图2（缩放点积/多头注意力结构图）+图注。@240dpi。批次指标：15 页，visual_score 0.9041（risk low），error_count 0，strict_pass true，翻译耗时 135.1s。 banner_formula_* 为带上下文版本（段落译文+冻结公式，y1374 H330 @240dpi），主页/README 的独立公式展示用它。",
+      "notes": "整页图按许可政策不公开展示，仅保留 p4 局部放大：formula=公式(1) Attention(Q,K,V)=softmax(QK^T/√dk)V 区域；figure=图2（缩放点积/多头注意力结构图）+图注。@240dpi。批次指标：15 页，visual_score 0.9041（risk low），error_count 0，strict_pass true，翻译耗时 135.1s。 banner_formula_* 为带上下文版本（段落译文+冻结公式，y1374 H330 @240dpi），主页/README 的独立公式展示用它。 crop_heading_* 为 p4「3.2.2 Multi-Head Attention → 3.2.2 多头注意力」小节标题迷你条（240dpi 重渲，box x340-1065 y2088-2144，两侧同框）；crop_formula_tight_* 为 crop_formula 的内容紧缩版（box x445-1440），两者供主页滑块左列「切片速览」窄栏展示。",
       "evidence": {
         "ours_pdf": "internal:classic20_final_r2_09f6992/translations/attention-mono.pdf",
         "original_pdf": "internal:classic20_final_r2_09f6992/papers/attention.pdf",

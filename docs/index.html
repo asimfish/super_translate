@@ -244,6 +244,21 @@ window.__ph = function (img) {
   .cmp-hint { margin-top: var(--sp-3); color: var(--muted); font-size: var(--fs-small); line-height: 1.8; border-left: 2px solid var(--line-strong); padding-left: 14px; }
   .cmp-hint b { color: var(--ink); }
 
+  /* 左列迷你切片对比（大小标题 / 公式） */
+  .cmp-minis { margin-top: var(--sp-3); display: grid; gap: 12px; }
+  .cmp-minis .minis-lbl { font: 700 10.5px/1.6 var(--mono); letter-spacing: .16em; color: var(--faint); text-transform: uppercase; }
+  .mini-pair { margin: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; background: var(--panel); transition: border-color .3s; }
+  .mini-pair:hover { border-color: var(--line-strong); }
+  .mini-pair figcaption { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 8px 12px 7px; border-bottom: 1px solid var(--line); }
+  .mini-pair figcaption b { font-size: 12.5px; font-weight: 750; color: var(--ink); letter-spacing: -.01em; }
+  .mini-pair figcaption span { font: 650 9.5px/1.6 var(--mono); color: var(--faint); white-space: nowrap; }
+  .mini-row { display: grid; grid-template-columns: 30px 1fr; align-items: center; background: #fff; }
+  .mini-row + .mini-row { border-top: 1px solid rgba(0, 0, 0, .08); }
+  .mini-row i { font: 750 9px/1 var(--mono); font-style: normal; text-align: center; letter-spacing: .04em; }
+  .mini-row i.en { color: #3b62c4; }
+  .mini-row i.zh { color: #c4572f; }
+  .mini-row img { display: block; width: 100%; padding: 7px 10px 7px 0; object-fit: contain; background: #fff; }
+
   /* 滑块：相框容器 + 内框 */
   .ba-shell {
     padding: 10px; border: 1px solid var(--line-strong); border-radius: var(--radius);
@@ -662,7 +677,7 @@ window.__ph = function (img) {
       <span class="overline">Evidence · 效果对比</span>
       <h2 class="sec-title">拖动分割线，<b>逐像素检查</b></h2>
       <p class="sec-desc">
-        每一页都是真实翻译产物的<b>整页渲染</b>，未做修饰：左侧原文、右侧译文，分割线随你拖动。
+        全部取自真实翻译产物的<b>原样渲染</b>，未做修饰：左侧原文、右侧译文，分割线随你拖动。
         两篇展示论文均为 CC BY 4.0 许可（worldmodel10 基准批次）。
       </p>
     </header>
@@ -679,6 +694,24 @@ window.__ph = function (img) {
           <div class="pill-group" id="cmpPages"></div>
         </div>
         <p class="cmp-hint" id="cmpHint"></p>
+        <div class="cmp-minis" aria-label="标题与公式切片对比">
+          <span class="minis-lbl">切片速览 · 标题与公式</span>
+          <figure class="mini-pair fx">
+            <figcaption><b>论文大标题</b><span>cosmos · p1 · 品牌绿原样</span></figcaption>
+            <div class="mini-row"><i class="en">EN</i><img src="assets/comparison/cosmos/crop_title_original.png" alt="Cosmos 论文标题原文" loading="lazy"></div>
+            <div class="mini-row"><i class="zh">ZH</i><img src="assets/comparison/cosmos/crop_title_ours.png" alt="Cosmos 论文标题译文，品牌色与字重保持" loading="lazy"></div>
+          </figure>
+          <figure class="mini-pair fx">
+            <figcaption><b>小节标题</b><span>attention · p4 · 编号粗体保真</span></figcaption>
+            <div class="mini-row"><i class="en">EN</i><img src="assets/comparison/attention/crop_heading_original.png" alt="Attention 3.2.2 小节标题原文" loading="lazy"></div>
+            <div class="mini-row"><i class="zh">ZH</i><img src="assets/comparison/attention/crop_heading_ours.png" alt="Attention 3.2.2 小节标题译文，编号与粗体保持" loading="lazy"></div>
+          </figure>
+          <figure class="mini-pair fx">
+            <figcaption><b>独立公式</b><span>attention · p4 · 两行零差异</span></figcaption>
+            <div class="mini-row"><i class="en">EN</i><img src="assets/comparison/attention/crop_formula_tight_original.png" alt="Attention 公式 (1) 原文" loading="lazy"></div>
+            <div class="mini-row"><i class="zh">ZH</i><img src="assets/comparison/attention/crop_formula_tight_ours.png" alt="Attention 公式 (1) 译文，与原文逐像素一致" loading="lazy"></div>
+          </figure>
+        </div>
       </div>
       <div class="ba-shell">
         <div class="ba-frame" id="baFrame" tabindex="0" role="slider" aria-label="原文与译文对比分割线" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" data-ph="assets/comparison/qwen_robotworld/original_p4.png 等">
@@ -1217,7 +1250,7 @@ ln -s "$PWD/super_translate/skills/paper-translate" ~/.claude/skills/paper-trans
       zh: '25 页具身世界模型技术报告 · arXiv 2606.17030 · CC BY 4.0',
       tags: ['图文混排', '结构大图', '行内数学符号'],
       pages: [4],
-      notes: { 4: '大型数据混合结构图：图注翻译，s_t、a_t 等数学符号原样' }
+      notes: { 4: '第 4 页上半区特写——大型数据混合结构图原样、粗体图注照译，正文段里 s_t、a_t 等数学符号一个不丢' }
     },
     {
       slug: 'cosmos',

@@ -32,6 +32,15 @@
 - **p34**：位于文档中后段，图17 视频帧网格（4B/12B/5B/13B 四行生成结果）+ **Prompt 段落译文** + 加粗图注 + 正文/小节标题，验证长文档深处质量不衰减。
 - crops：`figure`（p34 图17 下半组：5B/13B 网格 + Prompt 译文 + 图注）。
 
+## 2026-08-26 用户反馈修订
+
+1. **qwen_robotworld p4 trim 收窄**：用户指出页面底部编号列表（Task Goal Layer 等 5 条）的粗体导语在译文中丢失加粗、列表被排成段落——目检属实，属引擎待优化项（与此前撤下 p1 的摘要粗体错位同类）。源 PDF（/tmp/paper-china-repair-30-r3）已被系统清理无法重渲其它页，故将 trim 裁剪框收窄至干净上半区：整页 120dpi 图 y<900（原文正文段结束 y891、译文 y860，切线落在两侧公共空白带），内容 bbox 并集 + 24px 边距，同框裁两侧，最终 806×847。上半区（结构图 + 粗体图注 + 正文段）逐项目检忠实。主页文案同步从「整页渲染」改为「原样渲染」。
+2. **新增迷你切片条**（主页滑块左列「切片速览」，填补左列空间）：
+   - `cosmos/crop_title_*`：p1 论文大标题（从已入库整页图裁，box x85-867 y127-182），NVIDIA 品牌绿与字重保持；
+   - `attention/crop_heading_*`：p4「3.2.2 Multi-Head Attention → 3.2.2 多头注意力（Multi-Head Attention）」小节标题（240dpi 重渲自 classic20_final_r2 PDF，box x340-1065 y2088-2144），编号与粗体保真；
+   - `attention/crop_formula_tight_*`：crop_formula 内容紧缩版（box x445-1440 y33-140），窄栏可读。
+   全部两侧同框、成对像素级可比。
+
 ## pdf2zh 基线运行记录
 
 - 命令：`cd /tmp/st-compare && nice -n 19 <内部环境>/.venv/bin/pdf2zh <临时目录>/src/attention_original.pdf`（原文为 classic20 attention.pdf 的 /tmp 副本，避免 iCloud 重复读）

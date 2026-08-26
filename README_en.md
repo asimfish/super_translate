@@ -76,12 +76,12 @@ Two columns: **original on the left, SuperTranslate output on the right** — cl
     <th width="50%">SuperTranslate</th>
   </tr>
   <tr>
-    <td><a href="docs/assets/comparison/qwen_robotworld/original_p4.png"><img src="docs/assets/comparison/qwen_robotworld/original_p4.png" alt="Qwen-RobotWorld original page 4 (data-mixture diagram)"></a></td>
-    <td><a href="docs/assets/comparison/qwen_robotworld/ours_p4.png"><img src="docs/assets/comparison/qwen_robotworld/ours_p4.png" alt="Qwen-RobotWorld SuperTranslate page 4"></a></td>
+    <td><a href="docs/assets/comparison/qwen_robotworld/original_p4_trim.png"><img src="docs/assets/comparison/qwen_robotworld/original_p4_trim.png" alt="Qwen-RobotWorld original page 4, upper region (data-mixture diagram)"></a></td>
+    <td><a href="docs/assets/comparison/qwen_robotworld/ours_p4_trim.png"><img src="docs/assets/comparison/qwen_robotworld/ours_p4_trim.png" alt="Qwen-RobotWorld SuperTranslate page 4, upper region"></a></td>
   </tr>
 </table>
 
-**What to look for**: the large data-mixture diagram on page 4 — captions translated into Chinese while inline math symbols `s_t`, `a_t`, `s_{t+1}` are preserved as-is, exercising dense mixed figure-and-text layout.
+**What to look for**: the upper region of page 4 — the large data-mixture diagram kept intact, the bold caption translated, and inline math symbols `s_t`, `a_t`, `s_{t+1}` preserved as-is in the body paragraph, exercising dense mixed figure-and-text layout. (The numbered list in the lower region has a known bold-lead-in issue; see [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md).)
 
 ### Cosmos World Foundation Model (75 pages, CC BY 4.0)
 

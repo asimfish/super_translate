@@ -76,12 +76,12 @@ SuperTranslate 的三条设计原则：
     <th width="50%">SuperTranslate</th>
   </tr>
   <tr>
-    <td><a href="docs/assets/comparison/qwen_robotworld/original_p4.png"><img src="docs/assets/comparison/qwen_robotworld/original_p4.png" alt="Qwen-RobotWorld 原文第 4 页（数据混合结构图）"></a></td>
-    <td><a href="docs/assets/comparison/qwen_robotworld/ours_p4.png"><img src="docs/assets/comparison/qwen_robotworld/ours_p4.png" alt="Qwen-RobotWorld SuperTranslate 译文第 4 页"></a></td>
+    <td><a href="docs/assets/comparison/qwen_robotworld/original_p4_trim.png"><img src="docs/assets/comparison/qwen_robotworld/original_p4_trim.png" alt="Qwen-RobotWorld 原文第 4 页上半区（数据混合结构图）"></a></td>
+    <td><a href="docs/assets/comparison/qwen_robotworld/ours_p4_trim.png"><img src="docs/assets/comparison/qwen_robotworld/ours_p4_trim.png" alt="Qwen-RobotWorld SuperTranslate 译文第 4 页上半区"></a></td>
   </tr>
 </table>
 
-**看什么**：第 4 页的大型数据混合结构图——图注译为中文，行内数学符号 `s_t`、`a_t`、`s_{t+1}` 原样保留，验证复杂图文混排。
+**看什么**：第 4 页上半区特写——大型数据混合结构图原样、粗体图注照译，正文段中行内数学符号 `s_t`、`a_t`、`s_{t+1}` 原样保留，验证复杂图文混排。（本页下半区编号列表的粗体导语存在已知待优化项，见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)。）
 
 ### Cosmos World Foundation Model（75 页 · CC BY 4.0）
 
