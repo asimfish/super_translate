@@ -68,6 +68,37 @@ SuperTranslate 的三条设计原则：
 
 两列并排：**左原文，右 SuperTranslate 译文**，点击图片查看原始分辨率。所有对比图均渲染自真实翻译产物（`pdftoppm`，整页 120 DPI、局部放大 240 DPI）；保版式翻译不改变页面几何，同一位置左右直接可比。素材清单与证据指针见 [docs/assets/comparison/manifest.json](docs/assets/comparison/manifest.json)。
 
+### Direct Preference Optimization（27 页 · CC BY 4.0）· 含 pdf2zh 横向实测
+
+DPO 第 4 页同时含**小节标题、加粗导语与公式 (4)–(7)**，最能暴露版式问题。同一份原文，三种输出——中列为 [pdf2zh](https://github.com/Byaidu/PDFMathTranslate)（v1.9.11，默认 Google 翻译后端，同机实测），右列为 SuperTranslate（DeepSeek 后端）：
+
+<table>
+  <tr>
+    <th width="33%">原文</th>
+    <th width="33%">pdf2zh</th>
+    <th width="33%">SuperTranslate</th>
+  </tr>
+  <tr>
+    <td><a href="docs/assets/comparison/dpo/trio_p4_original.png"><img src="docs/assets/comparison/dpo/trio_p4_original.png" alt="DPO 第 4 页原文"></a></td>
+    <td><a href="docs/assets/comparison/dpo/trio_p4_pdf2zh.png"><img src="docs/assets/comparison/dpo/trio_p4_pdf2zh.png" alt="DPO 第 4 页 pdf2zh 译文：加粗导语丢失、引用链接框漂移"></a></td>
+    <td><a href="docs/assets/comparison/dpo/trio_p4_ours.png"><img src="docs/assets/comparison/dpo/trio_p4_ours.png" alt="DPO 第 4 页 SuperTranslate 译文：公式冻结、粗体与标题字重保真"></a></td>
+  </tr>
+</table>
+
+**细节 ① 摘要标题**——pdf2zh 把「Abstract」逐词直译成**「抽象的」**且丢失标题粗体；SuperTranslate 术语库给出学术惯用的**「摘要」**并保留标题字重（上原文 / 中 pdf2zh / 下 SuperTranslate）：
+
+<a href="docs/assets/comparison/dpo/crop_abstract_original.png"><img src="docs/assets/comparison/dpo/crop_abstract_original.png" alt="DPO 摘要标题：原文 Abstract"></a>
+<a href="docs/assets/comparison/dpo/crop_abstract_pdf2zh.png"><img src="docs/assets/comparison/dpo/crop_abstract_pdf2zh.png" alt="DPO 摘要标题：pdf2zh 译为「抽象的」且丢失粗体"></a>
+<a href="docs/assets/comparison/dpo/crop_abstract_ours.png"><img src="docs/assets/comparison/dpo/crop_abstract_ours.png" alt="DPO 摘要标题：SuperTranslate 译为「摘要」并保持字重"></a>
+
+**细节 ② 加粗导语与交叉引用**——pdf2zh 丢失导语粗体，Eq. 3 与文献引用的链接框脱离文字、漂浮成空框；SuperTranslate 的**「推导直接偏好优化目标。」粗体保真**，`[31,30,19,15]` 与式 3 原位嵌入重新断行的中文句：
+
+<a href="docs/assets/comparison/dpo/crop_boldlead_original.png"><img src="docs/assets/comparison/dpo/crop_boldlead_original.png" alt="DPO 加粗导语：原文"></a>
+<a href="docs/assets/comparison/dpo/crop_boldlead_pdf2zh.png"><img src="docs/assets/comparison/dpo/crop_boldlead_pdf2zh.png" alt="DPO 加粗导语：pdf2zh 粗体丢失、链接框漂浮"></a>
+<a href="docs/assets/comparison/dpo/crop_boldlead_ours.png"><img src="docs/assets/comparison/dpo/crop_boldlead_ours.png" alt="DPO 加粗导语：SuperTranslate 粗体保真"></a>
+
+**本轮实测口径**：SuperTranslate 为单遍翻译 + inspect 审计——27 页全篇共 3 处报告（1 条版面警告 + 2 处错误，均集中在附录 GPT-4 样例框），**展示页 p1 / p4 零缺陷**；pdf2zh 同机约 1.5 分钟完成。两侧完整命令、版本与环境见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)。本对比聚焦**版式与结构保真**；pdf2zh 默认后端为逐句机器翻译，译文文采差异应主要归因于各自后端。
+
 ### Qwen-RobotWorld Technical Report（25 页 · CC BY 4.0）
 
 <table>
@@ -145,7 +176,7 @@ Attention、DDPM 与 ResNet 采用 arXiv 非独占许可（非 CC），按下方
 
 ### 展示政策
 
-对比素材遵循 [benchmarks/classic20/README.md](benchmarks/classic20/README.md) 的许可政策：**仅 Creative Commons 许可的论文公开展示完整翻译页**（本节的 Qwen-RobotWorld 与 Cosmos 均为 CC BY 4.0）；arXiv 非独占许可的论文只展示小幅局部 crop 与聚合指标。基准 `showcase_cc` 组的六篇 CC 许可经典论文（LLaMA / Mistral / Mamba / DPO / CoT / vLLM）翻译产物就绪后，将补充为完整页对比。
+对比素材遵循 [benchmarks/classic20/README.md](benchmarks/classic20/README.md) 的许可政策：**仅 Creative Commons 许可的论文公开展示完整翻译页**（本节的 DPO、Qwen-RobotWorld 与 Cosmos 均为 CC BY 4.0）；arXiv 非独占许可的论文只展示小幅局部 crop 与聚合指标。基准 `showcase_cc` 组的六篇 CC 许可经典论文中，DPO 已完成并展示于上文；其余五篇（LLaMA / Mistral / Mamba / CoT / vLLM）翻译产物就绪后继续补充。
 
 ### 相比其他读论文的方式，优势在哪里
 
@@ -171,7 +202,7 @@ Attention、DDPM 与 ResNet 采用 arXiv 非独占许可（非 CC），按下方
 
 > ¹ 对其他工具的描述基于各自公开文档与产品页（2026-08 查阅），能力可能随版本变化，如有出入欢迎提 issue 指正。
 >
-> 诚实说明：上文对比图暂无 pdf2zh 的同机图像基线——制图环境的 I/O 限制导致 pdf2zh 未能在时限内完成运行（记录见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)），本表仅为基于公开文档的文字性对比，欢迎社区提交对比样张。
+> pdf2zh 的同机图像基线已补齐：见上文 [DPO 横向实测](#direct-preference-optimization27-页--cc-by-40--含-pdf2zh-横向实测)（v1.9.11，默认 Google 后端，完整命令与环境见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)）。
 
 ## 实现机制：从原页到可信译文
 

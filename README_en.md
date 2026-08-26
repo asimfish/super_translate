@@ -68,6 +68,37 @@ SuperTranslate follows three design rules:
 
 Two columns: **original on the left, SuperTranslate output on the right** — click any image for full resolution. All comparison images are rendered directly from real translation artifacts (`pdftoppm`, full pages at 120 DPI, close-ups at 240 DPI); since layout-preserving translation keeps page geometry unchanged, the same spot on both sides is directly comparable. The asset inventory and evidence pointers live in [docs/assets/comparison/manifest.json](docs/assets/comparison/manifest.json).
 
+### Direct Preference Optimization (27 pages, CC BY 4.0) — with a measured pdf2zh baseline
+
+Page 4 of DPO packs **section headings, bold paragraph lead-ins, and equations (4)–(7)** onto a single page — the kind of page that exposes layout problems fastest. The same source PDF was fed to [pdf2zh](https://github.com/Byaidu/PDFMathTranslate) (v1.9.11, default Google Translate backend, run on the same machine) and to SuperTranslate (DeepSeek backend):
+
+<table>
+  <tr>
+    <th width="33%">Original</th>
+    <th width="33%">pdf2zh</th>
+    <th width="33%">SuperTranslate</th>
+  </tr>
+  <tr>
+    <td><a href="docs/assets/comparison/dpo/trio_p4_original.png"><img src="docs/assets/comparison/dpo/trio_p4_original.png" alt="DPO page 4, original"></a></td>
+    <td><a href="docs/assets/comparison/dpo/trio_p4_pdf2zh.png"><img src="docs/assets/comparison/dpo/trio_p4_pdf2zh.png" alt="DPO page 4, pdf2zh: bold lead-in lost, reference link boxes drifting"></a></td>
+    <td><a href="docs/assets/comparison/dpo/trio_p4_ours.png"><img src="docs/assets/comparison/dpo/trio_p4_ours.png" alt="DPO page 4, SuperTranslate: formulas frozen, bold and heading weights preserved"></a></td>
+  </tr>
+</table>
+
+**Detail 1 — the abstract heading**: pdf2zh renders "Abstract" as the word-for-word "抽象的" ("abstract" as in abstract art) and drops the bold; SuperTranslate's terminology corpus produces the standard academic "摘要" with the heading weight intact (top: original / middle: pdf2zh / bottom: SuperTranslate):
+
+<a href="docs/assets/comparison/dpo/crop_abstract_original.png"><img src="docs/assets/comparison/dpo/crop_abstract_original.png" alt="DPO abstract heading: original"></a>
+<a href="docs/assets/comparison/dpo/crop_abstract_pdf2zh.png"><img src="docs/assets/comparison/dpo/crop_abstract_pdf2zh.png" alt="DPO abstract heading: pdf2zh mistranslation, bold lost"></a>
+<a href="docs/assets/comparison/dpo/crop_abstract_ours.png"><img src="docs/assets/comparison/dpo/crop_abstract_ours.png" alt="DPO abstract heading: SuperTranslate, weight preserved"></a>
+
+**Detail 2 — bold lead-ins and cross-references**: pdf2zh loses the bold on "Deriving the DPO objective.", and the hyperref link boxes for Eq. 3 and citations detach from their text and float as empty boxes; SuperTranslate keeps the lead-in bold and re-embeds `[31,30,19,15]` and Eq. 3 in the re-wrapped Chinese sentence:
+
+<a href="docs/assets/comparison/dpo/crop_boldlead_original.png"><img src="docs/assets/comparison/dpo/crop_boldlead_original.png" alt="DPO bold lead-in: original"></a>
+<a href="docs/assets/comparison/dpo/crop_boldlead_pdf2zh.png"><img src="docs/assets/comparison/dpo/crop_boldlead_pdf2zh.png" alt="DPO bold lead-in: pdf2zh, bold lost and link boxes floating"></a>
+<a href="docs/assets/comparison/dpo/crop_boldlead_ours.png"><img src="docs/assets/comparison/dpo/crop_boldlead_ours.png" alt="DPO bold lead-in: SuperTranslate, bold preserved"></a>
+
+**Methodology for this run**: SuperTranslate output is a single translation pass plus the `inspect` audit — 3 findings across all 27 pages (1 layout warning, plus 2 errors confined to GPT-4 sample boxes in the appendix); **the showcased pages p1/p4 have zero findings**. pdf2zh completed in about 1.5 minutes on the same machine. Full commands, versions, and environment are recorded in [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md). This comparison focuses on **layout and structural fidelity**; prose quality differences are mostly attributable to the respective translation backends.
+
 ### Qwen-RobotWorld Technical Report (25 pages, CC BY 4.0)
 
 <table>
@@ -145,7 +176,7 @@ Neither paper has error-severity issues; the only findings are non-blocking layo
 
 ### Display Policy
 
-Comparison assets follow the licensing policy of [benchmarks/classic20/README.md](benchmarks/classic20/README.md): **only Creative Commons licensed papers get full translated pages in public** (Qwen-RobotWorld and Cosmos in this section are both CC BY 4.0); papers under the arXiv non-exclusive license are shown only as small close-up crops plus aggregate metrics. Once translations of the six CC-licensed classics in the benchmark's `showcase_cc` group (LLaMA / Mistral / Mamba / DPO / CoT / vLLM) are ready, they will be added as full-page comparisons.
+Comparison assets follow the licensing policy of [benchmarks/classic20/README.md](benchmarks/classic20/README.md): **only Creative Commons licensed papers get full translated pages in public** (DPO, Qwen-RobotWorld, and Cosmos in this section are all CC BY 4.0); papers under the arXiv non-exclusive license are shown only as small close-up crops plus aggregate metrics. Of the six CC-licensed classics in the benchmark's `showcase_cc` group, DPO is done and showcased above; the remaining five (LLaMA / Mistral / Mamba / CoT / vLLM) will follow as their translations are produced.
 
 ### How It Compares to Other Ways of Reading Papers
 
@@ -171,7 +202,7 @@ Each approach has a different job: reading the original is the most faithful but
 
 > ¹ Descriptions of other tools are based on their public documentation and product pages (checked 2026-08) and may change with versions; corrections are welcome via issues.
 >
-> Honest note: the comparison images above include no same-machine pdf2zh baseline — I/O constraints in the rendering environment kept pdf2zh from completing within the time budget (see [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)). The table above is therefore a documentation-based comparison only; community-contributed side-by-side samples are welcome.
+> A same-machine pdf2zh image baseline is now included: see the [DPO head-to-head above](#direct-preference-optimization-27-pages-cc-by-40--with-a-measured-pdf2zh-baseline) (v1.9.11, default Google backend; full commands and environment in [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)).
 
 ## How It Works: From Original Page to Trusted Translation
 

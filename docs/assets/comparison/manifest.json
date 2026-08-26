@@ -2,6 +2,7 @@
   "display_policy": {
     "rule": "遵循 benchmarks/classic20/README.md 许可政策：仅 CC 许可论文（showcase_ok）公开展示完整翻译页；arXiv 非独占许可论文仅展示小幅局部 crop 与聚合指标",
     "full_page_papers": [
+      "dpo",
       "qwen_robotworld",
       "cosmos"
     ],
@@ -11,6 +12,22 @@
     ]
   },
   "papers": [
+    {
+      "slug": "dpo",
+      "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+      "license": "CC BY 4.0（arXiv 2305.18290v3 abs 页 license 链接 creativecommons.org/licenses/by/4.0，2026-08-26 核验）",
+      "display": "full_pages",
+      "pages_rendered": [1, 4],
+      "has_pdf2zh": true,
+      "crops": ["abstract(三方)", "boldlead(三方)", "trio_p4(三方整页)"],
+      "notes": "showcase_cc 六篇中首篇完成。2026-08-26 本地快盘实测：SuperTranslate 单遍翻译（deepseek 后端，默认 deepseek-v4-pro，--preserve-graphics-text），27 页 216 块翻译 / 301 块保护跳过，耗时约 24 分钟（含限速重试）；inspect 全篇 3 报告（p17 公式横移 16pt 警告 + p22 附录 GPT-4 样例框 2 处 font_size_drift 错误），展示页 p1/p4 零缺陷。pdf2zh v1.9.11（默认 Google 后端）同机约 1.5 分钟完成，观察缺陷：Abstract→「抽象的」且丢标题粗体、加粗导语丢失、Eq./引用链接框脱离文字漂浮成空框、arXiv 侧边栏字符竖排乱序、定义/引理段未翻译（p5）。trio_* 为三方同框（x155-1020 y98-1273 @120dpi）；detail crops @240dpi。",
+      "evidence": {
+        "ours_pdf": "local:.local-work/showcase/dpo-mono.pdf（61.5MB，未入库）",
+        "original_pdf": "arXiv 2305.18290 官方 PDF（下载副本 local:.local-work/showcase/dpo.pdf）",
+        "qa_report": "local:.local-work/showcase/dpo.inspect.json（3 issues / 2 errors，均在附录）",
+        "pdf2zh_pdf": "local:.local-work/baseline/dpo-mono.pdf（v1.9.11 google 后端）"
+      }
+    },
     {
       "slug": "qwen_robotworld",
       "title": "Qwen-RobotWorld Technical Report",
