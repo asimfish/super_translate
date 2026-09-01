@@ -326,6 +326,14 @@ window.__ph = function (img) {
   .crop-row .badge { position: absolute; top: 9px; left: 9px; z-index: 2; }
   .crop-foot { padding: 10px 18px 12px; border-top: 1px solid var(--line); color: var(--muted); font: 600 11px/1.75 var(--mono); }
   .crop-foot b { color: var(--gold); font-weight: 750; }
+  /* 第二篇实测的小节分隔，与如实标注的已知缺陷卡 */
+  .h2h-sub { margin-top: var(--sp-4); display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 16px; }
+  .h2h-sub b { font-size: 16px; font-weight: 800; color: var(--ink); letter-spacing: -.01em; }
+  .h2h-sub span { font: 650 11px/1.7 var(--mono); color: var(--faint); }
+  .h2h-sub .ok { color: #5fe6a8; }
+  .crop-card.known { border-color: rgba(255, 143, 107, .38); }
+  .crop-card.known .crop-head b { color: var(--warm); }
+  .crop-card.known .crop-foot b { color: var(--warm); }
   .license-note { margin-top: var(--sp-3); max-width: var(--w-text); color: var(--faint); font-size: 12px; line-height: 1.8; border-left: 2px solid rgba(243, 201, 107, .5); padding-left: 14px; }
   .license-note b { color: var(--gold); }
 
@@ -710,7 +718,7 @@ window.__ph = function (img) {
       <h2 class="sec-title">拖动分割线，<b>逐像素检查</b></h2>
       <p class="sec-desc">
         全部取自真实翻译产物的<b>原样渲染</b>，未做修饰：左侧原文、右侧译文，分割线随你拖动。
-        三篇展示论文（DPO、Qwen-RobotWorld、Cosmos）均为 CC BY 4.0 许可。
+        四篇展示论文（DPO、Mistral 7B、Qwen-RobotWorld、Cosmos）均为 CC BY 4.0 许可。
       </p>
     </header>
 
@@ -835,7 +843,7 @@ window.__ph = function (img) {
 
       </div>
       <p class="license-note fx">
-        <b>遵守论文许可：</b>仅 CC BY 4.0 论文（DPO、Qwen-RobotWorld、Cosmos）公开展示完整翻译页；
+        <b>遵守论文许可：</b>仅 CC BY 4.0 论文（DPO、Mistral 7B、Qwen-RobotWorld、Cosmos）公开展示完整翻译页；
         arXiv 非独占许可论文（Attention、ResNet）只展示小幅局部对比与聚合指标。
       </p>
     </div>
@@ -934,6 +942,63 @@ window.__ph = function (img) {
         <div class="crop-foot">定理体例的斜体段最容易被整段跳过：pdf2zh 把<b>定义 1、引理 1、引理 2 的正文原封不动留成英文</b>（编号却翻了）；SuperTranslate 全部译出，「定义 1。」「引理 1。」粗体保留，r(x,y)−r′(x,y)=f(x) 等行内数学原样。我们的 QA 会按块统计中文覆盖率，漏翻会被当作缺陷打回重译——这类整段漏翻过不了检。</div>
       </figure>
 
+      <div class="h2h-sub fx">
+        <b>第二篇 · Mistral 7B</b>
+        <span>9 页 · arXiv 2310.06825 · CC BY 4.0 · pdf2zh v1.9.11 同机实测 · SuperTranslate 单遍翻译 · <i class="ok">inspect 0 issue</i></span>
+      </div>
+      <p class="sec-desc fx" style="margin-top: 8px; font-size: 13px;">换一种版式类型再走一遍：这篇几乎没有公式，难点是<b>模型名与机构名、密集的结果表、加粗导语列表和整整两页参考文献</b>。整页对比已加入上方滑块（Mistral 7B 标签）。</p>
+
+      <figure class="crop-card crop-banner fx">
+        <div class="crop-head"><b>细节 ④ 标题与作者栏：专名不音译</b><span>mistral · p1 · 240dpi</span></div>
+        <div class="crop-row" data-ph="assets/comparison/mistral/crop_title_original.png">
+          <span class="badge en">EN 原文</span>
+          <img src="assets/comparison/mistral/crop_title_original.png" alt="Mistral 7B 标题页原文：标题与加粗作者栏" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/mistral/crop_title_pdf2zh.png">
+          <span class="badge base">PDF2ZH</span>
+          <img src="assets/comparison/mistral/crop_title_pdf2zh.png" alt="pdf2zh 把标题 Mistral 7B 音译为「米斯特拉尔7B」，作者栏丢粗体、人名被从中间断行" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/mistral/crop_title_ours.png">
+          <span class="badge zh">ZH 译文</span>
+          <img src="assets/comparison/mistral/crop_title_ours.png" alt="SuperTranslate 保留标题 Mistral 7B 原名，作者栏粗体与居中排版原样" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-foot">pdf2zh 把模型名<b>「Mistral 7B」音译成「米斯特拉尔7B」</b>，作者栏丢失粗体、人名从单词中间断行（De/vendra、G/uillaume）、分隔符变成中文顿号；SuperTranslate 术语库把模型名、机构名、基准名列为不译项，<b>标题原名保留、作者栏粗体居中原样</b>。</div>
+      </figure>
+
+      <figure class="crop-card crop-banner fx">
+        <div class="crop-head"><b>细节 ⑤ 参考文献：保持可检索</b><span>mistral · p8 · 240dpi</span></div>
+        <div class="crop-row" data-ph="assets/comparison/mistral/crop_refs_original.png">
+          <span class="badge en">EN 原文</span>
+          <img src="assets/comparison/mistral/crop_refs_original.png" alt="Mistral 7B 参考文献原文：编号悬挂缩进的条目" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/mistral/crop_refs_pdf2zh.png">
+          <span class="badge base">PDF2ZH</span>
+          <img src="assets/comparison/mistral/crop_refs_pdf2zh.png" alt="pdf2zh 把参考文献标题译成中文、条目合并成一段、人名被改写" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/mistral/crop_refs_ours.png">
+          <span class="badge zh">ZH 译文</span>
+          <img src="assets/comparison/mistral/crop_refs_ours.png" alt="SuperTranslate 只译「参考文献」标题，每条文献原文原样、悬挂缩进保留" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-foot">pdf2zh 把每条文献的<b>论文标题译成中文、整节合并成一段、人名被改写</b>（Jianfeng Gao → Jianfeng Taka）——译完就搜不到原文了；SuperTranslate 只译节标题「参考文献」，<b>条目逐字原样、编号悬挂缩进保留</b>，随手复制标题即可检索。</div>
+      </figure>
+
+      <figure class="crop-card crop-banner known fx">
+        <div class="crop-head"><b>已知缺陷 · 这一处 pdf2zh 做得比我们好</b><span>mistral · p5 · 240dpi · 已记录 issue</span></div>
+        <div class="crop-row" data-ph="assets/comparison/mistral/known_table4_original.png">
+          <span class="badge en">EN 原文</span>
+          <img src="assets/comparison/mistral/known_table4_original.png" alt="Mistral 7B 第 5 页原文：系统提示框与无框线的表 4" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/mistral/known_table4_pdf2zh.png">
+          <span class="badge base">PDF2ZH</span>
+          <img src="assets/comparison/mistral/known_table4_pdf2zh.png" alt="pdf2zh 保留了表 4 的表格结构与粗体表头" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-row" data-ph="assets/comparison/mistral/known_table4_ours.png">
+          <span class="badge zh">ZH 译文</span>
+          <img src="assets/comparison/mistral/known_table4_ours.png" alt="SuperTranslate 把无框线的表 4 当成正文重排，系统提示框文字超出右边框" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        </div>
+        <div class="crop-foot">表 4 是只有两条横线的<b>无框线小表</b>，我们的表格检测没认出来，单元格被当正文重排、列对齐全乱；同页系统提示框的译文<b>超出了右边框</b>。inspect 对这两处都没有报警——这是 QA 的盲区，不是「0 issue」就等于完美。pdf2zh 此处正确。已记入 NOTES 并开 <a href="https://github.com/asimfish/super_translate/issues/2" target="_blank" rel="noopener" style="color: var(--warm);">issue #2</a> 跟进。</div>
+      </figure>
+
       <div class="why-grid fx">
         <div class="why-item"><b>术语成体系</b><p>1,066 条学术语料逐块注入提示词，「Abstract→摘要」「preference→偏好」全文一致，不靠单次运气（细节①）。</p></div>
         <div class="why-item"><b>结构字重保真</b><p>粗体导语、小节标题、hyperref 链接框都在原位；重排式工具最常丢的就是这些（细节②）。</p></div>
@@ -946,7 +1011,7 @@ window.__ph = function (img) {
       <p class="license-note fx">
         <b>口径说明：</b>「直接丢给大模型」列为同一后端（deepseek-v4-pro）对整页 pdftotext 文本的单轮翻译，输出按聊天界面的真实能力呈现（markdown + KaTeX 渲染，渲染失败处即模型自身输出的 LaTeX 缺陷）；
         pdf2zh 是同类开源方案中的优秀代表，其默认后端为逐句机器翻译，本对比聚焦<b>版式与结构保真</b>而非译文文采；
-        SuperTranslate 产物为单遍翻译 + inspect 审计（展示页 0 缺陷，全篇 3 处报告集中在附录样例框）。
+        SuperTranslate 产物均为单遍翻译 + inspect 审计：DPO 展示页 0 缺陷（全篇 3 处报告集中在附录样例框），Mistral 7B 全篇 0 issue——但 inspect 漏掉了上面如实标出的表 4 与提示框问题，QA 盲区也是这份对比的一部分。
         三侧完整命令、提示词、版本与环境记录于 <a href="https://github.com/asimfish/super_translate/blob/main/docs/assets/comparison/NOTES.md" target="_blank" rel="noopener">NOTES.md</a>，欢迎复现。
       </p>
     </div>
@@ -991,7 +1056,7 @@ window.__ph = function (img) {
         </tbody>
       </table>
     </div>
-    <p class="vs-note fx">✓ 具备 · ◐ 部分具备/视情况 · — 不提供 · ¹ 基于各工具公开文档（2026-08 查阅），欢迎指正；pdf2zh 已补同机实测图像对比，见<a href="#headtohead">「横向实测」</a>。</p>
+    <p class="vs-note fx">✓ 具备 · ◐ 部分具备/视情况 · — 不提供 · ¹ 基于各工具公开文档（2026-08 查阅），欢迎指正；「GPT / Kimi 粘贴」与 pdf2zh 两列已补同机实测图像对比（DPO、Mistral 7B 两篇），见<a href="#headtohead">「横向实测」</a>。</p>
   </div>
 </section>
 
@@ -1396,6 +1461,17 @@ ln -s "$PWD/super_translate/skills/paper-translate" ~/.claude/skills/paper-trans
       notes: {
         4: '公式 (4)–(7) 逐像素冻结，小节标题「4 直接偏好优化」与加粗导语「推导直接偏好优化目标。」字重保真，行内引用 [31,30,19,15] 原位嵌入中文句',
         1: '居中中文大标题、粗体「摘要」、作者栏与 arXiv 侧边栏全部原样保留'
+      }
+    },
+    {
+      slug: 'mistral',
+      title: 'Mistral 7B',
+      zh: '9 页开源模型技术报告 · arXiv 2310.06825 · CC BY 4.0',
+      tags: ['大结果表', '柱状图', '加粗导语'],
+      pages: [4, 1],
+      notes: {
+        4: '表 2 十三列结果大表与柱状图原样保留，「表 2：」图注与「规模与效率。」「评估差异。」加粗导语字重保真，Llama / Mistral 等模型名不被翻译',
+        1: '标题「Mistral 7B」保持原名不音译，加粗作者栏与 3D logo 图原样；「摘要」居中标题'
       }
     },
     {

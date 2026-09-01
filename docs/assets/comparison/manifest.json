@@ -3,6 +3,7 @@
     "rule": "遵循 benchmarks/classic20/README.md 许可政策：仅 CC 许可论文（showcase_ok）公开展示完整翻译页；arXiv 非独占许可论文仅展示小幅局部 crop 与聚合指标",
     "full_page_papers": [
       "dpo",
+      "mistral",
       "qwen_robotworld",
       "cosmos"
     ],
@@ -28,6 +29,23 @@
         "qa_report": "local:.local-work/showcase/dpo.inspect.json（3 issues / 2 errors，均在附录）",
         "pdf2zh_pdf": "local:.local-work/baseline/dpo-mono.pdf（v1.9.11 google 后端）",
         "raw_llm_output": "local:.local-work/p4_raw_llm.md（deepseek-v4-pro 单轮直译）"
+      }
+    },
+    {
+      "slug": "mistral",
+      "title": "Mistral 7B",
+      "license": "CC BY 4.0（arXiv 2310.06825v1 abs 页 license 链接 creativecommons.org/licenses/by/4.0，2026-09-02 核验）",
+      "display": "full_pages",
+      "pages_rendered": [1, 4],
+      "has_pdf2zh": true,
+      "has_raw_llm": false,
+      "crops": ["title(三方)", "refs(三方)", "known_table4(三方·已知缺陷)"],
+      "notes": "showcase_cc 第二篇。2026-09-02 本地快盘实测：SuperTranslate 单遍翻译（deepseek 后端 deepseek-v4-pro，--preserve-graphics-text），9 页 59 块翻译 / 148 块保护跳过，约 2 分钟；inspect 全篇 0 issue。pdf2zh v1.9.11（默认 Google 后端）同机 1 分 12 秒完成。观察 pdf2zh 缺陷：标题 Mistral 7B 音译为「米斯特拉尔7B」、作者栏丢粗体且人名从词中断行、参考文献标题被译成中文且整节合并成段、人名改写（Jianfeng Gao→Jianfeng Taka）、加粗导语与图注粗体丢失、脚注 4 未译、0-shot/5 次 术语不一致。SuperTranslate 已知缺陷（inspect 未捕获）：p5 表 4 无框线小表未被识别为表格，单元格按正文重排列对齐全乱；p5 系统提示框译文超出右边框；p3 首条 bullet 首行超出右栏且续行丢悬挂缩进；p1 标题字体族由衬线变为 CJK 链无衬线。整页 200dpi（trim 同框 p1 box 10,180-1443,2036；p4 box 260,181-1444,2123）；细节三联 240dpi 固定框（title x180-1860 y200-820；refs x180-1860 y190-900；known_table4 x180-1860 y1300-1900），顶部 48px 白边。",
+      "evidence": {
+        "ours_pdf": "local:.local-work/showcase/mistral-mono.pdf（4.3MB，未入库）",
+        "original_pdf": "arXiv 2310.06825v1 官方 PDF（下载副本 local:.local-work/showcase/mistral.pdf）",
+        "qa_report": "local:.local-work/showcase/mistral.inspect.json（0 issues）",
+        "pdf2zh_pdf": "local:.local-work/baseline/mistral-mono.pdf（v1.9.11 google 后端）"
       }
     },
     {

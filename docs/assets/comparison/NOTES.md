@@ -107,3 +107,30 @@
 4. **机制图**：`arch_overview.svg` v2——新增术语库节点（绿色，1,066 条 · 用户可扩展，「逐块注入」箭头入翻译节点）与 Agentic 修复循环回环（金色虚线，QA 未过检 → 回翻译节点，标注「只接受严格变好 · 否则回滚快照」），画布 520→640 高。
 
 体积：comparison/ 由 14MB 增至 18MB（200dpi 升级 + rawllm 列 + lemmas 三联）。
+
+## 2026-09-02 Mistral 7B 第二篇横向实测（showcase_cc 第二篇 + 已知缺陷如实入册）
+
+选篇理由：与 DPO 互补——几乎没有公式，难点换成专名（模型/机构/基准名）、密集结果表、加粗导语列表和两页参考文献。许可 CC BY 4.0（arXiv 2310.06825v1 abs 页 license 链接核验）。
+
+**SuperTranslate 运行**
+- 命令：`.venv/bin/python -m pdf_zh_translator translate mistral.pdf mistral-mono.pdf --api-mode deepseek --api-key-env PAPER_CHINA_DEEPSEEK_API_KEY --preserve-graphics-text`（模型默认 deepseek-v4-pro）。
+- 9 页：59 块翻译 / 148 块保护跳过，约 2 分钟（9 个批次，无限速重试）。
+- `inspect mistral.pdf mistral-mono.pdf`：**0 issue**。
+
+**pdf2zh 基线**
+- 命令：`.venv/bin/pdf2zh mistral.pdf`（v1.9.11，默认 Google 后端），同机 1 分 12 秒，产出 mistral-mono.pdf / mistral-dual.pdf。
+- 观察缺陷：p1 标题「Mistral 7B」音译为「米斯特拉尔7B」；作者栏丢粗体、人名从单词中间断行（De/vendra、G/uillaume、P/ierre）、逗号变顿号；p3 加粗导语列表粗体丢失、「0-shot」与「5 次」术语不一致、脚注 4 整条未译；p4「表 2:」图注与「规模和效率。」导语粗体丢失、行首标点（「，」顶格）；p8-9 参考文献：每条标题译成中文、整节合并成一段、人名改写（Jianfeng Gao → Jianfeng Taka）、「Radfo/rd」断词。
+
+**SuperTranslate 已知缺陷（inspect 全部漏报，如实展示于主页与 README）**
+1. p5 表 4（Guardrails / MT Bench，仅两条横线的无框线小表）未被识别为表格：单元格被当正文重排，「护栏机制 MT Bench 无系统提示 / 6.84 ± 0.07 Llama 2 系统提示 …」列对齐全乱。pdf2zh 此处正确（保留表格结构与粗体表头）。
+2. p5 系统提示框（矢量矩形）内译文超出右边框约一个字宽。
+3. p3 首条 bullet（常识推理）首行超出右栏边界、续行丢失悬挂缩进回到左边距。
+4. p1 标题「Mistral 7B」内容未变但字体族由 Times 粗衬线变为 CJK 字体链的无衬线（标题块被当作译文重排）。
+根因初判：(1) 表格检测依赖框线/网格密度，两条 booktabs 横线 + 三行文本的表未达阈值；(2) 回填时按 bbox 宽度断行，但提示框 bbox 取的是文本 bbox 而非包围矩形；(3) 列表项续行缩进未继承首行的 hanging indent；(4) 纯 ASCII 标题块也进入了 CJK 字体链。QA 盲区：inspect 目前检查字号漂移、公式位移、覆盖率，不检查「原文为表格结构 / 译文列对齐」与「文本是否越出所属矢量框」。→ 已开 GitHub issue 跟进。
+
+**素材**
+- 整页 200dpi：`mistral/original_p{1,4}.png`、`ours_p{1,4}.png` + `*_trim.png`（union-trim 同框，p1 box 10,180-1443,2036；p4 box 260,181-1444,2123）。
+- 细节三联 240dpi 固定框 + 顶部 48px 白边：`crop_title_*`（x180-1860 y200-820）、`crop_refs_*`（x180-1860 y190-900）、`known_table4_*`（x180-1860 y1300-1900）。
+- 未选用 p3 列表区作为优势细节：我们的粗体与术语一致性确实更好，但同一裁剪框内会露出上面第 3 条缺陷，作为「优势」展示不诚实；缺陷本身已在文字中记录。
+
+体积：comparison/ 由 18MB 增至约 24MB。

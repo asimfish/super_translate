@@ -118,6 +118,41 @@ DPO 第 4 页同时含**小节标题、加粗导语与公式 (4)–(7)**，最�
 
 **本轮实测口径**：「直接丢给大模型」列为同一后端（deepseek-v4-pro）对整页 `pdftotext` 文本的单轮翻译，输出按聊天界面的真实能力呈现（markdown + KaTeX 渲染，渲染失败处即模型自身输出的 LaTeX 缺陷）；SuperTranslate 为单遍翻译 + inspect 审计——27 页全篇共 3 处报告（1 条版面警告 + 2 处错误，均集中在附录 GPT-4 样例框），**展示页 p1 / p4 / p5 零缺陷**；pdf2zh 同机约 1.5 分钟完成。三侧完整命令、提示词、版本与环境见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)。本对比聚焦**版式与结构保真**；pdf2zh 默认后端为逐句机器翻译，译文文采差异应主要归因于各自后端。
 
+### Mistral 7B（9 页 · CC BY 4.0）· 第二篇横向实测
+
+换一种版式类型再走一遍：这篇几乎没有公式，难点是**模型名与机构名、密集的结果表、加粗导语列表和整整两页参考文献**。同机 pdf2zh v1.9.11 基线，SuperTranslate 单遍翻译、inspect 全篇 0 issue。
+
+<table>
+  <tr>
+    <th width="50%">原文</th>
+    <th width="50%">SuperTranslate</th>
+  </tr>
+  <tr>
+    <td><a href="docs/assets/comparison/mistral/original_p4_trim.png"><img src="docs/assets/comparison/mistral/original_p4_trim.png" alt="Mistral 7B 第 4 页原文：表 2 结果大表、柱状图与加粗导语"></a></td>
+    <td><a href="docs/assets/comparison/mistral/ours_p4_trim.png"><img src="docs/assets/comparison/mistral/ours_p4_trim.png" alt="Mistral 7B 第 4 页译文：表格与柱状图原样、加粗导语字重保真"></a></td>
+  </tr>
+</table>
+
+**看什么**：表 2 十三列结果大表与柱状图原样保留，「表 2：」图注与「规模与效率。」「评估差异。」加粗导语字重保真，Llama / Mistral 等模型名不被翻译。第 1 页（标题、作者栏、3D logo、摘要）见主页滑块。
+
+**细节 ④ 标题与作者栏：专名不音译**——pdf2zh 把模型名**「Mistral 7B」音译成「米斯特拉尔7B」**，作者栏丢失粗体、人名从单词中间断行（De/vendra、G/uillaume）、分隔符变成中文顿号；SuperTranslate 术语库把模型名、机构名、基准名列为不译项，标题原名保留、作者栏粗体居中原样（上原文 / 中 pdf2zh / 下 SuperTranslate）：
+
+<a href="docs/assets/comparison/mistral/crop_title_original.png"><img src="docs/assets/comparison/mistral/crop_title_original.png" alt="Mistral 7B 标题与作者栏：原文"></a>
+<a href="docs/assets/comparison/mistral/crop_title_pdf2zh.png"><img src="docs/assets/comparison/mistral/crop_title_pdf2zh.png" alt="Mistral 7B 标题与作者栏：pdf2zh 音译标题、作者栏断行丢粗体"></a>
+<a href="docs/assets/comparison/mistral/crop_title_ours.png"><img src="docs/assets/comparison/mistral/crop_title_ours.png" alt="Mistral 7B 标题与作者栏：SuperTranslate 原名保留、粗体居中"></a>
+
+**细节 ⑤ 参考文献：保持可检索**——pdf2zh 把每条文献的**论文标题译成中文、整节合并成一段、人名被改写**（Jianfeng Gao → Jianfeng Taka），译完就搜不到原文了；SuperTranslate 只译节标题「参考文献」，条目逐字原样、编号悬挂缩进保留：
+
+<a href="docs/assets/comparison/mistral/crop_refs_original.png"><img src="docs/assets/comparison/mistral/crop_refs_original.png" alt="Mistral 7B 参考文献：原文"></a>
+<a href="docs/assets/comparison/mistral/crop_refs_pdf2zh.png"><img src="docs/assets/comparison/mistral/crop_refs_pdf2zh.png" alt="Mistral 7B 参考文献：pdf2zh 标题被译、条目合并"></a>
+<a href="docs/assets/comparison/mistral/crop_refs_ours.png"><img src="docs/assets/comparison/mistral/crop_refs_ours.png" alt="Mistral 7B 参考文献：SuperTranslate 条目原样、缩进保留"></a>
+
+**已知缺陷 · 这一处 pdf2zh 做得比我们好**——第 5 页表 4 是只有两条横线的无框线小表，我们的表格检测没认出来，单元格被当正文重排、列对齐全乱；同页系统提示框的译文超出了右边框。**inspect 对这两处都没有报警**——这是 QA 的盲区，「0 issue」不等于完美。pdf2zh 此处正确。两个问题已在 [#2](https://github.com/asimfish/super_translate/issues/2) 跟进（上原文 / 中 pdf2zh / 下 SuperTranslate）：
+
+<a href="docs/assets/comparison/mistral/known_table4_original.png"><img src="docs/assets/comparison/mistral/known_table4_original.png" alt="Mistral 7B 第 5 页表 4：原文"></a>
+<a href="docs/assets/comparison/mistral/known_table4_pdf2zh.png"><img src="docs/assets/comparison/mistral/known_table4_pdf2zh.png" alt="Mistral 7B 第 5 页表 4：pdf2zh 保留表格结构"></a>
+<a href="docs/assets/comparison/mistral/known_table4_ours.png"><img src="docs/assets/comparison/mistral/known_table4_ours.png" alt="Mistral 7B 第 5 页表 4：SuperTranslate 表格被重排、提示框溢出（已知缺陷）"></a>
+
 ### Qwen-RobotWorld Technical Report（25 页 · CC BY 4.0）
 
 <table>
@@ -195,7 +230,7 @@ Attention、DDPM 与 ResNet 采用 arXiv 非独占许可（非 CC），按下方
 
 ### 展示政策
 
-对比素材遵循 [benchmarks/classic20/README.md](benchmarks/classic20/README.md) 的许可政策：**仅 Creative Commons 许可的论文公开展示完整翻译页**（本节的 DPO、Qwen-RobotWorld 与 Cosmos 均为 CC BY 4.0）；arXiv 非独占许可的论文只展示小幅局部 crop 与聚合指标。基准 `showcase_cc` 组的六篇 CC 许可经典论文中，DPO 已完成并展示于上文；其余五篇（LLaMA / Mistral / Mamba / CoT / vLLM）翻译产物就绪后继续补充。
+对比素材遵循 [benchmarks/classic20/README.md](benchmarks/classic20/README.md) 的许可政策：**仅 Creative Commons 许可的论文公开展示完整翻译页**（本节的 DPO、Mistral 7B、Qwen-RobotWorld 与 Cosmos 均为 CC BY 4.0）；arXiv 非独占许可的论文只展示小幅局部 crop 与聚合指标。基准 `showcase_cc` 组的六篇 CC 许可经典论文中，DPO 与 Mistral 7B 已完成并展示于上文（均含同机 pdf2zh 基线）；其余四篇（LLaMA / Mamba / CoT / vLLM）翻译产物就绪后继续补充。
 
 ### 相比其他读论文的方式，优势在哪里
 

@@ -118,6 +118,41 @@ Page 4 of DPO packs **section headings, bold paragraph lead-ins, and equations (
 
 **Methodology for this run**: the *Raw LLM paste* column is a single-turn translation of the full-page `pdftotext` text by the same backend (deepseek-v4-pro), presented at the realistic capability of a chat UI (markdown + KaTeX rendering; where rendering fails, that is the model's own LaTeX defect). SuperTranslate output is a single translation pass plus the `inspect` audit — 3 findings across all 27 pages (1 layout warning, plus 2 errors confined to GPT-4 sample boxes in the appendix); **the showcased pages p1/p4/p5 have zero findings**. pdf2zh completed in about 1.5 minutes on the same machine. Full commands, prompts, versions, and environment are recorded in [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md). This comparison focuses on **layout and structural fidelity**; prose quality differences are mostly attributable to the respective translation backends.
 
+### Mistral 7B (9 pages, CC BY 4.0) — second head-to-head
+
+A different kind of layout: this paper has almost no equations; the hard parts are **model and organisation names, dense result tables, bold-lead-in bullet lists, and two full pages of references**. Same-machine pdf2zh v1.9.11 baseline; SuperTranslate single pass, `inspect` reports 0 issues across the paper.
+
+<table>
+  <tr>
+    <th width="50%">Original</th>
+    <th width="50%">SuperTranslate</th>
+  </tr>
+  <tr>
+    <td><a href="docs/assets/comparison/mistral/original_p4_trim.png"><img src="docs/assets/comparison/mistral/original_p4_trim.png" alt="Mistral 7B page 4, original: Table 2, bar charts and bold lead-ins"></a></td>
+    <td><a href="docs/assets/comparison/mistral/ours_p4_trim.png"><img src="docs/assets/comparison/mistral/ours_p4_trim.png" alt="Mistral 7B page 4, SuperTranslate: table and charts intact, bold lead-ins preserved"></a></td>
+  </tr>
+</table>
+
+**What to look at**: the 13-column Table 2 and the bar charts are untouched; the bold "表 2：" caption lead and the bold paragraph lead-ins ("规模与效率。", "评估差异。") keep their weight; model names such as Llama and Mistral are not translated. Page 1 (title, author block, 3D logo, abstract) is in the homepage slider.
+
+**Detail 4 — title and author block: proper names stay untranslated**: pdf2zh transliterates the model name **"Mistral 7B" into "米斯特拉尔7B"**, drops the bold on the author block, breaks names mid-word (De/vendra, G/uillaume) and swaps the separators for Chinese enumeration commas; SuperTranslate's terminology corpus lists model, organisation and benchmark names as do-not-translate, so the title keeps its name and the author block stays bold and centred (top: original / middle: pdf2zh / bottom: SuperTranslate):
+
+<a href="docs/assets/comparison/mistral/crop_title_original.png"><img src="docs/assets/comparison/mistral/crop_title_original.png" alt="Mistral 7B title and authors: original"></a>
+<a href="docs/assets/comparison/mistral/crop_title_pdf2zh.png"><img src="docs/assets/comparison/mistral/crop_title_pdf2zh.png" alt="Mistral 7B title and authors: pdf2zh transliterates the title, breaks names, loses bold"></a>
+<a href="docs/assets/comparison/mistral/crop_title_ours.png"><img src="docs/assets/comparison/mistral/crop_title_ours.png" alt="Mistral 7B title and authors: SuperTranslate keeps the name, bold and centring"></a>
+
+**Detail 5 — references stay searchable**: pdf2zh **translates every paper title into Chinese, merges the whole section into one paragraph and rewrites names** (Jianfeng Gao → Jianfeng Taka) — you can no longer look the papers up; SuperTranslate translates only the section heading and leaves each entry verbatim with its hanging indent:
+
+<a href="docs/assets/comparison/mistral/crop_refs_original.png"><img src="docs/assets/comparison/mistral/crop_refs_original.png" alt="Mistral 7B references: original"></a>
+<a href="docs/assets/comparison/mistral/crop_refs_pdf2zh.png"><img src="docs/assets/comparison/mistral/crop_refs_pdf2zh.png" alt="Mistral 7B references: pdf2zh translates titles and merges entries"></a>
+<a href="docs/assets/comparison/mistral/crop_refs_ours.png"><img src="docs/assets/comparison/mistral/crop_refs_ours.png" alt="Mistral 7B references: SuperTranslate keeps entries verbatim with indentation"></a>
+
+**Known defect — here pdf2zh does better than we do**: Table 4 on page 5 is a small borderless table with only two rules. Our table detector misses it, so the cells are re-flowed as running text and the columns collapse; on the same page the translated system prompt overflows the right edge of its box. **`inspect` flagged neither** — this is a QA blind spot, and "0 issues" is not the same as perfect. pdf2zh gets this spot right. Both problems are tracked in [#2](https://github.com/asimfish/super_translate/issues/2) (top: original / middle: pdf2zh / bottom: SuperTranslate):
+
+<a href="docs/assets/comparison/mistral/known_table4_original.png"><img src="docs/assets/comparison/mistral/known_table4_original.png" alt="Mistral 7B page 5 Table 4: original"></a>
+<a href="docs/assets/comparison/mistral/known_table4_pdf2zh.png"><img src="docs/assets/comparison/mistral/known_table4_pdf2zh.png" alt="Mistral 7B page 5 Table 4: pdf2zh keeps the table structure"></a>
+<a href="docs/assets/comparison/mistral/known_table4_ours.png"><img src="docs/assets/comparison/mistral/known_table4_ours.png" alt="Mistral 7B page 5 Table 4: SuperTranslate re-flows the table and overflows the box (known defect)"></a>
+
 ### Qwen-RobotWorld Technical Report (25 pages, CC BY 4.0)
 
 <table>
@@ -195,7 +230,7 @@ Neither paper has error-severity issues; the only findings are non-blocking layo
 
 ### Display Policy
 
-Comparison assets follow the licensing policy of [benchmarks/classic20/README.md](benchmarks/classic20/README.md): **only Creative Commons licensed papers get full translated pages in public** (DPO, Qwen-RobotWorld, and Cosmos in this section are all CC BY 4.0); papers under the arXiv non-exclusive license are shown only as small close-up crops plus aggregate metrics. Of the six CC-licensed classics in the benchmark's `showcase_cc` group, DPO is done and showcased above; the remaining five (LLaMA / Mistral / Mamba / CoT / vLLM) will follow as their translations are produced.
+Comparison assets follow the licensing policy of [benchmarks/classic20/README.md](benchmarks/classic20/README.md): **only Creative Commons licensed papers get full translated pages in public** (DPO, Mistral 7B, Qwen-RobotWorld, and Cosmos in this section are all CC BY 4.0); papers under the arXiv non-exclusive license are shown only as small close-up crops plus aggregate metrics. Of the six CC-licensed classics in the benchmark's `showcase_cc` group, DPO and Mistral 7B are done and showcased above (both with a same-machine pdf2zh baseline); the remaining four (LLaMA / Mamba / CoT / vLLM) will follow as their translations are produced.
 
 ### How It Compares to Other Ways of Reading Papers
 

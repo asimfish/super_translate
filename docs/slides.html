@@ -245,6 +245,21 @@ window.__ph = function (img) {
   .cmp-pages .ftag.zh { color: var(--warm); border: 1px solid rgba(255, 143, 107, .6); }
   .cmp-vs { align-self: center; font: 850 26px/1 var(--mono); color: var(--muted); letter-spacing: .1em; }
 
+  /* ===== 横向实测页（原文 / 大模型直译 / pdf2zh / SuperTranslate 四列） ===== */
+  .quad-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-top: 24px; }
+  .quad-col { border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; background: var(--panel); box-shadow: 0 20px 60px rgba(0, 0, 0, .45); }
+  .quad-col.us { border-color: rgba(111, 157, 255, .75); box-shadow: 0 0 0 1px rgba(111, 157, 255, .35), 0 20px 60px rgba(0, 0, 0, .45); }
+  .quad-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .quad-head b { font-size: 17px; font-weight: 800; }
+  .quad-col.us .quad-head b { color: var(--blue-soft); }
+  .quad-head span { font: 650 11.5px/1.5 var(--mono); color: var(--muted); white-space: nowrap; }
+  .quad-col img { display: block; width: 100%; height: auto; background: #fff; }
+  .quad-takeaways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 20px; }
+  .quad-take { border: 1px solid var(--line); border-left: 4px solid var(--muted); border-radius: var(--radius); background: var(--panel); padding: 11px 18px; color: var(--muted); font-size: 15.5px; line-height: 1.5; }
+  .quad-take b { display: block; color: var(--ink); font-size: 17px; margin-bottom: 2px; }
+  .quad-take.warm { border-left-color: var(--warm); }
+  .quad-take.blue { border-left-color: var(--blue); }
+
   /* ===== S7 局部放大 ===== */
   .crops3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 22px; margin-top: 32px; }
   .crop-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: hidden; }
@@ -556,9 +571,39 @@ window.__ph = function (img) {
     <div class="footer-line"><span>SuperTranslate · 保版式引擎</span><span>github.com/asimfish/super_translate</span></div>
   </section>
 
-  <!-- S5 效果对比 1 -->
+  <!-- S5 效果对比 0 横向实测 -->
+  <section class="slide" data-title="效果对比 · 横向实测">
+    <span class="eyebrow gold">Evidence 1 / 4 · 横向实测</span>
+    <h2 class="s-title">同一页论文，<b>三条路各走一遍</b></h2>
+    <div class="quad-grid">
+      <div class="quad-col">
+        <div class="quad-head"><b>原文</b><span>DPO · p4 · CC BY 4.0</span></div>
+        <img src="assets/comparison/dpo/trio_p4_original.png" alt="DPO 第 4 页原文：小节标题、加粗导语与公式 (4)-(7)" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+      </div>
+      <div class="quad-col">
+        <div class="quad-head"><b>直接丢给大模型</b><span>deepseek · 纯文本</span></div>
+        <img src="assets/comparison/dpo/trio_p4_rawllm.png" alt="同一页文本直接交给 DeepSeek：正文可读但版式全无，公式 (6) 起退化为 LaTeX 源码" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+      </div>
+      <div class="quad-col">
+        <div class="quad-head"><b>pdf2zh</b><span>v1.9.11 · google 后端</span></div>
+        <img src="assets/comparison/dpo/trio_p4_pdf2zh.png" alt="pdf2zh 译文：整页重排，加粗导语丢失、引用链接框漂移" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+      </div>
+      <div class="quad-col us">
+        <div class="quad-head"><b>SuperTranslate</b><span>deepseek 后端</span></div>
+        <img src="assets/comparison/dpo/trio_p4_ours.png" alt="SuperTranslate 译文：公式冻结、粗体与标题字重保真、原坐标回填" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+      </div>
+    </div>
+    <div class="quad-takeaways">
+      <div class="quad-take"><b>直接丢给大模型：同一个模型，只剩一段聊天文本</b>公式 (6) 起 LaTeX 退化成源码、下划线触发整段误斜体；双栏、页码、引用锚点全部消失。</div>
+      <div class="quad-take warm"><b>pdf2zh：像一页论文，但整页重排</b>加粗导语丢失、hyperref 链接框漂成空框；第 5 页定义与引理正文整段留英未翻。</div>
+      <div class="quad-take blue"><b>SuperTranslate：公式不经模型，正文原坐标回填</b>字重、标题、引用原位；单遍翻译 + inspect 审计，展示页零缺陷，全篇 3 处均在附录。</div>
+    </div>
+    <div class="footer-line"><span>SuperTranslate · 效果对比 1/4</span><span>三侧命令、提示词与环境见 docs/assets/comparison/NOTES.md</span></div>
+  </section>
+
+  <!-- S5b 效果对比 1 -->
   <section class="slide" data-title="效果对比 · Qwen-RobotWorld">
-    <span class="eyebrow gold">Evidence 1 / 3 · 整页对比</span>
+    <span class="eyebrow gold">Evidence 2 / 4 · 整页对比</span>
     <h2 class="s-title">Qwen-RobotWorld Technical Report</h2>
     <div class="cmp-layout">
       <div class="cmp-info">
@@ -579,12 +624,12 @@ window.__ph = function (img) {
         </figure>
       </div>
     </div>
-    <div class="footer-line"><span>SuperTranslate · 效果对比 1/3</span><span>主页可拖动分割线逐像素对比</span></div>
+    <div class="footer-line"><span>SuperTranslate · 效果对比 2/4</span><span>主页可拖动分割线逐像素对比</span></div>
   </section>
 
   <!-- S6 效果对比 2 -->
   <section class="slide" data-title="效果对比 · Cosmos 长文">
-    <span class="eyebrow gold">Evidence 2 / 3 · 长文档深处</span>
+    <span class="eyebrow gold">Evidence 3 / 4 · 长文档深处</span>
     <h2 class="s-title">Cosmos：75 页第 34 页，质量不衰减</h2>
     <div class="cmp-layout">
       <div class="cmp-info">
@@ -606,12 +651,12 @@ window.__ph = function (img) {
         </figure>
       </div>
     </div>
-    <div class="footer-line"><span>SuperTranslate · 效果对比 2/3</span><span>github.com/asimfish/super_translate</span></div>
+    <div class="footer-line"><span>SuperTranslate · 效果对比 3/4</span><span>github.com/asimfish/super_translate</span></div>
   </section>
 
   <!-- S7 效果对比 3 局部放大 -->
   <section class="slide" data-title="效果对比 · 局部放大">
-    <span class="eyebrow gold">Evidence 3 / 3 · 局部放大</span>
+    <span class="eyebrow gold">Evidence 4 / 4 · 局部放大</span>
     <h2 class="s-title">经典论文，只看最难的细节</h2>
     <div class="crops3">
       <div class="crop-card">
@@ -652,7 +697,7 @@ window.__ph = function (img) {
       </div>
     </div>
     <p class="license-line"><b>遵守论文许可：</b>Attention / ResNet 为 arXiv 非独占许可（非 CC），按政策仅展示小幅局部对比与聚合指标；完整页展示仅用 CC BY 4.0 论文。</p>
-    <div class="footer-line"><span>SuperTranslate · 效果对比 3/3</span><span>github.com/asimfish/super_translate</span></div>
+    <div class="footer-line"><span>SuperTranslate · 效果对比 4/4</span><span>github.com/asimfish/super_translate</span></div>
   </section>
 
   <!-- S8 QA 体系 -->
@@ -746,15 +791,15 @@ window.__ph = function (img) {
   <!-- S11 实现机制 -->
   <section class="slide" data-title="实现机制">
     <span class="eyebrow">How It Works · 实现机制</span>
-    <h2 class="s-title">一条确定性流水线，<b>从解析到回滚</b></h2>
+    <h2 class="s-title">从原页，<b>到可信译文</b></h2>
     <div class="mech-wrap" data-ph="assets/arch_overview.svg">
       <a href="assets/arch_overview.svg" target="_blank" rel="noopener" aria-label="打开架构总图原图">
-        <img src="assets/arch_overview.svg" alt="SuperTranslate 架构总图：解析冻结、术语注入与多供应商翻译、原坐标回填、QA 审计，两种 PDF 交付" loading="lazy" onerror="window.__ph&&window.__ph(this)">
+        <img src="assets/arch_overview.svg" alt="SuperTranslate 架构总图：冻结不可译对象、术语库逐块注入下翻译正文、原坐标回填、QA 审计；未过检进入 Agentic 修复循环，只接受严格变好，通过后交付两种 PDF" loading="lazy" onerror="window.__ph&&window.__ph(this)">
       </a>
     </div>
     <div class="mech-notes">
-      <div class="mech-note"><b>保护区不交给模型：</b>公式、引用与 URL 先替换为可逆占位符，图形、表格、算法按规则冻结，译文只在原 bbox 内回填。</div>
-      <div class="mech-note gold"><b>只接受严格变好：</b>修复前快照、修复后全部检测器重跑，问题分未严格下降就原子回滚——每一轮都写入 *.qa.json。</div>
+      <div class="mech-note"><b>保护区不交给模型，术语随块注入：</b>公式、引用与 URL 先替换为可逆占位符，图形、表格、算法按规则冻结；1,066 条学术术语按当前文本块注入提示词，用户可继续扩展。</div>
+      <div class="mech-note gold"><b>未过检就进入 Agentic 修复循环：</b>QA 带缺陷清单打回该对象重译，全部检测器重跑；问题分未严格下降就原子回滚快照——每一轮都写入 *.qa.json。</div>
     </div>
     <div class="footer-line"><span>SuperTranslate · 实现机制</span><span>github.com/asimfish/super_translate</span></div>
   </section>
