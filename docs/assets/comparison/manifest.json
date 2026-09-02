@@ -39,12 +39,13 @@
       "pages_rendered": [1, 4],
       "has_pdf2zh": true,
       "has_raw_llm": false,
-      "crops": ["title(三方)", "refs(三方)", "known_table4(三方·已知缺陷)"],
+      "crops": ["title(三方)", "refs(三方)", "known_table4(原文/pdf2zh/修复前/修复后)"],
+      "fix_round": "2026-09-03：issue #2 四处引擎缺陷修复后 live 重跑（58 块翻译 / 151 块保护，inspect 0 issue）；ours_p1/p4、crop_title_ours、crop_refs_ours 已替换为修复后产物；known_table4_ours_before.png 保留首次实测的缺陷图，known_table4_ours_after.png 为修复后同框裁切。",
       "notes": "showcase_cc 第二篇。2026-09-02 本地快盘实测：SuperTranslate 单遍翻译（deepseek 后端 deepseek-v4-pro，--preserve-graphics-text），9 页 59 块翻译 / 148 块保护跳过，约 2 分钟；inspect 全篇 0 issue。pdf2zh v1.9.11（默认 Google 后端）同机 1 分 12 秒完成。观察 pdf2zh 缺陷：标题 Mistral 7B 音译为「米斯特拉尔7B」、作者栏丢粗体且人名从词中断行、参考文献标题被译成中文且整节合并成段、人名改写（Jianfeng Gao→Jianfeng Taka）、加粗导语与图注粗体丢失、脚注 4 未译、0-shot/5 次 术语不一致。SuperTranslate 已知缺陷（inspect 未捕获）：p5 表 4 无框线小表未被识别为表格，单元格按正文重排列对齐全乱；p5 系统提示框译文超出右边框；p3 首条 bullet 首行超出右栏且续行丢悬挂缩进；p1 标题字体族由衬线变为 CJK 链无衬线。整页 200dpi（trim 同框 p1 box 10,180-1443,2036；p4 box 260,181-1444,2123）；细节三联 240dpi 固定框（title x180-1860 y200-820；refs x180-1860 y190-900；known_table4 x180-1860 y1300-1900），顶部 48px 白边。",
       "evidence": {
-        "ours_pdf": "local:.local-work/showcase/mistral-mono.pdf（4.3MB，未入库）",
+        "ours_pdf": "local:.local-work/showcase_v2/mistral-mono.pdf（修复后 live 重跑；首次实测产物 local:.local-work/showcase/mistral-mono.pdf 保留作对照）",
         "original_pdf": "arXiv 2310.06825v1 官方 PDF（下载副本 local:.local-work/showcase/mistral.pdf）",
-        "qa_report": "local:.local-work/showcase/mistral.inspect.json（0 issues）",
+        "qa_report": "local:.local-work/showcase_v2/mistral.inspect.json（0 issues，含新增 table_cells_reflowed / text_outside_frame 检测器）",
         "pdf2zh_pdf": "local:.local-work/baseline/mistral-mono.pdf（v1.9.11 google 后端）"
       }
     },

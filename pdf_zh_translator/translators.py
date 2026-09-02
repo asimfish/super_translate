@@ -339,11 +339,15 @@ class CacheOnlyTranslator(Translator):
     On cache misses it writes the missing source blocks to
     ``<cache>.missing.jsonl`` and aborts, so the caller can fill the cache
     and re-run.
+
+    ``segment_source_styles`` must match how the cache was produced: a cache
+    exported for manual filling holds whole blocks (default), while a cache
+    written by a live supplier run stores bold run-in lead-ins and their
+    bodies as separate entries and can only be replayed with ``True``.
     """
 
-    supports_source_style_segments = False
-
-    def __init__(self, cache_file: Path) -> None:
+    def __init__(self, cache_file: Path, segment_source_styles: bool = False) -> None:
+        self.supports_source_style_segments = bool(segment_source_styles)
         self.cache_file = Path(cache_file)
         self.cache: Dict[str, str] = {}
         if self.cache_file.exists():
@@ -691,7 +695,10 @@ def build_translator_from_args(args: Any) -> Translator:
     if args.api_mode == "cache-only":
         if not args.cache_file:
             raise TranslationError("cache-only mode requires --cache-file.")
-        return CacheOnlyTranslator(Path(args.cache_file))
+        return CacheOnlyTranslator(
+            Path(args.cache_file),
+            segment_source_styles=bool(getattr(args, "cache_segments", False)),
+        )
 
     if args.api_mode == "deepseek":
         api_url = args.api_url or os.getenv("DEEPSEEK_API_URL") or "https://api.deepseek.com"

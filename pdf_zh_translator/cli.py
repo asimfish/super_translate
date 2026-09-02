@@ -172,6 +172,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Supplier protocol. 'cache-only' renders from cache.",
     )
     translate.add_argument(
+        "--cache-segments",
+        action="store_true",
+        help=(
+            "With --api-mode cache-only: replay a cache written by a live run, "
+            "which stores bold run-in lead-ins and bodies as separate entries."
+        ),
+    )
+    translate.add_argument(
         "--model",
         help="Model name. Defaults to deepseek-v4-pro.",
     )

@@ -147,11 +147,18 @@ A different kind of layout: this paper has almost no equations; the hard parts a
 <a href="docs/assets/comparison/mistral/crop_refs_pdf2zh.png"><img src="docs/assets/comparison/mistral/crop_refs_pdf2zh.png" alt="Mistral 7B references: pdf2zh translates titles and merges entries"></a>
 <a href="docs/assets/comparison/mistral/crop_refs_ours.png"><img src="docs/assets/comparison/mistral/crop_refs_ours.png" alt="Mistral 7B references: SuperTranslate keeps entries verbatim with indentation"></a>
 
-**Known defect — here pdf2zh does better than we do**: Table 4 on page 5 is a small borderless table with only two rules. Our table detector misses it, so the cells are re-flowed as running text and the columns collapse; on the same page the translated system prompt overflows the right edge of its box. **`inspect` flagged neither** — this is a QA blind spot, and "0 issues" is not the same as perfect. pdf2zh gets this spot right. Both problems are tracked in [#2](https://github.com/asimfish/super_translate/issues/2) (top: original / middle: pdf2zh / bottom: SuperTranslate):
+**The spot we lost — exposed by the first run, then fixed**: in the first run, Table 4 on page 5 (a small borderless table with only two rules) was re-flowed as running text with its columns collapsed, and the translated system prompt on the same page overflowed the right edge of its box, while **`inspect` flagged neither**; pdf2zh got this spot right. We published the losing image as-is, then fixed it ([#2](https://github.com/asimfish/super_translate/issues/2)):
+
+- table detection gained geometric evidence — ≥3 rows with equal cell counts, one edge per column aligned within 3pt, positive inter-column gaps and a measurement column — so two-column mini tables no longer depend on a wide gap;
+- refill widening and downward growth now treat vector frame rules as hard boundaries, and widening never runs more than 1.5em past the text column;
+- list continuation lines keep the source hanging indent; blocks whose translation equals the source (e.g. the title "Mistral 7B") keep their original glyphs;
+- QA gained two detectors: `table_cells_reflowed` (source rows carry several cells, translation collapses them) and `text_outside_frame` (translated text escapes its enclosing box) — they fire on the old output and stay silent on the new one;
+- 24 unit tests cover the fixes, the golden regression passes, and the live re-run reports 0 `inspect` issues. Below: original / pdf2zh / before / after:
 
 <a href="docs/assets/comparison/mistral/known_table4_original.png"><img src="docs/assets/comparison/mistral/known_table4_original.png" alt="Mistral 7B page 5 Table 4: original"></a>
 <a href="docs/assets/comparison/mistral/known_table4_pdf2zh.png"><img src="docs/assets/comparison/mistral/known_table4_pdf2zh.png" alt="Mistral 7B page 5 Table 4: pdf2zh keeps the table structure"></a>
-<a href="docs/assets/comparison/mistral/known_table4_ours.png"><img src="docs/assets/comparison/mistral/known_table4_ours.png" alt="Mistral 7B page 5 Table 4: SuperTranslate re-flows the table and overflows the box (known defect)"></a>
+<a href="docs/assets/comparison/mistral/known_table4_ours_before.png"><img src="docs/assets/comparison/mistral/known_table4_ours_before.png" alt="Mistral 7B page 5 Table 4: before the fix, SuperTranslate re-flowed the table and overflowed the box"></a>
+<a href="docs/assets/comparison/mistral/known_table4_ours_after.png"><img src="docs/assets/comparison/mistral/known_table4_ours_after.png" alt="Mistral 7B page 5 Table 4: after the fix, table and box are intact"></a>
 
 ### Qwen-RobotWorld Technical Report (25 pages, CC BY 4.0)
 

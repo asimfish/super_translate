@@ -134,3 +134,30 @@
 - 未选用 p3 列表区作为优势细节：我们的粗体与术语一致性确实更好，但同一裁剪框内会露出上面第 3 条缺陷，作为「优势」展示不诚实；缺陷本身已在文字中记录。
 
 体积：comparison/ 由 18MB 增至约 24MB。
+
+## 2026-09-03 issue #2 修复轮：四处引擎缺陷 + 两个 QA 检测器
+
+**根因（插桩 `prepare_translation_units` 逐块打印后确认）**
+1. 表 4：PDF 原始提取为两个块——表头块（1 行 2 格）与表体块（3 行 × 2 格）。`record_is_table` 要求 ≥2 行有「宽间隙」（阈值 max(8, 1.6×行高)≈15pt），表体三行间隙为 21.3 / 12.0 / 13.9pt，只有一行过线；单行判据又要求 ≥3 格。于是两块都判为正文，随后 `merge_paragraph_blocks` 合并成 8 行段落。但几何证据其实很强：右列三行 x0 完全一致（454.6），左列居中对齐（中心 400.2±0.1），右列全是数值。
+2. 提示框：`_expand_single_line_body_bbox` 的 `compact_two_line_body` 分支（两行、宽 ≥ 页宽 55%）把右边界借到 `page_width − margin` = 611.2，只用同行右侧的**文本块**做边界，不看矢量框线；两行译文放不进一行时仍然把块加宽，于是首行流到页边。
+3. 列表续行：渲染器所有行都对齐到 `rect.x0`，没有悬挂缩进概念；同一块还被 (2) 加宽过。
+4. 标题：译文与原文完全相同（"Mistral 7B"）的块仍被擦除并用 CJK 字体链重排。
+
+**修复（`pdf_zh_translator/pdf_layout.py`）**
+- 新增 `_record_has_aligned_value_column_rows`：≥3 行、每行格数一致（≤4）、每列 x0/x1/中心任一边跨行极差 ≤3pt、列间每行正间隙 ≥4pt、存在「测量值列」（小数/%/±/千分位/单位，排除纯小整数与公式编号，避免误伤目录页码与编号公式）、无整句行。接入 `record_is_table`。表头提升放宽：表体是单个 ≥3 行表块时视同两个单元格邻居。
+- 新增 `_page_frame_rule_bboxes`（item 级提取细线与描边矩形四边，去重闭合路径的重复边）与 `_frame_right_limit`；`_expand_single_line_body_bbox` 加宽止于最近的右侧竖线、不越过所在文本列右缘 1.5em，两行块放不进一行时保持源 bbox；横线作为 `_expand_multiline_block_bbox` 与 `_cascade_expand_page_items` 的障碍（穿过候选块自身行区的细线视为下划线而非框线，不计入）。
+- 新增 `_list_hanging_indent`：项目符号/编号开头且源第二行 x0 比首行大 3pt～max(24, 3em) 的块，`break_lines` 首行全宽、续行减去缩进，续行渲染 rect 右移；`translated_text_fits` 同步。
+- 新增 `_translation_repeats_source`：译文去空白后与原文相同且不含 CJK 的块不进入 page_items（不擦除、不重排），warning 汇总计数。
+- `CacheOnlyTranslator(segment_source_styles=)` + CLI `--cache-segments`：live 缓存把粗体导语与正文分开存，旧 cache-only 模式按整块查键必然 miss；现在可零成本回放。golden 夹具缓存仍按整块存，默认行为不变。
+
+**QA（`pdf_zh_translator/page_inspector.py`）**
+- `table_cells_reflowed`：源页 ≥2 条对齐横线（≥60pt，不再要求 ≥40% 页宽）围成的带内，比较源/译文的「行 × 格」结构：格数上限下降、多格行数减少 ≥2、译文出现 ≥85% 带宽的整行、或第二列 x0 跨行极差由 ≤3pt 变为 >8pt（两端对齐散文的假单元格不会跨行对齐）→ error。位于保护区内的表交给 `preserved_ink_mismatch`。
+- `text_outside_frame`：源页成对竖边（≥40pt 宽、纵向重叠 ≥80%、内有文字、不在图区）构成的框，译文行中心在框内而 x1/x0/y1 越出 >1.5pt → error，报越出量与文本片段。
+- 验证：旧 p5 产物报 `text_outside_frame`（越右 107.7pt）与 `preserved_ink_mismatch`（表 4 现被识别为保护区）；以空排除集直接调用时 `table_cells_reflowed` 亦触发；修复后产物两项均安静。
+- golden 门禁抓到一次误报（`hdflow_p5_formula_explanations.pdf`）：一张图的坐标框（x=291–715，超出页宽）被当成文本框，其下方正文行的字形盒越过框底 2pt。修正：框必须在页面内、内部不能有 ≥2 个非细线图形（曲线/填充/图像），且越出量以**源页文字与同一框的贴合程度为基准**——只计译文比源文多越出的部分（字形盒本就会伸出下划线一个下伸部）。修正后该页安静、Mistral 旧产物仍报 107.7pt。两个新 code 有意**不**加入 `INSPECTOR_ISSUE_CODES` 排除集，让 204 页 golden 门禁直接守着它们。
+
+**验证**
+- `tests/test_frames_tables_lists.py` 24 个单测（表格判据正/反例、框线提取与三条扩展路径、悬挂缩进、原文复现、分段缓存回放、两个检测器的合成 PDF 正/反例）。
+- 核心套件 926 通过（translators / page_inspector / pdf_layout_preserve / layout_fix / native_engine / pdf_layout_e2e / gutter / cli_layout）；golden 回归见下方结果行。
+- live 重跑 Mistral：58 块翻译 / 151 块保护（+3：表 4 三块；−1：标题保留原字形），inspect 0 issue；p1/p3/p5 目检四处均正常。
+- 调试回路：`.local-work/dev/dump_blocks.py`（逐块分类 + 页面矢量线）与 `trace_insert.py`（追踪 bbox 在各扩展步的变化），配合单页 PDF + `--cache-segments`，单次迭代 ~10s。

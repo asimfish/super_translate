@@ -147,11 +147,18 @@ DPO 第 4 页同时含**小节标题、加粗导语与公式 (4)–(7)**，最�
 <a href="docs/assets/comparison/mistral/crop_refs_pdf2zh.png"><img src="docs/assets/comparison/mistral/crop_refs_pdf2zh.png" alt="Mistral 7B 参考文献：pdf2zh 标题被译、条目合并"></a>
 <a href="docs/assets/comparison/mistral/crop_refs_ours.png"><img src="docs/assets/comparison/mistral/crop_refs_ours.png" alt="Mistral 7B 参考文献：SuperTranslate 条目原样、缩进保留"></a>
 
-**已知缺陷 · 这一处 pdf2zh 做得比我们好**——第 5 页表 4 是只有两条横线的无框线小表，我们的表格检测没认出来，单元格被当正文重排、列对齐全乱；同页系统提示框的译文超出了右边框。**inspect 对这两处都没有报警**——这是 QA 的盲区，「0 issue」不等于完美。pdf2zh 此处正确。两个问题已在 [#2](https://github.com/asimfish/super_translate/issues/2) 跟进（上原文 / 中 pdf2zh / 下 SuperTranslate）：
+**我们输过的一处 · 首次实测暴露，随即修复**——第一次实测时，第 5 页表 4（只有两条横线的无框线小表）被我们当成正文重排、列对齐全乱，同页系统提示框的译文超出了右边框，而 **inspect 对两处都没报警**；pdf2zh 此处是对的。我们把输掉的图原样发了出来，然后修（[#2](https://github.com/asimfish/super_translate/issues/2)）：
+
+- 表格判据新增几何证据：≥3 行、每行格数一致、每列有一条边严格对齐（≤3pt）、列间正间隙、存在数值列——两列小表不再依赖「宽间隙」；
+- 回填时的加宽与下扩以矢量框线为硬边界，且加宽不再越过所在文本列右缘 1.5em；
+- 列表项续行恢复源文件的悬挂缩进；译文与原文完全相同的块（如标题「Mistral 7B」）保留原始字形；
+- QA 补上两只眼睛：`table_cells_reflowed`（源行有多格、译文塌成散文）与 `text_outside_frame`（译文越出包围框）——在旧产物上报警、在新产物上安静；
+- 修复带 24 个单测，golden 回归通过；live 重跑 inspect 0 issue。下图依次为原文 / pdf2zh / 修复前 / 修复后：
 
 <a href="docs/assets/comparison/mistral/known_table4_original.png"><img src="docs/assets/comparison/mistral/known_table4_original.png" alt="Mistral 7B 第 5 页表 4：原文"></a>
 <a href="docs/assets/comparison/mistral/known_table4_pdf2zh.png"><img src="docs/assets/comparison/mistral/known_table4_pdf2zh.png" alt="Mistral 7B 第 5 页表 4：pdf2zh 保留表格结构"></a>
-<a href="docs/assets/comparison/mistral/known_table4_ours.png"><img src="docs/assets/comparison/mistral/known_table4_ours.png" alt="Mistral 7B 第 5 页表 4：SuperTranslate 表格被重排、提示框溢出（已知缺陷）"></a>
+<a href="docs/assets/comparison/mistral/known_table4_ours_before.png"><img src="docs/assets/comparison/mistral/known_table4_ours_before.png" alt="Mistral 7B 第 5 页表 4：修复前 SuperTranslate 表格被重排、提示框溢出"></a>
+<a href="docs/assets/comparison/mistral/known_table4_ours_after.png"><img src="docs/assets/comparison/mistral/known_table4_ours_after.png" alt="Mistral 7B 第 5 页表 4：修复后表格与提示框均原样"></a>
 
 ### Qwen-RobotWorld Technical Report（25 页 · CC BY 4.0）
 

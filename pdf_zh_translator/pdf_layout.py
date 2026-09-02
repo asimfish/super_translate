@@ -1058,18 +1058,30 @@ def translate_pdf(
         )
 
     by_page: Dict[int, List[Tuple[TextBlock, str]]] = {}
+    kept_verbatim = 0
     for (block, _, _), (translated_text, missing) in zip(units, cleaned_results):
         if missing:
             warnings.append(
                 "Page %d: translator dropped %d placeholder(s); fragments appended at block end"
                 % (block.page_index + 1, len(missing))
             )
+        if _translation_repeats_source(block, translated_text):
+            # A name, a code token or a bare label came back unchanged. The
+            # source glyphs are the best possible rendering of that text:
+            # leave them alone instead of re-setting them from the CJK chain.
+            kept_verbatim += 1
+            continue
         if _translated_block_still_english(block, translated_text):
             warnings.append(
                 "Page %d: translated %s block still looks like English after retry"
                 % (block.page_index + 1, block.block_type)
             )
         by_page.setdefault(block.page_index, []).append((block, translated_text))
+    if kept_verbatim:
+        warnings.append(
+            "Kept %d block(s) in their source typesetting: translation repeated the source"
+            % kept_verbatim
+        )
 
     for page_index in range(document.page_count):
         candidate_items = _combine_formula_continuation_translation_items(
@@ -1091,6 +1103,22 @@ def translate_pdf(
         # Float obstacles (figures/tables/captions) that reflowed CJK must avoid.
         page_floats = list(_visual_regions_for_page(page))
         page_floats.extend(preserved_regions.get(page_index, []))
+        # Hairline frames (boxed prompts, framed notes): translated prose may
+        # neither widen across their vertical rules nor grow across the
+        # horizontal ones. Rules running through a candidate's own rows are
+        # underlines, not frames.
+        frame_horizontal, frame_vertical = _page_frame_rule_bboxes(page)
+        candidate_bboxes = [candidate.bbox for candidate, _ in candidate_items]
+        frame_horizontal = [
+            rule
+            for rule in frame_horizontal
+            if not any(
+                bbox[1] + 1.0 < rule[1] < bbox[3] - 1.0
+                and min(bbox[2], rule[2]) - max(bbox[0], rule[0]) > 0.0
+                for bbox in candidate_bboxes
+            )
+        ]
+        page_frame_rules = (frame_horizontal, frame_vertical)
         relax_caption_boxes(page, candidate_items, obstacles=page_floats)
         page_floats.extend(
             block.bbox
@@ -1183,6 +1211,8 @@ def translate_pdf(
                 margin,
                 page_width,
                 obstacles=equation_rows.get(page_index, ()),
+                frame_rules=page_frame_rules,
+                page_columns=page_columns,
             )
             block = _expand_multiline_block_bbox(
                 block,
@@ -1195,6 +1225,7 @@ def translate_pdf(
                 obstacles=[
                     *page_floats,
                     *equation_rows.get(page_index, ()),
+                    *page_frame_rules[0],
                 ],
             )
             block = _expand_caption_bbox_upward(
@@ -1332,6 +1363,7 @@ def translate_pdf(
                 *page_floats,
                 *preserved_regions.get(page_index, []),
                 *equation_rows.get(page_index, []),
+                *page_frame_rules[0],
             ],
             float_obstacles=page_floats,
         )
@@ -7197,6 +7229,96 @@ def _visual_regions_for_page(
     if not regions:
         return []
     return merge_nearby_bboxes(regions, 2.0)
+
+
+_FRAME_RULE_MAX_THICKNESS = 2.5
+_FRAME_RULE_MIN_LENGTH = 12.0
+
+
+def _page_frame_rule_bboxes(page: object) -> Tuple[List[BBox], List[BBox]]:
+    """Thin stroked rules on a page, split into (horizontal, vertical) bboxes.
+
+    Boxed prompts, framed notes and booktabs rows are drawn as hairline rules
+    or stroked rectangles; the text they enclose must not be widened or grown
+    across them. Stroked rectangles contribute their four edges so a framed
+    block sees the frame whether it was drawn as one path or four segments.
+    """
+    horizontal: List[BBox] = []
+    vertical: List[BBox] = []
+
+    def add_segment(x0: float, y0: float, x1: float, y1: float) -> None:
+        width, height = abs(x1 - x0), abs(y1 - y0)
+        if height <= _FRAME_RULE_MAX_THICKNESS and width >= _FRAME_RULE_MIN_LENGTH:
+            horizontal.append((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)))
+        elif width <= _FRAME_RULE_MAX_THICKNESS and height >= _FRAME_RULE_MIN_LENGTH:
+            vertical.append((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)))
+
+    for drawing in _page_drawings(page):
+        dashes = drawing.get("dashes")
+        if dashes and dashes not in ("", "[] 0"):
+            continue
+        for item in drawing.get("items", ()):
+            if not item:
+                continue
+            kind = item[0]
+            if kind == "l":
+                p1, p2 = item[1], item[2]
+                add_segment(float(p1.x), float(p1.y), float(p2.x), float(p2.y))
+            elif kind == "re":
+                rect = item[1]
+                x0, y0, x1, y1 = (
+                    float(rect.x0),
+                    float(rect.y0),
+                    float(rect.x1),
+                    float(rect.y1),
+                )
+                width, height = x1 - x0, y1 - y0
+                if height <= _FRAME_RULE_MAX_THICKNESS or width <= _FRAME_RULE_MAX_THICKNESS:
+                    add_segment(x0, y0, x1, y1)
+                    continue
+                if drawing.get("fill") is not None or drawing.get("color") is None:
+                    continue
+                if width < _FRAME_RULE_MIN_LENGTH or height < _FRAME_RULE_MIN_LENGTH:
+                    continue
+                horizontal.append((x0, y0, x1, y0))
+                horizontal.append((x0, y1, x1, y1))
+                vertical.append((x0, y0, x0, y1))
+                vertical.append((x1, y0, x1, y1))
+
+    def unique(rules: List[BBox]) -> List[BBox]:
+        # A closed path retraces its last edge; identical segments count once.
+        seen: Dict[Tuple[float, float, float, float], BBox] = {}
+        for rule in rules:
+            key = tuple(round(value, 1) for value in rule)
+            seen.setdefault(key, rule)
+        return list(seen.values())
+
+    return unique(horizontal), unique(vertical)
+
+
+def _frame_right_limit(
+    bbox: BBox,
+    vertical_rules: Sequence[BBox],
+    *,
+    inset: float,
+) -> Optional[float]:
+    """Nearest vertical rule to the right of a block that spans its rows.
+
+    Distance does not matter: a short line inside a wide box is still bounded
+    by the box, and a figure frame further right must not be painted over.
+    """
+    x0, y0, x1, y1 = bbox
+    height = max(1.0, y1 - y0)
+    limits = []
+    for rule in vertical_rules:
+        rule_x = (rule[0] + rule[2]) / 2.0
+        if rule_x < x1 - 1.0:
+            continue
+        overlap = min(y1, rule[3]) - max(y0, rule[1])
+        if overlap < height * 0.5:
+            continue
+        limits.append(rule_x - inset)
+    return min(limits) if limits else None
 
 
 def _clip_block_bbox_against_floats(
@@ -13106,7 +13228,10 @@ def _promote_table_component_blocks(blocks: Sequence[TextBlock]) -> None:
             and cell.bbox[0] < block.bbox[2] + _TABLE_COMPONENT_HORIZONTAL_PAD
             and cell.bbox[2] > block.bbox[0] - _TABLE_COMPONENT_HORIZONTAL_PAD
         ]
-        if len(nearby_cells) < 2:
+        # A compact table body is often one protected block holding every
+        # row; that single multi-row neighbour is as good as two cells.
+        multi_row_body = any(cell.source_lines >= 3 for cell in nearby_cells)
+        if len(nearby_cells) < 2 and not multi_row_body:
             continue
         nearby_union = union_bbox([cell.bbox for cell in nearby_cells])
         overlap = min(block.bbox[2], nearby_union[2]) - max(
@@ -15487,6 +15612,90 @@ def _record_has_dense_aligned_column_rows(record: _RawBlockRec) -> bool:
     return aligned >= 4 and aligned / len(candidates) >= 0.7
 
 
+_MEASUREMENT_CELL_RE = re.compile(
+    r"^[\s(\[]*[-−+±]?\d[\d,]*(?:\.\d+)?\s*(?:%|×|x|k|K|M|B|ms|s|pt|px|GB|MB|dB)?"
+    r"(?:\s*(?:±|\+/-|\+-)\s*\d[\d,]*(?:\.\d+)?\s*%?)?[\s)\]]*$"
+)
+_EQUATION_NUMBER_CELL_RE = re.compile(r"^\(\s*[A-Za-z]?\d{1,3}[a-z]?\s*\)$")
+
+
+def _cell_is_measurement(text: str) -> bool:
+    """A numeric result cell: a decimal, percentage, ± interval or unit value.
+
+    Bare small integers are excluded on purpose: table-of-contents page numbers
+    and list markers also line up in a column but are not table values.
+    """
+    compact = " ".join(text.split())
+    if not _MEASUREMENT_CELL_RE.match(compact):
+        return False
+    if _EQUATION_NUMBER_CELL_RE.match(compact):
+        return False
+    return bool(
+        re.search(
+            r"\.\d|%|±|\+/-|\d,\d{3}|\d\s*(?:×|x)\s*$|\d\s*(?:ms|s|pt|px|GB|MB|dB|[kKMB])$",
+            compact,
+        )
+    )
+
+
+def _record_has_aligned_value_column_rows(record: _RawBlockRec) -> bool:
+    """Recognize compact booktabs result tables from exact column alignment.
+
+    Small tables such as ``No system prompt | 6.84 ± 0.07`` fail the gap-based
+    row test (their inter-column gap is barely wider than a word space) and are
+    too short for the dense two-column detector. Typesetting still gives them
+    away: every row has the same number of cells, each column keeps one edge
+    (left, right or centre) stable within 3pt across all rows, columns are
+    separated by a positive gap in every row, one column holds measurements and
+    no line is a full sentence.
+    """
+    rows = [
+        sorted(row, key=lambda line: line.bbox[0])
+        for row in group_same_y_lines(record.lines)
+    ]
+    rows = [row for row in rows if len(row) >= 2]
+    if len(rows) < 3:
+        return False
+    cell_count = len(rows[0])
+    if cell_count > 4 or any(len(row) != cell_count for row in rows):
+        return False
+    if _record_prose_line_count(record) > 0:
+        return False
+    texts = [
+        [" ".join(strip_sentinels(line.text).split()) for line in row] for row in rows
+    ]
+    if any(not text or len(text) > 42 for row in texts for text in row):
+        return False
+    if any(
+        re.search(r"[.!?。！？]\s*$", text) and not _cell_is_measurement(text)
+        for row in texts
+        for text in row
+    ):
+        return False
+    for column in range(cell_count):
+        cells = [row[column] for row in rows]
+        edges = (
+            [cell.bbox[0] for cell in cells],
+            [cell.bbox[2] for cell in cells],
+            [(cell.bbox[0] + cell.bbox[2]) / 2.0 for cell in cells],
+        )
+        if not any(max(edge) - min(edge) <= 3.0 for edge in edges):
+            return False
+        if column:
+            gaps = [
+                row[column].bbox[0] - row[column - 1].bbox[2] for row in rows
+            ]
+            if min(gaps) < 4.0:
+                return False
+    measurement_columns = sum(
+        1
+        for column in range(cell_count)
+        if sum(_cell_is_measurement(row[column]) for row in texts)
+        >= max(2, (2 * len(rows) + 2) // 3)
+    )
+    return measurement_columns >= 1
+
+
 def record_is_table(record: _RawBlockRec) -> bool:
     """Table blocks expose cells as separate physical lines sharing a y-band.
 
@@ -15502,6 +15711,8 @@ def record_is_table(record: _RawBlockRec) -> bool:
     if len(lines) < 3:
         return False
     if _record_has_dense_aligned_column_rows(record):
+        return True
+    if _record_has_aligned_value_column_rows(record):
         return True
     prose_lines = _record_prose_line_count(record)
     if prose_lines >= 3 or prose_lines / len(lines) >= 0.5:
@@ -19542,6 +19753,19 @@ def strip_sentinels(text: str) -> str:
     return text.replace(SENTINEL_OPEN, "").replace(SENTINEL_CLOSE, "")
 
 
+def _translation_repeats_source(block: TextBlock, translated_text: str) -> bool:
+    """Whether the translator handed the source back verbatim.
+
+    Whitespace is ignored so a wrapped source and a single-line answer still
+    compare equal; any CJK character means the text was actually translated.
+    """
+    source = "".join(strip_sentinels(block.text).split())
+    target = "".join(strip_sentinels(translated_text).split())
+    if not source or source != target:
+        return False
+    return not any(is_cjk_char(char) for char in target)
+
+
 def protect_text(text: str) -> Tuple[str, Dict[int, str]]:
     """Replace math/citation/URL fragments with ⟦n⟧ placeholders.
 
@@ -23440,8 +23664,15 @@ def _expand_single_line_body_bbox(
     page_width: float,
     *,
     obstacles: Sequence[BBox] = (),
+    frame_rules: Tuple[Sequence[BBox], Sequence[BBox]] = ((), ()),
+    page_columns: Sequence[Tuple[float, float]] = (),
 ) -> TextBlock:
-    """Give short prose and inline-style runs enough room to keep body size."""
+    """Give short prose and inline-style runs enough room to keep body size.
+
+    Widening stops at the nearest vertical frame rule and never runs more than
+    1.5em past the right edge of the text column the block sits in; a boxed
+    prompt or a framed note must keep its translation inside the frame.
+    """
     inline_style_flow = block.flow_inline_math and block.source_lines <= 2
     compact_two_line_body = bool(
         block.source_lines == 2
@@ -23489,6 +23720,28 @@ def _expand_single_line_body_bbox(
         if vertical_overlap <= 0.0 or other.bbox[0] < x1 - 0.5:
             continue
         row_right = min(row_right, other.bbox[0] - 0.8)
+    horizontal_rules, vertical_rules = frame_rules
+    frame_right = _frame_right_limit(
+        block.bbox,
+        vertical_rules,
+        inset=max(1.5, margin + 1.0),
+    )
+    if frame_right is not None:
+        row_right = min(row_right, max(x1, frame_right))
+    containing_columns = [
+        column
+        for column in page_columns
+        if column[0] - 4.0 <= x0 <= column[0] + column[1] + 4.0
+    ]
+    if containing_columns:
+        column_left, column_width = min(
+            containing_columns,
+            key=lambda column: abs(x0 - column[0]),
+        )
+        row_right = min(
+            row_right,
+            max(x1, column_left + column_width + font_size * 1.5),
+        )
     if inline_style_flow:
         same_column_rights = [
             other.bbox[2]
@@ -23531,17 +23784,21 @@ def _expand_single_line_body_bbox(
         if embedded_in_equation_row
         else min(row_right, max(x1, x0 + desired_width))
     )
-    if (
-        compact_two_line_body
-        and desired_width <= row_right - x0 + 0.1
-        and desired_height <= y1 - y0 + 0.1
-    ):
-        # Some TeX notes occupy two physical source rows only because a
-        # formula starts immediately below them. Their shorter Chinese text
-        # fits one row at body size when the unused right margin is borrowed.
-        # Keep the existing vertical box so the adjacent formula remains a
-        # hard boundary; only widen the prose line.
-        return replace(block, bbox=(x0, y0, new_x1, y1))
+    if compact_two_line_body:
+        if (
+            desired_width <= row_right - x0 + 0.1
+            and desired_height <= y1 - y0 + 0.1
+        ):
+            # Some TeX notes occupy two physical source rows only because a
+            # formula starts immediately below them. Their shorter Chinese
+            # text fits one row at body size when the unused right margin is
+            # borrowed. Keep the existing vertical box so the adjacent formula
+            # remains a hard boundary; only widen the prose line.
+            return replace(block, bbox=(x0, y0, new_x1, y1))
+        # Still two lines after widening: keep the source box. Widening a
+        # wrapped paragraph only pushes its first line past the frame or into
+        # the margin without saving a line.
+        return block
 
     top_limit = 0.0
     bottom_limit = float("inf")
@@ -23555,6 +23812,14 @@ def _expand_single_line_body_bbox(
             top_limit = max(top_limit, other.bbox[3] + 0.4)
         elif other.bbox[1] >= center_y:
             bottom_limit = min(bottom_limit, other.bbox[1] - 0.4)
+    for rule in horizontal_rules:
+        horizontal_overlap = min(new_x1, rule[2]) - max(x0, rule[0])
+        if horizontal_overlap <= 0.0:
+            continue
+        if rule[3] <= center_y:
+            top_limit = max(top_limit, rule[3] + 0.8)
+        elif rule[1] >= center_y:
+            bottom_limit = min(bottom_limit, rule[1] - 0.8)
     for keepout in _unresolved_formula_keepouts(block):
         horizontal_overlap = min(new_x1, keepout[2]) - max(x0, keepout[0])
         if horizontal_overlap <= 0.0:
@@ -25317,13 +25582,15 @@ def translated_text_fits(
                     return True
             size -= _FONT_SIZE_SEARCH_STEP
             continue
+        hanging_indent = 0.0 if centered else _list_hanging_indent(block, rect.width)
         lines = break_lines(
             tokens,
             fonts,
             size,
-            rect.width,
+            rect.width - hanging_indent,
             prefer_space_break=centered and block.block_type != "caption",
             bold_fonts=bold_fonts,
+            line_widths=[rect.width] if hanging_indent else None,
         )
         if block.block_type == "title":
             lines = balance_centered_title_lines(lines, rect.width)
@@ -25496,6 +25763,7 @@ def insert_translated_text(
             )
         return True
 
+    hanging_indent = 0.0 if centered else _list_hanging_indent(block, rect.width)
     chosen: Optional[Tuple[float, float, List[List[_Token]]]] = None
     size = font_size
     while size >= min_size - 1e-6:
@@ -25503,9 +25771,10 @@ def insert_translated_text(
             tokens,
             fonts,
             size,
-            rect.width,
+            rect.width - hanging_indent,
             prefer_space_break=centered and block.block_type != "caption",
             bold_fonts=bold_fonts,
+            line_widths=[rect.width] if hanging_indent else None,
         )
         for leading in leading_options(block):
             height = line_block_height(
@@ -25538,6 +25807,8 @@ def insert_translated_text(
 
     fitted = chosen is not None
     if chosen is None:
+        # The compressed fallback packs the full rect width on every line.
+        hanging_indent = 0.0
         chosen = choose_compressed_layout(
             tokens,
             fonts,
@@ -25576,13 +25847,18 @@ def insert_translated_text(
         fonts,
         bold_fonts,
     )
+    continuation_rect = (
+        fitz.Rect(rect.x0 + hanging_indent, rect.y0, rect.x1, rect.y1)
+        if hanging_indent
+        else rect
+    )
     for index, (line, baseline) in enumerate(zip(lines, baselines)):
         is_last = index == len(lines) - 1
         justify = not centered and not is_last
         render_line(
             page,
             line,
-            rect,
+            rect if index == 0 else continuation_rect,
             fonts,
             size,
             block.color,
@@ -25593,6 +25869,44 @@ def insert_translated_text(
             source_document,
         )
     return fitted
+
+
+_LIST_MARKER_LEAD_RE = re.compile(
+    r"^(?:[•◦▪●▫■□‣⁃–—-]|\(?(?:\d{1,3}|[a-zA-Z]|[ivxIVX]{1,4})[.)\]]|\[\d{1,3}\])\s+"
+)
+
+
+def _list_hanging_indent(block: TextBlock, rect_width: float) -> float:
+    """Continuation indent a list item carried in the source PDF.
+
+    A bulleted or numbered item wraps its second and later lines under the
+    item text, not under the marker. The source line boxes expose that offset
+    directly; reuse it so the translated item keeps the same hanging shape
+    instead of returning to the marker column.
+    """
+    if block.nowrap or block.block_type not in {"body", "list", "formula_prose"}:
+        return 0.0
+    plain = " ".join(strip_sentinels(block.text).split()).lstrip()
+    if not _LIST_MARKER_LEAD_RE.match(plain):
+        return 0.0
+    line_boxes = [
+        box
+        for box in (block.source_line_bboxes or ())
+        if box[2] - box[0] > 0.0
+    ]
+    if len(line_boxes) < 2:
+        return 0.0
+    rows = sorted(line_boxes, key=lambda box: (box[1], box[0]))
+    first_left = rows[0][0]
+    continuation_lefts = [box[0] for box in rows[1:] if box[1] >= rows[0][3] - 1.0]
+    if not continuation_lefts:
+        return 0.0
+    indent = statistics.median(continuation_lefts) - first_left
+    if indent < 3.0 or indent > max(24.0, block.font_size * 3.0):
+        return 0.0
+    if indent > rect_width * 0.4:
+        return 0.0
+    return float(indent)
 
 
 def line_block_height(

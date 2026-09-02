@@ -1382,6 +1382,386 @@ def _table_structure_issues(
     return issues
 
 
+def _band_cell_rows(page: object, band: BBox) -> List[List[BBox]]:
+    """Text rows inside a rule band, each row split into cells by x gaps."""
+    x0, y0, x1, y1 = band
+    lines: List[Tuple[BBox, float]] = []
+    try:
+        raw = page.get_text("dict")
+    except Exception:
+        return []
+    for block in raw.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            bbox = tuple(float(value) for value in line.get("bbox", (0, 0, 0, 0)))
+            text = "".join(span.get("text", "") for span in line.get("spans", []))
+            if not text.strip():
+                continue
+            center_x = (bbox[0] + bbox[2]) / 2.0
+            center_y = (bbox[1] + bbox[3]) / 2.0
+            if not (x0 <= center_x <= x1 and y0 <= center_y <= y1):
+                continue
+            size = max(
+                (float(span.get("size", 0.0)) for span in line.get("spans", [])),
+                default=0.0,
+            )
+            lines.append((bbox, size))
+    rows: List[List[Tuple[BBox, float]]] = []
+    for line in sorted(lines, key=lambda item: ((item[0][1] + item[0][3]) / 2.0, item[0][0])):
+        bbox = line[0]
+        for row in rows:
+            other = row[0][0]
+            overlap = min(bbox[3], other[3]) - max(bbox[1], other[1])
+            if overlap >= 0.5 * min(bbox[3] - bbox[1], other[3] - other[1]):
+                row.append(line)
+                break
+        else:
+            rows.append([line])
+    cell_rows: List[List[BBox]] = []
+    for row in rows:
+        cells: List[BBox] = []
+        for bbox, size in sorted(row, key=lambda item: item[0][0]):
+            gap_limit = max(3.0, 0.5 * size)
+            if cells and bbox[0] - cells[-1][2] <= gap_limit:
+                previous = cells[-1]
+                cells[-1] = (
+                    previous[0],
+                    min(previous[1], bbox[1]),
+                    max(previous[2], bbox[2]),
+                    max(previous[3], bbox[3]),
+                )
+            else:
+                cells.append(bbox)
+        cell_rows.append(cells)
+    return cell_rows
+
+
+def _second_column_spread(rows: Sequence[Sequence[BBox]]) -> Optional[float]:
+    """Spread of the second cell's left edge across multi-cell rows."""
+    lefts = [row[1][0] for row in rows if len(row) >= 2]
+    if len(lefts) < 2:
+        return None
+    return max(lefts) - min(lefts)
+
+
+def _compact_table_bands(
+    rules: Sequence[Tuple[float, float, float]],
+    verticals: Sequence[Tuple[float, float, float]],
+    excluded_regions: Sequence[BBox],
+) -> List[BBox]:
+    """Booktabs-style rule stacks, including narrow side tables.
+
+    Two or more aligned rules at least 60pt wide and 12pt apart bound a table
+    body; frames with two vertical edges are boxes, not tables, and rules
+    inside figures belong to charts.
+    """
+    clusters: List[List[Tuple[float, float, float]]] = []
+    for rule in sorted(rules):
+        if rule[2] - rule[1] < 60.0:
+            continue
+        if (
+            clusters
+            and rule[0] - clusters[-1][-1][0] <= 70.0
+            and abs(rule[1] - clusters[-1][-1][1]) <= 6.0
+            and abs(rule[2] - clusters[-1][-1][2]) <= 6.0
+        ):
+            clusters[-1].append(rule)
+        else:
+            clusters.append([rule])
+    bands: List[BBox] = []
+    for cluster in clusters:
+        if len(cluster) < 2:
+            continue
+        top, bottom = cluster[0][0], cluster[-1][0]
+        if bottom - top < 12.0:
+            continue
+        left = min(rule[1] for rule in cluster)
+        right = max(rule[2] for rule in cluster)
+        if any(_rule_inside_regions(rule, excluded_regions) for rule in cluster):
+            continue
+        frame_edges = sum(
+            1
+            for x, y0, y1 in verticals
+            if left - 4.0 <= x <= right + 4.0
+            and min(bottom, y1) - max(top, y0) >= (bottom - top) * 0.55
+        )
+        if frame_edges >= 2:
+            continue
+        bands.append((left, top, right, bottom))
+    return bands
+
+
+def _table_cell_layout_issues(
+    page_number: int,
+    original_page: object,
+    translated_page: object,
+    original_rules: Sequence[Tuple[float, float, float]],
+    *,
+    excluded_regions: Sequence[BBox] = (),
+) -> List[object]:
+    """Detect table cells that the translation re-flowed into prose lines.
+
+    Rule geometry survives when a small borderless table is mistaken for a
+    paragraph: the rules are vector art and stay put while the cell text is
+    re-set as running lines. Compare the text grid inside every rule band:
+    the source rows carry several cells each, a re-flowed translation carries
+    one wide line per row (or spills past the rules).
+    """
+    verticals = _page_vertical_lines(original_page)
+    issues: List[object] = []
+    for band in _compact_table_bands(original_rules, verticals, excluded_regions):
+        left, top, right, bottom = band
+        probe = (left - 4.0, top - 1.0, right + 4.0, bottom + 1.0)
+        source_rows = [row for row in _band_cell_rows(original_page, probe) if row]
+        if len(source_rows) < 2:
+            continue
+        source_max_cells = max(len(row) for row in source_rows)
+        source_multi = sum(1 for row in source_rows if len(row) >= 2)
+        if source_max_cells < 2 or source_multi < 2:
+            continue
+        translated_rows = [row for row in _band_cell_rows(translated_page, probe) if row]
+        if not translated_rows:
+            continue
+        translated_max_cells = max(len(row) for row in translated_rows)
+        translated_multi = sum(1 for row in translated_rows if len(row) >= 2)
+        band_width = max(1.0, right - left)
+        source_wide = any(
+            (cell[2] - cell[0]) >= 0.85 * band_width for row in source_rows for cell in row
+        )
+        translated_wide = any(
+            (cell[2] - cell[0]) >= 0.85 * band_width
+            for row in translated_rows
+            for cell in row
+        )
+        source_spill = max(
+            (max(cell[2] - right, left - cell[0]) for row in source_rows for cell in row),
+            default=0.0,
+        )
+        spill = max(
+            (
+                max(cell[2] - right, left - cell[0]) - max(0.0, source_spill)
+                for row in translated_rows
+                for cell in row
+            ),
+            default=0.0,
+        )
+        # Justified prose inside the band splits into pseudo-cells at its
+        # word gaps, but those never line up across rows the way a real
+        # second column does.
+        source_spread = _second_column_spread(source_rows)
+        translated_spread = _second_column_spread(translated_rows)
+        misaligned = (
+            source_spread is not None
+            and translated_spread is not None
+            and source_spread <= 3.0
+            and translated_spread > 8.0
+        )
+        collapsed = (
+            translated_max_cells < source_max_cells
+            or translated_multi < source_multi - 1
+            or (translated_wide and not source_wide)
+            or misaligned
+        )
+        if collapsed:
+            issues.append(
+                _issue(
+                    page_number,
+                    "table_cells_reflowed",
+                    (
+                        f"Page {page_number}: table at y={top:.0f}-{bottom:.0f} has "
+                        f"{source_multi} source rows with up to {source_max_cells} cells, "
+                        f"but the translation sets them as {translated_multi} multi-cell "
+                        f"rows (up to {translated_max_cells} cells): cells re-flowed as prose"
+                    ),
+                )
+            )
+        elif spill > 2.0:
+            issues.append(
+                _issue(
+                    page_number,
+                    "table_cells_reflowed",
+                    (
+                        f"Page {page_number}: table at y={top:.0f}-{bottom:.0f}: translated "
+                        f"cell text runs {spill:.1f}pt past the table rules"
+                    ),
+                )
+            )
+        if len(issues) >= 3:
+            break
+    return issues
+
+
+def _text_frames(
+    page: object,
+    excluded_regions: Sequence[BBox],
+) -> List[BBox]:
+    """Boxes drawn around source text: paired vertical edges with text inside."""
+    verticals = _page_vertical_lines(page)
+    page_width = float(page.rect.width)
+    page_height = float(page.rect.height)
+    frames: List[BBox] = []
+    for index, (ax, ay0, ay1) in enumerate(verticals):
+        for bx, by0, by1 in verticals[index + 1 :]:
+            width = abs(bx - ax)
+            if width < 40.0 or width > page_width * 0.95:
+                continue
+            overlap = min(ay1, by1) - max(ay0, by0)
+            height = min(ay1 - ay0, by1 - by0)
+            if height <= 0 or overlap < 0.8 * height:
+                continue
+            frame = (min(ax, bx), max(ay0, by0), max(ax, bx), min(ay1, by1))
+            if frame[3] - frame[1] > page_height * 0.6:
+                continue
+            # A text box lies on the page; plot frames and clip boxes of
+            # figures routinely run off it.
+            if frame[0] < -2.0 or frame[2] > page_width + 2.0:
+                continue
+            frames.append(frame)
+    if not frames:
+        return []
+    inner_art = _inner_graphic_bboxes(page)
+    kept: List[BBox] = []
+    for frame in frames:
+        center = ((frame[0] + frame[2]) / 2.0, (frame[1] + frame[3]) / 2.0)
+        if any(
+            region[0] <= center[0] <= region[2] and region[1] <= center[1] <= region[3]
+            for region in excluded_regions
+        ):
+            continue
+        if any(
+            abs(frame[0] - other[0]) <= 2.0
+            and abs(frame[2] - other[2]) <= 2.0
+            and abs(frame[1] - other[1]) <= 2.0
+            and abs(frame[3] - other[3]) <= 2.0
+            for other in kept
+        ):
+            continue
+        # Chart frames are full of curves, bars and images; a text box holds
+        # nothing but its own edges.
+        art_inside = sum(
+            1
+            for art in inner_art
+            if art[0] >= frame[0] - 1.0
+            and art[2] <= frame[2] + 1.0
+            and art[1] >= frame[1] - 1.0
+            and art[3] <= frame[3] + 1.0
+            and (art[2] - art[0] > 3.0 or art[3] - art[1] > 3.0)
+        )
+        if art_inside >= 2:
+            continue
+        if not _band_cell_rows(page, frame):
+            continue
+        kept.append(frame)
+    return kept
+
+
+def _inner_graphic_bboxes(page: object) -> List[BBox]:
+    """Bboxes of drawings that are not hairline rules, plus placed images."""
+    boxes: List[BBox] = []
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        drawings = []
+    for drawing in drawings:
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        width, height = float(rect.width), float(rect.height)
+        if width <= 1.6 or height <= 1.6:
+            continue
+        has_curve = any(item and item[0] == "c" for item in drawing.get("items", ()))
+        if has_curve or drawing.get("fill") is not None:
+            boxes.append((float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)))
+    try:
+        for image in page.get_images():
+            rect = page.get_image_bbox(image)
+            if rect and rect.is_valid and not rect.is_empty:
+                boxes.append((float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)))
+    except Exception:
+        pass
+    return boxes
+
+
+def _frame_overflow_issues(
+    page_number: int,
+    original_page: object,
+    translated_page: object,
+    *,
+    excluded_regions: Sequence[BBox] = (),
+) -> List[object]:
+    """Detect translated text that runs outside the box drawn around it.
+
+    Boxed prompts and framed notes keep their vector frame through
+    redaction; only the refilled text can escape it, either sideways when the
+    block was widened past the frame or downward when it grew across the
+    bottom rule.
+    """
+    issues: List[object] = []
+    for frame in _text_frames(original_page, excluded_regions):
+        fx0, fy0, fx1, fy1 = frame
+        try:
+            raw = translated_page.get_text("dict")
+        except Exception:
+            return issues
+        # The source text is the reference for how tightly text may sit
+        # against this frame: glyph boxes routinely poke a descender's worth
+        # past a rule, and only excess beyond the source counts.
+        source_cells = [cell for row in _band_cell_rows(original_page, frame) for cell in row]
+        source_excess = {
+            "right": max((cell[2] - fx1 for cell in source_cells), default=0.0),
+            "left": max((fx0 - cell[0] for cell in source_cells), default=0.0),
+            "bottom": max((cell[3] - fy1 for cell in source_cells), default=0.0),
+        }
+        worst: Optional[Tuple[float, str, str]] = None
+        for block in raw.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                bbox = tuple(float(value) for value in line.get("bbox", (0, 0, 0, 0)))
+                text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                if not text:
+                    continue
+                center_y = (bbox[1] + bbox[3]) / 2.0
+                if not (fy0 - 1.0 <= center_y <= fy1 + 1.0):
+                    continue
+                horizontal_overlap = min(bbox[2], fx1) - max(bbox[0], fx0)
+                if horizontal_overlap < 0.5 * max(1.0, bbox[2] - bbox[0]):
+                    continue
+                overflow_right = bbox[2] - fx1 - max(0.0, source_excess["right"])
+                overflow_left = fx0 - bbox[0] - max(0.0, source_excess["left"])
+                overflow_bottom = (
+                    bbox[3]
+                    - fy1
+                    - max(1.0, 0.25 * (bbox[3] - bbox[1]))
+                    - max(0.0, source_excess["bottom"])
+                )
+                candidates = (
+                    (overflow_right, "right"),
+                    (overflow_left, "left"),
+                    (overflow_bottom, "bottom"),
+                )
+                amount, side = max(candidates, key=lambda item: item[0])
+                if amount > 1.5 and (worst is None or amount > worst[0]):
+                    worst = (amount, side, text[:40])
+        if worst is not None:
+            amount, side, snippet = worst
+            issues.append(
+                _issue(
+                    page_number,
+                    "text_outside_frame",
+                    (
+                        f"Page {page_number}: text in the box at x={fx0:.0f}-{fx1:.0f}, "
+                        f"y={fy0:.0f}-{fy1:.0f} runs {amount:.1f}pt past its {side} edge: "
+                        f"{snippet!r}"
+                    ),
+                )
+            )
+        if len(issues) >= 3:
+            break
+    return issues
+
+
 def _display_alignment_issues(
     original_ink: _InkCache,
     translated_ink: _InkCache,
@@ -2500,6 +2880,23 @@ def inspect_translation(
                     translated_page=translated_page,
                     preserved_regions=page_regions,
                     graphic_regions=page_figure_regions,
+                )
+            )
+            issues.extend(
+                _table_cell_layout_issues(
+                    page_number,
+                    original_page,
+                    translated_page,
+                    original_rules,
+                    excluded_regions=[*page_regions, *page_figure_regions],
+                )
+            )
+            issues.extend(
+                _frame_overflow_issues(
+                    page_number,
+                    original_page,
+                    translated_page,
+                    excluded_regions=page_figure_regions,
                 )
             )
             issues.extend(
