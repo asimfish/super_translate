@@ -685,7 +685,7 @@ function renderPaperList() {
 
   container.innerHTML = papers.map(p => `
     <article class="paper-card" data-paper-id="${esc(p.id)}" data-action="open-reader">
-      <h2 class="title"><button type="button" class="paper-card-link" data-action="open-reader" data-paper-id="${esc(p.id)}" aria-label="打开论文：${esc(p.title)}">${esc(p.title)}</button></h2>
+      <h2 class="title"><button type="button" class="paper-card-link" data-action="open-reader" data-paper-id="${esc(p.id)}" title="${esc(p.title)}" aria-label="打开论文：${esc(p.title)}">${esc(p.title)}</button></h2>
       <div class="meta">
         <span>${p.page_count} 页</span>
         <span>${formatSize(p.file_size)}</span>
@@ -2551,10 +2551,18 @@ function formatSize(bytes) {
   return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 }
 
+function parseServerTime(iso) {
+  if (!iso) return null;
+  // Stored timestamps are UTC; older servers emit them without an offset,
+  // which browsers would otherwise read as local time.
+  const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso);
+  const d = new Date(hasOffset ? iso : `${iso}Z`);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function formatDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
+  const d = parseServerTime(iso);
+  if (!d) return '';
   return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 

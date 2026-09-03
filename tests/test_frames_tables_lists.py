@@ -374,6 +374,129 @@ class CenteredHeadingExpansionTests(unittest.TestCase):
         self.assertGreater(expanded.bbox[2], 400.0)
 
 
+def _bold_span(text, bbox, size=10.0):
+    return {
+        "text": text,
+        "bbox": bbox,
+        "size": size,
+        "font": "NimbusRomNo9L-Medi",
+        "flags": 20,
+    }
+
+
+class NumberedListBoldLeadInTests(unittest.TestCase):
+    """Qwen-RobotWorld p4: ``1. Task Goal Layer\u2014...`` items sharing one PDF block."""
+
+    def _record(self):
+        def item(number, lead, tail, y):
+            marker = "%d." % number
+            marker_box = (70.9, y, 79.0, y + 10.0)
+            lead_box = (79.0, y, 79.0 + 6.0 * len(lead), y + 10.0)
+            tail_box = (lead_box[2], y, 525.0, y + 10.0)
+            return _LineRec(
+                text="%s %s%s" % (marker, lead, tail),
+                bbox=(70.9, y, 525.0, y + 10.0),
+                spans=[
+                    _span(marker, marker_box),
+                    _bold_span(" " + lead, lead_box),
+                    _span(tail, tail_box),
+                ],
+            )
+
+        def continuation(text, y):
+            return _line(text, (83.4, y, 500.0, y + 10.0))
+
+        return _RawBlockRec(
+            lines=[
+                item(1, "Task Goal Layer", "\u2014infer the high-level intent of the", 602.1),
+                continuation("transition, integrating external instructions;", 613.4),
+                item(
+                    2,
+                    "Action Detail Layer",
+                    "\u2014decompose the action into trajectories",
+                    627.1,
+                ),
+                continuation("and force, with explicit viewpoint information;", 638.3),
+                item(
+                    3,
+                    "Physical Feedback Layer",
+                    "\u2014describe the observable consequences",
+                    662.8,
+                ),
+                continuation("of the action on the environment.", 674.2),
+            ]
+        )
+
+    def test_sequential_numbered_openers_are_detected(self):
+        from pdf_zh_translator.pdf_layout import _sequential_numbered_item_lines
+
+        record = self._record()
+        openers = _sequential_numbered_item_lines(record)
+        self.assertEqual(len(openers), 3)
+        self.assertEqual(
+            {id(line) for line in record.lines[::2]},
+            openers,
+        )
+
+    def test_lone_line_initial_number_is_not_a_list(self):
+        from pdf_zh_translator.pdf_layout import _sequential_numbered_item_lines
+
+        record = _RawBlockRec(
+            lines=[
+                _line("results are summarised in Table", (70.9, 100.0, 500.0, 110.0)),
+                _line("1. Then we discuss the ablations in detail.", (70.9, 112.0, 500.0, 122.0)),
+            ]
+        )
+        self.assertEqual(_sequential_numbered_item_lines(record), set())
+
+    def test_items_split_into_bold_run_in_headings_and_bodies(self):
+        from pdf_zh_translator.pdf_layout import segments_from_record, strip_sentinels
+
+        segments = segments_from_record(0, self._record())
+        headings = [s for s in segments if s.block_type == "run_in_heading"]
+        bodies = [s for s in segments if s.block_type == "body"]
+        self.assertEqual(len(headings), 3)
+        self.assertEqual(len(bodies), 3)
+        self.assertTrue(all(h.bold for h in headings))
+        self.assertEqual(
+            [strip_sentinels(h.text).strip() for h in headings],
+            ["1. Task Goal Layer", "2. Action Detail Layer", "3. Physical Feedback Layer"],
+        )
+
+    def test_period_marker_counts_as_lead_in_marker(self):
+        from pdf_zh_translator.pdf_layout import span_is_leadin_marker
+
+        self.assertTrue(span_is_leadin_marker("1."))
+        self.assertTrue(span_is_leadin_marker("12)"))
+        self.assertFalse(span_is_leadin_marker("1.5"))
+        self.assertFalse(span_is_leadin_marker("Fig."))
+
+    def test_list_marker_stays_regular_inside_a_bold_prefix(self):
+        from pdf_zh_translator.pdf_layout import apply_inline_bold, tokenize_text
+
+        text = (
+            "1. \u4efb\u52a1\u76ee\u6807\u5c42"
+            "\u2014\u63a8\u65ad\u8f6c\u6362\u7684\u9ad8\u5c42\u610f\u56fe"
+        )
+        block = TextBlock(
+            page_index=0,
+            bbox=(70.9, 602.1, 525.0, 624.0),
+            text="1. Task Goal Layer\u2014infer the high-level intent",
+            font_size=10.0,
+            color=(0.0, 0.0, 0.0),
+            translated_bold_prefix_chars=len("1. \u4efb\u52a1\u76ee\u6807\u5c42"),
+        )
+        tokens = tokenize_text(text)
+        apply_inline_bold(tokens, block, text)
+        visible = [token for token in tokens if token.kind != "space"]
+        self.assertEqual(visible[0].text, "1.")
+        self.assertFalse(visible[0].bold)
+        lead_in = visible[1:6]
+        self.assertEqual("".join(token.text for token in lead_in), "\u4efb\u52a1\u76ee\u6807\u5c42")
+        self.assertTrue(all(token.bold for token in lead_in))
+        self.assertFalse(any(token.bold for token in visible[6:]))
+
+
 class VerbatimTranslationTests(unittest.TestCase):
     def _block(self, text):
         return TextBlock(

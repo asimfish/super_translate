@@ -888,3 +888,9 @@ def run_translate(args: argparse.Namespace) -> int:
     for warning in report.warnings:
         print("Warning: %s" % warning, file=sys.stderr)
     return 0
+
+
+if __name__ == "__main__":
+    # ``python -m pdf_zh_translator`` is the documented entry point; running
+    # this module directly used to exit silently, which read like success.
+    raise SystemExit(main())

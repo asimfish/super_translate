@@ -89,6 +89,28 @@ class TestGetPdfInfo(unittest.TestCase):
 class TestExtractTitleFromPdf(unittest.TestCase):
     """Test title extraction."""
 
+    def test_ligatures_and_whitespace_are_normalized(self):
+        from app.services.library import normalize_title_text
+
+        self.assertEqual(
+            normalize_title_text("Ef\ufb01cient  Estimation of\n Word Representations"),
+            "Efficient Estimation of Word Representations",
+        )
+
+    def test_metadata_title_is_normalized(self):
+        import fitz
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            path = Path(f.name)
+        doc = fitz.open()
+        doc.new_page()
+        doc.set_metadata({"title": "Ef\ufb01cient \ufb02ow matching"})
+        doc.save(str(path))
+        doc.close()
+
+        self.assertEqual(extract_title_from_pdf(path), "Efficient flow matching")
+        path.unlink()
+
     def test_fallback_to_filename(self):
         """When PDF is invalid, should fall back to filename."""
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False, prefix="my_research_") as f:

@@ -123,6 +123,11 @@ v2 改为**全分辨率截图序列 + ffmpeg concat 时间轴**（`record_frames
 
 ## 发现的 UI / 引擎问题清单（建议开 issue）
 
+> 2026-09-03 处置结果：1 → [#3](https://github.com/asimfish/super_translate/issues/3)；2 → [#4](https://github.com/asimfish/super_translate/issues/4)；
+> 3、4、6、8 已直接修复（标题 NFKC 归一化、`python -m pdf_zh_translator.cli` 打印用法、卡片标题 `title` 提示、
+> 时间戳 API 端带 `+00:00` + 前端按 UTC 解析）；5 → [#5](https://github.com/asimfish/super_translate/issues/5)；
+> 7 属数据侧观察，术语库现已把人名/模型名/机构名列为不译项，无需代码改动。
+
 1. **QA 对公式密集块误报「未翻译英文」并触发缓存失效**：word2vec 中
    `X=vector("biggest")−vector("big")+vector("small")` 这类占位符恢复后的公式段
    （>35 西文字符、无 CJK）会被 `_contains_untranslated_english_run` 判为未翻译，

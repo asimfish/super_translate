@@ -383,9 +383,23 @@ def _paper_to_response(
         has_translated=has_translated,
         has_dual=has_dual,
         has_qa_report=has_qa_report,
-        created_at=paper.created_at.isoformat() if paper.created_at else "",
-        updated_at=paper.updated_at.isoformat() if paper.updated_at else "",
+        created_at=_iso_utc(paper.created_at),
+        updated_at=_iso_utc(paper.updated_at),
     )
+
+
+def _iso_utc(value: datetime | None) -> str:
+    """Serialize a stored timestamp with an explicit UTC offset.
+
+    The database keeps naive UTC datetimes; a bare ``isoformat()`` of those
+    is parsed by browsers as *local* time, so cards showed UTC clock values
+    (an 8-hour shift for UTC+8 users).
+    """
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
 
 
 def _job_to_response(job: TranslationJob) -> TranslationJobResponse:
@@ -407,11 +421,11 @@ def _job_to_response(job: TranslationJob) -> TranslationJobResponse:
         last_issue_fingerprint=job.last_issue_fingerprint,
         cancel_requested=job.cancel_requested,
         error=job.error,
-        created_at=job.created_at.isoformat() if job.created_at else "",
-        updated_at=job.updated_at.isoformat() if job.updated_at else "",
-        heartbeat_at=job.heartbeat_at.isoformat() if job.heartbeat_at else "",
-        started_at=job.started_at.isoformat() if job.started_at else "",
-        finished_at=job.finished_at.isoformat() if job.finished_at else "",
+        created_at=_iso_utc(job.created_at),
+        updated_at=_iso_utc(job.updated_at),
+        heartbeat_at=_iso_utc(job.heartbeat_at),
+        started_at=_iso_utc(job.started_at),
+        finished_at=_iso_utc(job.finished_at),
     )
 
 

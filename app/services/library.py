@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import shutil
+import unicodedata
 import uuid
 from pathlib import Path
 
@@ -50,18 +51,29 @@ def get_pdf_info(pdf_path: Path) -> tuple[int, int]:
             return 0, 0
 
 
+def normalize_title_text(title: str) -> str:
+    """Fold typographic ligatures and collapse whitespace in an extracted title.
+
+    PDF text keeps TeX ligatures as single code points (``Efﬁcient`` with
+    U+FB01), which look wrong in the library and defeat search; NFKC turns
+    them back into plain letters.
+    """
+    folded = unicodedata.normalize("NFKC", title)
+    return " ".join(folded.split())
+
+
 def extract_title_from_pdf(pdf_path: Path) -> str:
     """Try to extract title from PDF metadata or first page."""
     try:
         with fitz.open(str(pdf_path)) as doc:
-            meta_title = doc.metadata.get("title", "").strip()
+            meta_title = normalize_title_text(doc.metadata.get("title", "") or "")
             if meta_title:
                 return meta_title
 
             if doc.page_count > 0:
                 title = _extract_title_from_first_page(doc[0])
                 if title:
-                    return title
+                    return normalize_title_text(title)
     except Exception as e:
         logger.debug("Could not extract title from %s: %s", pdf_path.name, e)
     return pdf_path.stem.replace("_", " ").replace("-", " ").title()

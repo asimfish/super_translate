@@ -16431,6 +16431,42 @@ def line_looks_like_list_item(line: _LineRec) -> bool:
     return bool(re.match(r"^(?:[•◦▪●]|\(?[a-zA-Z0-9]{1,3}\)|[-–])\s+", compact))
 
 
+_NUMBERED_PERIOD_ITEM_RE = re.compile(r"^(\d{1,3})\.\s+\S")
+
+
+def _sequential_numbered_item_lines(record: _RawBlockRec) -> set:
+    """Line ids that open ``1.`` ``2.`` ``3.`` items inside one PDF block.
+
+    A bare ``N.`` at a line start is ambiguous on its own (a wrapped sentence
+    can begin with ``1. Then``), so only a run of consecutive numbers sharing
+    the same left edge counts. Each opener then starts its own segment, which
+    keeps the item's bold lead-in at the front where the run-in prefix logic
+    can see it.
+    """
+    openers: List[Tuple[int, float, _LineRec]] = []
+    for line in record.lines:
+        compact = " ".join(strip_sentinels(line.text).split()).strip()
+        match = _NUMBERED_PERIOD_ITEM_RE.match(compact)
+        if match is None:
+            continue
+        openers.append((int(match.group(1)), float(line.bbox[0]), line))
+    if len(openers) < 2:
+        return set()
+    accepted: set = set()
+    run: List[Tuple[int, float, _LineRec]] = [openers[0]]
+    for opener in openers[1:]:
+        previous = run[-1]
+        if opener[0] == previous[0] + 1 and abs(opener[1] - previous[1]) <= 3.0:
+            run.append(opener)
+            continue
+        if len(run) >= 2:
+            accepted.update(id(item[2]) for item in run)
+        run = [opener]
+    if len(run) >= 2:
+        accepted.update(id(item[2]) for item in run)
+    return accepted
+
+
 def line_continues_list_item(line: _LineRec, current: "_SegmentAccumulator") -> bool:
     if not current.line_bboxes:
         return False
@@ -16498,7 +16534,7 @@ def split_bold_leadin_line(line: _LineRec) -> Optional[Tuple[_LineRec, _LineRec]
 
 def span_is_leadin_marker(text: str) -> bool:
     compact = " ".join(text.split()).strip()
-    return bool(re.fullmatch(r"(?:\d+\)|\([a-zA-Z0-9]{1,3}\)|[•◦▪●])", compact))
+    return bool(re.fullmatch(r"(?:\d{1,3}[.)]|\([a-zA-Z0-9]{1,3}\)|[•◦▪●])", compact))
 
 
 def line_starts_with_leadin_marker(line: _LineRec) -> bool:
@@ -18923,6 +18959,7 @@ def segments_from_record(
     current_inline_prefix_right: Optional[float] = None
     current_reflowed_inline_formula = False
     preserved_line_bboxes: List[BBox] = []
+    numbered_item_lines = _sequential_numbered_item_lines(record)
 
     def flush_current() -> None:
         nonlocal current, current_has_inline_tail, current_no_merge, current_min_y0
@@ -19470,7 +19507,9 @@ def segments_from_record(
                 block.nowrap = True
                 segments.append(block)
             continue
-        if not equation_record and line_looks_like_list_item(line):
+        if not equation_record and (
+            line_looks_like_list_item(line) or id(line) in numbered_item_lines
+        ):
             flush_current()
             current_no_merge = True
         elif current_no_merge and current.lines and not line_continues_list_item(line, current):
@@ -24588,6 +24627,13 @@ def apply_inline_bold(
         if block.translated_bold_prefix_chars > 0
         else _bold_prefix_limit(text) if block.bold_prefix else 0
     )
+    # "1. Task Goal Layer" keeps its list marker at regular weight; only the
+    # lead-in after the marker is bold in the source.
+    marker_end = 0
+    if prefix_limit > 0:
+        marker = _LIST_MARKER_LEAD_RE.match(text)
+        if marker is not None:
+            marker_end = marker.end()
     terms = {_normalize_bold_match_text(term) for term in block.bold_terms}
     terms = {term for term in terms if term}
     for token in tokens:
@@ -24596,7 +24642,7 @@ def apply_inline_bold(
         if token.kind == "space":
             continue
         normalized = _normalize_bold_match_text(token.text)
-        in_prefix = prefix_limit > 0 and start < prefix_limit
+        in_prefix = prefix_limit > 0 and marker_end <= start < prefix_limit
         if in_prefix or normalized in terms or any(term in normalized for term in terms):
             token.bold = True
 

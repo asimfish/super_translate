@@ -131,6 +131,18 @@ class TestPaperToResponse(unittest.TestCase):
         self.assertEqual(resp.created_at, "")
         self.assertEqual(resp.updated_at, "")
 
+    def test_naive_utc_timestamps_carry_an_explicit_offset(self):
+        """Stored naive UTC must not be parsed by browsers as local time."""
+        from datetime import datetime, timezone
+
+        paper = self._make_paper(
+            created_at=datetime(2026, 8, 25, 11, 44),
+            updated_at=datetime(2026, 8, 25, 17, 37, tzinfo=timezone.utc),
+        )
+        resp = _paper_to_response(paper)
+        self.assertEqual(resp.created_at, "2026-08-25T11:44:00+00:00")
+        self.assertEqual(resp.updated_at, "2026-08-25T17:37:00+00:00")
+
 
 class TestProgressEtaEstimator(unittest.TestCase):
     """Test backend ETA smoothing used by translation progress callbacks."""
