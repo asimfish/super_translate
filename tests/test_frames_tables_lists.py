@@ -22,6 +22,7 @@ from pdf_zh_translator.pdf_layout import (
     TextBlock,
     _expand_multiline_block_bbox,
     _expand_single_line_body_bbox,
+    _expand_standalone_heading_to_column,
     _frame_right_limit,
     _LineRec,
     _list_hanging_indent,
@@ -327,6 +328,50 @@ class HangingIndentTests(unittest.TestCase):
             ),
         )
         self.assertEqual(_list_hanging_indent(block, 394.0), 0.0)
+
+
+class CenteredHeadingExpansionTests(unittest.TestCase):
+    """DPO p1: the centred ``Abstract`` heading must stay centred as ``\u6458\u8981``."""
+
+    def _heading(self):
+        return TextBlock(
+            page_index=0,
+            bbox=(283.8, 285.9, 328.4, 302.1),
+            text="Abstract",
+            font_size=12.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+            source_line_bboxes=((283.8, 285.9, 328.4, 302.1),),
+        )
+
+    def test_centered_heading_grows_symmetrically_around_its_source_center(self):
+        expanded = _expand_standalone_heading_to_column(
+            self._heading(),
+            [(108.0, 396.0)],
+            612.0,
+            centered=True,
+        )
+        source_center = (283.8 + 328.4) / 2.0
+        self.assertAlmostEqual(
+            (expanded.bbox[0] + expanded.bbox[2]) / 2.0, source_center, places=3
+        )
+        self.assertGreater(expanded.bbox[2] - expanded.bbox[0], 200.0)
+        self.assertGreaterEqual(expanded.bbox[0], 108.0)
+        self.assertLessEqual(expanded.bbox[2], 504.0)
+
+    def test_left_aligned_heading_still_grows_to_the_right(self):
+        block = TextBlock(
+            page_index=0,
+            bbox=(108.0, 400.0, 190.0, 412.0),
+            text="1 Introduction",
+            font_size=12.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="heading",
+            source_line_bboxes=((108.0, 400.0, 190.0, 412.0),),
+        )
+        expanded = _expand_standalone_heading_to_column(block, [(108.0, 396.0)], 612.0)
+        self.assertEqual(expanded.bbox[0], 108.0)
+        self.assertGreater(expanded.bbox[2], 400.0)
 
 
 class VerbatimTranslationTests(unittest.TestCase):

@@ -1192,6 +1192,7 @@ def translate_pdf(
                 page_columns,
                 page_width,
                 [candidate for candidate, _ in candidate_items],
+                centered=centered,
             )
             requested_size = requested_translation_font_size(block, min_font_size, font_scale)
             block = _expand_single_line_list_bbox(
@@ -21827,8 +21828,16 @@ def _expand_standalone_heading_to_column(
     page_columns: Sequence[Tuple[float, float]],
     page_width: float,
     page_blocks: Sequence[TextBlock] = (),
+    *,
+    centered: bool = False,
 ) -> TextBlock:
-    """Give a standalone translated heading the width of its source column."""
+    """Give a standalone translated heading the width of its source column.
+
+    A left-aligned heading grows to the right; a centred heading (``Abstract``
+    over a centred abstract column) grows symmetrically so its translation is
+    centred where the source was, not in a box that starts at the source's
+    left edge.
+    """
     if (
         block.block_type != "heading"
         or block.nowrap
@@ -21836,6 +21845,37 @@ def _expand_standalone_heading_to_column(
     ):
         return block
     x0, y0, x1, y1 = block.bbox
+    if centered:
+        column_matches = [
+            column
+            for column in page_columns
+            if column[0] - 4.0 <= x0 and x1 <= column[0] + column[1] + 4.0
+        ]
+        if not column_matches:
+            return block
+        column_left, column_width = max(column_matches, key=lambda column: column[1])
+        column_right = min(float(page_width), column_left + column_width)
+        # expand_heading_bbox pads the right edge only; the source line boxes
+        # still carry the true centre of the heading.
+        source_boxes = [box for box in (block.source_line_bboxes or ()) if box[2] > box[0]]
+        if source_boxes:
+            source_left = min(box[0] for box in source_boxes)
+            source_right = max(box[2] for box in source_boxes)
+            center = (source_left + source_right) / 2.0
+        else:
+            center = (x0 + x1) / 2.0
+        half = min(center - column_left, column_right - center)
+        if half <= (x1 - x0) / 2.0 + 1.0:
+            return block
+        redacts = block.redact_bboxes or [block.bbox]
+        return replace(
+            block,
+            bbox=(center - half, y0, center + half, y1),
+            redact_bboxes=list(redacts),
+            fixed_translation_font_size=(
+                block.fixed_translation_font_size or block.font_size
+            ),
+        )
     containing = [
         column
         for column in page_columns
