@@ -547,6 +547,7 @@ uv run python -m pdf_zh_translator translate \
 - `--api-mode`：`deepseek`（默认，模型 `deepseek-v4-pro`）/ `openai-compatible`（配 `--api-url` 与 `--model`，可接 Kimi、GLM 等任意兼容端点）/ `generic` / `cache-only`
 - `--api-key-env`：传环境变量名而不是明文 key，避免密钥进入命令行历史
 - `--cache-file`：块级翻译缓存；重跑时已翻内容不再计费，`--api-mode cache-only` 可离线确定性重放
+- `--cache-segments`：配合 `cache-only` 回放**由 live 运行写出的**缓存（粗体导语与正文分段存储）——升级引擎后零 API 成本重渲同一篇论文
 - 译后核验：`uv run python -m pdf_zh_translator inspect 原文.pdf 译文.pdf --json-out 报告.json`
 
 全部子命令（术语库管理、golden 回归、版式模板学习等）：`uv run python -m pdf_zh_translator --help`。

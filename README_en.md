@@ -550,6 +550,7 @@ uv run python -m pdf_zh_translator translate \
 - `--api-mode`: `deepseek` (default; model `deepseek-v4-pro`) / `openai-compatible` (with `--api-url` and `--model`, works with Kimi, GLM, or any compatible endpoint) / `generic` / `cache-only`
 - `--api-key-env`: pass the *name* of an environment variable instead of the key itself, keeping secrets out of shell history
 - `--cache-file`: block-level translation cache; reruns skip already-translated blocks, and `--api-mode cache-only` replays deterministically offline
+- `--cache-segments`: with `cache-only`, replay a cache **written by a live run** (bold lead-ins and bodies are stored as separate entries) — re-render the same paper after an engine upgrade without paying for the model again
 - Post-run verification: `uv run python -m pdf_zh_translator inspect original.pdf translated.pdf --json-out report.json`
 
 All subcommands (terminology management, golden regression, layout-profile learning, and more): `uv run python -m pdf_zh_translator --help`.
