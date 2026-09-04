@@ -116,7 +116,7 @@ DPO 第 4 页同时含**小节标题、加粗导语与公式 (4)–(7)**，最�
 - **质量可自证**——每份产物附 `*.qa.json` 与 inspect 审计，未过检进入只接受严格变好的修复循环，改坏即回滚；
 - **不止一个翻译器**——双语对照阅读器、Agent Skill、断点续跑批处理，是一套读论文的工作流。
 
-**本轮实测口径**：「直接丢给大模型」列为同一后端（deepseek-v4-pro）对整页 `pdftotext` 文本的单轮翻译，输出按聊天界面的真实能力呈现（markdown + KaTeX 渲染，渲染失败处即模型自身输出的 LaTeX 缺陷）；SuperTranslate 为单遍翻译 + inspect 审计——27 页全篇共 3 处报告（1 条版面警告 + 2 处错误，均集中在附录 GPT-4 样例框），**展示页 p1 / p4 / p5 零缺陷**；pdf2zh 同机约 1.5 分钟完成。三侧完整命令、提示词、版本与环境见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)。本对比聚焦**版式与结构保真**；pdf2zh 默认后端为逐句机器翻译，译文文采差异应主要归因于各自后端。
+**本轮实测口径**：「直接丢给大模型」列为同一后端（deepseek-v4-pro）对整页 `pdftotext` 文本的单轮翻译，输出按聊天界面的真实能力呈现（markdown + KaTeX 渲染，渲染失败处即模型自身输出的 LaTeX 缺陷）；SuperTranslate 为单遍翻译 + inspect 审计——27 页全篇共 3 处报告（1 条版面警告 + 2 处错误，均集中在附录 GPT-4 样例框），**展示页 p1 / p4 / p5 零缺陷**；pdf2zh 同机约 1.5 分钟完成。三侧完整命令、提示词、版本与环境见 [docs/assets/comparison/NOTES.md](docs/assets/comparison/NOTES.md)。本对比聚焦**版式与结构保真**；pdf2zh 默认后端为逐句机器翻译，译文文采差异应主要归因于各自后端。**引擎来源说明**：DPO 这组展示图（2026-08-26）由当时仍在开发中的引擎工作区产出，与本仓库已发布的引擎存在差异；用已发布引擎重翻并替换展示图的任务已排入队列（等待 API 额度），届时会在 NOTES 中记录两次产物的差别。Mistral 7B 一组则完全由本仓库已发布引擎产出，用户可直接复现。
 
 ### Mistral 7B（9 页 · CC BY 4.0）· 第二篇横向实测
 
@@ -626,8 +626,8 @@ Google 后端（`fast` 档）免 key 可直接用；其余后端各自需要 key
 
 以下方向来自仓库内已有文档与代码基础，不承诺时间线：
 
-- **基准集持续扩充**：classic20 定位为「growing set」，覆盖更多版式轴与近期论文
-- **展示站**：`/showcase` 端点与预览产物已内置，项目主页与在线对比展示建设中
+- **基准集持续扩充**：classic20 定位为「growing set」，覆盖更多版式轴与近期论文；`showcase_cc` 组余下四篇（LLaMA / Mamba / CoT / vLLM）待补横向实测
+- **QA 盲区清零**：`inspect` 的每一类漏报（如本轮的无框线小表、越框文本）都应在被发现的同一轮变成检测器；正在跟进的有多行公式隐藏可复制文本层的逐行归属（见 Issues）
 - **规模化部署路径**：面向多用户重负载的 PostgreSQL + 外部任务队列迁移（当前定位单机/小团队）
 - **模型目录跟随更新**：按 [PROVIDER_MODEL_CATALOG](docs/PROVIDER_MODEL_CATALOG.md) 的维护规则持续核验各家新模型
 - **版式模板库**：`layout-learn` 已支持从代表性 PDF 学习 ACM/IEEE/Springer/ACL 风格的版式 profile，逐步沉淀为内置模板
@@ -638,7 +638,7 @@ Google 后端（`fast` 档）免 key 可直接用；其余后端各自需要 key
 
 **为什么是 AGPL**：本项目捆绑并导入 [pdf2zh (PDFMathTranslate)](https://github.com/Byaidu/PDFMathTranslate) 与 [PyMuPDF](https://github.com/pymupdf/PyMuPDF)，二者均为 AGPL-3.0，整个项目因此必须以 AGPL-3.0 分发。这意味着：如果你把修改过的版本作为网络服务运行，必须向用户提供对应源码——Web 界面里的「源码」链接就是为此保留的，请让它指向与你运行代码一致的仓库。
 
-学术引用：
+学术引用（仓库根目录附 [`CITATION.cff`](CITATION.cff)，GitHub 页面右侧「Cite this repository」可直接导出）：
 
 ```bibtex
 @software{supertranslate2026,

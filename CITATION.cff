@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use SuperTranslate in your research or teaching, please cite it as below."
+type: software
+title: "SuperTranslate: Layout-Preserving Academic PDF Translation"
+abstract: >-
+  Layout-preserving English-to-Chinese translation of academic PDFs. Formulas,
+  figures, tables and citations are frozen and never sent to the model; prose is
+  translated with a curated academic terminology corpus and refilled at the
+  original coordinates; every page is audited by an object-level QA loop that
+  only accepts strict improvements. Available as a self-hosted web application
+  and as an Agent Skill for Claude Code / Cursor.
+authors:
+  - name: "SuperTranslate Contributors"
+repository-code: "https://github.com/asimfish/super_translate"
+url: "https://asimfish.github.io/super_translate/"
+license: AGPL-3.0-or-later
+version: 0.3.2
+date-released: 2026-09-03
+keywords:
+  - pdf-translation
+  - layout-preservation
+  - academic-papers
+  - machine-translation
+  - quality-assurance
+  - agent-skill

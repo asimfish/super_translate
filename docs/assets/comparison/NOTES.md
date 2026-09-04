@@ -161,3 +161,9 @@
 - 核心套件 926 通过（translators / page_inspector / pdf_layout_preserve / layout_fix / native_engine / pdf_layout_e2e / gutter / cli_layout）；golden 回归见下方结果行。
 - live 重跑 Mistral：58 块翻译 / 151 块保护（+3：表 4 三块；−1：标题保留原字形），inspect 0 issue；p1/p3/p5 目检四处均正常。
 - 调试回路：`.local-work/dev/dump_blocks.py`（逐块分类 + 页面矢量线）与 `trace_insert.py`（追踪 bbox 在各扩展步的变化），配合单页 PDF + `--cache-segments`，单次迭代 ~10s。
+
+## 2026-09-05 引擎来源声明与主页体积
+
+- **DPO 展示图的引擎来源**：核对缓存键发现 DPO（2026-08-26）那次翻译由内部开发工作区的引擎产出（缓存键含 `⟦L:1⟧` 标题编号占位，本仓库已发布引擎不产生该占位；内部 `pdf_layout.py` 约 38k 行 vs 已发布约 27k 行）。Mistral 7B 两次运行均为本仓库已发布引擎。按维护者决定，开源仓库是已发布引擎的事实来源：DPO 将用已发布引擎（含 issue #2 修复）重翻并替换展示图，届时在此记录两次产物差异。重翻已排队，当前阻塞于 DeepSeek 账户 HTTP 402（余额）。README 与主页已加引擎来源说明。
+- 用内部开发引擎 dry-run 复核 Mistral p5：表 4 重排与提示框越界两处缺陷同样存在，issue #2 的修复在两套引擎上都需要；内部工作区由另外三个会话持续开发，本仓库不直接改动它，待其提交后再合并，并以 `tests/test_frames_tables_lists.py` 作为行为规范守住这几处修复。
+- **主页体积**：53 张内嵌对比图由 PNG 切为 WebP（q=90，`method=6`），16.2MB → 7.6MB；`<a href>` 仍指向 PNG 原图作为证据；滑块 JS 同步读取 `_trim.webp`。目检公式与正文区 PNG/WebP 无可见差异。新增 `assets/og-image.png`（1200×630）与 og/twitter meta、`CITATION.cff`。
