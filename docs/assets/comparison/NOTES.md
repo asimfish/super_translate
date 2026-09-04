@@ -167,3 +167,18 @@
 - **DPO 展示图的引擎来源**：核对缓存键发现 DPO（2026-08-26）那次翻译由内部开发工作区的引擎产出（缓存键含 `⟦L:1⟧` 标题编号占位，本仓库已发布引擎不产生该占位；内部 `pdf_layout.py` 约 38k 行 vs 已发布约 27k 行）。Mistral 7B 两次运行均为本仓库已发布引擎。按维护者决定，开源仓库是已发布引擎的事实来源：DPO 将用已发布引擎（含 issue #2 修复）重翻并替换展示图，届时在此记录两次产物差异。重翻已排队，当前阻塞于 DeepSeek 账户 HTTP 402（余额）。README 与主页已加引擎来源说明。
 - 用内部开发引擎 dry-run 复核 Mistral p5：表 4 重排与提示框越界两处缺陷同样存在，issue #2 的修复在两套引擎上都需要；内部工作区由另外三个会话持续开发，本仓库不直接改动它，待其提交后再合并，并以 `tests/test_frames_tables_lists.py` 作为行为规范守住这几处修复。
 - **主页体积**：53 张内嵌对比图由 PNG 切为 WebP（q=90，`method=6`），16.2MB → 7.6MB；`<a href>` 仍指向 PNG 原图作为证据；滑块 JS 同步读取 `_trim.webp`。目检公式与正文区 PNG/WebP 无可见差异。新增 `assets/og-image.png`（1200×630）与 og/twitter meta、`CITATION.cff`。
+
+## 2026-09-05 dry-run 扫描：12 篇真实论文找缺陷（不依赖 API）
+
+**方法**：`translate --dry-run --preserve-graphics-text`（EchoTranslator 等长中文填充，走完整版式管线）→ `inspect` → 按 issue 代码汇总 → 60dpi 缩略图 + 定点 100dpi 目检。扫描脚本与汇总器在 `.local-work/sweep/`（未入库）。样本：Mistral、ResNet（CVPR 双栏）、BERT（ACL 双栏）、ViT、DDPM、Qwen-RobotWorld、LoRA、DPO、SAM、Mamba、CoT、Cosmos，共 346 页。机器负载 140–220，单篇 dry-run 3–12 分钟。
+
+**先修测试基座**：EchoTranslator 的填充比例 ≈0.53 中文字/英文字符，而 211 条真实译文（DPO+Mistral 缓存）中位数 0.312、四分位 0.28–0.36——dry-run 比生产多挤 70%，报出生产不会出现的 font_size_drift。校准为 0.34（`EchoTranslator.ZH_PER_EN_CHAR`），并保留行首列表标记（`1.` `(a)` `•`），使 dry-run 能验证标记版式。golden 桩（`_GoldenStubTranslator`）仍为 0.45，作为偏严门禁保留，记此待议。
+
+**发现与修复**
+1. **ResNet p6 表 3 整表重排为正文**（3 列 11 行、有横线）。根因：PyMuPDF 把每一行提取成独立块（3 格 = 3 行文本），`record_is_table` 只看单块（1 行）聚不齐 ≥3 行；单行判据对 3 格行又要求表头词汇；按格聚行的提升又要求每行 ≥3 个块。随后 `merge_paragraph_blocks` 把行块合成 12/21 行段落。修复：`_promote_row_grid_blocks` 在合并后的块上用 `source_line_bboxes` 重建「行 × 格」网格（≥3 多格行、格数一致、每列一边对齐 ≤4pt；两列网格需数值证据；首列全是窄标记则排除；整句正文否决），相邻单行块先叠成栈再判。新检测器 `table_cells_reflowed` 在此页首次于真实论文上触发。
+2. **ResNet p4 图 3 架构图标签被翻译**（左、中两列 126 个 48×7pt 的圆角框标签溢出框外，右列因有贝塞尔弧线而被保留）。根因：小框低于图形区域尺寸下限且被当作文字背景，整张矢量图没有形成图形区域。修复：`_diagram_cluster_regions`——≥8 个小框（16–220 × 5–40pt）在 40pt 内成簇、连线段数 ≥ 框数/2、簇内无 ≥8 词的整句 → 整簇为图形区域；item 级提取，兼容单路径画法。修复后 p4 三列标签全部保留，只译图注。
+3. **ViT p10–12 `reference_content_changed` 误报**：文献续页把 `reference_y` 置 0，整页算文献区；页眉「Published as a conference paper at ICLR 2021」含会议名+年份，`_looks_like_reference_entry_text` 把它当成文献条目而不排除，26 个译文汉字被算作「文献被改」。修复：`header`/`footer` 角色块按角色直接排除。
+4. **已知取舍（未修）**：DDPM p3–p4 夹在显示公式之间、带行内公式锚点的段落被缩到 0.66–0.83 倍——行内公式按源坐标锚定，译文只能在剩余槽位里换行；要根治需把行内公式当 token 重排而非锚定，属设计层决定，记入 Roadmap。
+5. dry-run 其余 font_size_drift（Mistral p2/p3/p5、BERT p12–16、ViT 全页页眉）多为旧填充比例导致，校准后待复扫确认。
+
+**未覆盖**：LoRA、DPO、SAM、Mamba、CoT、Cosmos 的扫描仍在排队（负载所致），结果续记。

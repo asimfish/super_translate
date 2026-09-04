@@ -27,6 +27,10 @@
 - Mistral 7B 横向实测暴露的四处引擎缺陷（[#2](https://github.com/asimfish/super_translate/issues/2)）：无框线两列小表按「列边严格对齐 + 数值列」几何证据识别为表格，不再重排为正文；回填加宽与下扩以矢量框线为硬边界，且加宽不越过所在文本列右缘 1.5em；列表项续行恢复源文件悬挂缩进；译文与原文完全相同的块保留原始字形
 - `inspect` 新增两个检测器：`table_cells_reflowed`（源表行含多格、译文塌成散文）与 `text_outside_frame`（译文越出包围矢量框）
 - 编号列表（`1.` `2.` `3.` 共处一个 PDF 块）按连续编号切成独立项，项首粗体导语按 run-in 前缀翻译并保持粗体，编号本身保持常规字重（Qwen-RobotWorld p4）
+- 逐行成块的 booktabs 表（每行一个 PDF 块、被合并成段落）按「行 × 格」网格几何识别为表格，不再重排为正文（ResNet p6 表 3）
+- 由大量小标签框 + 连线构成的矢量架构图整簇识别为图形区域，图内标签不再被翻译溢出（ResNet p4 图 3）
+- `inspect`：`header`/`footer` 角色块不再被 `reference_content_changed` 当作文献条目（ViT 页眉「Published as a conference paper at ICLR 2021」误报）
+- `--dry-run` 的 EchoTranslator 填充比例按 211 条真实译文校准为 0.34 中文字/英文字符（原 ≈0.53），并保留行首列表标记，dry-run 版式压力贴近生产
 - 居中的单行标题（如 `Abstract`）加宽时围绕原中心对称扩展，译文「摘要」不再偏右
 - Web：论文卡片时间戳 API 端输出显式 UTC 偏移、前端按 UTC 解析（此前显示为 UTC 时刻）；提取的标题做 NFKC 归一化（`Efﬁcient` 连字）；卡片长标题悬停显示全名；`python -m pdf_zh_translator.cli` 直跑打印用法而非静默退出
 - `--api-mode cache-only` 新增 `--cache-segments`，可回放 live 运行写出的缓存（粗体导语与正文分段存储），零 API 成本重渲

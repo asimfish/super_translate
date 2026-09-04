@@ -497,6 +497,86 @@ class NumberedListBoldLeadInTests(unittest.TestCase):
         self.assertFalse(any(token.bold for token in visible[6:]))
 
 
+class RowGridPromotionTests(unittest.TestCase):
+    """ResNet p6 Table 3: one PDF block per row, merged into a paragraph block."""
+
+    def _grid_block(
+        self,
+        rows,
+        x_cols=((96.4, 150.0), (170.2, 190.4), (217.6, 233.3)),
+        y0=74.8,
+        text=None,
+    ):
+        boxes = []
+        for index in range(rows):
+            y = y0 + index * 12.0
+            for x_start, x_end in x_cols:
+                boxes.append((x_start, y, x_end, y + 8.0))
+        return TextBlock(
+            page_index=0,
+            bbox=(96.4, y0, 240.0, y0 + rows * 12.0),
+            text=text or " ".join("VGG-%d [1] 28.0%d 9.3%d" % (i, i, i) for i in range(rows)),
+            font_size=8.0,
+            color=(0.0, 0.0, 0.0),
+            source_lines=rows * len(x_cols),
+            block_type="body",
+            source_line_bboxes=tuple(boxes),
+        )
+
+    def test_three_column_result_rows_become_a_table(self):
+        from pdf_zh_translator.pdf_layout import _promote_row_grid_blocks
+
+        block = self._grid_block(4)
+        _promote_row_grid_blocks([block])
+        self.assertEqual(block.block_type, "table")
+        self.assertFalse(block.should_translate)
+        self.assertTrue(block.nowrap)
+
+    def test_adjacent_single_row_blocks_are_stacked(self):
+        from pdf_zh_translator.pdf_layout import _promote_row_grid_blocks
+
+        rows = [
+            self._grid_block(1, y0=74.8 + i * 12.0, text="ResNet-%d 24.%d 7.%d" % (i, i, i))
+            for i in range(3)
+        ]
+        _promote_row_grid_blocks(rows)
+        self.assertTrue(all(block.block_type == "table" for block in rows))
+
+    def test_bulleted_list_with_separate_bullet_boxes_stays_prose(self):
+        from pdf_zh_translator.pdf_layout import _promote_row_grid_blocks
+
+        block = self._grid_block(
+            4,
+            x_cols=((109.5, 113.0), (120.0, 500.0)),
+            text=(
+                "\u2022 We evaluate the model on commonsense reasoning benchmarks. "
+                "\u2022 We also report world knowledge results on two datasets. "
+                "\u2022 Reading comprehension uses the standard evaluation. "
+                "\u2022 Code generation follows the usual protocol."
+            ),
+        )
+        _promote_row_grid_blocks([block])
+        self.assertEqual(block.block_type, "body")
+
+    def test_two_column_definition_rows_without_numbers_stay_prose(self):
+        from pdf_zh_translator.pdf_layout import _promote_row_grid_blocks
+
+        block = self._grid_block(
+            3,
+            x_cols=((96.4, 140.0), (150.0, 240.0)),
+            text="policy the agent behaviour reward the scalar signal value the expected return",
+        )
+        _promote_row_grid_blocks([block])
+        self.assertEqual(block.block_type, "body")
+
+    def test_plain_paragraph_lines_are_not_a_grid(self):
+        from pdf_zh_translator.pdf_layout import _promote_row_grid_blocks
+
+        block = self._grid_block(5, x_cols=((96.4, 240.0),), text="ordinary prose " * 20)
+        _promote_row_grid_blocks([block])
+        self.assertEqual(block.block_type, "body")
+
+
 class VerbatimTranslationTests(unittest.TestCase):
     def _block(self, text):
         return TextBlock(
@@ -623,6 +703,130 @@ def _boxed_overflow_page(document):
         fontname="helv",
     )
     return page
+
+
+class DiagramClusterTests(unittest.TestCase):
+    """ResNet Figure 3: a column of small labelled boxes joined by arrows."""
+
+    def _diagram_page(self, boxes=12, with_lines=True, prose=False):
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        shape = page.new_shape()
+        for index in range(boxes):
+            y = 100.0 + index * 24.0
+            shape.draw_rect(fitz.Rect(150.0, y, 198.0, y + 7.0))
+            if with_lines and index:
+                shape.draw_line((174.0, y - 17.0), (174.0, y))
+        shape.finish(color=(0.5, 0.5, 0.5), fill=(0.95, 0.9, 0.85), width=0.5)
+        shape.commit()
+        for index in range(boxes):
+            y = 100.0 + index * 24.0
+            label = (
+                "this is a long explanatory sentence with many words inside the box"
+                if prose
+                else "3x3 conv, 64"
+            )
+            page.insert_text((152.0, y + 5.5), label, fontsize=4.5, fontname="helv")
+        return document, page
+
+    def test_labelled_box_column_with_connectors_is_a_graphic_region(self):
+        from pdf_zh_translator.pdf_layout import _diagram_cluster_regions
+
+        _document, page = self._diagram_page()
+        regions = _diagram_cluster_regions(page)
+        self.assertEqual(len(regions), 1)
+        x0, y0, x1, y1 = regions[0]
+        self.assertLessEqual(x0, 150.0)
+        self.assertGreaterEqual(x1, 198.0)
+        self.assertLessEqual(y0, 100.0)
+        self.assertGreaterEqual(y1, 100.0 + 11 * 24.0 + 7.0)
+
+    def test_too_few_boxes_are_not_a_diagram(self):
+        from pdf_zh_translator.pdf_layout import _diagram_cluster_regions
+
+        _document, page = self._diagram_page(boxes=5)
+        self.assertEqual(_diagram_cluster_regions(page), [])
+
+    def test_boxes_without_connectors_are_not_a_diagram(self):
+        from pdf_zh_translator.pdf_layout import _diagram_cluster_regions
+
+        _document, page = self._diagram_page(with_lines=False)
+        self.assertEqual(_diagram_cluster_regions(page), [])
+
+    def test_prose_inside_the_cluster_vetoes_it(self):
+        from pdf_zh_translator.pdf_layout import _diagram_cluster_regions
+
+        _document, page = self._diagram_page(prose=True)
+        self.assertEqual(_diagram_cluster_regions(page), [])
+
+
+class ReferenceHeaderExclusionTests(unittest.TestCase):
+    """ViT p10-12: a venue+year running header is not a tampered reference."""
+
+    HEADER = "Published as a conference paper at ICLR 2021"
+    ENTRIES = [
+        "Ashish Vaswani, Noam Shazeer, and Niki Parmar. Attention is all you need. "
+        "In NeurIPS, 2017.",
+        "Kaiming He, Xiangyu Zhang, and Jian Sun. Deep residual learning. In CVPR, 2016.",
+        "Jacob Devlin, Ming-Wei Chang, and Kenton Lee. BERT pre-training. In NAACL, 2019.",
+    ]
+
+    def _pages(self, translated_header):
+        source_doc, translated_doc = fitz.open(), fitz.open()
+        pages = []
+        for doc, header in ((source_doc, self.HEADER), (translated_doc, translated_header)):
+            page = doc.new_page(width=612, height=792)
+            font = "china-s" if any(ord(c) > 127 for c in header) else "helv"
+            page.insert_text((108.0, 35.0), header, fontsize=9, fontname=font)
+            for index, entry in enumerate(self.ENTRIES):
+                page.insert_text(
+                    (108.0, 120.0 + index * 14.0), entry, fontsize=9, fontname="helv"
+                )
+            pages.append(page)
+        return pages
+
+    def test_translated_running_header_is_excluded_by_role(self):
+        header_zh = "\u53d1\u8868\u4e8e ICLR 2021 \u4f1a\u8bae\u8bba\u6587" * 3
+        source, translated = self._pages(header_zh)
+        header_block = TextBlock(
+            page_index=9,
+            bbox=(108.0, 27.8, 293.1, 37.8),
+            text=self.HEADER,
+            font_size=9.0,
+            color=(0.0, 0.0, 0.0),
+            block_type="header",
+            preserve_position=True,
+            nowrap=True,
+        )
+        issues = inspector._reference_issues(
+            source,
+            translated,
+            10,
+            0.0,
+            source_role_blocks=[header_block],
+            reference_regions=[(0.0, 0.0, 612.0, 792.0)],
+        )
+        codes = [i.code for i in issues if i.code == "reference_content_changed"]
+        self.assertEqual(codes, [])
+
+    def test_translated_entry_inside_references_is_still_reported(self):
+        source, translated = self._pages(self.HEADER)
+        translated.insert_text(
+            (108.0, 160.0),
+            ("\u4ed6\u4eec\u63d0\u51fa\u4e86\u4e00\u79cd\u65b0\u7684"
+             "\u6ce8\u610f\u529b\u673a\u5236") * 2,
+            fontsize=9,
+            fontname="china-s",
+        )
+        issues = inspector._reference_issues(
+            source,
+            translated,
+            10,
+            0.0,
+            source_role_blocks=[],
+            reference_regions=[(0.0, 0.0, 612.0, 792.0)],
+        )
+        self.assertEqual([i.code for i in issues], ["reference_content_changed"])
 
 
 class InspectorBlindSpotTests(unittest.TestCase):

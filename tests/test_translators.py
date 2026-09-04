@@ -699,6 +699,28 @@ class EchoTranslatorPlaceholderTests(unittest.TestCase):
 
         self.assertTrue(placeholders_preserved(source, output))
 
+    def test_echo_translator_length_tracks_measured_zh_en_ratio(self):
+        from pdf_zh_translator.translators import EchoTranslator
+
+        source = "We introduce a seven billion parameter language model engineered for " * 3
+        output = EchoTranslator().translate_batch([source])[0]
+        body = output[len("第1段"):]
+        ratio = len(body) / len(source)
+        # Real academic translations land at 0.28-0.36 Chinese characters per
+        # English character; the dry-run filler must stay in that band.
+        self.assertGreaterEqual(ratio, 0.30)
+        self.assertLessEqual(ratio, 0.38)
+
+    def test_echo_translator_keeps_leading_list_marker(self):
+        from pdf_zh_translator.translators import EchoTranslator
+
+        outputs = EchoTranslator().translate_batch(
+            ["1. Task Goal Layer infers the intent", "(b) second option", "plain sentence here"]
+        )
+        self.assertTrue(outputs[0].startswith("1. 第1段"))
+        self.assertTrue(outputs[1].startswith("(b) 第2段"))
+        self.assertTrue(outputs[2].startswith("第3段"))
+
     def test_echo_translator_plain_text_unchanged_format(self):
         from pdf_zh_translator.translators import EchoTranslator
 

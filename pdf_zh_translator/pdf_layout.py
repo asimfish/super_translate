@@ -9441,7 +9441,8 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
 
     page_rect = page.rect
     image_candidates: List[BBox] = []
-    for raw_block in page.get_text("dict").get("blocks", []):
+    page_dict = page.get_text("dict")
+    for raw_block in page_dict.get("blocks", []):
         if raw_block.get("type") == 0 or "bbox" not in raw_block:
             continue
         bbox = tuple(float(value) for value in raw_block["bbox"])
@@ -9479,6 +9480,7 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
         )
     ]
     candidates.extend(drawing_candidates)
+    candidates.extend(_diagram_cluster_regions(page, page_dict=page_dict))
 
     merged = merge_nearby_bboxes(candidates, GRAPHIC_REGION_CLUSTER_GAP)
     output: List[BBox] = []
@@ -9487,6 +9489,102 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
             continue
         output.append(expand_bbox_to_page(bbox, GRAPHIC_REGION_PADDING, page_rect))
     return output
+
+
+_DIAGRAM_MIN_BOXES = 8
+
+
+def _segment_touches(segment: BBox, region: BBox) -> bool:
+    """Whether a (possibly zero-width or zero-height) line segment crosses a region."""
+    x0, y0, x1, y1 = segment
+    return (
+        x0 <= region[2]
+        and x1 >= region[0]
+        and y0 <= region[3]
+        and y1 >= region[1]
+    )
+
+
+def _diagram_cluster_regions(
+    page: object,
+    *,
+    page_dict: Optional[dict] = None,
+) -> List[BBox]:
+    """Flow charts and architecture diagrams drawn as small labelled boxes.
+
+    ResNet's Figure 3 is 126 rounded rectangles of 48x7pt joined by arrows.
+    Each box is far below the graphic size floor and looks like a text
+    highlight behind its label, so no region was found except where the
+    residual connections happened to be bezier curves — and the labels of the
+    other columns were translated and overflowed their boxes. A dense cluster
+    of small boxes tied together by line segments is a diagram: preserve it
+    whole. Prose inside the cluster (a boxed algorithm or note) vetoes it.
+    """
+    boxes: List[BBox] = []
+    segments: List[BBox] = []
+    for drawing in _page_drawings(page):
+        for item in drawing.get("items", ()):
+            if not item:
+                continue
+            kind = item[0]
+            if kind in ("re", "qu"):
+                rect = item[1].rect if kind == "qu" else item[1]
+                width, height = float(rect.width), float(rect.height)
+                if 16.0 <= width <= 220.0 and 5.0 <= height <= 40.0:
+                    boxes.append(
+                        (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+                    )
+            elif kind == "l":
+                p1, p2 = item[1], item[2]
+                if abs(p2.x - p1.x) + abs(p2.y - p1.y) < 4.0:
+                    continue
+                segments.append(
+                    (
+                        float(min(p1.x, p2.x)),
+                        float(min(p1.y, p2.y)),
+                        float(max(p1.x, p2.x)),
+                        float(max(p1.y, p2.y)),
+                    )
+                )
+    if len(boxes) < _DIAGRAM_MIN_BOXES:
+        return []
+
+    clusters = merge_nearby_bboxes(boxes, 40.0)
+    try:
+        # Callers that already extracted the page dict pass it in: decoding
+        # an image-heavy page twice is a measurable per-page cost.
+        raw = page_dict if page_dict is not None else page.get_text("dict")
+        text_lines = [
+            (
+                tuple(float(value) for value in line["bbox"]),
+                "".join(span.get("text", "") for span in line.get("spans", ())),
+            )
+            for block in raw.get("blocks", [])
+            if block.get("type") == 0
+            for line in block.get("lines", [])
+        ]
+    except Exception:
+        text_lines = []
+
+    regions: List[BBox] = []
+    for cluster in clusters:
+        probe = expand_bbox(cluster, 6.0)
+        inside = sum(1 for box in boxes if bbox_intersection_area(box, probe) > 0.0)
+        if inside < _DIAGRAM_MIN_BOXES:
+            continue
+        connectors = sum(1 for seg in segments if _segment_touches(seg, probe))
+        if connectors < inside // 2:
+            continue
+        # Diagram labels are short; a sentence-length line crossing the
+        # cluster means a boxed note or algorithm, which must stay prose.
+        prose_inside = any(
+            len(text.split()) >= 8 and bbox_intersection_area(bbox, probe) > 0.0
+            for bbox, text in text_lines
+        )
+        if prose_inside:
+            continue
+        regions.append(cluster)
+    return regions
 
 
 def _captioned_composite_figure_regions(
@@ -13191,6 +13289,143 @@ def _promote_adjacent_table_rows(
             break
 
 
+def _cell_rows_from_boxes(boxes: Sequence[BBox], font_size: float) -> List[List[BBox]]:
+    """Group source line boxes into rows of left-to-right cells."""
+    rows: List[List[BBox]] = []
+    for box in sorted(boxes, key=lambda item: ((item[1] + item[3]) / 2.0, item[0])):
+        height = box[3] - box[1]
+        for row in rows:
+            other = row[0]
+            overlap = min(box[3], other[3]) - max(box[1], other[1])
+            if overlap >= 0.5 * min(height, other[3] - other[1]):
+                row.append(box)
+                break
+        else:
+            rows.append([box])
+    cell_rows: List[List[BBox]] = []
+    gap_limit = max(6.0, font_size * 0.6)
+    for row in rows:
+        cells: List[BBox] = []
+        for box in sorted(row, key=lambda item: item[0]):
+            if cells and box[0] - cells[-1][2] < gap_limit:
+                previous = cells[-1]
+                cells[-1] = (
+                    previous[0],
+                    min(previous[1], box[1]),
+                    max(previous[2], box[2]),
+                    max(previous[3], box[3]),
+                )
+            else:
+                cells.append(box)
+        cell_rows.append(cells)
+    return cell_rows
+
+
+def _rows_form_column_grid(rows: Sequence[Sequence[BBox]]) -> bool:
+    """Whether most rows carry the same cell count with aligned column edges.
+
+    A header row may be centred over right-aligned numbers, so alignment is
+    judged per column over the rows that share the modal cell count and one
+    column is allowed to disagree.
+    """
+    multi = [row for row in rows if len(row) >= 2]
+    if len(multi) < 2 or len(multi) < 0.7 * len(rows):
+        return False
+    counts: Dict[int, int] = {}
+    for row in multi:
+        counts[len(row)] = counts.get(len(row), 0) + 1
+    modal, modal_rows = max(counts.items(), key=lambda item: (item[1], item[0]))
+    if modal_rows < max(2, 0.6 * len(multi)):
+        return False
+    grid = [row for row in multi if len(row) == modal]
+    aligned_columns = 0
+    for column in range(modal):
+        edges = (
+            [row[column][0] for row in grid],
+            [row[column][2] for row in grid],
+            [(row[column][0] + row[column][2]) / 2.0 for row in grid],
+        )
+        if any(max(edge) - min(edge) <= 4.0 for edge in edges):
+            aligned_columns += 1
+    return aligned_columns >= modal - (1 if modal >= 3 else 0)
+
+
+def _promote_row_grid_blocks(blocks: Sequence[TextBlock]) -> None:
+    """Recognize tables whose rows arrived as PDF blocks of side-by-side cells.
+
+    PyMuPDF often hands over a booktabs table as one block per row (cells as
+    parallel lines, "VGG-16 [41] | 28.07 | 9.33") which paragraph merging then
+    stacks into a multi-line body block. Per-record detection never saw a
+    second row and cell-level promotion never saw a second block per row, so
+    the whole table was re-flowed as prose. The merged block still carries
+    every cell box: three or more aligned multi-cell rows are a table, two
+    rows suffice when they hold measurement cells.
+    """
+    excluded_types = {
+        "algorithm",
+        "bibliography",
+        "caption",
+        "equation",
+        "figure_label",
+        "footer",
+        "heading",
+        "metadata",
+        "table",
+        "title",
+    }
+    candidates = sorted(
+        (
+            block
+            for block in blocks
+            if block.block_type not in excluded_types
+            and not block.nowrap
+            and len(block.source_line_bboxes or ()) >= 2
+        ),
+        key=lambda block: (block.bbox[1], block.bbox[0]),
+    )
+    # Neighbouring single-row blocks that paragraph merging kept apart still
+    # belong to one table; stack them before judging the grid.
+    stacks: List[List[TextBlock]] = []
+    for block in candidates:
+        if stacks:
+            previous = stacks[-1][-1]
+            gap = block.bbox[1] - previous.bbox[3]
+            x_overlap = min(block.bbox[2], previous.bbox[2]) - max(block.bbox[0], previous.bbox[0])
+            narrow = min(block.bbox[2] - block.bbox[0], previous.bbox[2] - previous.bbox[0])
+            if -2.0 <= gap <= max(6.0, block.font_size * 1.6) and x_overlap > 0.5 * narrow:
+                stacks[-1].append(block)
+                continue
+        stacks.append([block])
+
+    for stack in stacks:
+        boxes = [box for block in stack for box in block.source_line_bboxes if box[2] > box[0]]
+        font_size = statistics.median(block.font_size for block in stack)
+        rows = _cell_rows_from_boxes(boxes, font_size)
+        multi_rows = [row for row in rows if len(row) >= 2]
+        if len(multi_rows) < 2 or not _rows_form_column_grid(rows):
+            continue
+        plain = " ".join(strip_sentinels(" ".join(block.text for block in stack)).split())
+        measurement_tokens = sum(1 for token in plain.split() if _cell_is_measurement(token))
+        modal_cells = max(len(row) for row in multi_rows)
+        # Two-column grids need numeric evidence: "bullet | text" and
+        # "term | definition" rows align just as neatly but are prose.
+        if measurement_tokens < 2 and (len(multi_rows) < 3 or modal_cells < 3):
+            continue
+        # A first column of bullets or list markers is not a table column.
+        first_cells = [row[0] for row in multi_rows]
+        if all(cell[2] - cell[0] < font_size * 1.2 for cell in first_cells):
+            continue
+        # Rows of a results table are labels and numbers, never sentences.
+        if substantial_prose_word_count(plain) >= 6 * max(1, len(rows)) // 2:
+            continue
+        for block in stack:
+            block.block_type = "table"
+            block.should_translate = False
+            block.preserve_position = True
+            block.nowrap = True
+            block.no_merge = True
+
+
 def _promote_table_component_blocks(blocks: Sequence[TextBlock]) -> None:
     """Preserve table headers and group labels split from detected cell rows."""
     table_captions = [
@@ -13200,6 +13435,7 @@ def _promote_table_component_blocks(blocks: Sequence[TextBlock]) -> None:
         and _TABLE_CAPTION_RE.match(strip_sentinels(block.text))
     ]
 
+    _promote_row_grid_blocks(blocks)
     _promote_borderless_captioned_table_blocks(blocks, table_captions)
 
     excluded_types = {

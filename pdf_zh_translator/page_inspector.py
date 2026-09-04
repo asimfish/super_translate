@@ -2041,6 +2041,13 @@ def _reference_issues(
         if bbox is None:
             continue
         source_bbox = tuple(float(value) for value in bbox)
+        # A running header such as "Published as a conference paper at ICLR
+        # 2021" carries a venue and a year and passes for a bibliography
+        # entry; by role it never is one, and on continuation pages the
+        # reference region starts at y=0 and would otherwise swallow it.
+        if getattr(source_block, "block_type", "") in {"header", "footer"}:
+            translation_exclusions.append(source_bbox)
+            continue
         full_width_before_heading = bool(
             reference_y > 0.0
             and source_bbox[1] < reference_y - 4.0
