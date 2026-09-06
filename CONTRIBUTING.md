@@ -41,6 +41,9 @@ uv run pytest -q -m e2e
 
 # 轻量冒烟（CI 同款，几十秒）
 bash scripts/smoke_test.sh
+
+# 版式扫描：在真实论文上找引擎缺陷，不花 API 额度
+uv run python scripts/layout_sweep.py papers/*.pdf --out /tmp/sweep
 ```
 
 约定：
@@ -48,6 +51,12 @@ bash scripts/smoke_test.sh
 - 修引擎（`pdf_zh_translator/`）必须带针对性的回归用例，版式类修复优先用 `tests/fixtures/` 里的真实论文页做正例，必要时补相邻反例。
 - QA / 几何启发式的改动，除了新用例还要确认既有 fixtures 不被误伤（跑全量）。
 - 提交前最低要求：`ruff` 干净 + 冒烟通过 + 改动相关的测试文件通过。
+
+### 用版式扫描找缺陷
+
+`scripts/layout_sweep.py` 对每篇 PDF 跑 `--dry-run`（EchoTranslator 按实测的中英长度比 0.34 生成中文填充，走完整的结构分析 / 保护 / 回填 / 字体链路）、再跑 `inspect` 审计，输出每篇的 `dry.pdf`、`inspect.json`、错误页的「原文 | dry-run」对照拼图和 `summary.md`（按 issue 代码汇总）。有 error 级问题时退出码为 1，可当粗粒度回归门禁。
+
+读结果的原则：**结构类问题优先**——`table_cells_reflowed`（表格塌成散文）、`text_outside_frame`（译文越出框线）、`untranslated_block`、`reference_content_changed`、「translated text did not fully fit」警告成片出现（往往是图内标签被当正文），这些与填充长度无关，基本就是真缺陷；`font_size_drift` 只是指示性的，dry-run 填充是「中位长度」译文，真实译文可能放得下。找到缺陷后的固定流程：抽出单页 PDF → 用 `.local-work` 里的插桩脚本打印块分类 / 矢量线 / bbox 变化定位根因 → 修根因 → 把该页形态写成 `tests/` 里的合成用例（正例 + 相邻反例）→ 跑 golden 门禁（`pytest tests/test_golden_pages.py -k "no_error_issues or no_ink_overlap"`）→ 在 `docs/assets/comparison/NOTES.md` 记录根因与取舍。2026-09 的一轮扫描（12 篇、346 页）就是这样发现并修掉了逐行成块的表格、矢量架构图标签被翻译、页眉被当作文献条目三类缺陷。
 
 ## 代码风格
 
