@@ -60,6 +60,7 @@ _STYLE_SENSITIVE_FONT_RE = re.compile(
     r"(?:math|symbol|cmmi|cmsy|cmex|msam|msbm|stix|euler|eufm|rsfs|wasy|txsy|pxsy)",
     re.IGNORECASE,
 )
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,8 @@ def _find_nearest_column(
 def fix_translated_layout(
     translated_path: Path | str,
     output_path: Path | str | None = None,
+    *,
+    visual_overlap_pages: set[int] | None = None,
 ) -> bool:
     """Fix text block positions in a translated PDF.
 
@@ -120,9 +123,13 @@ def fix_translated_layout(
     with fitz.open(str(translated_path)) as doc:
         total_fixed = 0
 
+        overlap_pages = visual_overlap_pages or set()
         for page_idx in range(doc.page_count):
             page = doc[page_idx]
-            fixed = _fix_page_layout(page)
+            fixed = _fix_page_layout(
+                page,
+                allow_visual_overlap=(page_idx + 1 in overlap_pages),
+            )
             total_fixed += fixed
 
         if total_fixed > 0:
@@ -195,7 +202,86 @@ def _block_overlaps_image(
     return False
 
 
-def _fix_page_layout(page: object) -> int:
+def _visual_overlap_block_indices(
+    page_dict: dict,
+    visual_bboxes: list[tuple[float, float, float, float]],
+) -> set[int]:
+    """Return body blocks whose translated CJK text newly enters a visual."""
+    candidates: set[int] = set()
+    for block_index, raw_block in enumerate(page_dict.get("blocks", [])):
+        if raw_block.get("type") != 0 or not raw_block.get("bbox"):
+            continue
+        spans = [
+            span
+            for line in raw_block.get("lines", [])
+            for span in line.get("spans", [])
+            if str(span.get("text", "")).strip()
+        ]
+        text = "".join(str(span.get("text", "")) for span in spans)
+        if len(text.strip()) < 14 or len(_CJK_RE.findall(text)) < 4:
+            continue
+        block_bbox = tuple(float(value) for value in raw_block["bbox"])
+        block_area = max(1.0, _bbox_area(block_bbox))
+        for visual in visual_bboxes:
+            intersection = (
+                max(block_bbox[0], visual[0]),
+                max(block_bbox[1], visual[1]),
+                min(block_bbox[2], visual[2]),
+                min(block_bbox[3], visual[3]),
+            )
+            if intersection[2] <= intersection[0] or intersection[3] <= intersection[1]:
+                continue
+            overlap_area = _bbox_area(intersection)
+            ratio = overlap_area / block_area
+            # A block mostly inside a figure is likely figure-internal text;
+            # only repair flowing prose that crosses into the visual region.
+            if ratio >= 0.12 and ratio < 0.80:
+                candidates.add(block_index)
+                break
+    return candidates
+
+
+def _bbox_area(bbox: tuple[float, float, float, float]) -> float:
+    return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+
+
+def _clip_rect_away_from_visuals(
+    rect: fitz.Rect,
+    visual_bboxes: list[tuple[float, float, float, float]],
+) -> fitz.Rect | None:
+    """Clip a forced body reflow to the safe side of a figure/image."""
+    result = fitz.Rect(rect)
+    original_width = result.width
+    for visual in visual_bboxes:
+        if not _bbox_intersects_tuple(tuple(result), visual):
+            continue
+        gap = 3.0
+        left_width = max(0.0, visual[0] - result.x0 - gap)
+        right_width = max(0.0, result.x1 - visual[2] - gap)
+        if visual[0] > result.x0 + original_width * 0.30 and left_width >= right_width:
+            result.x1 = visual[0] - gap
+        elif visual[2] < result.x1 - original_width * 0.30:
+            result.x0 = visual[2] + gap
+        else:
+            return None
+    if result.width < max(MIN_BLOCK_WIDTH, original_width * 0.20):
+        return None
+    return result
+
+
+def _bbox_intersects_tuple(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> bool:
+    return (
+        left[0] < right[2]
+        and right[0] < left[2]
+        and left[1] < right[3]
+        and right[1] < left[3]
+    )
+
+
+def _fix_page_layout(page: object, *, allow_visual_overlap: bool = False) -> int:
     """Fix text blocks on a single page. Returns number of blocks fixed."""
     # Extract page dict once — reused by _extract_text_blocks and _find_nbsp_bboxes
     page_dict = page.get_text("dict")
@@ -207,6 +293,11 @@ def _fix_page_layout(page: object) -> int:
     # font artifacts, but repainting its containing block would erase vector
     # artwork underneath it.
     visual_bboxes = _get_visual_bboxes(page, page_dict)
+    visual_overlap_indices = (
+        _visual_overlap_block_indices(page_dict, visual_bboxes)
+        if allow_visual_overlap
+        else set()
+    )
 
     # First pass: clean control character artifacts from all blocks
     # (null bytes, SOH, etc. from pdf2zh font embedding)
@@ -227,8 +318,13 @@ def _fix_page_layout(page: object) -> int:
     to_fix = [
         b
         for b in blocks
-        if _needs_fix(b, columns, page_height, page.rect.width)
-        and not _block_overlaps_image(b, visual_bboxes)
+        if (
+            b.block_index in visual_overlap_indices
+            or (
+                _needs_fix(b, columns, page_height, page.rect.width)
+                and not _block_overlaps_image(b, visual_bboxes)
+            )
+        )
     ]
 
     # Also flag full-width blocks that overlap with caption blocks
@@ -259,7 +355,14 @@ def _fix_page_layout(page: object) -> int:
         return 0
 
     # Decide which blocks can be safely reinserted before destructive redaction.
-    plans = _plan_reinsert_blocks(page, to_fix, columns, all_blocks=blocks)
+    plans = _plan_reinsert_blocks(
+        page,
+        to_fix,
+        columns,
+        all_blocks=blocks,
+        visual_bboxes=visual_bboxes,
+        visual_overlap_indices=visual_overlap_indices,
+    )
     if not plans:
         return 0
     _redact_blocks(page, [plan.block for plan in plans])
@@ -418,6 +521,8 @@ def _plan_reinsert_blocks(
     blocks: list[TextBlockInfo],
     columns: list[ColumnInfo],
     all_blocks: list[TextBlockInfo] | None = None,
+    visual_bboxes: list[tuple[float, float, float, float]] | None = None,
+    visual_overlap_indices: set[int] | None = None,
 ) -> list[ReinsertPlan]:
     """Return only blocks that pass every non-destructive reinsertion check."""
     plans: list[ReinsertPlan] = []
@@ -472,6 +577,14 @@ def _plan_reinsert_blocks(
         if height < block.avg_font_size * 1.5:
             y1 = y0 + block.avg_font_size * 2.5
         correct_rect = fitz.Rect(left_margin, y0, left_margin + col_width, y1)
+        if block.block_index in (visual_overlap_indices or set()):
+            clipped = _clip_rect_away_from_visuals(
+                correct_rect,
+                visual_bboxes or [],
+            )
+            if clipped is None:
+                continue
+            correct_rect = clipped
 
         # Check if this rect would overlap with another block
         skip = False
