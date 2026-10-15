@@ -1,0 +1,7 @@
+{
+  "name": "supertranslate-zotero",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {"test": "node --test tests/*.test.cjs", "build": "python3 scripts/build.py"},
+  "engines": {"node": ">=20"}
+}
