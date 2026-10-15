@@ -1,0 +1,12 @@
+#!/bin/bash
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    printf 'PDF 悬窗目前支持 macOS 13 或更新版本。\n' >&2
+    exit 1
+fi
+APP_DIR="$HOME/Applications/Super Translate Floating.app"
+if [[ ! -d "$APP_DIR" ]]; then
+    "$REPO_DIR/desktop/macos/install.sh"
+fi
+open "$APP_DIR" --args "$@"
