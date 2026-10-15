@@ -25,6 +25,8 @@ SuperTranslate 走了另一条路：**不重排页面**。公式、图表、引�
 
 部署成 Web 应用，自带双栏对照阅读器；装成 Agent Skill，在 Claude Code / Cursor 里说一句「帮我把这篇论文翻成中文」就够了。
 
+**Zotero 插件预览版**：在文献库、论文侧栏或 PDF 阅读器中发起翻译，自动把中文 / 双语 PDF 归档到原论文下。支持账号和模型设置、任务恢复与重复附件保护。[安装与使用 →](zotero/README.md) · [实机验证 →](zotero/VERIFICATION.md)
+
 [看翻译效果](#翻译效果对比) · [五分钟跑起来](#快速开始--web-模式) · [了解实现机制](#实现机制从原页到可信译文)
 
 ![SuperTranslate 翻译效果：Cosmos 第 1 页原文与译文轮播](docs/assets/comparison/cosmos/hero.gif)
