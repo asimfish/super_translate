@@ -52,6 +52,7 @@ INSPECTOR_ISSUE_CODES = frozenset(
         "reference_bold_style",
         "untranslated_block",
         "display_formula_misaligned",
+        "text_visual_overlap",
     }
 )
 
@@ -350,6 +351,118 @@ def _median(values: Sequence[float]) -> float:
     if count % 2:
         return ordered[middle]
     return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _text_visual_overlap_issues(
+    original_page: object,
+    translated_page: object,
+    page_number: int,
+    *,
+    original_visual_regions: Sequence[BBox] = (),
+    translated_visual_regions: Sequence[BBox] = (),
+) -> List[object]:
+    """Detect translated body text newly painted over figure/image regions."""
+    if not original_visual_regions or not translated_visual_regions:
+        return []
+
+    def intersection(left: BBox, right: BBox) -> Optional[BBox]:
+        box = (
+            max(left[0], right[0]),
+            max(left[1], right[1]),
+            min(left[2], right[2]),
+            min(left[3], right[3]),
+        )
+        return box if box[2] > box[0] and box[3] > box[1] else None
+
+    def area(box: BBox) -> float:
+        return max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+
+    def page_text_spans(page: object) -> List[dict]:
+        spans: List[dict] = []
+        for block in page.get_text("dict").get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if (
+                        span.get("text", "").strip()
+                        and len(span.get("bbox", ())) == 4
+                    ):
+                        spans.append(span)
+        return spans
+
+    source_anchors: List[Tuple[BBox, BBox]] = []
+    for span in page_text_spans(original_page):
+        text = str(span.get("text", "")).strip()
+        raw_bbox = span.get("bbox")
+        if not text or not raw_bbox:
+            continue
+        source_bbox = tuple(float(value) for value in raw_bbox)
+        source_area = area(source_bbox)
+        if source_area <= 0.0:
+            continue
+        for region in original_visual_regions:
+            region_box = tuple(float(value) for value in region)
+            overlap = intersection(source_bbox, region_box)
+            if overlap is not None and area(overlap) / source_area >= 0.20:
+                source_anchors.append((source_bbox, region_box))
+
+    issues: List[object] = []
+    for span in page_text_spans(translated_page):
+        text = " ".join(str(span.get("text", "")).split())
+        raw_bbox = span.get("bbox")
+        if not text or not raw_bbox or not _CJK_HAN_RE.search(text):
+            continue
+        target_bbox = tuple(float(value) for value in raw_bbox)
+        target_area = area(target_bbox)
+        if target_area <= 0.0:
+            continue
+        tx = (target_bbox[0] + target_bbox[2]) / 2.0
+        ty = (target_bbox[1] + target_bbox[3]) / 2.0
+        for target_region in translated_visual_regions:
+            target_region_box = tuple(float(value) for value in target_region)
+            overlap = intersection(target_bbox, target_region_box)
+            if overlap is None:
+                continue
+            overlap_area = area(overlap)
+            if overlap_area / target_area < 0.12 or overlap[3] - overlap[1] < 1.0:
+                continue
+            region_w = max(1.0, target_region_box[2] - target_region_box[0])
+            region_h = max(1.0, target_region_box[3] - target_region_box[1])
+            preserved_source_text = False
+            for source_bbox, source_region_box in source_anchors:
+                source_width = max(1.0, source_region_box[2] - source_region_box[0])
+                source_height = max(1.0, source_region_box[3] - source_region_box[1])
+                if abs(source_width - region_w) > max(20.0, 0.25 * region_w):
+                    continue
+                if abs(source_height - region_h) > max(20.0, 0.25 * region_h):
+                    continue
+                sx = (source_bbox[0] + source_bbox[2]) / 2.0
+                sy = (source_bbox[1] + source_bbox[3]) / 2.0
+                if (
+                    abs(sx - tx) <= max(8.0, 0.10 * region_w)
+                    and abs(sy - ty) <= max(8.0, 0.10 * region_h)
+                ):
+                    preserved_source_text = True
+                    break
+            if preserved_source_text:
+                continue
+            issues.append(
+                _issue(
+                    page_number,
+                    "text_visual_overlap",
+                    (
+                        f"Page {page_number}: translated text overlaps a figure/image "
+                        f"region by {overlap_area / target_area:.0%} at "
+                        f"x={overlap[0]:.1f}, y={overlap[1]:.1f}: {text[:80]}"
+                    ),
+                    severity="error",
+                )
+            )
+            if len(issues) >= 4:
+                return issues
+            break
+    return issues
 
 
 def _font_size_issues(
@@ -1837,6 +1950,7 @@ def inspect_translation(
     from .pdf_layout import (
         _page_looks_like_reference_continuation,
         _reference_section_start_y,
+        _visual_regions_for_page,
         expand_bbox,
         open_pdf_detached,
         prepare_translation_units,
@@ -1954,6 +2068,23 @@ def inspect_translation(
                     (left, cluster[0][0], right, cluster[-1][0])
                 )
             table_bands.extend(_line_table_bboxes(translated_page))
+
+            try:
+                translated_graphic_regions = _visual_regions_for_page(
+                    translated_page,
+                    blocks=translated_page.get_text("dict").get("blocks", []),
+                )
+            except Exception:
+                translated_graphic_regions = []
+            issues.extend(
+                _text_visual_overlap_issues(
+                    original_page,
+                    translated_page,
+                    page_number,
+                    original_visual_regions=raw_graphic_regions,
+                    translated_visual_regions=translated_graphic_regions,
+                )
+            )
 
             issues.extend(
                 _font_size_issues(

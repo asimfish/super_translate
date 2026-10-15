@@ -1948,7 +1948,21 @@ def _run_post_translation_qa(
             before_repair_issues = list(issues)
             snapshot = _snapshot_translated_outputs(trans_result)
             try:
-                fixed = _fix_translated_outputs(input_path, trans_result)
+                visual_overlap_pages = {
+                    int(issue.page)
+                    for issue in issues
+                    if getattr(issue, "code", "") == "text_visual_overlap"
+                    and isinstance(getattr(issue, "page", None), int)
+                    and issue.page > 0
+                }
+                if visual_overlap_pages:
+                    fixed = _fix_translated_outputs(
+                        input_path,
+                        trans_result,
+                        visual_overlap_pages=visual_overlap_pages,
+                    )
+                else:
+                    fixed = _fix_translated_outputs(input_path, trans_result)
             except Exception:
                 _restore_translated_outputs(snapshot)
                 raise
@@ -2207,6 +2221,7 @@ _QA_ERROR_LABELS = {
     "reference_overlap": "参考文献重叠",
     "raster_heading_body_overlap": "标题与正文重叠",
     "table_structure_mismatch": "表格结构错位",
+    "text_visual_overlap": "正文压到图片",
     "text_overlap": "正文重叠",
     "untranslated_block": "整段漏翻",
     "untranslated_caption": "图注漏翻",
@@ -2268,12 +2283,23 @@ def _has_blocking_qa_error(issues: list) -> bool:
 def _fix_translated_outputs(
     input_path: Path,
     trans_result: TranslationResult,
+    *,
+    visual_overlap_pages: set[int] | None = None,
 ) -> bool:
     from app.services.layout_fix import fix_translated_layout
 
     fixed = False
     if trans_result.mono_path:
-        fixed = fix_translated_layout(trans_result.mono_path) or fixed
+        if visual_overlap_pages:
+            fixed = (
+                fix_translated_layout(
+                    trans_result.mono_path,
+                    visual_overlap_pages=visual_overlap_pages,
+                )
+                or fixed
+            )
+        else:
+            fixed = fix_translated_layout(trans_result.mono_path) or fixed
     if fixed and trans_result.mono_path and trans_result.dual_path:
         from pdf_zh_translator.pdf_layout import create_dual_pdf
 

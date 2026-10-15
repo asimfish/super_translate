@@ -26,7 +26,9 @@ class QualityAgent(Protocol):
     def plan(self, issues: Sequence[object]) -> QualityPlan: ...
 
 
-LAYOUT_REPAIR_ISSUE_CODES = frozenset({"caption_overlap", "text_overlap"})
+LAYOUT_REPAIR_ISSUE_CODES = frozenset(
+    {"caption_overlap", "text_overlap", "text_visual_overlap"}
+)
 RETRANSLATABLE_ISSUE_CODES = frozenset(
     {
         "untranslated_english",
