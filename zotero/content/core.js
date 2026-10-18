@@ -85,7 +85,18 @@ var SuperTranslateCore = (() => {
         seen.add(id);
         const p = await this.request(`/api/papers/${id}`);
         if (p?.id !== id) throw new ClientError("服务返回了不匹配的文档", "PROTOCOL");
-        if (!p.canonical_paper_id || p.canonical_paper_id === id) return p;
+        if (!p.canonical_paper_id || p.canonical_paper_id === id) {
+          // Paper status aggregates active repair and paused repair. Only the
+          // durable job distinguishes them; older servers still supply a stage.
+          p.latest_job = null;
+          if (["repairing", "repair_pending"].includes(p.translation_status)) {
+            try {
+              const jobs = await this.request(`/api/papers/${id}/jobs`);
+              if (Array.isArray(jobs) && jobs[0]?.paper_id === id) p.latest_job = jobs[0];
+            } catch (_) { /* Keep the paper's stage when optional job details are unavailable. */ }
+          }
+          return p;
+        }
         id = p.canonical_paper_id;
       }
       throw new ClientError("文档关联层级异常", "PROTOCOL");
@@ -102,6 +113,7 @@ var SuperTranslateCore = (() => {
       return pdfBytes(await this.request(`/api/papers/${id}/download/${variant}`, "GET", undefined,
         { binary: true, timeout: 180000, maxBytes: 300 * 1024 * 1024, headers: { Accept: "application/pdf" } }), 300 * 1024 * 1024);
     }
+    qaReport(id) { return this.request(`/api/papers/${paperID(id)}/qa-report`); }
   }
   class ZoteroTranslationController {
     constructor({ client, store, host, namespace, changed = () => {} }) {
@@ -158,6 +170,13 @@ var SuperTranslateCore = (() => {
     apply(task, p) {
       if (!["pending", "translating", "completed", "failed", "repairing", "repair_pending"].includes(p.translation_status)) throw new ClientError("未知的服务状态", "PROTOCOL");
       task.paperID = p.id; task.state = p.translation_status;
+      task.stage = String(p.translation_stage || "").slice(0, 600);
+      const job = p.latest_job?.paper_id === p.id ? p.latest_job : null;
+      if (task.state === "repairing" && (job?.status === "repair_pending" ||
+          (!job && task.stage.startsWith("修复已暂停")))) task.state = "repair_pending";
+      task.attempts = Number.isSafeInteger(job?.attempt_count) && job.attempt_count >= 0 ? job.attempt_count : null;
+      task.maxAttempts = Number.isSafeInteger(job?.max_attempts) && job.max_attempts > 0 ? job.max_attempts : null;
+      task.hasQAReport = p.has_qa_report === true;
       task.progress = Math.max(0, Math.min(1, Number(p.translation_progress) || 0));
       task.message = (p.translation_error || p.translation_stage || labels[task.state] || "").slice(0, 600);
       task.available = task.variant === "dual" ? p.has_dual : p.has_translated;
@@ -198,7 +217,7 @@ var SuperTranslateCore = (() => {
     }
     shutdown() { this.closed = true; }
   }
-  const labels = { queued: "排队中", uploading: "上传中", starting: "提交中", start_unknown: "待确认", pending: "等待翻译", translating: "翻译中", repairing: "系统修复中", repair_pending: "等待系统修复", completed: "等待归档", saved: "已完成", failed: "翻译失败", interrupted: "上传中断", sync_error: "等待重连" };
+  const labels = { queued: "排队中", uploading: "上传中", starting: "提交中", start_unknown: "待确认", pending: "等待翻译", translating: "翻译中", repairing: "系统修复中", repair_pending: "修复已暂停", completed: "等待归档", saved: "已完成", failed: "翻译失败", interrupted: "上传中断", sync_error: "等待重连" };
   return { PROVIDERS, ACTIVE, ClientError, origin, paperID, pdfBytes, safeName, multipart, ZoteroServiceClient, ZoteroTranslationController, labels };
 })();
 if (typeof module !== "undefined") module.exports = SuperTranslateCore;

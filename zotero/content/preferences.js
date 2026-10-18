@@ -71,6 +71,13 @@ window.SuperTranslatePreferences = {
     });
     bind('st-refresh', 'st-model-status', async () => { await app.controller.refresh(); tasks(); status('st-model-status', '任务状态已更新。'); });
     tasks(); fillModel();
+    // Preference panes are separate from item sidebars. Keep their task cards
+    // current too, and stop when this pane is replaced or its window closes.
+    const timer = win.setInterval(() => {
+      if (!$('st-tasks')?.isConnected || Zotero.SuperTranslate !== app || app.disposed) { win.clearInterval(timer); return; }
+      tasks();
+    }, 5000);
+    win.addEventListener('unload', () => win.clearInterval(timer), { once: true });
     status('st-connection', app.controller.client.token ? '已保存登录凭据，可点击检测连接。' : '尚未连接。填写服务地址和账号即可开始。');
   },
 };

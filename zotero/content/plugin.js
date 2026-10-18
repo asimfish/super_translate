@@ -271,6 +271,11 @@ var SuperTranslateZotero = {
     head.append(this.element(doc, "strong", task.variant === "dual" ? "中英对照 PDF" : "中文 PDF"),
       this.element(doc, "span", SuperTranslateCore.labels[task.state] || task.state, `st-status ${task.state === "saved" ? "st-success" : ""}`)); card.append(head);
     const progress = this.element(doc, "progress"); progress.max = 1; progress.value = task.progress; progress.setAttribute("aria-label", "翻译进度"); card.append(progress);
+    if (task.stage && task.stage !== task.message) card.append(this.element(doc, "p", task.stage, "st-stage"));
+    if (task.state === "repair_pending") {
+      const attempts = task.attempts != null ? `已自动尝试 ${task.attempts}${task.maxAttempts ? "/" + task.maxAttempts : ""} 次。` : "";
+      card.append(this.element(doc, "p", attempts + "当前未继续处理，需等待服务端修复。刷新只同步状态，不会重新翻译。", "st-notice st-error"));
+    }
     const message = this.element(doc, "p", task.message, "st-message"); message.setAttribute("aria-live", "polite"); card.append(message);
     const actions = this.element(doc, "div", null, "st-actions");
     if (task.resultID) actions.append(this.button(doc, "打开译文", () => Zotero.getMainWindow().ZoteroPane.viewAttachment(task.resultID)));
@@ -280,7 +285,39 @@ var SuperTranslateZotero = {
         actions.append(this.button(doc, "重试", async () => this.controller.retry(task, await this.source(await Zotero.Items.getAsync(task.attachmentID))), "st-button st-quiet"));
       }
     }
+    if (!task.resultID && task.available && ["repairing", "repair_pending", "failed"].includes(task.state)) {
+      actions.append(this.button(doc, "查看待修复译文", () => this.openDraft(task)));
+      card.append(this.element(doc, "p", "待修复译文尚未通过质检，仅供预览；不会自动归档为正式译文。", "st-footnote"));
+    }
+    if (task.hasQAReport) actions.append(this.button(doc, "质检详情", () => this.showQA(task), "st-button st-quiet"));
     card.append(actions); return card;
+  },
+  async openDraft(task) {
+    const controller = this.controller;
+    if (!controller.tasks.includes(task)) throw new Error("账号或任务已变化，请刷新后重试。");
+    const paper = await controller.client.paper(task.paperID);
+    controller.apply(task, paper); await controller.save();
+    if (!task.available) throw new Error("服务端尚未保留可查看的译文，请稍后刷新。");
+    const bytes = await controller.client.download(task.paperID, task.variant);
+    if (this.disposed || controller !== this.controller) throw new Error("账号已切换，请重新打开译文。");
+    const folder = PathUtils.join(Zotero.getTempDirectory().path, "supertranslate-preview-" + this.uuid());
+    await IOUtils.makeDirectory(folder, { permissions: 0o700 });
+    const label = task.variant === "dual" ? "中英对照" : "中文";
+    const path = PathUtils.join(folder, "待修复草稿 - " + SuperTranslateCore.safeName(task.title) + ` - ${label}.pdf`);
+    await IOUtils.write(path, bytes, { permissions: 0o600 });
+    Zotero.launchFile(path);
+    return path;
+  },
+  async showQA(task) {
+    const controller = this.controller;
+    if (!controller.tasks.includes(task)) throw new Error("账号或任务已变化，请刷新后重试。");
+    const report = await controller.client.qaReport(task.paperID);
+    if (!report || !Array.isArray(report.issues)) throw new Error("服务返回的质检报告格式不正确。");
+    if (this.disposed || controller !== this.controller) return;
+    const issues = report.issues.slice(0, 50).map(i => `第 ${Number(i.page) || "?"} 页 · ${i.severity === "error" ? "错误" : "提示"}\n${String(i.message || i.code || "").slice(0, 500)}`);
+    const summary = report.status === "passed" ? "质检通过" : "质检尚未通过，译文仍需修复";
+    const counts = `${Number(report.error_count) || 0} 个错误，${Number(report.warning_count) || 0} 个提示`;
+    Services.prompt.alert(Zotero.getMainWindow(), "SuperTranslate · 质检详情", [task.title, summary + " · " + counts, ...issues].join("\n\n"));
   },
   refreshPanels() {
     for (const [body, args] of [...this.panels]) {
