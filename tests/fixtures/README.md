@@ -12,6 +12,15 @@ ordinary-font graph operators, and bold headings interrupted by math fonts.
 No license is inferred from the supplied document; these excerpts serve the
 same internal regression purpose as the other owner-supplied fixtures below.
 
+`gflownet_inline_assumption.json` is the prepared `TextBlock` geometry for
+page 5's paragraph beginning “Assumption 3.1 implies”. It captures the user's
+reported gap before the inline `Z=1` and `U×X`: the academic prefix caused
+these symbols to stay at their original English coordinates. The regression
+checks compact math beside source prose, with separate-row, long, wide, tall,
+inset-continuation and missing-geometry controls that must still retain fixed
+formula placement. The existing PRICE and OTF fixtures also protect compound
+math that extends beyond the translated prose fragment.
+
 The DDPM cache gained one response and the BatchNorm cache four responses
 from actual DeepSeek `deepseek-v4-pro` calls on 2026-10-19. These cover changed
 protected-formula boundaries and three already-missing BatchNorm inputs.
