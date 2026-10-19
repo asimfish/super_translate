@@ -19,6 +19,11 @@ Responses were checked for placeholder preservation; existing entries remain
 unchanged. The DDPM covariance test checks protected expressions, including
 Sigma, rather than requiring an arbitrary count of formula fragments.
 
+The final-r2 Adam cache also gained two genuine responses from the same model
+and date. Protecting ordinary-font Delta symbols changes these two request
+keys; all prior entries are preserved. The old branch replay passes, while the
+new boundaries require these additional cache entries.
+
 Cache completeness does not establish layout quality. BatchNorm layout
 failures must still be evaluated independently against the engine baseline.
 
