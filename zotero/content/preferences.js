@@ -9,7 +9,7 @@ window.SuperTranslatePreferences = {
     for (const [id, label] of Object.entries(labels)) {
       const option = app.element(doc, "option", label); option.value = id; $('st-provider').append(option);
     }
-    for (const key of ['provider', 'quality', 'variant']) {
+    for (const key of ['provider', 'quality']) {
       $('st-' + key).value = app.pref(key);
       $('st-' + key).addEventListener('change', () => { app.setPref(key, $('st-' + key).value); if (key === 'provider') fillModel(); app.refreshPanels(); });
     }

@@ -154,7 +154,7 @@ var SuperTranslateZotero = {
         try {
           const source = await this.source(item);
           await this.checkImport({ attachmentID: source.id, sourceKey: source.key });
-          await this.controller.submit(source, { provider: this.pref("provider", "deepseek"), quality: this.pref("quality", "balanced"), variant: this.pref("variant", "dual") });
+          await this.controller.submit(source, { provider: this.pref("provider", "deepseek"), quality: this.pref("quality", "balanced"), variant: "translated" });
         } catch (e) { errors.push(`${item.getField("title").slice(0, 70)}：${e.message}`); }
       }
     } finally { this.running = false; this.refreshPanels(); }
@@ -205,12 +205,13 @@ var SuperTranslateZotero = {
     const source = await this.checkImport(task);
     const folder = PathUtils.join(Zotero.getTempDirectory().path, "supertranslate-" + this.uuid());
     await IOUtils.makeDirectory(folder, { permissions: 0o700 });
-    const label = task.variant === "dual" ? "中英对照" : "中文译文";
-    const filename = SuperTranslateCore.safeName(task.title) + ` - ${label}.pdf`;
+    const title = task.variant === "dual" ? `中英对照 · ${task.title}` : `中文版《${task.title}》`;
+    const filename = task.variant === "dual"
+      ? SuperTranslateCore.safeName(task.title) + " - 中英对照.pdf"
+      : `中文版《${SuperTranslateCore.safeName(task.title)}》.pdf`;
     const path = PathUtils.join(folder, filename);
     try {
       await IOUtils.write(path, bytes, { permissions: 0o600 });
-      const title = `${label} · ${task.title}`;
       const journalPath = PathUtils.join(Zotero.Profile.dir, "supertranslate", this.marker(task).replace(":", "-") + ".json");
       await IOUtils.writeJSON(journalPath, { title, digest: this.hash(bytes) }, { tmpPath: journalPath + ".tmp", permissions: 0o600 });
       const imported = await Zotero.Attachments.importFromFile({ file: path, libraryID: source.libraryID,
@@ -256,7 +257,7 @@ var SuperTranslateZotero = {
     const catalog = this.catalogs.find(c => c.provider === provider);
     root.append(this.element(doc, "div", `${catalog?.label || provider} · ${catalog?.selected_model || "账号默认模型"}`, "st-model"));
     const actions = this.element(doc, "div", null, "st-actions");
-    const submit = this.button(doc, "翻译并保存附件", () => this.translateItems([item]), "st-button st-primary");
+    const submit = this.button(doc, "翻译并保存中文版", () => this.translateItems([item]), "st-button st-primary");
     submit.disabled = this.running || args.editable === false;
     actions.append(submit, this.button(doc, "设置", () => this.openSettings(), "st-button st-quiet")); root.append(actions);
     const taskList = this.element(doc, "div", null, "st-task-list"); root.append(taskList);

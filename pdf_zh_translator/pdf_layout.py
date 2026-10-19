@@ -25405,7 +25405,38 @@ def _uses_fixed_source_math(block: TextBlock) -> bool:
             re.I,
         )
     )
-    return academic_statement
+    if not academic_statement:
+        return False
+    # An academic label can also introduce ordinary prose ("Assumption 3.1
+    # implies Z=1 ..."). Locking its compact inline symbols to the English
+    # coordinates leaves large holes after Chinese text becomes shorter.
+    # Only release math whose source geometry proves a neighbouring prose row;
+    # wide, tall and separate display equations retain their fixed layout.
+    if block.source_math_bboxes and block.source_prose_bboxes:
+        width = max(1.0, block.bbox[2] - block.bbox[0])
+        size = max(1.0, block.font_size)
+        # An inset continuation can share its row with a separately preserved
+        # mathematical condition. Reflowing only this prose fragment would
+        # detach it from (or overlap) that unowned condition.
+        if any(
+            row[0] > block.bbox[0] + size
+            for row in block.source_line_bboxes[1:]
+        ):
+            return True
+        all_inline = all(
+            math[2] - math[0] <= min(width * 0.45, size * 6.0)
+            and math[3] - math[1] <= size * 1.6
+            and any(
+                min(math[3], prose[3]) - max(math[1], prose[1])
+                >= 0.6 * min(math[3] - math[1], prose[3] - prose[1])
+                and max(prose[0] - math[2], math[0] - prose[2], 0.0) <= size
+                for prose in block.source_prose_bboxes
+            )
+            for math in block.source_math_bboxes
+        )
+        if all_inline:
+            return False
+    return True
 
 
 def _block_is_short_derivation_explanation(block: TextBlock) -> bool:
