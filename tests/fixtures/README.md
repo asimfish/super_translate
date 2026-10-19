@@ -1,5 +1,27 @@
 # Golden PDF fixtures
 
+## Full-paper proof and inline-formula regressions (2026-10-19)
+
+`gflownet_inline_records.json` contains text/span geometry excerpts from the
+user-supplied 17-page *Your GFlowNet Secretly Learns an Optimal Transport Plan*
+(arXiv:2606.06272). Original SHA-256:
+`c671f77f878bf9b429712aae9ff7ed800d68bcf839049810286699c1b90631a1`.
+The complete PDF and Zotero library are not included. The excerpts exercise
+cross-object fractions and sums, narrative citations, short proof clauses,
+ordinary-font graph operators, and bold headings interrupted by math fonts.
+No license is inferred from the supplied document; these excerpts serve the
+same internal regression purpose as the other owner-supplied fixtures below.
+
+The DDPM cache gained one response and the BatchNorm cache four responses
+from actual DeepSeek `deepseek-v4-pro` calls on 2026-10-19. These cover changed
+protected-formula boundaries and three already-missing BatchNorm inputs.
+Responses were checked for placeholder preservation; existing entries remain
+unchanged. The DDPM covariance test checks protected expressions, including
+Sigma, rather than requiring an arbitrary count of formula fragments.
+
+Cache completeness does not establish layout quality. BatchNorm layout
+failures must still be evaluated independently against the engine baseline.
+
 ## Visual inspector regression pairs (`otf_p*_*.pdf` / `*_translated.pdf`)
 
 Page-level pairs extracted from the OFT paper below (CC BY 4.0) and its

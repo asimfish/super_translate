@@ -4485,6 +4485,16 @@ def _looks_like_reference_entry_text(text: str) -> bool:
     compact = " ".join(text.split())
     if not compact:
         return False
+    leading_citation = _REFERENCE_ENTRY_RE.match(compact)
+    if (
+        leading_citation
+        and leading_citation.group(0).endswith(")")
+        and re.match(r"\s+[a-z]", compact[leading_citation.end():])
+    ):
+        # Narrative citations are grammatical subjects: ``Smith (2025)
+        # defines ...`` or ``Smith (2024) and Jones (2025) show ...``.
+        # A real bibliography range is still owned by the section classifier.
+        return False
     numbered_questions = re.findall(
         r"(?:^|[?]\s+)\d{1,2}\.(?!\d)\s+"
         r"(?:can|could|do|does|how|is|are|what|when|where|which|why)\b",
@@ -6590,6 +6600,16 @@ def _translation_retains_source_prose_run(
     # input/output that stays in English by design.
     if _looks_like_cjk_sample_label(result_plain):
         return False
+    if _has_short_proof_prose(block.text):
+        for fragment in SENTINEL_RUN_RE.split(block.text):
+            words = re.findall(r"[A-Za-z]{2,}", fragment)
+            if not words or (len(words) < 2 and words[0].casefold() not in {
+                "first", "then", "hence", "therefore", "thus", "finally", "so",
+            }):
+                continue
+            phrase = r"\b" + r"\s+".join(re.escape(word) for word in words) + r"\b"
+            if re.search(phrase, result_plain, re.IGNORECASE):
+                return True
 
     def prose_word_segments(text: str, *, source: bool = False) -> List[List[str]]:
         # Source sentinels mark formulas and protected PDF atoms. Their literal
@@ -7439,8 +7459,16 @@ def _extract_formula_fragments(
                 )
                 if not is_review_line_number:
                     span_text = span.get("text", "")
-                    if span_text.strip().casefold() in {"and", "where"}:
-                        span_text = f" {span_text.strip()} "
+                    # PDF spans can omit a word boundary next to math, e.g.
+                    # ``X`` + `` as`` + ``d(u,x)=...`` or ``. Here`` + ``|U|``.
+                    # Keep prose connectors separate before collecting exact
+                    # formula signatures; their translations need not match.
+                    if re.search(
+                        r"\b(?:and|where|as|on|here|indicates|initialize(?:d|s|ing)?)\b",
+                        span_text,
+                        re.IGNORECASE,
+                    ):
+                        span_text = f" {span_text} "
                     text_parts.append(span_text)
         text = "".join(text_parts) if saw_span else _extract_text_from_block(block)
         # Explanatory parentheticals can be emitted in the same PDF text
@@ -7461,7 +7489,7 @@ def _extract_formula_fragments(
         # signature makes a correct ``and -> 及`` translation look like a
         # damaged formula and also couples otherwise independent equations.
         for candidate in re.split(
-            r"\b(?:and|where|indicates|initialize(?:d|s|ing)?)\b",
+            r"\b(?:and|where|as|on|here|indicates|initialize(?:d|s|ing)?)\b",
             text,
             flags=re.IGNORECASE,
         ):
@@ -7586,7 +7614,10 @@ def _large_operator_formula_present_across_views(
 
 
 _INLINE_FORMULA_SIGNATURE_STRIP_RE = re.compile(
-    r"[\^_{}\x00∗⋆′†‡\ufe00-\ufe0f]"
+    # CMEX's paired delimiter slots 0/1 are not Unicode characters; the
+    # portable text layer cannot encode either slot. Visible glyph identity
+    # remains covered independently by formula-sprite ink verification.
+    r"[\^_{}\x00-\x01∗⋆′†‡\ufe00-\ufe0f]"
 )
 _INLINE_FORMULA_MATH_CUE_RE = re.compile(r"[=+−\-*/→↗↘∈≤≥<>()\[\],]|·")
 
@@ -9779,12 +9810,35 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
     return False
 
 
+def _has_short_proof_prose(text: str) -> bool:
+    """Recognize ordinary proof clauses independently of math character count."""
+    outside = " ".join(SENTINEL_RUN_RE.sub(" ", text).split()).lstrip(".,;: ")
+    if re.fullmatch(r"(?:first|then|hence|thus|therefore|finally|so)\s*[,;:]?", outside, re.I):
+        return True
+    return bool(
+        re.match(
+            r"^(?:\d+\.\s*)?(?:and|now|we|from|since|renaming|step|if|then|"
+            r"hence|therefore|thus|so|the|every)\b", outside, re.I,
+        )
+        and re.search(
+            r"\b(?:is|are|assume|define|obtain|yields?|satisf(?:y|ies)|implies?|"
+            r"clearly|choice|construction|then)\b", outside, re.I,
+        )
+    )
+
+
 def _looks_like_translatable_formula_prose_block(block: TextBlock) -> bool:
     # Structural classification may relabel formula_prose as body, so retain
     # the extraction marker through its no-merge flag and formula anchors.
     outside = " ".join(SENTINEL_RUN_RE.sub(" ", block.text).split())
     if not block.source_math_bboxes:
         return False
+    if (
+        block.block_type in {"body", "run_in_heading", "formula_prose"}
+        and block.source_prose_bboxes
+        and _has_short_proof_prose(block.text)
+    ):
+        return True
     if _ACADEMIC_FORMULA_STATEMENT_RE.match(outside):
         # TeX often cuts ``Lemma 10.4. Let <formula>`` into a short body
         # fragment. It has too few ordinary words for the generic prose gate,
@@ -10014,6 +10068,7 @@ def looks_like_parallel_figure_label_row(block: TextBlock, plain: str) -> bool:
 def looks_like_action_skeleton_sequence(plain: str) -> bool:
     """Function-call action chains are pseudocode, not translatable prose."""
     compact = " ".join(strip_sentinels(plain).split()).strip()
+    compact = re.sub(r"^(?:[•▪●-]\s*)?Action Skeleton:\s*", "", compact, flags=re.I)
     call_pattern = r"[A-Za-z][A-Za-z0-9_-]*\s*\([^()]{0,100}\)"
     if re.fullmatch(call_pattern, compact):
         return True
@@ -10023,9 +10078,12 @@ def looks_like_action_skeleton_sequence(plain: str) -> bool:
         or len(re.findall(r"[.!?](?:\s|$)", compact)) > 1
     ):
         return False
-    calls = re.findall(rf"\b{call_pattern}", compact)
-    arrows = re.findall(r"(?:→|⇒|->)", compact)
-    return len(calls) >= 2 and bool(arrows)
+    # The arrow must connect calls, rather than merely occur somewhere in
+    # prose mentioning two functions (a common pattern in mathematical proofs).
+    return bool(re.fullmatch(
+        rf"{call_pattern}(?:\s*(?:→|⇒|->)\s*{call_pattern})+\s*[.;]?",
+        compact,
+    ))
 
 
 def looks_like_vertical_margin_metadata(block: TextBlock, plain: str) -> bool:
@@ -10407,6 +10465,11 @@ def collect_text_blocks(
                     "where",
                     "and",
                     "with",
+                    "then",
+                    "hence",
+                    "therefore",
+                    "thus",
+                    "so",
                 }:
                     continue
             if not record_segments:
@@ -10669,8 +10732,10 @@ def _inline_formula_prose_fragment_sequence_end(
             re.IGNORECASE,
         )
     )
+    conditional_lead = bool(re.fullmatch(r"If\s*,?\s*then", first_outside, re.I))
     if (
-        len(_prose_words(first_outside)) < (2 if short_inline_lead else 4)
+        len(_prose_words(first_outside))
+        < (1 if conditional_lead else 2 if short_inline_lead else 4)
         or sentence_final_text(first.bare_text())
         or not any(line.prose_bboxes for line in first.lines)
         or not any(line.math_run_bboxes for line in first.lines)
@@ -10702,6 +10767,15 @@ def _inline_formula_prose_fragment_sequence_end(
 
     for candidate_index in range(start + 1, min(len(records), start + 5)):
         candidate = records[candidate_index]
+        # An ordinary-font denominator may lead the next PDF object. Resolve
+        # its geometric math ownership before checking the math-leading chain.
+        # Use a copy here; only a proven continuation is merged by the caller.
+        candidate = replace(
+            candidate,
+            lines=_promote_stacked_plain_formula_fragments(
+                [*first.lines, *candidate.lines]
+            )[len(first.lines):],
+        )
         first_math = next(
             (
                 bbox
@@ -14595,12 +14669,14 @@ def _formula_like_plain_span_text(text: str) -> bool:
         # absorbed into one protected math run and can never be translated.
         return False
     wordish = re.sub(r"^[^A-Za-z]+|[^A-Za-z]+$", "", stripped).lower()
-    if len(wordish) > 1 and wordish in _SHORT_PROSE_WORDS:
+    if len(wordish) > 1 and (wordish in _SHORT_PROSE_WORDS or wordish == "so"):
         return False
     words = _PROSE_WORD_RE.findall(stripped)
     if any(len(word) > 2 and word.lower() not in _MATH_WORDS for word in words):
         return False
     if re.fullmatch(r"[\s.,:;(){}\[\]]+", stripped):
+        return True
+    if re.fullmatch(r"[\sα-ωΑ-Ω∆∇.,:;(){}\[\]]+", stripped):
         return True
     if re.fullmatch(
         r"(?i)(?:in|at|by|from|see)?\s*"
@@ -14695,6 +14771,18 @@ def _expanded_math_span_indexes(
             expanded.add(index)
 
     threshold = max(4.0, line_max_size * 0.65)
+    for index, span in enumerate(spans[:-2]):
+        # Graph neighbourhood operators can use the surrounding prose font.
+        # Only protect in/out when an adjacent parenthesis and a math-font
+        # argument establish a function call; ordinary prepositions stay prose.
+        if (
+            normalize_span_text(span.get("text", "")).strip() in {"in", "out"}
+            and normalize_span_text(spans[index + 1].get("text", "")) == "("
+            and _span_is_math_neighbor(spans[index + 2], line_max_size)
+            and _span_horizontal_gap(span, spans[index + 1]) <= 2.0
+            and _span_horizontal_gap(spans[index + 1], spans[index + 2]) <= 2.0
+        ):
+            expanded.update((index, index + 1))
     changed = True
     while changed:
         changed = False
@@ -14707,6 +14795,19 @@ def _expanded_math_span_indexes(
             if not _formula_like_plain_span_text(text):
                 continue
             stripped = text.strip()
+            if stripped in {"(", "["} and index + 1 < len(spans):
+                following = spans[index + 1]
+                following_text = normalize_span_text(following.get("text", ""))
+                if (
+                    re.match(r"\s*[A-Za-z]{2,}", following_text)
+                    and not _formula_like_plain_span_text(following_text)
+                    and not _span_is_math_neighbor(following, line_max_size)
+                ):
+                    # An author citation or prose parenthetical following a
+                    # formula owns its opening delimiter. Protecting it as
+                    # math hides that delimiter from the translator, which
+                    # then supplies a second opening parenthesis.
+                    continue
             if re.fullmatch(r"[a-z]", stripped):
                 split_word_neighbor = False
                 if index > 0 and not text[:1].isspace():
@@ -16759,6 +16860,20 @@ def split_bold_leadin_line(line: _LineRec) -> Optional[Tuple[_LineRec, _LineRec]
     tail_line = line_from_spans(tail_spans, fallback_bbox=line.bbox)
     if prefix_line is None or tail_line is None:
         return None
+    tail_prose_spans = [
+        span for span in tail_line.spans
+        if tuple(span.get("bbox", ())) in tail_line.prose_bboxes
+        and normalize_span_text(span.get("text", "")).strip()
+    ]
+    if (
+        prefix_line.text.rstrip().endswith(":")
+        and tail_line.text.startswith(SENTINEL_OPEN)
+        and tail_prose_spans
+        and all(span_is_bold(span) for span in tail_prose_spans)
+    ):
+        # A math font between bold words does not end a bold heading. Keeping
+        # the whole line gives the translator one owner for the inline formula.
+        return None
     if tail_line.text.startswith((": ", ":")) and not prefix_line.text.endswith(":"):
         prefix_line.text = prefix_line.text.rstrip() + ":"
         tail_line.text = tail_line.text[1:].lstrip()
@@ -16890,6 +17005,20 @@ def line_continues_inline_formula_tail(line: _LineRec, current: "_SegmentAccumul
         and re.search(r"\b(?:the|a|an|of|as|with)\s*$", previous_tail)
     )
     if wrapped_formula_suffix:
+        return True
+    wrapped_preposition_suffix = bool(
+        sentinel_char_count(line.text) > 0
+        and re.fullmatch(
+            r"\s*(?:of|with|in|as)\s*",
+            SENTINEL_RUN_RE.sub(" ", line.text),
+            re.IGNORECASE,
+        )
+        and not sentence_final_text(current.lines[-1])
+        and substantial_prose_word_count(current.lines[-1]) >= 4
+        and abs(line.bbox[0] - previous_line[0]) <= 8.0
+        and -2.0 <= vertical_gap <= previous_height * 0.65
+    )
+    if wrapped_preposition_suffix:
         return True
     previous = current.bboxes[-1]
     horizontal_gap = line.bbox[0] - previous_line[2]
@@ -17742,6 +17871,11 @@ def _math_line_prose_fragments(line: _LineRec) -> List[_LineRec]:
             "if",
             "where",
             "with",
+            "then",
+            "hence",
+            "therefore",
+            "thus",
+            "so",
         }
         # Short relational prose is routinely emitted as its own normal-font
         # span between math runs.  Require either an intrinsically verbal cue
@@ -18236,6 +18370,7 @@ def _fragmented_inline_math_paragraph_block(
             not math_fragments
             and not ordinary_inline_sentence
             and not ordinary_flowing_inline
+            and not explicit_inline_sentence
         )
     ):
         return None
@@ -18790,6 +18925,10 @@ def _compact_display_formula_prose_slot(
     ):
         return None
     outside = " ".join(_text_outside_sentinels(line.text).split())
+    if outside.casefold() in _MATH_WORDS:
+        # Upright operators (inf, sup, max, ...) remain mathematical ink.
+        return None
+    proof_clause = bool(line.prose_bboxes and _has_short_proof_prose(line.text))
     standalone_connector = bool(
         not line.math_bboxes
         and re.fullmatch(
@@ -18813,6 +18952,7 @@ def _compact_display_formula_prose_slot(
     if not (
         _prose_line_shares_math_row(record, line_index)
         or standalone_connector
+        or proof_clause
     ):
         return None
     if (
@@ -18963,6 +19103,28 @@ def segments_from_record(
         return []
     if equation_record and _record_is_annotated_formula_decoration(record):
         return []
+    if len(record.lines) == 1:
+        line = record.lines[0]
+        outside = " ".join(SENTINEL_RUN_RE.sub(" ", line.text).split())
+        font_size = max((float(span.get("size", 0)) for span in line.spans), default=0)
+        if (
+            line.math_run_bboxes
+            and line.prose_bboxes
+            and re.match(r"^(?:So|Thus|Hence|Therefore)\b", outside, re.I)
+            and re.search(r"\b(?:is|are)\b", outside, re.I)
+            and sentence_final_text(line.text)
+            and all(
+                box[3] - box[1] <= font_size * 1.8
+                for box in line.math_run_bboxes
+            )
+        ):
+            # A short proof conclusion owns its inline symbol. Independent
+            # prose slots would squeeze a translated connector into two letters.
+            block = body_block_from_line(page_index, line, no_merge=True)
+            if block is not None:
+                block.block_type = "formula_prose"
+                block.flow_inline_math = True
+                return [block]
     if equation_record:
         detached_connector = _detached_equation_connector_block(page_index, record)
         if detached_connector is not None:

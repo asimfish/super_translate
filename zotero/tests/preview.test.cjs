@@ -47,3 +47,22 @@ test('QA report uses literal bounded text and rejects a task from another accoun
   assert.ok(f.alerts[0].text.includes('<script>untrusted</script>'));
   await assert.rejects(f.app.showQA({ ...f.task }), /账号或任务已变化/);
 });
+
+test('completed reports with only warnings show passed with the warning count', async () => {
+  const f = nativeAdapter();
+  f.app.controller.client.qaReport = async () => ({ status: 'warning', error_count: 0, warning_count: 1,
+    issues: [{ page: 6, severity: 'warning', message: 'table-like text grid' }] });
+  await f.app.showQA(f.task);
+  assert.match(f.alerts[0].text, /质检通过 · 0 个错误，1 个提示/);
+  assert.match(f.alerts[0].text, /第 6 页 · 提示/);
+});
+
+test('warning status with errors or unknown QA status never shows passed', async () => {
+  for (const report of [
+    { status: 'warning', error_count: 1, issues: [{ severity: 'error', page: 8 }] },
+    { status: 'pending', error_count: 0, issues: [] },
+  ]) {
+    const f = nativeAdapter(); f.app.controller.client.qaReport = async () => report;
+    await f.app.showQA(f.task); assert.match(f.alerts[0].text, /质检尚未通过/);
+  }
+});

@@ -315,7 +315,8 @@ var SuperTranslateZotero = {
     if (!report || !Array.isArray(report.issues)) throw new Error("服务返回的质检报告格式不正确。");
     if (this.disposed || controller !== this.controller) return;
     const issues = report.issues.slice(0, 50).map(i => `第 ${Number(i.page) || "?"} 页 · ${i.severity === "error" ? "错误" : "提示"}\n${String(i.message || i.code || "").slice(0, 500)}`);
-    const summary = report.status === "passed" ? "质检通过" : "质检尚未通过，译文仍需修复";
+    const passed = ["passed", "warning"].includes(report.status) && report.error_count === 0;
+    const summary = passed ? "质检通过" : "质检尚未通过，译文仍需修复";
     const counts = `${Number(report.error_count) || 0} 个错误，${Number(report.warning_count) || 0} 个提示`;
     Services.prompt.alert(Zotero.getMainWindow(), "SuperTranslate · 质检详情", [task.title, summary + " · " + counts, ...issues].join("\n\n"));
   },
