@@ -49,3 +49,27 @@ jobs:
 
       - name: Smoke test
         run: PYTHON=.venv/bin/python bash scripts/smoke_test.sh
+
+  zotero:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Zotero protocol and task regressions
+        run: npm test --prefix zotero
+      - name: Validate runtime syntax and preferences XML
+        run: |
+          node --check zotero/content/core.js
+          node --check zotero/content/plugin.js
+          node --check zotero/content/preferences.js
+          python3 -c "from xml.etree import ElementTree; ElementTree.parse('zotero/content/preferences.xhtml')"
+      - name: Reproducible install package
+        run: |
+          python3 zotero/scripts/build.py
+          cp zotero/dist/SHA256.json /tmp/zotero-sha-first.json
+          python3 zotero/scripts/build.py
+          cmp /tmp/zotero-sha-first.json zotero/dist/SHA256.json

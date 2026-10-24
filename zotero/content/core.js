@@ -3,6 +3,12 @@ var SuperTranslateCore = (() => {
   "use strict";
   const PROVIDERS = ["deepseek", "kimi", "openai", "anthropic", "glm", "gemini", "qwen", "doubao"];
   const ACTIVE = new Set(["queued", "uploading", "starting", "pending", "translating", "repairing", "repair_pending"]);
+  async function mapLimit(values, limit, action) {
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => {
+      while (cursor < values.length) { const index = cursor++; await action(values[index], index); }
+    }));
+  }
   class ClientError extends Error {
     constructor(message, code = "CLIENT") { super(message); this.name = "ClientError"; this.code = code; }
   }
@@ -68,6 +74,20 @@ var SuperTranslateCore = (() => {
     connect() { return this.request("/api/papers/?limit=1"); }
     login(username, password) { return this.json("/api/auth/login", "POST", { username, password }); }
     models() { return this.request("/api/provider-credentials/models"); }
+    refreshModels(provider) {
+      if (!PROVIDERS.includes(provider)) throw new ClientError("请选择有效的供应商");
+      return this.request(`/api/provider-credentials/models/${provider}/refresh`, "POST");
+    }
+    cancel(id) { return this.request(`/api/papers/${paperID(id)}/cancel`, "POST"); }
+    async listPapers(search = "", sort = "recent", offset = 0) {
+      if (search.length > 200 || !["recent", "oldest", "title"].includes(sort) || !Number.isSafeInteger(offset) || offset < 0) throw new ClientError("检索条件无效");
+      const page = await this.request(`/api/papers/?search=${encodeURIComponent(search)}&sort=${sort}&offset=${offset}&limit=50`);
+      if (!Array.isArray(page?.papers) || !Number.isSafeInteger(page.total)) throw new ClientError("文档列表格式不正确", "PROTOCOL");
+      for (const p of page.papers) paperID(p.id);
+      return page;
+    }
+    libraryHistory(id) { return this.request(`/api/papers/${paperID(id)}/library-history`); }
+    organizeLibrary() { return this.request("/api/papers/organize", "POST"); }
     credentials() { return this.request("/api/provider-credentials"); }
     saveModel(provider, model, apiKey = "") {
       if (!PROVIDERS.includes(provider) || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(model)) throw new ClientError("请选择有效的供应商和模型");
@@ -103,8 +123,8 @@ var SuperTranslateCore = (() => {
     }
     start(id, { provider, quality }) {
       paperID(id);
-      if (!PROVIDERS.includes(provider) || !["fast", "balanced", "quality"].includes(quality)) throw new ClientError("翻译配置无效");
-      const q = `quality=${quality}&preserve_graphics_text=true&qa_mode=single` + (quality === "fast" ? "" : `&backend=${provider}`);
+      if (!(provider === "" || PROVIDERS.includes(provider)) || !["fast", "balanced", "quality"].includes(quality)) throw new ClientError("翻译配置无效");
+      const q = `quality=${quality}&preserve_graphics_text=true&qa_mode=single` + (quality === "fast" || !provider ? "" : `&backend=${provider}`);
       return this.request(`/api/papers/${id}/translate?${q}`, "POST");
     }
     async download(id, variant) {
@@ -129,9 +149,13 @@ var SuperTranslateCore = (() => {
       this.changed(); return this;
     }
     async save() {
-      const snapshot = JSON.parse(JSON.stringify(this.tasks));
-      this.saveChain = this.saveChain.catch(() => {}).then(() => this.store.save(snapshot));
-      await this.saveChain; this.changed();
+      const json = JSON.stringify(this.tasks);
+      this.saveChain = this.saveChain.catch(() => {}).then(async () => {
+        if (json === this.persistedJSON) return;
+        await this.store.save(JSON.parse(json)); this.persistedJSON = json;
+        if (!this.closed) this.changed();
+      });
+      await this.saveChain;
     }
     async submit(source, options) {
       const existing = this.tasks.find(t => t.sourceKey === source.key && t.sourceHash === source.hash && t.variant === options.variant);
@@ -152,7 +176,9 @@ var SuperTranslateCore = (() => {
           const p = await this.client.upload(source.bytes, source.filename, `SuperTranslate-${this.host.uuid()}`);
           task.paperID = p.id; await this.save();
         }
+        if (this.closed) return;
         const p = await this.client.paper(task.paperID);
+        if (this.closed) return;
         task.paperID = p.id;
         if (p.translation_status === "pending" || p.translation_status === "failed") {
           task.state = "starting"; task.message = "正在提交翻译"; await this.save();
@@ -168,6 +194,7 @@ var SuperTranslateCore = (() => {
       } finally { this.busy.delete(task.id); }
     }
     apply(task, p) {
+      const before = JSON.stringify(task);
       if (!["pending", "translating", "completed", "failed", "repairing", "repair_pending"].includes(p.translation_status)) throw new ClientError("未知的服务状态", "PROTOCOL");
       task.paperID = p.id; task.state = p.translation_status;
       task.stage = String(p.translation_stage || "").slice(0, 600);
@@ -180,30 +207,55 @@ var SuperTranslateCore = (() => {
       task.progress = Math.max(0, Math.min(1, Number(p.translation_progress) || 0));
       task.message = (p.translation_error || p.translation_stage || labels[task.state] || "").slice(0, 600);
       task.available = task.variant === "dual" ? p.has_dual : p.has_translated;
-      task.updatedAt = new Date().toISOString();
+      if (task.cancelRequested && ["pending", "failed"].includes(task.state)) { task.state = "cancelled"; task.message = "已取消，可重新翻译。"; }
+      else if (task.cancelRequested && task.state === "translating") task.message = "正在取消，等待服务确认…";
+      if (JSON.stringify(task) !== before) task.updatedAt = new Date().toISOString();
     }
-    async refresh() {
-      for (const task of this.tasks) {
-        if (this.closed) break;
-        if (!task.paperID || this.busy.has(task.id) || task.state === "saved") continue;
+    refresh() {
+      if (this.refreshing) return this.refreshing;
+      this.refreshing = this.refreshTasks().finally(() => { this.refreshing = null; });
+      return this.refreshing;
+    }
+    async refreshTasks() {
+      const papers = new Map();
+      await mapLimit(this.tasks.slice(), 4, async task => {
+        if (this.closed || !task.paperID || this.busy.has(task.id) || ["saved", "cancelled"].includes(task.state)) return;
         this.busy.add(task.id);
         try {
-          const p = await this.client.paper(task.paperID);
+          if (!papers.has(task.paperID)) papers.set(task.paperID, this.client.paper(task.paperID));
+          const p = await papers.get(task.paperID);
+          if (this.closed) return;
           const uncertain = task.state === "start_unknown";
           this.apply(task, p);
           if (uncertain && p.translation_status === "pending") { task.state = "start_unknown"; task.message = "服务尚未启动此任务，可点击重试提交。"; }
           if (task.state === "completed") await this.importResult(task);
         } catch (e) { task.message = e.message; /* Keep the durable state; never replay a POST here. */ }
         finally { this.busy.delete(task.id); }
-      }
-      await this.save();
+      });
+      if (!this.closed) await this.save();
+    }
+    async cancel(task) {
+      if (this.refreshing) await this.refreshing;
+      if (this.closed || !this.tasks.includes(task)) return;
+      if (this.busy.has(task.id)) throw new ClientError("任务正在提交，请稍后取消。");
+      if (task.state !== "translating") return;
+      this.busy.add(task.id);
+      try {
+        await this.client.cancel(task.paperID);
+        if (this.closed) return;
+        task.cancelRequested = true; task.message = "正在取消，等待服务确认…";
+        await this.save();
+      } finally { this.busy.delete(task.id); }
+      await this.refresh();
     }
     async importResult(task) {
       if (this.closed) return;
       if (!task.available) { task.message = "翻译完成，但所选译文尚不可下载。请刷新或检查服务。"; return; }
       const imported = await this.host.findImported(task);
+      if (this.closed) return;
       if (imported) { task.resultID = imported; task.state = "saved"; task.message = "译文已归档"; await this.save(); return; }
       await this.host.checkImport(task);
+      if (this.closed) return;
       task.message = "正在保存译文附件"; await this.save();
       const bytes = await this.client.download(task.paperID, task.variant);
       if (this.closed) return;
@@ -211,13 +263,15 @@ var SuperTranslateCore = (() => {
       task.state = "saved"; task.progress = 1; task.message = "译文已归档"; await this.save();
     }
     async retry(task, source) {
+      if (this.closed || !this.tasks.includes(task)) throw new ClientError("账号或任务已变化，请刷新后重试。");
       if (source.hash !== task.sourceHash) throw new ClientError("原 PDF 已变化，请重新发起翻译");
       if (["translating", "repairing", "repair_pending"].includes(task.state)) return this.refresh();
+      delete task.cancelRequested;
       return this.run(task, source);
     }
     shutdown() { this.closed = true; }
   }
-  const labels = { queued: "排队中", uploading: "上传中", starting: "提交中", start_unknown: "待确认", pending: "等待翻译", translating: "翻译中", repairing: "系统修复中", repair_pending: "修复已暂停", completed: "等待归档", saved: "已完成", failed: "翻译失败", interrupted: "上传中断", sync_error: "等待重连" };
-  return { PROVIDERS, ACTIVE, ClientError, origin, paperID, pdfBytes, safeName, multipart, ZoteroServiceClient, ZoteroTranslationController, labels };
+  const labels = { queued: "排队中", uploading: "上传中", starting: "提交中", start_unknown: "待确认", pending: "等待翻译", translating: "翻译中", repairing: "系统修复中", repair_pending: "修复已暂停", completed: "等待归档", saved: "已完成", cancelled: "已取消", failed: "翻译失败", interrupted: "上传中断", sync_error: "等待重连" };
+  return { PROVIDERS, ACTIVE, mapLimit, ClientError, origin, paperID, pdfBytes, safeName, multipart, ZoteroServiceClient, ZoteroTranslationController, labels };
 })();
 if (typeof module !== "undefined") module.exports = SuperTranslateCore;

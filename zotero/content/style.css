@@ -44,3 +44,12 @@
  .st-success { color:#79d6b3; } .st-error { color:#ffaca2; }
 }
 @media (max-width:500px) { .st-grid { grid-template-columns:1fr; gap:0; } .st-settings { padding:6px; } }
+.st-picker { border:1px solid var(--st-border); border-radius:9px; padding:10px 12px; margin:10px 0 14px; }
+.st-picker summary { cursor:pointer; color:var(--st-accent); font-weight:600; }
+.st-selection { display:grid; gap:8px; padding-top:10px; }
+.st-selection label { font-weight:550; margin:0; }
+.st-selection .st-footnote { margin:3px 0; }
+.st-date { font-size:12px; color:var(--st-muted); margin:22px 0 7px; }
+.st-document-title { display:block; font-weight:600; overflow-wrap:anywhere; margin:12px 0 -5px; }
+.st-history { border-left:2px solid var(--st-border); padding-left:12px; margin-top:10px; }
+.st-history:empty { display:none; }

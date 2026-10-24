@@ -2,8 +2,28 @@
 var SuperTranslateZotero = {
   id: pluginID, rootURI, windows: new Set(), panels: new Map(), menus: [], controller: null,
   catalogs: [], credentials: [], timer: null, running: false, disposed: false, readerButtons: new Set(),
+  providerLabels: { "": "跟随系统默认", deepseek: "DeepSeek", kimi: "Kimi", openai: "OpenAI", anthropic: "Anthropic", glm: "智谱 GLM", gemini: "Gemini", qwen: "通义千问 Qwen", doubao: "豆包" },
   pref(key, fallback = "") { return Services.prefs.getStringPref(`extensions.supertranslate.${key}`, fallback); },
   setPref(key, value) { Services.prefs.setStringPref(`extensions.supertranslate.${key}`, String(value)); },
+  accountPref(key, fallback = "") { return this.pref(`account.${this.controller.namespace}.${key}`, fallback); },
+  setAccountPref(key, value) { this.setPref(`account.${this.controller.namespace}.${key}`, value); },
+  selectedModel(provider) { return this.catalogs.find(c => c.provider === provider)?.selected_model || this.credentials.find(c => c.provider === provider)?.model || ""; },
+  selectionDirty() {
+    const d = this.selection;
+    return !!d && (d.provider !== this.accountPref("provider", "deepseek") || d.quality !== this.accountPref("quality", "balanced") ||
+      (d.provider && d.model != null && d.model !== this.selectedModel(d.provider)));
+  },
+  async applySelection(apiKey = "") {
+    const controller = this.controller, draft = { ...this.selection };
+    if (draft.provider && (!draft.model || apiKey || draft.model !== this.selectedModel(draft.provider))) {
+      await controller.client.saveModel(draft.provider, draft.model, apiKey);
+      if (controller !== this.controller || controller.closed) return;
+      await this.loadModels();
+    }
+    if (controller !== this.controller || controller.closed) return;
+    this.setAccountPref("provider", draft.provider); this.setAccountPref("quality", draft.quality);
+    this.refreshPanels();
+  },
   uuid() { return Services.uuid.generateUUID().toString().slice(1, -1); },
   hash(bytes) {
     const h = Cc["@mozilla.org/security/hash;1"].createInstance(Ci.nsICryptoHash);
@@ -36,8 +56,10 @@ var SuperTranslateZotero = {
     return new SuperTranslateCore.ZoteroServiceClient({ baseURL, token: token ?? await this.token(baseURL), transport: a => this.transport(a) });
   },
   async configure() {
+    const generation = this.configuration = (this.configuration || 0) + 1;
     this.controller?.shutdown();
     const client = await this.client();
+    if (generation !== this.configuration || this.disposed) return;
     const namespace = this.hash(new TextEncoder().encode(client.origin + "\n" + client.token));
     const folder = PathUtils.join(Zotero.Profile.dir, "supertranslate");
     await IOUtils.makeDirectory(folder, { permissions: 0o700, ignoreExisting: true });
@@ -51,12 +73,18 @@ var SuperTranslateZotero = {
       },
       save: tasks => IOUtils.writeJSON(path, { version: 1, tasks }, { tmpPath: path + ".tmp", permissions: 0o600 }),
     };
-    this.controller = await new SuperTranslateCore.ZoteroTranslationController({ client, namespace, store,
+    const controller = new SuperTranslateCore.ZoteroTranslationController({ client, namespace, store,
       host: { uuid: () => this.uuid(), findImported: t => this.findImported(t), checkImport: t => this.checkImport(t), importPDF: (t, b) => this.importPDF(t, b) },
       changed: () => this.refreshPanels(),
-    }).init();
+    });
+    await controller.init();
+    if (generation !== this.configuration || this.disposed) { controller.shutdown(); return; }
+    this.controller = controller;
     this.catalogs = []; this.credentials = [];
+    this.modelsLoadedAt = 0; this.modelsPromise = null;
+    this.selection = { provider: this.accountPref("provider", "deepseek"), quality: this.accountPref("quality", "balanced"), model: null };
     this.refreshPanels();
+    if (client.token) this.loadModels().catch(() => {});
   },
   async startup() {
     await this.configure();
@@ -99,12 +127,16 @@ var SuperTranslateZotero = {
   removeWindow(win) { this.windows.delete(win); win.document.getElementById("supertranslate-l10n")?.remove(); },
   schedule() {
     if (this.disposed) return;
+    this.timer?.cancel();
     this.timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
     this.timer.initWithCallback(async () => {
-      try { if (!this.running) await this.controller?.refresh(); }
+      try {
+        await this.controller?.refresh();
+        if (this.controller?.client.token && Date.now() - this.modelsLoadedAt > 300000) await this.loadModels();
+      }
       catch (_) { /* Persistence/network failures are shown by tasks; no raw credentials logged. */ }
       finally { this.schedule(); }
-    }, 5000, Ci.nsITimer.TYPE_ONE_SHOT);
+    }, this.controller?.tasks.some(t => ["pending", "translating", "repairing", "start_unknown", "sync_error", "completed"].includes(t.state)) ? 5000 : 30000, Ci.nsITimer.TYPE_ONE_SHOT);
   },
   shutdown() {
     this.disposed = true; this.timer?.cancel(); this.controller?.shutdown();
@@ -147,17 +179,23 @@ var SuperTranslateZotero = {
     if (!items.length) return;
     if (items.length > 20) throw new Error("每次最多选择 20 篇论文。");
     if (!this.controller.client.token) { this.openSettings(); throw new Error("请先连接论文翻译服务。"); }
+    if (this.selectionDirty()) throw new Error("供应商或模型尚未应用，请先点击「应用翻译设置」。");
+    const controller = this.controller;
+    const options = { provider: this.selection?.provider ?? this.pref("provider", "deepseek"), quality: this.selection?.quality ?? this.pref("quality", "balanced"), variant: "translated" };
     this.running = true;
+    this.refreshPanels();
     const errors = [];
     try {
-      for (const item of items) {
+      await SuperTranslateCore.mapLimit(items, 2, async item => {
         try {
+          if (controller !== this.controller || controller.closed) return;
           const source = await this.source(item);
           await this.checkImport({ attachmentID: source.id, sourceKey: source.key });
-          await this.controller.submit(source, { provider: this.pref("provider", "deepseek"), quality: this.pref("quality", "balanced"), variant: "translated" });
+          if (controller !== this.controller || controller.closed) return;
+          await controller.submit(source, options);
         } catch (e) { errors.push(`${item.getField("title").slice(0, 70)}：${e.message}`); }
-      }
-    } finally { this.running = false; this.refreshPanels(); }
+      });
+    } finally { this.running = false; this.refreshPanels(); if (this.timer) this.schedule(); }
     if (errors.length) throw new Error(errors.join("\n\n"));
   },
   async checkImport(task) {
@@ -221,10 +259,62 @@ var SuperTranslateZotero = {
       return imported.id;
     } finally { await IOUtils.remove(folder, { recursive: true, ignoreAbsent: true }); }
   },
-  async loadModels() {
-    const [catalogs, credentials] = await Promise.all([this.controller.client.models(), this.controller.client.credentials()]);
-    if (!Array.isArray(catalogs) || !Array.isArray(credentials)) throw new Error("服务的模型目录格式不正确");
-    this.catalogs = catalogs; this.credentials = credentials; this.refreshPanels();
+  async loadModels(refreshProvider = "") {
+    const controller = this.controller;
+    if (this.modelsPromise) {
+      await this.modelsPromise;
+      if (controller !== this.controller || controller.closed) return;
+      if (!refreshProvider) return;
+    }
+    const request = (async () => {
+      if (refreshProvider) await controller.client.refreshModels(refreshProvider);
+      const [catalogs, credentials] = await Promise.all([controller.client.models(), controller.client.credentials()]);
+      if (controller !== this.controller || controller.closed) return;
+      if (!Array.isArray(catalogs) || !Array.isArray(credentials)) throw new Error("服务的模型目录格式不正确");
+      this.catalogs = catalogs; this.credentials = credentials; this.modelsLoadedAt = Date.now();
+      if (this.selection?.model == null) this.selection.model = this.selectedModel(this.selection.provider);
+      this.refreshPanels();
+    })();
+    this.modelsPromise = request;
+    try { await request; } finally { if (this.modelsPromise === request) this.modelsPromise = null; }
+  },
+  renderSelection(doc) {
+    const box = this.element(doc, "div", null, "st-selection");
+    const d = this.selection;
+    if (!d) return box;
+    const provider = this.element(doc, "select"); provider.setAttribute("aria-label", "API 供应商");
+    for (const [id, label] of Object.entries(this.providerLabels)) { const o = this.element(doc, "option", label); o.value = id; provider.append(o); }
+    provider.value = d.provider;
+    provider.addEventListener("change", () => { d.provider = provider.value; d.model = this.selectedModel(d.provider); this.refreshPanels(true); });
+    box.append(this.element(doc, "label", "API 供应商"), provider);
+    if (d.provider) {
+      const model = this.element(doc, "input"); model.value = d.model || ""; model.placeholder = "模型 ID / 豆包 Endpoint ID";
+      model.setAttribute("aria-label", "翻译模型");
+      const list = this.element(doc, "datalist"); list.id = "st-models-" + this.uuid(); model.setAttribute("list", list.id);
+      for (const id of this.catalogs.find(c => c.provider === d.provider)?.models || []) { const o = this.element(doc, "option"); o.value = id; list.append(o); }
+      model.addEventListener("input", () => { d.model = model.value.trim(); });
+      box.append(this.element(doc, "label", "翻译模型"), model, list);
+    }
+    const quality = this.element(doc, "select"); quality.setAttribute("aria-label", "翻译质量");
+    for (const [id, label] of [["balanced", "均衡 · 推荐"], ["quality", "高质量"], ["fast", "快速 · Google（不使用所选模型）"]]) {
+      const o = this.element(doc, "option", label); o.value = id; quality.append(o);
+    }
+    quality.value = d.quality; quality.addEventListener("change", () => { d.quality = quality.value; this.refreshPanels(true); }); box.append(this.element(doc, "label", "翻译质量"), quality);
+    box.append(this.button(doc, "应用翻译设置", () => this.applySelection(), "st-button st-primary"));
+    if (d.provider) box.append(this.button(doc, "更新模型目录", () => this.loadModels(d.provider), "st-button st-quiet"));
+    box.append(this.element(doc, "p", "更改后先应用。模型与悬窗、网页共享；快速档使用 Google。", "st-footnote"));
+    return box;
+  },
+  async openLibraryPDF(paper) {
+    const controller = this.controller;
+    const p = await controller.client.paper(paper.id);
+    if (!p.has_translated) throw new Error("这篇文档尚无中文译文。");
+    const bytes = await controller.client.download(p.id, "translated");
+    if (controller !== this.controller || controller.closed) return;
+    const folder = PathUtils.join(Zotero.getTempDirectory().path, "supertranslate-library-" + this.uuid());
+    await IOUtils.makeDirectory(folder, { permissions: 0o700 });
+    const path = PathUtils.join(folder, `${p.translation_status === "completed" ? "中文版" : "待修复草稿"}《${SuperTranslateCore.safeName(p.title)}》.pdf`);
+    await IOUtils.write(path, bytes, { permissions: 0o600 }); Zotero.launchFile(path);
   },
   element(doc, tag, text, className) {
     const node = doc.createElementNS("http://www.w3.org/1999/xhtml", tag);
@@ -242,6 +332,7 @@ var SuperTranslateZotero = {
     if (!item || this.disposed) return;
     this.panels.set(body, args);
     const doc = body.ownerDocument;
+    const expanded = body.querySelector("details")?.open || false;
     body.replaceChildren();
     const css = this.element(doc, "link"); css.rel = "stylesheet"; css.href = this.rootURI + "content/style.css"; body.append(css);
     const root = this.element(doc, "div", null, "st-root st-panel"); body.append(root);
@@ -253,9 +344,12 @@ var SuperTranslateZotero = {
       root.append(this.element(doc, "p", "连接已有的 SuperTranslate 账号，即可翻译当前 PDF。", "st-hint"));
       root.append(this.button(doc, "连接翻译服务", () => this.openSettings(), "st-button st-primary")); return;
     }
-    const provider = this.pref("provider", "deepseek");
+    const provider = this.selection?.provider ?? "deepseek";
     const catalog = this.catalogs.find(c => c.provider === provider);
-    root.append(this.element(doc, "div", `${catalog?.label || provider} · ${catalog?.selected_model || "账号默认模型"}`, "st-model"));
+    root.append(this.element(doc, "div", `${catalog?.label || this.providerLabels[provider]} · ${catalog?.selected_model || "账号默认模型"}`, "st-model"));
+    const picker = this.element(doc, "details", null, "st-picker");
+    picker.open = expanded;
+    picker.append(this.element(doc, "summary", "切换供应商、模型与质量"), this.renderSelection(doc)); root.append(picker);
     const actions = this.element(doc, "div", null, "st-actions");
     const submit = this.button(doc, "翻译并保存中文版", () => this.translateItems([item]), "st-button st-primary");
     submit.disabled = this.running || args.editable === false;
@@ -282,9 +376,10 @@ var SuperTranslateZotero = {
     if (task.resultID) actions.append(this.button(doc, "打开译文", () => Zotero.getMainWindow().ZoteroPane.viewAttachment(task.resultID)));
     else {
       actions.append(this.button(doc, "刷新状态", () => this.controller.refresh(), "st-button st-quiet"));
-      if (["interrupted", "failed", "start_unknown", "sync_error", "completed", "pending"].includes(task.state)) {
+      if (["interrupted", "failed", "cancelled", "start_unknown", "sync_error", "completed", "pending"].includes(task.state)) {
         actions.append(this.button(doc, "重试", async () => this.controller.retry(task, await this.source(await Zotero.Items.getAsync(task.attachmentID))), "st-button st-quiet"));
       }
+      if (task.paperID && task.state === "translating" && !task.cancelRequested) actions.append(this.button(doc, "取消翻译", () => this.controller.cancel(task), "st-button st-quiet"));
     }
     if (!task.resultID && task.available && ["repairing", "repair_pending", "failed"].includes(task.state)) {
       actions.append(this.button(doc, "查看待修复译文", () => this.openDraft(task)));
@@ -321,10 +416,10 @@ var SuperTranslateZotero = {
     const counts = `${Number(report.error_count) || 0} 个错误，${Number(report.warning_count) || 0} 个提示`;
     Services.prompt.alert(Zotero.getMainWindow(), "SuperTranslate · 质检详情", [task.title, summary + " · " + counts, ...issues].join("\n\n"));
   },
-  refreshPanels() {
+  refreshPanels(force = false) {
     for (const [body, args] of [...this.panels]) {
       if (!body.isConnected) this.panels.delete(body);
-      else this.renderPanel(args);
+      else if (force || !body.contains(body.ownerDocument.activeElement) || !["input", "select", "textarea"].includes(body.ownerDocument.activeElement?.localName)) this.renderPanel(args);
     }
   },
 };

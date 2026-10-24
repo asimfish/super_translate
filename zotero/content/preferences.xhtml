@@ -20,26 +20,34 @@
     <html:section class="st-section">
       <html:h2>02 · 翻译偏好</html:h2>
       <html:p class="st-muted">从服务获取模型目录，与你已有的供应商配置互通。</html:p>
-      <html:div class="st-grid">
-        <html:div><html:label for="st-provider">API 供应商</html:label><html:select id="st-provider"/></html:div>
-        <html:div><html:label for="st-model">账号默认模型</html:label><html:input id="st-model" type="text" list="st-model-list" placeholder="选择或输入模型标识"/><html:datalist id="st-model-list"/></html:div>
-      </html:div>
-      <html:label for="st-api-key">供应商 API Key（可选，仅更新时填写）</html:label>
-      <html:input id="st-api-key" type="password" autocomplete="off" placeholder="已在网页版配置时无需重复填写"/>
-      <html:p class="st-footnote">保存模型会更新这个服务账号的默认模型，网页版和悬窗也会使用它。API Key 只发送至你配置的翻译服务。</html:p>
-      <html:div class="st-actions"><html:button id="st-models" class="st-button">更新模型列表</html:button><html:button id="st-save-model" class="st-button">保存账号模型</html:button></html:div>
+      <html:div id="st-selection-controls"/>
+      <html:details class="st-picker"><html:summary>更新供应商 API Key</html:summary>
+        <html:label for="st-api-key">API Key（已在网页版配置时无需重复填写）</html:label>
+        <html:input id="st-api-key" type="password" autocomplete="off"/>
+        <html:button id="st-save-key" class="st-button">保存到所选供应商</html:button>
+      </html:details>
+      <html:p class="st-footnote">应用模型会同步这个服务账号在网页版和悬窗的默认模型。中文版自动保存为「中文版《论文名字》」。</html:p>
       <html:p id="st-model-status" class="st-notice" role="status" aria-live="polite"/>
-      <html:div class="st-grid">
-        <html:div><html:label for="st-quality">翻译质量</html:label><html:select id="st-quality"><html:option value="balanced">均衡 · 推荐</html:option><html:option value="quality">高质量</html:option><html:option value="fast">快速 · 服务的快速后端</html:option></html:select></html:div>
-        <html:div><html:p>自动保存中文版</html:p><html:p class="st-muted">中文版《论文名字》.pdf</html:p></html:div>
-      </html:div>
       <html:p class="st-footnote">所选 PDF 会上传到此服务，并由所选供应商翻译。服务可能产生 API 用量费用。原文、笔记与批注不会被覆盖。</html:p>
     </html:section>
     <html:section class="st-section">
       <html:h2>03 · 翻译任务</html:h2>
       <html:p class="st-muted">右键选择论文 → 翻译论文并保存译文。也可以在阅读器中点击「译」。</html:p>
+      <html:input id="st-task-search" type="search" placeholder="搜索本机任务标题" aria-label="搜索本机任务"/>
       <html:button id="st-refresh" class="st-button">刷新任务</html:button>
       <html:div id="st-tasks"/>
+    </html:section>
+    <html:section class="st-section">
+      <html:h2>04 · 共享文档库</html:h2>
+      <html:p class="st-muted">查找悬窗、网页上传的文档，查看同内容的导入历史和不同内容的版本。</html:p>
+      <html:div class="st-grid">
+        <html:input id="st-library-search" type="search" maxlength="200" placeholder="论文标题或原文件名" aria-label="搜索共享文档"/>
+        <html:select id="st-library-sort" aria-label="文档排序"><html:option value="recent">最近导入</html:option><html:option value="oldest">最早导入</html:option><html:option value="title">按标题</html:option></html:select>
+      </html:div>
+      <html:div class="st-actions"><html:button id="st-library-find" class="st-button st-primary">搜索文档</html:button><html:button id="st-library-organize" class="st-button">整理重复与标题</html:button></html:div>
+      <html:p id="st-library-status" class="st-notice" role="status" aria-live="polite"/>
+      <html:div id="st-library-results"/>
+      <html:div class="st-actions"><html:button id="st-library-prev" class="st-button">上一页</html:button><html:button id="st-library-next" class="st-button">下一页</html:button></html:div>
     </html:section>
   </html:div>
 </vbox>
