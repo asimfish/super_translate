@@ -63,6 +63,8 @@ class RetryRegressions(unittest.TestCase):
         self.assertEqual(
             m._missing_formula_fragments(fragments, ["结果从5/20提升到12/20。"]), ["13/20"]
         )
+        self.assertEqual(m._missing_formula_fragments(["5/20"], ["从15/20提升到13/20"]), ["5/20"])
+        self.assertEqual(m._missing_formula_fragments(["5/20"], ["从5/200提升到13/20"]), ["5/20"])
 
     def test_multiple_affiliation_numbers_separate_names(self):
         text = "Marcel Torne1,4Anthony Simeonov1,4Zechu Li1,3,4April Chan1,4"
@@ -112,6 +114,24 @@ class RetryRegressions(unittest.TestCase):
         self.assertTrue(m._is_sibling_list_item(block, "• 硬件配置：硬件的详细信息。"))
         block.text = "Hardware Setup: details about the hardware."
         self.assertFalse(m._is_sibling_list_item(block, "硬件配置：硬件的详细信息。"))
+
+    def test_long_list_label_does_not_bold_the_following_sentence(self):
+        block = m.TextBlock(
+            0,
+            (60, 100, 300, 140),
+            "• GUI for Real-to-Sim Transfer of Scenes XII: We provide details.",
+            10,
+            (0, 0, 0),
+            bold_prefix=True,
+        )
+        text = "用于场景真实到仿真迁移的图形用户界面 第十二节：本文进一步阐述所提出的界面细节。"
+        tokens = m.tokenize_text(text)
+        m.apply_inline_bold(tokens, block, text)
+        position = 0
+        for token in tokens:
+            if token.kind != "space":
+                self.assertEqual(token.bold, position <= text.index("："))
+            position += len(token.text)
 
 
 if __name__ == "__main__":

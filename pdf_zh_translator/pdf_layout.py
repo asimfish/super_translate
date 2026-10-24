@@ -7896,6 +7896,9 @@ def _two_dimensional_formula_sides_present(
 def _formula_fragment_present(fragment: str, translated_compact: str) -> bool:
     normalized = _normalize_formula_fragment_for_compare(fragment)
     normalized_page = _normalize_formula_fragment_for_compare(translated_compact)
+    if re.fullmatch(r"\d+(?:\.\d+)?/\d+(?:\.\d+)?", normalized):
+        return bool(re.search(r"(?<![\d./])" + re.escape(normalized) + r"(?![\d./])",
+                              normalized_page))
     if _formula_fragment_present_core(normalized, normalized_page):
         return True
     # Sentence words glued to inline math are legitimately translated; retry
@@ -10373,6 +10376,7 @@ def collect_text_blocks(
 
     markdown_fence = None
     fence_openings = paired_markdown_openings(document)
+    from .task_formula_layout import join_task_condition_records, task_condition_blocks
     for page_index in range(document.page_count):
         page = document[page_index]
         page_width = float(page.rect.width)
@@ -10381,10 +10385,15 @@ def collect_text_blocks(
             page_dict.get("blocks", []), markdown_fence,
             valid_openings=fence_openings.get(page_index, set()),
         )
+        page_dict["blocks"] = join_task_condition_records(page_dict.get("blocks", []))
         review_line_number_bboxes = _review_line_number_bboxes(page_dict)
         records: List[_RawBlockRec] = []
         for raw_block in page_dict.get("blocks", []):
             if raw_block.get("type") != 0:
+                continue
+            task_blocks = task_condition_blocks(raw_block, page_index)
+            if task_blocks is not None:
+                blocks.extend(task_blocks)
                 continue
             record, dropped = parse_block_lines(
                 raw_block,
@@ -25091,6 +25100,13 @@ def apply_inline_bold(
         if block.translated_bold_prefix_chars > 0
         else _bold_prefix_limit(text) if block.bold_prefix else 0
     )
+    if (
+        block.bold_prefix and block.translated_bold_prefix_chars <= 0
+        and _SIBLING_LIST_MARKER_RE.match(strip_sentinels(block.text).lstrip())
+    ):
+        colon = re.search(r"[:：]", text)
+        if colon is not None and colon.start() <= 96:
+            prefix_limit = colon.end()
     # "1. Task Goal Layer" keeps its list marker at regular weight; only the
     # lead-in after the marker is bold in the source.
     marker_end = 0
