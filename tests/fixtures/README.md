@@ -1,5 +1,41 @@
 # Golden PDF fixtures
 
+## Full-paper proof and inline-formula regressions (2026-10-19)
+
+`gflownet_inline_records.json` contains text/span geometry excerpts from the
+user-supplied 17-page *Your GFlowNet Secretly Learns an Optimal Transport Plan*
+(arXiv:2606.06272). Original SHA-256:
+`c671f77f878bf9b429712aae9ff7ed800d68bcf839049810286699c1b90631a1`.
+The complete PDF and Zotero library are not included. The excerpts exercise
+cross-object fractions and sums, narrative citations, short proof clauses,
+ordinary-font graph operators, and bold headings interrupted by math fonts.
+No license is inferred from the supplied document; these excerpts serve the
+same internal regression purpose as the other owner-supplied fixtures below.
+
+`gflownet_inline_assumption.json` is the prepared `TextBlock` geometry for
+page 5's paragraph beginning “Assumption 3.1 implies”. It captures the user's
+reported gap before the inline `Z=1` and `U×X`: the academic prefix caused
+these symbols to stay at their original English coordinates. The regression
+checks compact math beside source prose, with separate-row, long, wide, tall,
+inset-continuation and missing-geometry controls that must still retain fixed
+formula placement. The existing PRICE and OTF fixtures also protect compound
+math that extends beyond the translated prose fragment.
+
+The DDPM cache gained one response and the BatchNorm cache four responses
+from actual DeepSeek `deepseek-v4-pro` calls on 2026-10-19. These cover changed
+protected-formula boundaries and three already-missing BatchNorm inputs.
+Responses were checked for placeholder preservation; existing entries remain
+unchanged. The DDPM covariance test checks protected expressions, including
+Sigma, rather than requiring an arbitrary count of formula fragments.
+
+The final-r2 Adam cache also gained two genuine responses from the same model
+and date. Protecting ordinary-font Delta symbols changes these two request
+keys; all prior entries are preserved. The old branch replay passes, while the
+new boundaries require these additional cache entries.
+
+Cache completeness does not establish layout quality. BatchNorm layout
+failures must still be evaluated independently against the engine baseline.
+
 ## Visual inspector regression pairs (`otf_p*_*.pdf` / `*_translated.pdf`)
 
 Page-level pairs extracted from the OFT paper below (CC BY 4.0) and its

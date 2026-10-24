@@ -1,0 +1,83 @@
+{
+  "description": "Protocol shared with macOS floating client; update both consumers when this contract changes.",
+  "reference": "desktop/macos/Sources/FloatingCore/PDFService.swift",
+  "reference_sha256": "d52a4f0d622f2d1c04acd417397ec711fd50dd0e027a3aa4e4750c698e19aea3",
+  "verified_on": "2026-10-24",
+  "providers": [
+    "deepseek",
+    "kimi",
+    "openai",
+    "anthropic",
+    "glm",
+    "gemini",
+    "qwen",
+    "doubao"
+  ],
+  "operations": [
+    [
+      "models",
+      [],
+      "GET",
+      "/api/provider-credentials/models"
+    ],
+    [
+      "credentials",
+      [],
+      "GET",
+      "/api/provider-credentials"
+    ],
+    [
+      "refreshModels",
+      [
+        "deepseek"
+      ],
+      "POST",
+      "/api/provider-credentials/models/deepseek/refresh"
+    ],
+    [
+      "saveModel",
+      [
+        "deepseek",
+        "deepseek-v4-flash"
+      ],
+      "PUT",
+      "/api/provider-credentials/deepseek"
+    ],
+    [
+      "cancel",
+      [
+        "012345abcdef"
+      ],
+      "POST",
+      "/api/papers/012345abcdef/cancel"
+    ],
+    [
+      "libraryHistory",
+      [
+        "012345abcdef"
+      ],
+      "GET",
+      "/api/papers/012345abcdef/library-history"
+    ],
+    [
+      "organizeLibrary",
+      [],
+      "POST",
+      "/api/papers/organize"
+    ],
+    [
+      "qaReport",
+      [
+        "012345abcdef"
+      ],
+      "GET",
+      "/api/papers/012345abcdef/qa-report"
+    ]
+  ],
+  "translation_query": {
+    "quality": "balanced",
+    "preserve_graphics_text": "true",
+    "qa_mode": "single",
+    "backend": "deepseek"
+  }
+}

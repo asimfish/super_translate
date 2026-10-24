@@ -3556,7 +3556,13 @@ def test_ddpm_reverse_process_formula_sentence_is_one_flowing_unit():
     assert "had similar results" in plain
     assert paragraph.flow_inline_math
     assert not paragraph.nowrap
-    assert len(SENTINEL_RUN_RE.findall(paragraph.text)) >= 12
+    protected = " ".join(strip_sentinels(run) for run in SENTINEL_RUN_RE.findall(paragraph.text))
+    # Complete covariance expressions must be protected. Counting fragments
+    # rewarded leaving the ordinary-font Sigma outside its mathematical run.
+    assert "Σ^{θ}(x^{t}, t))" in protected
+    assert "Σ_{θ}(x_{t}, t) =σ^{2}" in protected
+    assert "x^{0}∼N(0,I)" in protected
+    assert "Σ" not in SENTINEL_RUN_RE.sub(" ", paragraph.text)
 
 
 def test_ddpm_numbered_heading_with_inline_formula_keeps_heading_role():
