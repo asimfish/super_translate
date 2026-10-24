@@ -1368,6 +1368,11 @@ def translate_pdf(
             ],
             float_obstacles=page_floats,
         )
+        from .prompt_layout import reflow_dense_prompt_items
+
+        page_items = reflow_dense_prompt_items(
+            page_items, source_document[page_index], font_pack, margin=margin,
+        )
         source_links = _page_links_for_restore(page)
         redact_original_text(
             page,
@@ -4198,7 +4203,7 @@ def _looks_like_author_or_affiliation_text(text: str) -> bool:
     # formula-dense paragraph from untranslated-English detection.
     if "@" in compact or re.search(r"\{[^{}]{2,60}(?:,[^{}]{1,60})+\}", compact):
         return True
-    authorish = re.sub(r"(?<=[a-z])\d+(?=[A-Z])", " ", compact)
+    authorish = re.sub(r"(?<=[a-z])\d+(?:,\d+)*(?=[A-Z]|\b)", " ", compact)
     names = re.findall(r"\b[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+)+", authorish)
     lower = compact.lower()
     body_verbs = (
@@ -7484,6 +7489,19 @@ def _extract_formula_fragments(
         # formula are translated prose, not part of the preservation
         # signature (``sqrt(beta(tau)) (Song et al., 2020)``).
         text = AUTHOR_YEAR_CITATION_RE.sub("", text)
+        # A reported improvement is prose around two exact numeric values,
+        # not a formula containing the English words "from" and "to".
+        # Keep checking both fractions even when the connectors translate.
+        numeric_range = re.compile(
+            r"\bfrom\s+(\d+(?:\.\d+)?/\d+(?:\.\d+)?)\s+to\s+"
+            r"(\d+(?:\.\d+)?/\d+(?:\.\d+)?)\b", re.IGNORECASE,
+        )
+        for match in numeric_range.finditer(text):
+            for value in match.groups():
+                if value not in seen:
+                    fragments.append(value)
+                    seen.add(value)
+        text = numeric_range.sub(" ", text)
         # Natural-language connectors embedded between two equations belong
         # to translatable prose. Keeping them inside one preservation
         # signature makes a correct ``and -> 及`` translation look like a
@@ -10347,10 +10365,22 @@ def collect_text_blocks(
     """
     blocks: List[TextBlock] = []
     gutter_rects: Dict[int, List[BBox]] = {}
+    from .prompt_layout import (
+        join_prompt_list_continuations,
+        paired_markdown_openings,
+        split_fenced_code_blocks,
+    )
+
+    markdown_fence = None
+    fence_openings = paired_markdown_openings(document)
     for page_index in range(document.page_count):
         page = document[page_index]
         page_width = float(page.rect.width)
         page_dict = page.get_text("dict")
+        page_dict["blocks"], fenced_code_boxes, markdown_fence = split_fenced_code_blocks(
+            page_dict.get("blocks", []), markdown_fence,
+            valid_openings=fence_openings.get(page_index, set()),
+        )
         review_line_number_bboxes = _review_line_number_bboxes(page_dict)
         records: List[_RawBlockRec] = []
         for raw_block in page_dict.get("blocks", []):
@@ -10421,6 +10451,7 @@ def collect_text_blocks(
         alg_regions = algorithm_regions_for_page(page, records)
         if algorithm_regions_out is not None:
             page_algorithm_regions = list(alg_regions)
+            page_algorithm_regions.extend(fenced_code_boxes)
             page_algorithm_regions.extend(
                 record.bbox
                 for record, is_algorithm in zip(records, algorithm_flags)
@@ -10497,7 +10528,12 @@ def collect_text_blocks(
             _attach_formula_keepouts(record_segments, formula_lines)
             _trim_redacts_against_block_keepouts(record_segments)
             blocks.extend(record_segments)
-    return blocks, gutter_rects
+    joined_blocks: List[TextBlock] = []
+    for page_index in range(document.page_count):
+        joined_blocks.extend(join_prompt_list_continuations(
+            [block for block in blocks if block.page_index == page_index], document[page_index],
+        ))
+    return joined_blocks, gutter_rects
 
 
 def _merge_wrapped_formula_continuation_records(
@@ -14278,6 +14314,11 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
     global _bibliography_heading_size, _bibliography_ended
     raw_text = block.text.strip()
 
+    if _bibliography_seen and not _bibliography_ended and _starts_post_reference_supplement(
+        block, all_blocks, max(_bibliography_seen),
+    ):
+        _bibliography_ended = True
+
     # Check if this block IS the references heading
     if _REFERENCES_HEADING_RE.match(raw_text):
         _bibliography_seen[block.page_index] = True
@@ -14342,6 +14383,34 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
         if _bibliography_seen.get(pi, False):
             return True
     return False
+
+
+def _starts_post_reference_supplement(
+    block: TextBlock, page_blocks: Sequence[TextBlock], last_reference_page: int,
+) -> bool:
+    """Recognize an appendix opener on its own page before small-cap sections.
+
+    Some proceedings omit an APPENDIX heading. Require both an explicit
+    supplemental-detail opener and a subsequent Roman-numbered section;
+    a reference title or a page still containing numbered entries cannot end
+    the bibliography range.
+    """
+    plain = " ".join(strip_sentinels(block.text).split())
+    if block.page_index <= last_reference_page or block.bbox[1] > 150:
+        return False
+    if not re.search(
+        r"\b(?:we\s+)?(?:provide|present|describe)\s+(?:further|additional|supplementary)"
+        r"\s+(?:(?:experimental|implementation)\s+)?details\b", plain, re.IGNORECASE,
+    ):
+        return False
+    if any(re.match(r"^\s*\[\d+\]", strip_sentinels(other.text)) for other in page_blocks):
+        return False
+    return any(
+        other.bbox[1] > block.bbox[3]
+        and _ROMAN_SECTION_HEADING_RE.match(strip_sentinels(other.text).strip())
+        and _looks_like_appendix_heading(strip_sentinels(other.text), other.source_lines)
+        for other in page_blocks
+    )
 
 
 @dataclass
@@ -23055,13 +23124,10 @@ def _is_sibling_list_item(block: TextBlock, translated_text: str) -> bool:
         block.preserve_position and block.block_type != "formula_prose"
     ):
         return False
-    # Run-in styled records (bold label + body flowed as one block) have a
-    # dedicated reflow path; the group pass must not re-stack them.
-    if (
-        block.bold_prefix
-        or block.translated_bold_prefix_chars
-        or block.flow_inline_math
-    ):
+    # A styled label on a real list item uses the same general line layout
+    # with range-level bold. It still needs the group's shared font size.
+    # Flowing formulas use a separate layout and cannot join this pass.
+    if block.flow_inline_math:
         return False
     plain = " ".join(strip_sentinels(block.text).split()).strip()
     translated_plain = " ".join(strip_sentinels(translated_text).split()).strip()

@@ -9,6 +9,7 @@ from pathlib import Path
 _REVISION_FILES = (
     "pdf_zh_translator/pdf_layout.py",
     "pdf_zh_translator/page_inspector.py",
+    "pdf_zh_translator/prompt_layout.py",
     "app/api/papers.py",
     "app/services/layout_fix.py",
     "app/services/quality_agent.py",

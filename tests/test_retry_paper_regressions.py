@@ -1,0 +1,118 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from pdf_zh_translator import pdf_layout as m
+
+
+class Page:
+    def get_text(self, mode):
+        return {
+            "blocks": [
+                {
+                    "type": 0,
+                    "lines": [
+                        {
+                            "spans": [
+                                {"text": "Results improve from 5/20 to"},
+                                {"text": " 13/20 on real-robot tasks."},
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+
+
+class RetryRegressions(unittest.TestCase):
+    def setUp(self):
+        state = (dict(m._bibliography_seen), m._bibliography_ended, m._bibliography_heading_size)
+
+        def restore():
+            m._bibliography_seen.clear()
+            m._bibliography_seen.update(state[0])
+            m._bibliography_ended, m._bibliography_heading_size = state[1:]
+
+        self.addCleanup(restore)
+
+    def test_prompt_engine_update_changes_recovery_revision(self):
+        from app.services import translation_recovery as recovery
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            module = root / "app/services/translation_recovery.py"
+            module.parent.mkdir(parents=True)
+            prompt = root / "pdf_zh_translator/prompt_layout.py"
+            prompt.parent.mkdir()
+            prompt.write_text("before")
+            try:
+                with patch.object(recovery, "__file__", str(module)):
+                    recovery.current_engine_revision.cache_clear()
+                    before = recovery.current_engine_revision()
+                    prompt.write_text("after")
+                    recovery.current_engine_revision.cache_clear()
+                    self.assertNotEqual(before, recovery.current_engine_revision())
+            finally:
+                recovery.current_engine_revision.cache_clear()
+
+    def test_number_ranges_keep_both_values_without_english_connectors(self):
+        fragments = m._extract_formula_fragments(Page())
+        self.assertEqual(fragments, ["5/20", "13/20"])
+        self.assertEqual(m._missing_formula_fragments(fragments, ["结果从5/20提升到13/20。"]), [])
+        self.assertEqual(
+            m._missing_formula_fragments(fragments, ["结果从5/20提升到12/20。"]), ["13/20"]
+        )
+
+    def test_multiple_affiliation_numbers_separate_names(self):
+        text = "Marcel Torne1,4Anthony Simeonov1,4Zechu Li1,3,4April Chan1,4"
+        self.assertFalse(m._looks_like_untranslated_english(text))
+        self.assertTrue(
+            m._looks_like_untranslated_english(
+                "We evaluate the proposed method using the same network "
+                "and improve the performance."
+            )
+        )
+
+    def test_supplement_opener_after_references(self):
+        def block(text, y, size=9.96):
+            return m.TextBlock(15, (49, y, 300, y + 20), text, size, (0, 0, 0))
+
+        opener = block("Next, we provide additional details of our work. More concretely:", 58)
+        heading = block("VIII. TASK DETAILS", 323, 8.96)
+        m._bibliography_seen.clear()
+        m._bibliography_seen[11] = True
+        m._bibliography_ended = False
+        m._bibliography_heading_size = 8.96
+        self.assertFalse(m._is_bibliography_context(opener, [opener, heading]))
+        self.assertFalse(
+            m._is_bibliography_context(
+                block(
+                    "In this section of the appendix we describe "
+                    "additional details about each task.",
+                    341,
+                ),
+                [heading],
+            )
+        )
+        reference = block("[75] A. Smith. Additional details. 2024.", 100)
+        m._bibliography_ended = False
+        self.assertTrue(m._is_bibliography_context(opener, [opener, heading, reference]))
+
+    def test_styled_list_label_keeps_shared_list_typography(self):
+        block = m.TextBlock(
+            0,
+            (60, 100, 300, 122),
+            "• Hardware Setup: details about the hardware.",
+            9.96,
+            (0, 0, 0),
+            bold_prefix=True,
+            translated_bold_prefix_chars=6,
+        )
+        self.assertTrue(m._is_sibling_list_item(block, "• 硬件配置：硬件的详细信息。"))
+        block.text = "Hardware Setup: details about the hardware."
+        self.assertFalse(m._is_sibling_list_item(block, "硬件配置：硬件的详细信息。"))
+
+
+if __name__ == "__main__":
+    unittest.main()
