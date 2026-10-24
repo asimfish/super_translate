@@ -20,8 +20,25 @@
 .st-task-head { justify-content:space-between; font-size:12px; }
 .st-status { color:var(--st-muted); font-size:11px; }
 .st-success { color:#218565; }
-.st-root progress { appearance:none; width:100%; height:5px; border:0; border-radius:9px; background:var(--st-soft); margin:12px 0 0; overflow:hidden; }
-.st-root progress::-moz-progress-bar { background:var(--st-accent); border-radius:9px; }
+.st-progress { margin:10px 0 12px; }
+.st-progress-caption { display:flex; align-items:baseline; gap:10px; justify-content:space-between; margin-bottom:6px; }
+.st-progress-value { color:var(--st-accent); font-size:16px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.st-progress-stage { font-size:12px; text-align:right; overflow-wrap:anywhere; }
+.st-progress-track { display:block; width:100%; height:8px; min-height:8px; overflow:hidden; border-radius:8px; background:var(--st-soft); }
+.st-progress-fill { display:block; height:100%; border-radius:inherit; background:var(--st-accent); transition:width .25s ease; }
+.st-progress-unknown .st-progress-fill { animation:st-progress-wait 1.4s ease-in-out infinite alternate; }
+.st-progress-paused .st-progress-fill { background:#b77920; }
+.st-progress-paused .st-progress-value { color:var(--st-muted); }
+.st-reader-control { display:inline-flex; align-items:center; gap:5px; }
+.st-reader-progress { display:inline-block; }
+.st-reader-progress[hidden] { display:none; }
+.st-progress-compact { width:64px; margin:0 3px 0 0; }
+.st-progress-compact.st-progress-paused { width:96px; }
+.st-progress-compact .st-progress-caption { margin:0 0 2px; }
+.st-progress-compact .st-progress-value { font-size:10px; line-height:12px; }
+.st-progress-compact .st-progress-track { height:4px; min-height:4px; }
+@keyframes st-progress-wait { from { transform:translateX(0); } to { transform:translateX(233%); } }
+@media (prefers-reduced-motion:reduce) { .st-progress-unknown .st-progress-fill { animation:none; } .st-progress-fill { transition:none; } }
 .st-message { font-size:12px; overflow-wrap:anywhere; margin:8px 0 12px; }
 .st-stage { font-size:12px; font-weight:600; overflow-wrap:anywhere; margin:8px 0 4px; }
 .st-settings { max-width:680px; padding:12px 16px 30px; }

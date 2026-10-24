@@ -1,6 +1,7 @@
 /* Native Zotero adapter. UI strings and remote metadata are inserted as text. */
 var SuperTranslateZotero = {
   id: pluginID, rootURI, windows: new Set(), panels: new Map(), menus: [], controller: null,
+  stylePath: "content/style.css?v=" + (typeof pluginVersion === "undefined" ? "dev" : encodeURIComponent(pluginVersion)),
   catalogs: [], credentials: [], timer: null, running: false, disposed: false, readerButtons: new Set(),
   providerLabels: { "": "跟随系统默认", deepseek: "DeepSeek", kimi: "Kimi", openai: "OpenAI", anthropic: "Anthropic", glm: "智谱 GLM", gemini: "Gemini", qwen: "通义千问 Qwen", doubao: "豆包" },
   pref(key, fallback = "") { return Services.prefs.getStringPref(`extensions.supertranslate.${key}`, fallback); },
@@ -96,7 +97,7 @@ var SuperTranslateZotero = {
       onDestroy: ({ body }) => this.panels.delete(body),
     });
     this.preferenceID = Zotero.PreferencePanes.register({ pluginID: this.id, id: "supertranslate-preferences", label: "论文翻译",
-      src: "content/preferences.xhtml", scripts: ["content/preferences.js"], stylesheets: ["content/style.css"], image: "content/icon.svg" });
+      src: "content/preferences.xhtml", scripts: ["content/preferences.js"], stylesheets: [this.stylePath], image: "content/icon.svg" });
     this.menus.push(Zotero.MenuManager.registerMenu({ menuID: "supertranslate-translate", pluginID: this.id, target: "main/library/item", menus: [
       { menuType: "menuitem", l10nID: "supertranslate-menu-translate", icon: this.rootURI + "content/icon.svg",
         onShowing: (_, c) => c.setVisible(c.items?.some(i => i.isRegularItem() || i.isPDFAttachment())),
@@ -106,12 +107,16 @@ var SuperTranslateZotero = {
       { menuType: "menuitem", l10nID: "supertranslate-menu-settings", onCommand: () => this.openSettings() },
     ] }));
     this.readerHandler = ({ reader, doc, append }) => {
+      const control = this.element(doc, "span", null, "st-root st-reader-control");
+      control.style.cssText = "display:inline-flex;align-items:center;gap:5px";
+      control.dataset.stReaderItemID = String(reader.itemID);
       const button = doc.createElement("button"); button.textContent = "译";
       button.title = "SuperTranslate · 翻译整篇论文"; button.setAttribute("aria-label", button.title);
       button.style.cssText = "border:0;border-radius:5px;background:transparent;color:inherit;padding:4px 8px;cursor:pointer;font-size:14px";
       button.addEventListener("click", () => this.guard(async () => this.translateItems([await Zotero.Items.getAsync(reader.itemID)])));
-      this.readerButtons.add(button);
-      append(button);
+      const progress = this.element(doc, "span", null, "st-reader-progress"); progress.hidden = true;
+      control.append(button, progress); this.readerButtons.add(control);
+      append(control); this.refreshReaderProgress();
     };
     Zotero.Reader.registerEventListener("renderToolbar", this.readerHandler, this.id);
     for (const win of Zotero.getMainWindows()) this.addWindow(win);
@@ -183,6 +188,7 @@ var SuperTranslateZotero = {
     const controller = this.controller;
     const options = { provider: this.selection?.provider ?? this.pref("provider", "deepseek"), quality: this.selection?.quality ?? this.pref("quality", "balanced"), variant: "translated" };
     this.running = true;
+    this.revealProgress = true;
     this.refreshPanels();
     const errors = [];
     try {
@@ -195,7 +201,7 @@ var SuperTranslateZotero = {
           await controller.submit(source, options);
         } catch (e) { errors.push(`${item.getField("title").slice(0, 70)}：${e.message}`); }
       });
-    } finally { this.running = false; this.refreshPanels(); if (this.timer) this.schedule(); }
+    } finally { this.running = false; this.refreshPanels(); this.revealProgress = false; if (this.timer) this.schedule(); }
     if (errors.length) throw new Error(errors.join("\n\n"));
   },
   async checkImport(task) {
@@ -327,6 +333,66 @@ var SuperTranslateZotero = {
     b.addEventListener("click", () => this.guard(async () => { b.disabled = true; try { await action(); } finally { if (b.isConnected) b.disabled = false; } }));
     return b;
   },
+  progressView(doc, task, compact = false) {
+    const pending = ["queued", "uploading", "starting", "start_unknown", "pending"].includes(task.state);
+    const known = Number.isFinite(task.progress) && !pending;
+    const percent = known ? Math.round(Math.max(0, Math.min(1, task.progress)) * 1000) / 10 : null;
+    const paused = ["repair_pending", "failed", "cancelled", "interrupted", "sync_error"].includes(task.state);
+    const text = percent == null ? (task.state === "uploading" ? "上传中" : "等待进度") : `${percent}%`;
+    const stage = task.stage || task.message || SuperTranslateCore.labels[task.state] || "";
+    const view = this.element(doc, "div", null, `st-progress${compact ? " st-progress-compact" : ""}${paused ? " st-progress-paused" : ""}`);
+    view.title = `${SuperTranslateCore.labels[task.state] || "翻译"} · ${text} · ${stage}`;
+    const caption = this.element(doc, "div", null, "st-progress-caption");
+    const captionText = compact && paused ? `${text} · ${task.state === "repair_pending" ? "暂停" : SuperTranslateCore.labels[task.state]}` : text;
+    caption.append(this.element(doc, "strong", captionText, "st-progress-value"));
+    if (!compact) caption.append(this.element(doc, "span", stage, "st-progress-stage"));
+    const meter = this.element(doc, "div", null, `st-progress-track${percent == null && !paused ? " st-progress-unknown" : ""}`);
+    meter.setAttribute("role", "progressbar"); meter.setAttribute("aria-label", "翻译进度");
+    meter.setAttribute("aria-valuemin", "0"); meter.setAttribute("aria-valuemax", "100");
+    meter.setAttribute("aria-valuetext", view.title);
+    if (percent != null) meter.setAttribute("aria-valuenow", percent);
+    const fill = this.element(doc, "div", null, "st-progress-fill"); fill.style.width = percent == null ? (paused ? "0%" : "30%") : `${percent}%`;
+    // Zotero's reader document cannot load jar: stylesheets. Its small meter
+    // uses local styles, like the existing reader button, without new privileges.
+    if (compact) {
+      view.style.cssText = `display:inline-block;width:${paused ? 96 : 64}px;margin-right:3px;vertical-align:middle`;
+      caption.style.cssText = "display:block;margin-bottom:2px;white-space:nowrap";
+      caption.firstChild.style.cssText = "font:600 10px/12px system-ui,sans-serif;color:inherit";
+      meter.style.cssText = "display:block;width:100%;height:4px;overflow:hidden;border-radius:4px;background:rgba(127,127,127,.25)";
+      fill.style.display = "block"; fill.style.height = "100%"; fill.style.borderRadius = "inherit";
+      fill.style.background = paused ? "#b77920" : "#637be8";
+    }
+    meter.append(fill); view.append(caption, meter); return view;
+  },
+  taskList(doc, item) {
+    const list = this.element(doc, "div", null, "st-task-list");
+    const ids = new Set(item.isRegularItem() ? item.getAttachments() : [item.id]);
+    const tasks = (this.controller?.tasks || []).filter(t => ids.has(t.attachmentID) || ids.has(t.resultID));
+    for (const task of tasks.slice(0, 8)) list.append(this.taskCard(doc, task));
+    return list;
+  },
+  refreshReaderProgress() {
+    for (const control of this.readerButtons) {
+      if (!control.isConnected && control.dataset.stMounted) { this.readerButtons.delete(control); continue; }
+      if (control.isConnected) control.dataset.stMounted = "true";
+      const id = Number(control.dataset.stReaderItemID);
+      const task = this.controller?.tasks.find(t => t.attachmentID === id || t.resultID === id);
+      const status = control.querySelector(".st-reader-progress");
+      if (!status) continue;
+      status.hidden = !task;
+      if (!task) {
+        control.dataset.stProgressSnapshot = ""; status.replaceChildren();
+        control.querySelector("button").title = "SuperTranslate · 翻译整篇论文";
+        continue;
+      }
+      const snapshot = JSON.stringify([task.state, task.progress, task.stage, task.message]);
+      if (snapshot === control.dataset.stProgressSnapshot) continue;
+      control.dataset.stProgressSnapshot = snapshot;
+      const view = this.progressView(control.ownerDocument, task, true);
+      status.replaceChildren(view);
+      control.querySelector("button").title = "SuperTranslate · " + view.title;
+    }
+  },
   renderPanel(args) {
     const { body, item } = args;
     if (!item || this.disposed) return;
@@ -334,7 +400,7 @@ var SuperTranslateZotero = {
     const doc = body.ownerDocument;
     const expanded = body.querySelector("details")?.open || false;
     body.replaceChildren();
-    const css = this.element(doc, "link"); css.rel = "stylesheet"; css.href = this.rootURI + "content/style.css"; body.append(css);
+    const css = this.element(doc, "link"); css.rel = "stylesheet"; css.href = this.rootURI + this.stylePath; body.append(css);
     const root = this.element(doc, "div", null, "st-root st-panel"); body.append(root);
     const top = this.element(doc, "div", null, "st-brand");
     top.append(this.element(doc, "span", "论文翻译", "st-title"), this.element(doc, "span", "保留版式", "st-badge")); root.append(top);
@@ -344,6 +410,7 @@ var SuperTranslateZotero = {
       root.append(this.element(doc, "p", "连接已有的 SuperTranslate 账号，即可翻译当前 PDF。", "st-hint"));
       root.append(this.button(doc, "连接翻译服务", () => this.openSettings(), "st-button st-primary")); return;
     }
+    root.append(this.taskList(doc, item));
     const provider = this.selection?.provider ?? "deepseek";
     const catalog = this.catalogs.find(c => c.provider === provider);
     root.append(this.element(doc, "div", `${catalog?.label || this.providerLabels[provider]} · ${catalog?.selected_model || "账号默认模型"}`, "st-model"));
@@ -354,10 +421,6 @@ var SuperTranslateZotero = {
     const submit = this.button(doc, "翻译并保存中文版", () => this.translateItems([item]), "st-button st-primary");
     submit.disabled = this.running || args.editable === false;
     actions.append(submit, this.button(doc, "设置", () => this.openSettings(), "st-button st-quiet")); root.append(actions);
-    const taskList = this.element(doc, "div", null, "st-task-list"); root.append(taskList);
-    const ids = new Set(item.isRegularItem() ? item.getAttachments() : [item.id]);
-    const tasks = (this.controller?.tasks || []).filter(t => ids.has(t.attachmentID));
-    for (const task of tasks.slice(0, 8)) taskList.append(this.taskCard(doc, task));
     root.append(this.element(doc, "p", "PDF 将发送至你配置的翻译服务。译文自动附在原论文下，原文和批注保留。", "st-footnote"));
   },
   taskCard(doc, task) {
@@ -365,13 +428,14 @@ var SuperTranslateZotero = {
     const head = this.element(doc, "div", null, "st-task-head");
     head.append(this.element(doc, "strong", task.variant === "dual" ? "中英对照 PDF" : "中文 PDF"),
       this.element(doc, "span", SuperTranslateCore.labels[task.state] || task.state, `st-status ${task.state === "saved" ? "st-success" : ""}`)); card.append(head);
-    const progress = this.element(doc, "progress"); progress.max = 1; progress.value = task.progress; progress.setAttribute("aria-label", "翻译进度"); card.append(progress);
-    if (task.stage && task.stage !== task.message) card.append(this.element(doc, "p", task.stage, "st-stage"));
+    card.append(this.progressView(doc, task));
     if (task.state === "repair_pending") {
       const attempts = task.attempts != null ? `已自动尝试 ${task.attempts}${task.maxAttempts ? "/" + task.maxAttempts : ""} 次。` : "";
       card.append(this.element(doc, "p", attempts + "当前未继续处理，需等待服务端修复。刷新只同步状态，不会重新翻译。", "st-notice st-error"));
     }
-    const message = this.element(doc, "p", task.message, "st-message"); message.setAttribute("aria-live", "polite"); card.append(message);
+    if (task.message && task.message !== task.stage) {
+      const message = this.element(doc, "p", task.message, "st-message"); message.setAttribute("aria-live", "polite"); card.append(message);
+    }
     const actions = this.element(doc, "div", null, "st-actions");
     if (task.resultID) actions.append(this.button(doc, "打开译文", () => Zotero.getMainWindow().ZoteroPane.viewAttachment(task.resultID)));
     else {
@@ -417,9 +481,23 @@ var SuperTranslateZotero = {
     Services.prompt.alert(Zotero.getMainWindow(), "SuperTranslate · 质检详情", [task.title, summary + " · " + counts, ...issues].join("\n\n"));
   },
   refreshPanels(force = false) {
+    this.refreshReaderProgress();
+    let revealed = false;
     for (const [body, args] of [...this.panels]) {
       if (!body.isConnected) this.panels.delete(body);
-      else if (force || !body.contains(body.ownerDocument.activeElement) || !["input", "select", "textarea"].includes(body.ownerDocument.activeElement?.localName)) this.renderPanel(args);
+      else {
+        if (force || !body.contains(body.ownerDocument.activeElement) || !["input", "select", "textarea"].includes(body.ownerDocument.activeElement?.localName)) this.renderPanel(args);
+        else body.querySelector(".st-task-list")?.replaceWith(this.taskList(body.ownerDocument, args.item));
+        if (this.revealProgress) {
+          const card = body.querySelector(".st-task");
+          if (card) {
+            const section = body.closest("item-pane-custom-section");
+            if (section) section.collapsed = false;
+            card.scrollIntoView({ block: "nearest" }); revealed = true;
+          }
+        }
+      }
     }
+    if (revealed) this.revealProgress = false;
   },
 };

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "SuperTranslate · 论文翻译",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "在 Zotero 中翻译论文，保留版式，并将中文版 PDF 自动归档到原论文下。",
   "author": "SuperTranslate",
   "homepage_url": "https://github.com/asimfish/super_translate",
