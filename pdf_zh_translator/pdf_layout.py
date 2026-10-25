@@ -146,6 +146,8 @@ _STRUCTURE_HEADING_WORDS = {
     "bibliography",
     "acknowledgments",
     "acknowledgements",
+    "acknowledgment",
+    "acknowledgement",
     "appendix",
     "impact statement",
     "keywords",
@@ -1598,6 +1600,7 @@ def _clear_adjacent_formula_ink_overlaps(
     """
     adjusted = list(page_items)
     ink_cache: Dict[int, Optional[BBox]] = {}
+    measured_body_size_moves: set[int] = set()
 
     def ink_bbox(index: int) -> Optional[BBox]:
         if index not in ink_cache:
@@ -1738,7 +1741,7 @@ def _clear_adjacent_formula_ink_overlaps(
             or block.nowrap
             or block.preserve_position
             or block.block_type not in {"body", "formula_prose"}
-            or not block.formula_anchors
+            or (not block.formula_anchors and block.source_lines != 1)
             or _uses_fixed_source_math(block)
             or block.bbox[1] < float(page_rect.height) * 0.55
         ):
@@ -1873,6 +1876,7 @@ def _clear_adjacent_formula_ink_overlaps(
             ):
                 adjusted[index] = (candidate, text)
                 ink_cache.pop(index, None)
+                measured_body_size_moves.add(index)
                 break
             shift += 0.25
 
@@ -1918,6 +1922,16 @@ def _clear_adjacent_formula_ink_overlaps(
         if previous_ink is None or current_ink is None:
             continue
         previous = adjusted[previous_index][0]
+        clearance = max(1.0, min(2.0, block.font_size * 0.14))
+        if (
+            index in measured_body_size_moves
+            and current_ink[1] >= previous_ink[3] + clearance
+        ):
+            # This position already fits at body size and its rendered ink
+            # clears the predecessor. A theoretical line-height estimate may
+            # include unused descender space; pushing it down again can put it
+            # back into the fixed equation and force avoidable font shrink.
+            continue
         conservative_previous_bottom = previous_ink[3]
         previous_text = adjusted[previous_index][1]
         previous_requested_size = requested_translation_font_size(
@@ -1947,7 +1961,6 @@ def _clear_adjacent_formula_ink_overlaps(
                     anchor_bottom + formula_descender_guard,
                 ),
             )
-        clearance = max(1.0, min(2.0, block.font_size * 0.14))
         shift = conservative_previous_bottom + clearance - current_ink[1]
         if shift <= 0.0:
             continue
@@ -7496,7 +7509,7 @@ def _extract_formula_fragments(
                     # Keep prose connectors separate before collecting exact
                     # formula signatures; their translations need not match.
                     if re.search(
-                        r"\b(?:and|where|as|on|here|giving|indicates|initialize(?:d|s|ing)?)\b",
+                        r"\b(?:let|and|where|as|on|here|giving|indicates|initialize(?:d|s|ing)?)\b",
                         span_text,
                         re.IGNORECASE,
                     ):
@@ -7534,7 +7547,7 @@ def _extract_formula_fragments(
         # signature makes a correct ``and -> 及`` translation look like a
         # damaged formula and also couples otherwise independent equations.
         for candidate in re.split(
-            r"\b(?:and|where|as|on|here|giving|indicates|initialize(?:d|s|ing)?)\b",
+            r"\b(?:let|and|where|as|on|here|giving|indicates|initialize(?:d|s|ing)?)\b",
             text,
             flags=re.IGNORECASE,
         ):
@@ -7554,10 +7567,18 @@ def _normalize_formula_fragment_for_compare(text: str) -> str:
         .replace("，", ",")
         .replace("（", "(")
         .replace("）", ")")
+        # NFKC uses CJK angle brackets for TeX mathematical angle brackets.
+        # Keep the enclosed operands and operators exact in both text views.
+        .replace("〈", "⟨")
+        .replace("〉", "⟩")
         .replace("−", "-")
         # Computer Modern extraction may expose the same Greek variable as
         # either the micro sign or Greek small mu.
         .replace("µ", "μ")
+        # The portable text layer follows Unicode compatibility mappings for
+        # TeX's spacing dot accent and phi variant. Retain the dot itself.
+        .replace("˙", "\u0307")
+        .replace("ϕ", "φ")
         # TeX math fonts use both the lunate epsilon (ϵ) and Greek epsilon
         # (ε) for the same semantic variable. Formula sprites and their
         # accessibility text can legitimately extract as either glyph.
@@ -10572,6 +10593,42 @@ def collect_text_blocks(
     return joined_blocks, gutter_rects
 
 
+def _records_form_wrapped_inline_sentence(
+    records: Sequence[_RawBlockRec], start: int,
+) -> bool:
+    """A prose row and its math-heavy wrapped ending own one sentence."""
+    if start + 1 >= len(records):
+        return False
+    first, following = records[start:start + 2]
+    outside = _text_outside_sentinels(first.bare_text())
+    tail = _text_outside_sentinels(following.bare_text()).strip()
+    if (
+        len(first.lines) != 1
+        or len(_prose_words(outside)) < 8
+        or len(_prose_words(tail)) < 4
+        or not re.match(r"^[a-z]", tail)
+        or sentence_final_text(first.bare_text())
+        or not sentence_final_text(following.bare_text())
+        or not any(line.math_run_bboxes for line in first.lines)
+        or not any(line.math_run_bboxes for line in following.lines)
+        or any(line_looks_like_section_heading(line)
+               for record in (first, following) for line in record.lines)
+        or any(EQUATION_NUMBER_RE.fullmatch("".join(strip_sentinels(line.text).split()))
+               for record in (first, following) for line in record.lines)
+    ):
+        return False
+    size = max(float(span.get("size", 0.0)) for line in first.lines for span in line.spans)
+    return bool(
+        size > 0
+        and abs(first.bbox[0] - following.bbox[0]) <= 4
+        and -size * 0.5 <= following.bbox[1] - first.bbox[3] <= size * 0.8
+        and following.bbox[1] - first.bbox[1] >= size * 0.6
+        and following.bbox[3] - following.bbox[1] <= size * 2.8
+        and following.bbox[2] - following.bbox[0]
+        >= (first.bbox[2] - first.bbox[0]) * 0.6
+    )
+
+
 def _merge_wrapped_formula_continuation_records(
     records: Sequence[_RawBlockRec],
 ) -> List[_RawBlockRec]:
@@ -10588,6 +10645,16 @@ def _merge_wrapped_formula_continuation_records(
     index = 0
     while index < len(records):
         current = records[index]
+        if _records_form_wrapped_inline_sentence(records, index):
+            output.append(_RawBlockRec(
+                lines=_promote_stacked_plain_formula_fragments(
+                    [*current.lines, *records[index + 1].lines]
+                ),
+                detached_inline_scripts=True,
+                flow_inline_math=True,
+            ))
+            index += 2
+            continue
         inline_fragment_end = _inline_formula_prose_fragment_sequence_end(
             records,
             index,
@@ -10805,9 +10872,13 @@ def _inline_formula_prose_fragment_sequence_end(
         )
     )
     conditional_lead = bool(re.fullmatch(r"If\s*,?\s*then", first_outside, re.I))
+    definition_lead = bool(
+        re.fullmatch(r"Let[\s,;]*(?:and)?", first_outside, re.I)
+        and first.bare_text().count("=") >= 2
+    )
     if (
         len(_prose_words(first_outside))
-        < (1 if conditional_lead else 2 if short_inline_lead else 4)
+        < (0 if definition_lead else 1 if conditional_lead else 2 if short_inline_lead else 4)
         or sentence_final_text(first.bare_text())
         or not any(line.prose_bboxes for line in first.lines)
         or not any(line.math_run_bboxes for line in first.lines)
@@ -16021,7 +16092,7 @@ def line_has_code_font(line: _LineRec) -> bool:
         if length <= 0:
             continue
         total += length
-        if _CODE_FONT_RE.search(str(span.get("font", ""))):
+        if int(span.get("flags", 0)) & 8 or _CODE_FONT_RE.search(str(span.get("font", ""))):
             code += length
     return total > 0 and code >= max(2, total * 0.5)
 
@@ -16089,6 +16160,16 @@ def record_is_algorithm(record: _RawBlockRec) -> bool:
             return True
 
     code_lines = [line for line in record.lines if line_is_code_like(line)]
+    if len(record.lines) == 1 and line_has_code_font(record.lines[0]):
+        # Some producers emit each listing statement as its own PDF object.
+        # Require actual statement/call syntax as well as typewriter glyphs;
+        # ordinary prose that mentions a function remains translatable.
+        if (
+            _CODE_LINE_RE.match(compact)
+            or re.fullmatch(r"(?:pass|break|continue)", compact)
+            or re.fullmatch(r"[A-Za-z_]\w*(?:\.\w+)*\([^\n]*\)", compact)
+        ):
+            return True
     if len(code_lines) < 2:
         return False
     code_font_lines = sum(1 for line in code_lines if line_has_code_font(line))
@@ -16365,7 +16446,7 @@ def row_has_table_gap(row: Sequence[_LineRec]) -> bool:
 _MATH_WORDS = frozenset(
     "sin cos tan exp log min max arg sup inf lim det diag clip tr kl "
     "softmax argmax argmin var cov std relu prox sgn span rank dim mod "
-    "arcsin arccos arctan sinh cosh tanh".split()
+    "arcsin arccos arctan sinh cosh tanh ite err true false".split()
 )
 _PROSE_WORD_RE = re.compile(r"[A-Za-z]{3,}")
 _SHORT_PROSE_WORDS = frozenset(
@@ -18656,6 +18737,19 @@ def _prose_trailing_display_start(record: _RawBlockRec) -> Optional[int]:
         previous = record.lines[index - 1]
         trailing = record.lines[index:]
         previous_plain = " ".join(_text_outside_sentinels(previous.text).split())
+        conditional_display = bool(
+            re.search(r"\bIf\s*$", previous_plain)
+            and len(trailing) == 1
+            and trailing[0].math_bboxes
+            and trailing[0].bbox[0] >= record.bbox[0] + 48.0
+            and trailing[0].bbox[2] - trailing[0].bbox[0]
+            <= (record.bbox[2] - record.bbox[0]) * 0.5
+            and abs(
+                (trailing[0].bbox[0] + trailing[0].bbox[2]) / 2
+                - (record.bbox[0] + record.bbox[2]) / 2
+            ) <= (record.bbox[2] - record.bbox[0]) * 0.15
+            and trailing[0].bbox[1] >= previous.bbox[3] - 2.0
+        )
         ordinary_display_lead = re.search(
             r"\b(?:(?:defined|expressed|given|written|computed)\s+as|"
             r"(?:is|are|equals?))[,;:]?\s*$",
@@ -18666,7 +18760,7 @@ def _prose_trailing_display_start(record: _RawBlockRec) -> Optional[int]:
             _record_is_inline_formula_sentence_bridge(record)
             and re.search(r"\bhave[,;:]?\s*$", previous_plain, re.IGNORECASE)
         )
-        if ordinary_display_lead is None and not bridge_display_lead:
+        if ordinary_display_lead is None and not bridge_display_lead and not conditional_display:
             continue
         if any(line_is_prose(line) for line in trailing):
             continue
@@ -18680,6 +18774,7 @@ def _prose_trailing_display_start(record: _RawBlockRec) -> Optional[int]:
         if (
             sum(bool(line.math_bboxes) for line in trailing) < 2
             and not single_display_seed
+            and not conditional_display
         ):
             continue
         return index

@@ -2290,6 +2290,17 @@ def _looks_like_aligned_preserved_rows(block: _Block) -> bool:
     if len(rows) < 4 or re.search(r"[.!?](?:\s|$)", block.text):
         return False
 
+    first_row = sorted(rows[0], key=lambda item: item.bbox[0])
+    if (
+        len(first_row) >= 3
+        and sum(right.bbox[0] - left.bbox[2] >= 12
+                for left, right in zip(first_row, first_row[1:])) >= 2
+        and all(len(re.findall(r"[A-Za-z]+", span.text)) <= 4 for span in first_row[:-1])
+        and all(all(abs(span.bbox[0] - first_row[-1].bbox[0]) <= 3
+                        for span in row) for row in rows[1:])
+    ):
+        return True
+
     structural_rows = 0
     numeric_grid_ends: List[Tuple[float, float]] = []
     for row in rows:
@@ -2377,6 +2388,33 @@ def _looks_like_subfigure_caption(
     return False
 
 
+def _native_formula_connectives_only(block: _Block) -> bool:
+    """Short connective words inside an otherwise native symbolic condition."""
+    ordinary = [span.text.strip() for span in block.spans
+                if span.text.strip() and not _MATH_FONT_RE.search(span.font)
+                and not re.search(r"CM(?:TI|SS|BX)\d", span.font, re.I)]
+    return bool(
+        ordinary
+        and all(re.fullmatch(r"such\s+that|is\s+satisfiable", text, re.I)
+                for text in ordinary)
+        and block.latin_words() <= 7
+        and len(re.findall(r"[=<>∈∃∀⇐⇒∧∨|]", block.text)) >= 3
+    )
+
+
+def _source_reference_list_owns_block(block: _Block, sources: Sequence[_Block]) -> bool:
+    """Carry confirmed source list ownership across target PDF object splits."""
+    from .pdf_layout import _looks_like_supplement_reference_list
+
+    compact = re.sub(r"\s+", "", block.text)
+    return bool(compact and any(
+        _looks_like_supplement_reference_list(source.text)
+        and _bbox_overlap_area(block.bbox, source.bbox) >= _bbox_area(block.bbox) * 0.95
+        and compact in re.sub(r"\s+", "", source.text)
+        for source in sources
+    ))
+
+
 def _untranslated_block_issues(
     translated_page: object,
     page_number: int,
@@ -2424,6 +2462,14 @@ def _untranslated_block_issues(
     for block in _text_blocks(translated_page):
         text = " ".join(block.text.split())
         if not text:
+            continue
+        if _source_reference_list_owns_block(block, source_blocks):
+            continue
+        if _native_formula_connectives_only(block) and any(
+            "".join(source.text.split()) == "".join(block.text.split())
+            and _bbox_overlap_area(block.bbox, source.bbox) >= _bbox_area(block.bbox) * 0.95
+            for source in source_blocks
+        ):
             continue
         if _VERBATIM_GENERATED_SAMPLE_RE.search(text):
             continue
