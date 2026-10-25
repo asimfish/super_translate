@@ -61,6 +61,30 @@ def issue_fingerprint(issues: Sequence[object]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def plan_quality_retry(
+    issues: Sequence[object], previous: Sequence[object] | None = None,
+) -> QualityPlan:
+    """A full regeneration needs a supported repair and measurable progress.
+
+    Layout repair already ran inside QA. Replaying the same PDF/cache cannot
+    repair an unsupported formula or extraction defect. Ignore warning noise
+    when deciding whether another expensive full-document run can help.
+    """
+    errors = [item for item in issues if getattr(item, "severity", "warning") == "error"]
+    codes = tuple(sorted({str(getattr(item, "code", "unknown")) for item in errors}))
+    if not errors:
+        return QualityPlan(QualityAction.ACCEPT, codes, "all blocking detectors passed")
+    if not has_retranslatable_error(errors):
+        return QualityPlan(QualityAction.STOP, codes, "remaining errors need an engine repair")
+    if previous is not None:
+        prior_errors = [
+            item for item in previous if getattr(item, "severity", "warning") == "error"
+        ]
+        if len(errors) >= len(prior_errors):
+            return QualityPlan(QualityAction.STOP, codes, "blocking errors did not decrease")
+    return QualityPlan(QualityAction.RETRANSLATE, codes, "retry supported untranslated prose")
+
+
 class DeterministicQualityAgent:
     """Map validated issue codes to the only safe next pipeline action."""
 

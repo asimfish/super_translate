@@ -136,3 +136,98 @@ class RetryRegressions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_formula_signatures_exclude_translatable_giving_connector():
+    class FormulaPage:
+        def get_text(self, _mode):
+            return {
+                "blocks": [
+                    {
+                        "type": 0,
+                        "lines": [
+                            {
+                                "spans": [
+                                    {"text": "ct+1 = ct(1-dt+1),"},
+                                    {"text": " giving "},
+                                    {"text": "J(theta) = E[P]"},
+                                ]
+                            }
+                        ],
+                    }
+                ]
+            }
+
+    fragments = m._extract_formula_fragments(FormulaPage())
+    assert all("giving" not in f for f in fragments)
+    assert m._missing_formula_fragments(fragments, ["ct+1=ct(1-dt+1),得到J(theta)=E[P]"]) == []
+    assert m._missing_formula_fragments(fragments, ["ct+1=ct(1-dt+2),得到J(theta)=E[P]"])
+
+
+def test_long_sentence_case_appendix_heading_with_explicit_appendix_opener():
+    heading = m.TextBlock(
+        12,
+        (108, 76, 504, 90),
+        "A Instantiation: observation, action, reward, and sim context",
+        10.96,
+        (0, 0, 0),
+        bold=True,
+    )
+    opener = m.TextBlock(
+        12,
+        (108, 96, 504, 119),
+        "This appendix instantiates the shared spaces of the POMDP of section 3.1.",
+        9.96,
+        (0, 0, 0),
+    )
+    assert m._starts_post_reference_supplement(heading, [heading, opener], 11)
+    # The title of a reference entry or its author list does not constitute an appendix.
+    heading.bold = False
+    assert not m._starts_post_reference_supplement(heading, [heading, opener], 11)
+
+
+def test_shell_reproduction_commands_are_not_english_prose():
+    command = (
+        "python unpack.py --output workspace R=workspace/mof-select-physical-correction-v1 "
+        "python -m pip install -r $T/requirements-tested.txt "
+        'python $T/train.py --bundle "$B" --family lambdamart --mode physical --seed 123'
+    )
+    assert m._looks_like_code_or_symbolic_text(command)
+    assert not m._looks_like_untranslated_english(command)
+    assert not m._looks_like_code_or_symbolic_text(
+        "Python provides the implementation, and we evaluate the model with the same settings."
+    )
+
+
+def test_rotated_source_labels_follow_native_preservation_policy(tmp_path):
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page(width=400, height=600)
+    page.insert_text(
+        (150, 460),
+        "(c) All actions overlap (d) Actions remain distinguishable",
+        fontsize=10,
+        rotate=90,
+    )
+    source = tmp_path / "source.pdf"
+    translated = tmp_path / "translated.pdf"
+    doc.save(source)
+    doc.save(translated)
+    doc.close()
+    issues = m.verify_translation_issues(source, translated)
+    assert not [i for i in issues if i.code == "untranslated_english"]
+
+
+def test_reproduction_commands_keep_native_code_ownership():
+    block = m.TextBlock(
+        22,
+        (143, 80, 466, 199),
+        "python unpack.py --output workspace python -m pip install -r requirements.txt",
+        9.96,
+        (0, 0, 0),
+        source_lines=10,
+    )
+    m.classify_blocks([block], 22, 792, [])
+    assert block.block_type == "code"
+    assert not block.should_translate

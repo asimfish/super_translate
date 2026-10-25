@@ -2985,6 +2985,14 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         for block in trans_blocks:
             if block.get("type") != 0:
                 continue
+            content_lines = [
+                line for line in block.get("lines", [])
+                if any(str(span.get("text", "")).strip() for span in line.get("spans", []))
+            ]
+            if content_lines and all(_line_is_rotated(line) for line in content_lines):
+                # Extraction deliberately leaves chart axes and rotated panel
+                # labels in their native typesetting; QA must use that policy.
+                continue
             if _block_in_reference_section(block, reference_y):
                 continue
             if _block_overlaps_preserved_regions(
@@ -4245,10 +4253,27 @@ def _looks_like_author_or_affiliation_text(text: str) -> bool:
     return False
 
 
+_PYTHON_COMMAND_RE = re.compile(
+    r"^(?:\$\s+)?python(?:[23](?:\.\d+)?)?\s+"
+    r"(?:-m\s+[\w.]+|-c\s+|[^\s]+\.py(?:\s|$))"
+)
+
+
 def _looks_like_code_or_symbolic_text(text: str) -> bool:
     compact = " ".join(text.split())
     lower = compact.lower()
     words = _ASCII_WORD_DETECT_RE.findall(compact)
+    if _PYTHON_COMMAND_RE.match(compact):
+        return True
+    if (
+        re.match(r"^[a-z][a-z_]*\s*=", compact)
+        and len(re.findall(r"\b[a-z][a-z_]*\s*=", compact)) >= 2
+        and len(words) <= 14
+        and re.search(r"\d|[α-ωΑ-Ω]", compact)
+        and not re.search(r"[.!?](?:\s|$)", compact)
+        and not _PROSE_VERB_RE.search(compact)
+    ):
+        return True
     if re.search(r"^(?:#|>>>|\.\.\.)\s*", compact):
         return True
     if re.search(r"\b(?:def|class)\s+\w+\s*\(", compact):
@@ -4490,6 +4515,8 @@ def _looks_like_reference_entry_text(text: str) -> bool:
     compact = " ".join(text.split())
     if not compact:
         return False
+    if _looks_like_supplement_reference_list(compact):
+        return True
     leading_citation = _REFERENCE_ENTRY_RE.match(compact)
     if (
         leading_citation
@@ -7469,7 +7496,7 @@ def _extract_formula_fragments(
                     # Keep prose connectors separate before collecting exact
                     # formula signatures; their translations need not match.
                     if re.search(
-                        r"\b(?:and|where|as|on|here|indicates|initialize(?:d|s|ing)?)\b",
+                        r"\b(?:and|where|as|on|here|giving|indicates|initialize(?:d|s|ing)?)\b",
                         span_text,
                         re.IGNORECASE,
                     ):
@@ -7507,7 +7534,7 @@ def _extract_formula_fragments(
         # signature makes a correct ``and -> 及`` translation look like a
         # damaged formula and also couples otherwise independent equations.
         for candidate in re.split(
-            r"\b(?:and|where|as|on|here|indicates|initialize(?:d|s|ing)?)\b",
+            r"\b(?:and|where|as|on|here|giving|indicates|initialize(?:d|s|ing)?)\b",
             text,
             flags=re.IGNORECASE,
         ):
@@ -12995,7 +13022,10 @@ def _vector_table_region_bboxes(
             for group in groups:
                 previous = group[-1]
                 if (
-                    segment[1] - previous[1] <= 90.0
+                    # Wrapped prose cells can make one row taller than 90pt.
+                    # Matching rule edges and the caption boundary below
+                    # still keep separate tables from joining each other.
+                    segment[1] - previous[1] <= 180.0
                     and not any(
                         previous[1] + 2.0
                         < (caption.bbox[1] + caption.bbox[3]) / 2.0
@@ -13844,6 +13874,12 @@ def classify_blocks(
         caption_match = bool(_CAPTION_RE.match(plain)) and not (
             _looks_like_split_caption_reference(block, plain, blocks)
         )
+        if _PYTHON_COMMAND_RE.match(plain):
+            block.block_type = "code"
+            block.should_translate = False
+            block.preserve_position = True
+            block.no_merge = True
+            continue
 
         # A references heading is a cross-page structure anchor. It must win
         # over run-in-heading and nearby figure-zone classification so the
@@ -14314,6 +14350,20 @@ def _is_structural_bibliography_terminator(
     return bool(block.source_lines <= 2 and 1 <= len(appendix_words) <= 4)
 
 
+def _looks_like_supplement_reference_list(text: str) -> bool:
+    """Recognize several S-numbered citations merged into one PDF record."""
+    compact = " ".join(strip_sentinels(text).split())
+    entries = re.split(r"\bS\d{1,3}\.\s+(?=[A-Z]\.\s)", compact)
+    if len(entries) < 3:
+        return False
+    # A PDF text object may end halfway through its last reference, before
+    # that entry's DOI. The completed entries still establish list ownership.
+    return bool(
+        all(_REFERENCE_YEAR_RE.search(entry) for entry in entries[1:])
+        and re.search(r"\bdoi\s*:\s*10\.\d{4,9}/", compact, re.IGNORECASE)
+    )
+
+
 def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> bool:
     """Check if block is in the bibliography section.
 
@@ -14353,6 +14403,12 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
             if block.bold and block.font_size >= bib_size_threshold:
                 if _SECTION_NUM_RE.match(raw_text) or len(raw_text) < 60:
                     _bibliography_ended = True
+
+    # Supplemental citations can occur inside an appendix after the main
+    # bibliography has ended. Preserve only this explicit list, without
+    # reopening the cross-page range over subsequent appendix prose.
+    if _looks_like_supplement_reference_list(raw_text):
+        return True
 
     if _bibliography_ended:
         return False
@@ -14407,6 +14463,26 @@ def _starts_post_reference_supplement(
     plain = " ".join(strip_sentinels(block.text).split())
     if block.page_index <= last_reference_page or block.bbox[1] > 150:
         return False
+    # Sentence-case appendix titles may be long and contain commas, so their
+    # typography alone is ambiguous with a bibliography entry. Require an
+    # explicit appendix opener immediately below the bold lettered heading.
+    if (
+        block.bold and block.source_lines <= 2
+        and _APPENDIX_LETTER_HEADING_RE.match(plain)
+        and len(_PROSE_WORD_RE.findall(plain)) <= 14
+        and not _looks_like_reference_entry_text(plain)
+        and any(
+            other.page_index == block.page_index
+            and -2 <= other.bbox[1] - block.bbox[3] <= 40
+            and abs(other.bbox[0] - block.bbox[0]) <= 8
+            and re.match(
+                r"^This\s+(?:appendix|supplement)\b",
+                strip_sentinels(other.text).strip(), re.IGNORECASE,
+            )
+            for other in page_blocks
+        )
+    ):
+        return True
     if not re.search(
         r"\b(?:we\s+)?(?:provide|present|describe)\s+(?:further|additional|supplementary)"
         r"\s+(?:(?:experimental|implementation)\s+)?details\b", plain, re.IGNORECASE,
@@ -14494,6 +14570,13 @@ def _promote_detached_inline_formula_scripts(lines: Sequence[_LineRec]) -> bool:
                 if normalize_span_text(span.get("text", "")).strip()
             ),
             default=0.0,
+        )
+        # A superscript can occupy the preceding PDF line by itself. Its
+        # 7pt size is not the body reference for the following 7pt subscript;
+        # the ordinary text sharing the current line supplies that reference.
+        previous_size = max(
+            previous_size,
+            max((float(span.get("size", 0.0)) for span in current.spans), default=0.0),
         )
         candidate_size = float(candidate.get("size", previous_size))
         previous_center = (previous_run[1] + previous_run[3]) / 2.0
@@ -14605,11 +14688,23 @@ def _span_is_adjacent_math_script(
         return False
     if not re.search(r"[A-Za-z0-9]", text) and not any(char in MATH_SYMBOLS for char in text):
         return False
-    for neighbor_index in (span_index - 1, span_index + 1):
+    neighbors = [
+        next((index for index in candidates
+              if str(spans[index].get("text", "")).strip()), -1)
+        for candidates in (
+            range(span_index - 1, -1, -1),
+            range(span_index + 1, len(spans)),
+        )
+    ]
+    for neighbor_index in neighbors:
         if neighbor_index < 0 or neighbor_index >= len(spans):
             continue
         neighbor = spans[neighbor_index]
-        if _span_horizontal_gap(span, neighbor) > LINE_NUMBER_NEIGHBOR_GAP:
+        allowed_gap = (
+            max(LINE_NUMBER_NEIGHBOR_GAP, line_max_size * 0.65)
+            if abs(neighbor_index - span_index) > 1 else LINE_NUMBER_NEIGHBOR_GAP
+        )
+        if _span_horizontal_gap(span, neighbor) > allowed_gap:
             continue
         if _span_is_math_neighbor(neighbor, line_max_size):
             return True
@@ -16259,7 +16354,8 @@ def row_has_table_gap(row: Sequence[_LineRec]) -> bool:
 # they never make a line prose on their own.
 _MATH_WORDS = frozenset(
     "sin cos tan exp log min max arg sup inf lim det diag clip tr kl "
-    "softmax argmax argmin var cov std relu prox sgn span rank dim mod".split()
+    "softmax argmax argmin var cov std relu prox sgn span rank dim mod "
+    "arcsin arccos arctan sinh cosh tanh".split()
 )
 _PROSE_WORD_RE = re.compile(r"[A-Za-z]{3,}")
 _SHORT_PROSE_WORDS = frozenset(
@@ -18953,6 +19049,16 @@ def _equation_inline_prose_slot_blocks(
 def _equation_record_is_formula_only(record: _RawBlockRec) -> bool:
     """Keep semantic labels inside a compact display equation immutable."""
     compact = " ".join(strip_sentinels(record.bare_text()).split())
+    if any(
+        line_is_prose(line)
+        and len(_ASCII_WORD_DETECT_RE.findall(_text_outside_sentinels(line.text))) >= 6
+        for line in record.lines
+    ):
+        # Glyph extraction can glue ``Here`` / ``with`` to an inline symbol.
+        # Counting words after stripping markers then merges prose and math
+        # identifiers. Count the separate prose runs before deciding that the
+        # entire record is immutable formula ink.
+        return False
     if any(_line_is_prose_dominant_sentence(line) for line in record.lines):
         return False
     prose_fragments = [
@@ -20288,6 +20394,25 @@ def protect_text(text: str) -> Tuple[str, Dict[int, str]]:
     Returns the protected text plus the mapping used to restore fragments
     after translation.
     """
+    # A PDF span may stop just before an interval's final bracket. Keep a
+    # directly adjacent unmatched closer with the protected formula so the
+    # supplier cannot drop it. A surrounding prose parenthesis whose opening
+    # is outside the formula stays ordinary punctuation.
+    for match in reversed(list(SENTINEL_RUN_RE.finditer(text))):
+        fragment = strip_sentinels(match.group(0))
+        end = match.end()
+        suffix = ""
+        pairs = {"]": "[", ")": "(", "}": "{"}
+        while end < len(text) and text[end] in pairs:
+            closer = text[end]
+            if fragment.count(pairs[closer]) <= fragment.count(closer):
+                break
+            suffix += closer
+            fragment += closer
+            end += 1
+        if suffix:
+            run = match.group(0)
+            text = text[:match.start()] + run[:-1] + suffix + SENTINEL_CLOSE + text[end:]
     mapping: Dict[int, str] = {}
 
     def stash(fragment: str) -> str:

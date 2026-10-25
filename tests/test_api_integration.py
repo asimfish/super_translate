@@ -4224,7 +4224,13 @@ class TestSelfHealingRetry:
                     code="text_overlap",
                     message="重叠",
                     severity="error",
-                )
+                ),
+                SimpleNamespace(
+                    page=2,
+                    code="untranslated_english",
+                    message="漏翻",
+                    severity="error",
+                ),
             ],
             [],
         ]
@@ -4334,7 +4340,9 @@ class TestSelfHealingRetry:
         ):
             _run_translation("paper123", "google", "fast")
 
-        assert mock_translate.call_count == 3
+        # The second identical QA result has no progress; do not render a
+        # third identical PDF merely to exhaust the configured budget.
+        assert mock_translate.call_count == 2
         assert paper.translation_status == "repairing"
         assert paper.translation_stage == "等待系统修复"
         assert paper.translated_filename

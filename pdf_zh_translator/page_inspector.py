@@ -2291,6 +2291,7 @@ def _looks_like_aligned_preserved_rows(block: _Block) -> bool:
         return False
 
     structural_rows = 0
+    numeric_grid_ends: List[Tuple[float, float]] = []
     for row in rows:
         ordered = sorted(row, key=lambda item: item.bbox[0])
         gaps = [
@@ -2310,6 +2311,21 @@ def _looks_like_aligned_preserved_rows(block: _Block) -> bool:
         ):
             continue
         structural_rows += 1
+        if (
+            sum(gap >= 12.0 for gap, _ in gaps) >= 3
+            and len(ordered) >= 4
+            and all(re.fullmatch(r"\d+", span.text.strip()) for span in ordered[-2:])
+        ):
+            numeric_grid_ends.append((ordered[-2].bbox[2], ordered[-1].bbox[2]))
+    if len(numeric_grid_ends) >= 3 and all(
+        max(pair[column] for pair in numeric_grid_ends)
+        - min(pair[column] for pair in numeric_grid_ends) <= 3.0
+        for column in (0, 1)
+    ):
+        # A section heading or wrapped note can share a PDF object with three
+        # table rows. Repeated numeric columns establish a grid independently
+        # of the prose in those extra rows.
+        return True
     return structural_rows >= max(4, int(len(rows) * 0.6))
 
 

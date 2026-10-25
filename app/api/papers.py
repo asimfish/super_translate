@@ -64,6 +64,7 @@ from app.services.quality_agent import (
     create_quality_agent,
     has_retranslatable_error,
     issue_fingerprint,
+    plan_quality_retry,
 )
 from app.services.resumable_uploads import (
     FilesystemChunkUploadStore,
@@ -2079,6 +2080,7 @@ async def _do_translate(
     best_score: tuple[int, int] | None = None
     clean_result = False
     qa_failure_error: str | None = None
+    previous_quality_issues: list | None = None
     for attempt in range(1, max_attempts + 1):
         if attempt > 1:
             delay = recovery_backoff_seconds(
@@ -2197,6 +2199,14 @@ async def _do_translate(
             )
             if job_id:
                 await db.commit()
+        retry_plan = plan_quality_retry(unresolved_issues, previous_quality_issues)
+        previous_quality_issues = list(unresolved_issues)
+        if retry_plan.action is QualityAction.STOP:
+            _append_log(
+                paper_id, loop,
+                "当前问题无法通过重复生成继续修复，已保留最佳译文和检查报告，等待引擎修复",
+            )
+            break
         if attempt < max_attempts:
             strategy = (
                 "重新生成漏翻内容"
@@ -2251,7 +2261,7 @@ async def _do_translate(
                 job_id,
                 status=TranslationJobStatus.REPAIR_PENDING.value,
                 progress=paper.translation_progress,
-                attempt_count=max_attempts,
+                attempt_count=attempt,
                 max_attempts=max_attempts,
                 engine_revision=engine_revision,
                 error=recovery_error,
@@ -2278,7 +2288,7 @@ async def _do_translate(
         else:
             error = qa_failure_error or trans_result.error
             final_log_message = (
-                f"等待系统修复: {error} (已自动尝试 {max_attempts} 次, "
+                f"等待系统修复: {error} (已自动尝试 {attempt} 次, "
                 f"耗时 {elapsed:.0f}秒)"
             )
         paper.translation_log = _append_log_text(paper.translation_log, final_log_message)
