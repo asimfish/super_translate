@@ -2287,7 +2287,32 @@ def _looks_like_aligned_preserved_rows(block: _Block) -> bool:
                 break
         else:
             rows.append([span])
-    if len(rows) < 4 or re.search(r"[.!?](?:\s|$)", block.text):
+    if len(rows) < 4:
+        return False
+
+    percentage_rows = [
+        sorted((span for span in row
+                if re.fullmatch(r"\d+(?:\.\d+)?%", span.text.strip())),
+               key=lambda span: span.bbox[0])
+        for row in rows
+    ]
+    percentage_rows = [row for row in percentage_rows if len(row) >= 3]
+    if len(percentage_rows) >= 4:
+        columns = len(percentage_rows[0])
+        aligned = [row for row in percentage_rows if len(row) == columns]
+        # Summary cells may shift a value to make room for an adjacent n=...
+        # note. Establish the grid from a consistent majority of data rows.
+        if len(aligned) >= 4 and any(
+            sum(all(
+                min(abs(anchor(row[column].bbox) - anchor(template[column].bbox))
+                    for anchor in (lambda box: box[0], lambda box: box[2],
+                                   lambda box: (box[0] + box[2]) / 2)) <= 3
+                for column in range(columns)
+            ) for row in aligned) >= max(4, len(aligned) * 0.7)
+            for template in aligned
+        ):
+            return True
+    if re.search(r"[.!?](?:\s|$)", block.text):
         return False
 
     first_row = sorted(rows[0], key=lambda item: item.bbox[0])

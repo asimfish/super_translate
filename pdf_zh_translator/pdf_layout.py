@@ -4002,7 +4002,10 @@ def _looks_like_cjk_file_payload(text: str) -> bool:
 
 def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
+    compact = _without_confirmed_author_year_lists(compact)
     if len(compact) < 35 or _is_reference_or_formula_text(compact):
+        return False
+    if _looks_like_file_tree_payload(compact):
         return False
     if _looks_like_parenthetical_gloss_with_citation(compact):
         return False
@@ -4058,6 +4061,38 @@ _IDENTIFIER_PAYLOAD_RE = re.compile(
     r"|[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+){2,}"
     r")\b"
 )
+_FILE_PAYLOAD_TOKEN_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_.\-]*\."
+    r"(?:md|jsonl?|py|sh|txt|ya?ml|toml|csv|[cm]?js|tsx?|html|xml)\b",
+    re.IGNORECASE,
+)
+
+
+def _without_confirmed_author_year_lists(text: str) -> str:
+    """Remove balanced author/year lists, without masking bracketed prose."""
+    def citation(match: re.Match) -> str:
+        content = match.group(0)[1:-1]
+        year = r"\b(?:19|20)\d{2}[a-z]?\b"
+        if not re.search(year, content):
+            return match.group(0)
+        residue = re.sub(year, " ", content)
+        residue = re.sub(r"\b(?:and|et|al|van|von|de|den|der)\b\.?", " ", residue)
+        residue = re.sub(r"\b[A-Z][A-Za-z'’\-]*\b", " ", residue)
+        return match.group(0) if re.search(r"[A-Za-z0-9]", residue) else "\n"
+
+    return re.sub(r"\[[^\[\]\n]{1,1800}\]", citation, text)
+
+
+def _looks_like_file_tree_payload(text: str) -> bool:
+    """A directory listing with dot leaders and several exact file/path tokens."""
+    if not re.search(r"\.{4,}", text):
+        return False
+    entries = re.compile(r"[A-Za-z_.][A-Za-z0-9_.\-/]*[\/]"
+                         r"|[A-Za-z_][A-Za-z0-9_.\-]*\.[A-Za-z0-9]{1,8}\b")
+    if len(entries.findall(text)) < 2:
+        return False
+    remainder = entries.sub(" ", text)
+    return len(_ASCII_WORD_DETECT_RE.findall(remainder)) <= 1
 
 
 def _looks_like_translated_identifier_payload(text: str) -> bool:
@@ -4820,6 +4855,30 @@ def _rendered_run_in_prefix_assignments(
         if block.block_type != "run_in_heading":
             continue
         source_baseline = block.bbox[3]
+        expected_start = block.bbox[0]
+        joint_body_index: Optional[int] = None
+        for peer in source_blocks[:block_index]:
+            same_band = min(peer.bbox[3], block.bbox[3]) - max(peer.bbox[1], block.bbox[1])
+            if not (
+                peer.bold and peer.source_lines == 1
+                and peer.block_type in {"body", "run_in_heading"}
+                and not peer.formula_anchors
+                and abs(peer.font_size - block.font_size) <= 0.5
+                and same_band >= min(
+                    peer.bbox[3] - peer.bbox[1], block.bbox[3] - block.bbox[1],
+                ) * 0.8
+                and 0 <= block.bbox[0] - peer.bbox[2] <= block.font_size * 1.5
+            ):
+                continue
+            joint_body_index = next((index for index, body in enumerate(source_blocks)
+                if body.block_type in {"body", "formula_prose"} and not body.bold
+                and abs(body.bbox[0] - peer.bbox[0]) <= 4
+                and any(abs(row[0] - block.bbox[2]) <= 4
+                        and min(row[3], block.bbox[3]) - max(row[1], block.bbox[1])
+                        >= block.font_size * 0.65 for row in body.source_line_bboxes)), None)
+            if joint_body_index is not None:
+                expected_start = peer.bbox[0]
+                break
         # Column cascade can move a run-in paragraph by roughly two source
         # lines while preserving its bold-prefix boundary. Keep matching the
         # prefix by baseline within that bounded reflow distance; a genuinely
@@ -4833,18 +4892,26 @@ def _rendered_run_in_prefix_assignments(
                 if span.get("origin")
                 and abs(float(span["origin"][1]) - source_baseline)
                 <= baseline_tolerance
-                and float(span["bbox"][0]) >= block.bbox[0] - start_tolerance
+                and float(span["bbox"][0]) >= expected_start - start_tolerance
             ),
             key=lambda span: float(span["bbox"][0]),
         )
         if not same_line:
             continue
+        if joint_body_index is not None:
+            starts = [span for span in same_line if _span_uses_bold_weight(span)
+                      and abs(float(span["bbox"][0]) - expected_start) <= start_tolerance]
+            if starts:
+                anchor = min(starts, key=lambda span:
+                             abs(float(span["origin"][1]) - source_baseline))
+                same_line = [span for span in same_line
+                             if abs(float(span["origin"][1]) - float(anchor["origin"][1])) <= 3]
         first_index = next(
             (
                 index
                 for index, span in enumerate(same_line)
                 if _span_uses_bold_weight(span)
-                and abs(float(span["bbox"][0]) - block.bbox[0]) <= start_tolerance
+                and abs(float(span["bbox"][0]) - expected_start) <= start_tolerance
             ),
             None,
         )
@@ -4863,6 +4930,8 @@ def _rendered_run_in_prefix_assignments(
                 continue
             if prefix_spans:
                 has_regular_boundary = True
+                if joint_body_index is not None:
+                    assignments[id(span)] = joint_body_index
             break
         if has_regular_boundary:
             assignments.update((id(span), block_index) for span in prefix_spans)
@@ -6666,6 +6735,11 @@ def _translation_retains_source_prose_run(
             if source
             else strip_sentinels(text)
         )
+        # Filenames and field IDs are exact payloads, not contiguous prose.
+        # Without a boundary, state_NN.json + log_NN.json becomes six words.
+        plain = _IDENTIFIER_PAYLOAD_RE.sub("\n", plain)
+        plain = _FILE_PAYLOAD_TOKEN_RE.sub("\n", plain)
+        plain = _without_confirmed_author_year_lists(plain)
         plain = re.sub(
             r"\b[A-Za-z][A-Za-z0-9]*(?:[-\u00ad\u2010-\u2015][A-Za-z0-9]+)+\b",
             "\n",
@@ -6700,7 +6774,6 @@ def _translation_retains_source_prose_run(
         for boundary_re in (
             EMAIL_RE,
             AUTHOR_YEAR_CITATION_RE,
-            BRACKETED_AUTHOR_YEAR_CITATION_RE,
             CITATION_RE,
         ):
             plain = boundary_re.sub("\n", plain)
@@ -7509,7 +7582,7 @@ def _extract_formula_fragments(
                     # Keep prose connectors separate before collecting exact
                     # formula signatures; their translations need not match.
                     if re.search(
-                        r"\b(?:let|and|where|as|on|here|giving|indicates|initialize(?:d|s|ing)?)\b",
+                        r"\b(?:let|and|where|as|on|here|giving|indicates|satisf(?:y|ies)|initialize(?:d|s|ing)?)\b",
                         span_text,
                         re.IGNORECASE,
                     ):
@@ -7547,7 +7620,7 @@ def _extract_formula_fragments(
         # signature makes a correct ``and -> 及`` translation look like a
         # damaged formula and also couples otherwise independent equations.
         for candidate in re.split(
-            r"\b(?:let|and|where|as|on|here|giving|indicates|initialize(?:d|s|ing)?)\b",
+            r"\b(?:let|and|where|as|on|here|giving|indicates|satisf(?:y|ies)|initialize(?:d|s|ing)?)\b",
             text,
             flags=re.IGNORECASE,
         ):
@@ -7944,6 +8017,13 @@ def _two_dimensional_formula_sides_present(
 def _formula_fragment_present(fragment: str, translated_compact: str) -> bool:
     normalized = _normalize_formula_fragment_for_compare(fragment)
     normalized_page = _normalize_formula_fragment_for_compare(translated_compact)
+    numeric_intervals = re.findall(
+        r"[\[(][-+]?\d+(?:\.\d+)?,[-+]?\d+(?:\.\d+)?[\])]", normalized,
+    )
+    if any(interval not in normalized_page for interval in numeric_intervals):
+        # Chunk matching for detached scripts must not borrow interval bounds
+        # from unrelated subscripts or constants elsewhere on the page.
+        return False
     if re.fullmatch(r"\d+(?:\.\d+)?/\d+(?:\.\d+)?", normalized):
         return bool(re.search(r"(?<![\d./])" + re.escape(normalized) + r"(?![\d./])",
                               normalized_page))
@@ -10005,6 +10085,21 @@ def _looks_like_prose_grazing_graphic_padding(
         if intersection <= 0.0:
             continue
         touched = True
+        horizontal_overlap = min(block.bbox[2], region[2]) - max(
+            block.bbox[0], region[0]
+        )
+        crosses_horizontal_edge = (
+            block.bbox[0] < region[0] < block.bbox[2]
+            or block.bbox[0] < region[2] < block.bbox[2]
+        )
+        if (
+            crosses_horizontal_edge
+            and width - horizontal_overlap >= max(block.font_size * 3, width * 0.2)
+        ):
+            # A full-width prose row may cross an oversized vector hull while
+            # starting well outside it. Interior labels cannot establish this
+            # substantial exterior text column; keep their existing protection.
+            continue
         vertical_overlap = min(block.bbox[3], region[3]) - max(
             block.bbox[1], region[1]
         )
@@ -10015,9 +10110,6 @@ def _looks_like_prose_grazing_graphic_padding(
         edge_grazing = crosses_vertical_edge and vertical_overlap <= height * 0.60
         if bbox_contains_point(region, center_x, center_y) and not edge_grazing:
             return False
-        horizontal_overlap = min(block.bbox[2], region[2]) - max(
-            block.bbox[0], region[0]
-        )
         if (
             horizontal_overlap < width * 0.75
             or vertical_overlap > height * 0.60
@@ -10451,7 +10543,8 @@ def collect_text_blocks(
             if dropped:
                 gutter_rects.setdefault(page_index, []).extend(dropped)
             if record is not None:
-                records.extend(_split_column_straddling_record(record))
+                for column_record in _split_column_straddling_record(record):
+                    records.extend(_split_leading_prose_before_code(column_record))
         records = _merge_wrapped_formula_continuation_records(records)
         equation_flags = mark_equation_blocks(records)
         algorithm_flags = [record_is_algorithm(record) for record in records]
@@ -10591,6 +10684,57 @@ def collect_text_blocks(
             [block for block in blocks if block.page_index == page_index], document[page_index],
         ))
     return joined_blocks, gutter_rects
+
+
+def _split_leading_prose_before_code(record: _RawBlockRec) -> List[_RawBlockRec]:
+    """Separate running prose from a monospaced listing in the same PDF object."""
+    rows = group_same_y_lines(record.lines)
+
+    def code_font(line: _LineRec) -> bool:
+        return line_has_code_font(line) or bool(
+            re.fullmatch(r"[{}\[\],:]+", strip_sentinels(line.text).strip())
+            and any(int(span.get("flags", 0)) & 8
+                    or _CODE_FONT_RE.search(str(span.get("font", "")))
+                    for span in line.spans)
+        )
+
+    def code_row(row: Sequence[_LineRec]) -> bool:
+        return any(code_font(line) for line in row) and all(
+            code_font(line)
+            or re.fullmatch(r"\d{1,3}", strip_sentinels(line.text).strip())
+            for line in row
+        )
+
+    for row_index in range(3, len(rows) - 1):
+        if (
+            all(code_row(row) for row in rows[:row_index])
+            and all(
+                not any(code_font(line) for line in row)
+                for row in rows[row_index:]
+            )
+            and sum(
+                any(line_is_prose(line) for line in row)
+                for row in rows[row_index:]
+            ) >= 2
+        ):
+            index = min(record.lines.index(line) for line in rows[row_index])
+            return [
+                _RawBlockRec(lines=list(record.lines[:index])),
+                _RawBlockRec(lines=list(record.lines[index:])),
+            ]
+
+    for row_index in range(3, len(rows) - 2):
+        index = min(record.lines.index(line) for line in rows[row_index])
+        if (
+            all(code_row(row) for row in rows[row_index:row_index + 3])
+            and sum(line_is_prose(line) and not line_has_code_font(line)
+                    for line in record.lines[:index]) >= 3
+        ):
+            return [
+                _RawBlockRec(lines=list(record.lines[:index])),
+                _RawBlockRec(lines=list(record.lines[index:])),
+            ]
+    return [record]
 
 
 def _records_form_wrapped_inline_sentence(
@@ -12084,7 +12228,18 @@ def _inline_formula_record_is_part_of_2d_cluster(
     )
     return bool(
         len(cluster) >= 4
-        and len(record_indexes) >= 3
+        and (
+            len(record_indexes) >= 3
+            or (
+                len(record_indexes) >= 2
+                and all(not line_is_prose(line) for line in record.lines)
+                and any(
+                    not sentinel_char_count(line.text)
+                    and re.fullmatch(r"\d{1,3}", strip_sentinels(line.text).strip())
+                    for _, line in cluster
+                )
+            )
+        )
         and has_stacked_ink
     )
 
@@ -16068,7 +16223,7 @@ _PROSE_STOPWORD_RE = re.compile(
 )
 _ALGORITHM_STAGE_RE = re.compile(r"^\s*(?:Stage|Phase)\s+\d+\s*:", re.IGNORECASE)
 _CODE_FONT_RE = re.compile(
-    r"(?:Inconsolata|Courier|Mono|Typewriter|Consolas|Menlo|CMTT|CMRTypewriter)",
+    r"(?:Inconsolata|Courier|Mono|NimbusMon|Typewriter|Consolas|Menlo|CMTT|CMRTypewriter)",
     re.IGNORECASE,
 )
 _CODE_LINE_RE = re.compile(
@@ -16094,7 +16249,8 @@ def line_has_code_font(line: _LineRec) -> bool:
         total += length
         if int(span.get("flags", 0)) & 8 or _CODE_FONT_RE.search(str(span.get("font", ""))):
             code += length
-    return total > 0 and code >= max(2, total * 0.5)
+    minimum = 1 if re.fullmatch(r"[{}\[\],:]", strip_sentinels(line.text).strip()) else 2
+    return total > 0 and code >= max(minimum, total * 0.5)
 
 
 def line_is_code_like(line: _LineRec) -> bool:
@@ -16106,7 +16262,7 @@ def line_is_code_like(line: _LineRec) -> bool:
     if _CODE_LINE_RE.match(compact):
         return True
     if line_has_code_font(line):
-        if re.search(r"(?:->|=>|==|!=|<=|>=|\+=|-=|:=|=|\(|\)|\[|\]|:)", compact):
+        if re.search(r"(?:->|=>|==|!=|<=|>=|\+=|-=|:=|=|\(|\)|\[|\]|[{}]|:)", compact):
             return True
     return False
 
@@ -19380,6 +19536,50 @@ def _structured_task_list_block(
     return block
 
 
+def _stacked_typographic_heading_segments(
+    page_index: int, record: _RawBlockRec,
+) -> Optional[List[TextBlock]]:
+    """A centered title, smaller left subtitle, then ordinary supplement prose."""
+    if len(record.lines) < 5:
+        return None
+    title, subtitle = record.lines[:2]
+    regular_sizes = [
+        float(span.get("size", 0))
+        for line in record.lines[2:] for span in line.spans
+        if str(span.get("text", "")).strip() and not span_is_bold(span)
+    ]
+    if not regular_sizes:
+        return None
+    body_size = statistics.median(regular_sizes)
+    width = max(1.0, record.bbox[2] - record.bbox[0])
+    for line, ratio in ((title, 1.15), (subtitle, 1.08)):
+        text = " ".join(strip_sentinels(line.text).split())
+        spans = [span for span in line.spans if str(span.get("text", "")).strip()]
+        if (
+            not spans or not 3 <= len(text) <= 90
+            or sentinel_char_count(line.text) or sentence_final_text(text)
+            or _looks_like_reference_entry_text(text)
+            or not all(span_is_bold(span) for span in spans)
+            or min(float(span.get("size", 0)) for span in spans) < body_size * ratio
+        ):
+            return None
+    if (
+        title.bbox[2] - title.bbox[0] > width * 0.70
+        or abs((title.bbox[0] + title.bbox[2] - record.bbox[0] - record.bbox[2]) / 2) > 5
+        or abs(subtitle.bbox[0] - record.bbox[0]) > 3
+        or subtitle.bbox[1] < title.bbox[3] - 1
+    ):
+        return None
+    headings = [heading_block_from_line(page_index, line) for line in (title, subtitle)]
+    if any(block is None for block in headings):
+        return None
+    for block in headings:
+        block.block_type = "heading"
+        block.no_merge = True
+        block.bold = True
+    return [*headings, *segments_from_record(page_index, _RawBlockRec(lines=record.lines[2:]))]
+
+
 def segments_from_record(
     page_index: int, record: _RawBlockRec, equation_record: bool = False
 ) -> List[TextBlock]:
@@ -19388,6 +19588,9 @@ def segments_from_record(
     For equation zones only full prose lines are extracted (the formula
     typesetting is preserved); for normal blocks a residual display-equation
     line still splits the segment and keeps its original rendering."""
+    stacked_headings = _stacked_typographic_heading_segments(page_index, record)
+    if stacked_headings is not None:
+        return stacked_headings
     if equation_record and _record_is_single_line_numbered_display_equation(record):
         return []
     if equation_record and _record_is_annotated_formula_decoration(record):
@@ -22744,6 +22947,34 @@ def _combine_inline_style_translation_items(
 
         prefix = heading_translation.rstrip()
         suffix = body_translation.lstrip()
+        if combined_items:
+            peer, peer_translation = combined_items[-1]
+            same_band = min(peer.bbox[3], heading_line[3]) - max(peer.bbox[1], heading_line[1])
+            if (
+                peer.page_index == heading.page_index and peer.bold
+                and peer.block_type in {"body", "run_in_heading"}
+                and peer.source_lines == 1 and not peer.formula_anchors
+                and abs(peer.font_size - heading.font_size) <= 0.5
+                and same_band >= min(
+                    peer.bbox[3] - peer.bbox[1], heading_line[3] - heading_line[1],
+                ) * 0.8
+                and 0 <= heading_line[0] - peer.bbox[2] <= heading.font_size * 1.5
+                and abs(peer.bbox[0] - body.bbox[0]) <= 4
+                and body.bbox[2] > heading_line[2] + 10
+            ):
+                combined_items.pop()
+                prefix = peer_translation.rstrip() + " " + prefix
+                heading = replace(
+                    heading, bbox=union_bbox([peer.bbox, heading.bbox]),
+                    text=peer.text.rstrip() + " " + heading.text.lstrip(),
+                    redact_bboxes=[*(peer.redact_bboxes or [peer.bbox]),
+                                   *(heading.redact_bboxes or [heading.bbox])],
+                    source_line_bboxes=tuple([*(peer.source_line_bboxes or [peer.bbox]),
+                                              *heading.source_line_bboxes]),
+                    source_prose_bboxes=tuple([
+                        *peer.source_prose_bboxes, *heading.source_prose_bboxes,
+                    ]),
+                )
         translated = f"{prefix} {suffix}" if suffix else prefix
         source_text = f"{heading.text.rstrip()} {body.text.lstrip()}"
         source_lines = tuple(
@@ -24664,6 +24895,13 @@ def relax_caption_boxes(
         for other in blocks:
             if other is block or other.page_index != block.page_index:
                 continue
+            # A paragraph can start beside the caption and continue at full
+            # width below it. Its outer box begins above the caption's bottom;
+            # only the individual source rows reveal the occupied space below.
+            for row in other.source_line_bboxes:
+                overlap = min(x1, row[2]) - max(x0, row[0])
+                if row[1] > y1 and overlap > min(x1 - x0, row[2] - row[0]) * 0.2:
+                    next_y = min(next_y, row[1] - 3.0)
             ox0, oy0, ox1, _ = other.bbox
             if oy0 <= y1:
                 continue
@@ -25832,7 +26070,15 @@ def _unresolved_formula_keepouts(block: TextBlock) -> List[BBox]:
                 and keepout[3] >= block.bbox[1] - block.font_size * 0.2
                 and keepout[1] <= block.bbox[3] + block.font_size * 0.2
             )
-            if not compact_boundary_fragment and not boundary_crossing_formula:
+            upper_side_float = bool(
+                keepout[1] < block.bbox[1] < keepout[3]
+                and keepout[2] - keepout[0] >= (block.bbox[2] - block.bbox[0]) * 0.25
+                and keepout[3] - keepout[1] >= block.font_size * 2
+                and vertical_overlap >= block.font_size * 0.5
+            )
+            if not (
+                compact_boundary_fragment or boundary_crossing_formula or upper_side_float
+            ):
                 continue
         keepout_area = max(1.0, bbox_area(keepout))
         represented = any(
@@ -26431,7 +26677,35 @@ def translated_text_fits(
             ) <= rect.height:
                 return True
         size -= _FONT_SIZE_SEARCH_STEP
+    if keepouts:
+        side_column = _clip_exhausted_wrap_to_side_column(block, rect, keepouts)
+        if side_column is not None:
+            return translated_text_fits(
+                side_column, text, font_pack, font_size, min_font_size, margin, centered,
+            )
     return False
+
+
+def _clip_exhausted_wrap_to_side_column(
+    block: TextBlock, rect: object, keepouts: Sequence[BBox],
+) -> Optional[TextBlock]:
+    """Keep an exhausted right-float wrap inside a continuous free left column."""
+    if block.block_type not in {"body", "formula_prose"} or not keepouts:
+        return None
+    # Tiny formula anchors are not side floats: clipping the entire paragraph
+    # around one would shrink otherwise readable body prose.
+    if not any(box[2] - box[0] >= rect.width * 0.25 for box in keepouts):
+        return None
+    if any(box[0] < rect.x0 + rect.width * 0.35 for box in keepouts):
+        return None
+    right = min(box[0] for box in keepouts) - _KEEPOUT_PAD - 0.4
+    if right - rect.x0 < max(_KEEPOUT_MIN_SEGMENT, rect.width * 0.35):
+        return None
+    return replace(
+        block,
+        bbox=(block.bbox[0], block.bbox[1], right, block.bbox[3]),
+        redact_bboxes=list(block.redact_bboxes or [block.bbox]),
+    )
 
 
 def insert_translated_text(
@@ -26589,6 +26863,14 @@ def insert_translated_text(
                 source_document,
             )
         return True
+
+    if keepouts:
+        side_column = _clip_exhausted_wrap_to_side_column(block, rect, keepouts)
+        if side_column is not None:
+            return insert_translated_text(
+                page, side_column, text, font_pack, font_size, min_font_size, margin,
+                centered, source_document,
+            )
 
     hanging_indent = 0.0 if centered else _list_hanging_indent(block, rect.width)
     chosen: Optional[Tuple[float, float, List[List[_Token]]]] = None

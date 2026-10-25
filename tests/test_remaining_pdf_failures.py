@@ -347,6 +347,76 @@ def test_math_accent_and_phi_have_portable_but_not_missing_signature():
     ) != m._normalize_formula_fragment_for_compare(target.replace("̇", ""))
 
 
+def test_satisfy_connects_two_exact_conditions_without_becoming_math():
+    spans = [
+        {"text": text, "bbox": (50, 50, 300, 65)}
+        for text in ("Let", "β1,β2∈[0,1)", "satisfy", "β21√β2<1.")
+    ]
+    fragments = m._extract_formula_fragments(
+        None, blocks=[{"type": 0, "lines": [{"spans": spans}]}]
+    )
+    target = m._normalize_formula_fragment_for_compare("令β1,β2∈[0,1)满足β21√β2<1.")
+    assert not m._missing_formula_fragments(fragments, [target])
+    assert m._missing_formula_fragments(fragments, [target.replace("[0,1)", "[0,2)")])
+
+
+def test_cross_object_fraction_stays_native_even_when_tail_is_prose():
+    records = [
+        m._RawBlockRec(
+            [
+                line(
+                    "We estimate the source and target distributions with a normalized "
+                    "kernel density function, defined as",
+                    (100, 100, 500, 113),
+                ),
+                line(
+                    math("K(u)="),
+                    (100, 114, 130, 127),
+                    math_boxes=[(100, 114, 130, 127)],
+                    prose=False,
+                ),
+                line(
+                    "1", (150, 112, 155, 120), prose=False
+                ),
+                line(
+                    math("√"), (140, 116, 147, 133), math_boxes=[(140, 116, 147, 133)], prose=False
+                ),
+            ]
+        ),
+        m._RawBlockRec(
+            [
+                line(
+                    math("2πe^-1"),
+                    (140, 116, 177, 134),
+                    math_boxes=[(140, 116, 177, 134)],
+                    prose=False,
+                )
+            ]
+        ),
+        m._RawBlockRec(
+            [
+                line(
+                    math("2 u2")
+                    + ". The distributions are then subtracted to compute the marginal difference.",
+                    (178, 112, 500, 133),
+                    math_boxes=[(178, 112, 190, 131)],
+                )
+            ]
+        ),
+    ]
+    merged = m._merge_wrapped_formula_continuation_records(records)
+    assert len(merged) == 3
+    assert m._inline_formula_record_is_part_of_2d_cluster(records[:2], 1)
+    explanation = m._RawBlockRec([
+        *records[1].lines,
+        line("given the input to the model is available as", (200, 116, 450, 129)),
+    ])
+    assert not m._inline_formula_record_is_part_of_2d_cluster([records[0], explanation], 1)
+    # Two ordinary inline symbols do not establish a native fraction tower.
+    ordinary = [m._RawBlockRec([record.lines[-1]]) for record in records[:2]]
+    assert not m._inline_formula_record_is_part_of_2d_cluster(ordinary, 1)
+
+
 def test_formula_connective_is_native_only_when_all_nonmath_words_are_connectives():
     bbox = (100, 100, 400, 115)
     formula = pi._Block(
