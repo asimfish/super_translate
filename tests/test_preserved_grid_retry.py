@@ -116,3 +116,41 @@ def test_supplement_reference_pdf_object_can_end_before_last_doi():
         "doi:10.1000/two.S6. J. Brown. Influence of substitution. Review B 64 (2001). Tables I and"
     )
     assert m._looks_like_reference_entry_text(text)
+
+
+def test_tall_table_rules_do_not_cross_following_section():
+    import fitz
+
+    doc = fitz.open()
+    try:
+        page = doc.new_page()
+        for y in (120, 147, 251, 400):
+            page.draw_line((110, y), (500, y))
+        caption = m.TextBlock(
+            0, (108, 82, 504, 114), "Table 3: Measured values.", 10, (0, 0, 0), block_type="caption"
+        )
+        cells = [
+            m.TextBlock(0, (x, y, x + 60, y + 12), "wrapped cell", 10, (0, 0, 0))
+            for y in (130, 170)
+            for x in (115, 270, 410)
+        ]
+        heading = m.TextBlock(
+            0,
+            (108, 280, 400, 292),
+            "C.4 ONLINE EXTENSION AND CACHING",
+            10,
+            (0, 0, 0),
+            block_type="heading",
+        )
+        prose = m.TextBlock(
+            0,
+            (108, 310, 500, 390),
+            "A precursor absent from the initial cache can still be evaluated.",
+            10,
+            (0, 0, 0),
+        )
+        regions = m._vector_table_region_bboxes(page, [caption, *cells, heading, prose])
+        assert regions
+        assert all(bottom <= 251 for _, _, _, bottom in regions)
+    finally:
+        doc.close()

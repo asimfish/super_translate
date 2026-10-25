@@ -13032,6 +13032,16 @@ def _vector_table_region_bboxes(
                         < segment[1] - 2.0
                         for caption in captions
                     )
+                    and not any(
+                        previous[1] + 2.0 < block.bbox[1] < segment[1] - 2.0
+                        and block.bbox[0] < previous[2]
+                        and block.bbox[2] > previous[0]
+                        and re.match(
+                            r"^(?:[A-Z]\.\d+(?:\.\d+)*|\d+(?:\.\d+)+)\s+[A-Z]",
+                            " ".join(strip_sentinels(block.text).split()),
+                        )
+                        for block in blocks
+                    )
                     and abs(segment[0] - statistics.median(item[0] for item in group))
                     <= 8.0
                     and abs(segment[2] - statistics.median(item[2] for item in group))
