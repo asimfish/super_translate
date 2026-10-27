@@ -15,6 +15,8 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![GitHub stars](https://img.shields.io/github/stars/asimfish/super_translate?style=flat&logo=github&label=Stars)](https://github.com/asimfish/super_translate/stargazers)
 
+[哔哩哔哩视频](https://b23.tv/dNg3JYK) · [小红书](https://xhslink.cn/o/95CUF7S0njW)
+
 </div>
 
 **速刷论文，却卡在英文阅读上？SuperTranslate —— 像素级保真的 Agent-Native 论文翻译引擎。**
