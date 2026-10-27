@@ -315,3 +315,132 @@ async def test_owner_only_transfer_before_claim_preserves_translating_new_owner(
         assert job.engine_revision == "old-engine"
         assert job.last_issue_fingerprint == "preserved-failure"
         assert job.error == "Preserved error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newest_completed", [False, True])
+async def test_disabled_recovery_finalizes_running_jobs_for_each_paper(
+    restart_db, newest_completed,
+):
+    async with restart_db() as db:
+        for index in range(3):
+            paper = _paper(scope=f"owner{index}")
+            paper.id = f"interrupted{index}"
+            job = _job(status="running", scope=paper.access_scope)
+            job.id = f"interruptedjob{index}"
+            job.paper_id = paper.id
+            job.created_at = _stale() + timedelta(seconds=index)
+            if index == 2 and newest_completed:
+                job.status = "completed"
+                paper.translation_status = "completed"
+            db.add(paper)
+            await db.flush()
+            db.add(job)
+        await db.commit()
+    assert await app_main._recover_stuck_translations(resume_queued=False) == []
+    async with restart_db() as db:
+        for index in range(3):
+            job = await db.get(TranslationJob, f"interruptedjob{index}")
+            assert job.status == ("completed" if index == 2 and newest_completed else "failed")
+            if job.status == "failed":
+                assert job.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_queued_worker_finalizes_without_running_translation(
+    restart_db, monkeypatch,
+):
+    from app.api import papers
+    from app.services.translator import TranslationConfig
+
+    async with restart_db() as db:
+        db.add(_paper())
+        await db.flush()
+        db.add(_job(cancelled=True))
+        await db.commit()
+    def forbidden(*args, **kwargs):
+        pytest.fail("A cancelled queued job must not render or call a supplier")
+    monkeypatch.setattr(papers, "_run_translate_in_worker", forbidden)
+    await papers._do_translate(
+        "restart211", TranslationConfig(backend="deepseek"), "balanced", job_id="restartjob211",
+    )
+    async with restart_db() as db:
+        paper = await db.get(Paper, "restart211")
+        job = await db.get(TranslationJob, "restartjob211")
+        assert paper.translation_status == "pending"
+        assert paper.translation_error is None
+        assert paper.translated_filename == "restart211/retained.pdf"
+        assert job.status == "cancelled" and job.cancel_requested
+        assert job.finished_at is not None
+        assert job.attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cancelled_queued_job_finishes_even_after_key_removed(restart_db):
+    import asyncio
+
+    from app.api import papers
+
+    async with restart_db() as db:
+        db.add(_paper())
+        await db.flush()
+        db.add(_job(cancelled=True))
+        await db.commit()
+    await asyncio.to_thread(
+        papers._run_translation, "restart211", "deepseek",
+        job_id="restartjob211", access_scope="alice",
+    )
+    async with restart_db() as db:
+        assert (await db.get(Paper, "restart211")).translation_status == "pending"
+        assert (await db.get(TranslationJob, "restartjob211")).status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_finishing_old_cancellation_does_not_reset_newer_job(restart_db):
+    import asyncio
+    import time
+
+    from app.api import papers
+
+    async with restart_db() as db:
+        db.add(_paper())
+        await db.flush()
+        db.add(_job(cancelled=True))
+        newer = _job(status="running")
+        newer.id = "newerjob211"
+        newer.created_at = _stale() + timedelta(minutes=1)
+        db.add(newer)
+        await db.commit()
+    await papers._finalize_cancelled_translation(
+        "restart211", asyncio.get_running_loop(), None, time.monotonic(), "restartjob211",
+    )
+    async with restart_db() as db:
+        assert (await db.get(Paper, "restart211")).translation_status == "translating"
+        assert (await db.get(TranslationJob, "restartjob211")).status == "cancelled"
+        assert (await db.get(TranslationJob, "newerjob211")).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_cancel_retry_same_second_ignores_older_terminal_id(restart_db):
+    import asyncio
+    import time
+
+    from app.api import papers
+
+    async with restart_db() as db:
+        db.add(_paper())
+        await db.flush()
+        older = _job(status="completed")
+        older.id = "zz_older_completed"
+        current = _job(cancelled=True)
+        current.id = "aa_current_cancelled"
+        current.created_at = older.created_at
+        db.add_all([older, current])
+        await db.commit()
+    await papers._finalize_cancelled_translation(
+        "restart211", asyncio.get_running_loop(), None, time.monotonic(), "aa_current_cancelled",
+    )
+    async with restart_db() as db:
+        assert (await db.get(Paper, "restart211")).translation_status == "pending"
+        assert (await db.get(TranslationJob, "aa_current_cancelled")).status == "cancelled"
+        assert (await db.get(TranslationJob, "zz_older_completed")).status == "completed"

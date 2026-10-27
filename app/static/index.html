@@ -172,6 +172,12 @@
               <option value="auto">OCR 自动</option>
               <option value="force">OCR 强制</option>
             </select>
+                <div class="translation-cache-options">
+                  <label class="translate-option"><input id="cache-only" type="checkbox"> 从缓存离线渲染（不调用模型）</label>
+                  <label class="translation-cache-upload">翻译缓存（JSONL，可选）<input id="translation-cache-file" type="file" accept=".jsonl,application/x-ndjson"></label>
+                  <p>未上传时复用本篇最近的缓存；缺失条目会提示失败，原有译文保留。</p>
+                  <button type="button" class="btn btn-sm btn-outline" data-action="download-translation-cache">导出本篇缓存</button>
+                </div>
               </div>
             </details>
             <button class="btn btn-sm btn-primary" id="btn-translate" data-action="start-translate">翻译</button>

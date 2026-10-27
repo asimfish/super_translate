@@ -91,4 +91,27 @@ final class TaskReconciliationTests: XCTestCase {
         XCTAssertTrue(store.notice.contains("草稿不可用"))
         XCTAssertTrue(store.notice.contains("重试修复"))
     }
+
+    @MainActor
+    func testExplicitRepairRetryCancelsParkedJobBeforeStarting() async throws {
+        let (store, storage) = try await configuredStore(records: [
+            legacy(id: "012345abcde4", title: "Retry specimen")])
+        defer { try? FileManager.default.removeItem(at: storage) }
+        let job = try XCTUnwrap(store.jobs.first)
+        XCTAssertEqual(job.phase.rawValue, "repairing")
+        await store.retry(job)
+        XCTAssertEqual(store.jobs.first?.phase.rawValue, "translating")
+        XCTAssertEqual(store.jobs.first?.message, "翻译已排队")
+    }
+
+    @MainActor
+    func testFailedRepairCancellationKeepsDraftAndRepairState() async throws {
+        let (store, storage) = try await configuredStore(records: [
+            legacy(id: "012345abcde5", title: "Retry failure specimen")])
+        defer { try? FileManager.default.removeItem(at: storage) }
+        await store.retry(try XCTUnwrap(store.jobs.first))
+        XCTAssertEqual(store.jobs.first?.phase.rawValue, "repairing")
+        XCTAssertTrue(store.jobs.first?.hasTranslated == true)
+        XCTAssertTrue(store.jobs.first?.message.contains("保留草稿") == true)
+    }
 }

@@ -106,6 +106,7 @@ class TranslationConfig:
     ocr_language: str = "eng"
     ocr_dpi: int = 180
     terminology: dict[str, str] | None = None
+    cache_file: str = ""
 
 
 # Quality presets configuration
@@ -323,6 +324,8 @@ _NATIVE_ENGINE_BACKENDS = {
 def _use_native_engine(config: TranslationConfig) -> bool:
     from app.core.config import settings
 
+    if config.backend == "cache-only":
+        return True
     if config.terminology is not None and config.backend in _NATIVE_ENGINE_BACKENDS:
         return True
 
@@ -419,6 +422,12 @@ class _ProgressTranslator:
         self._concurrency = max(1, concurrency)
 
     @property
+    def cache_only_translator(self):
+        from pdf_zh_translator.translators import CacheOnlyTranslator
+
+        return self._inner if isinstance(self._inner, CacheOnlyTranslator) else None
+
+    @property
     def block_types(self):
         return getattr(self._inner, "block_types", None)
 
@@ -505,12 +514,20 @@ def _translate_sync_native(
     """
     from app.services.library import cleanup_output_dir
     from pdf_zh_translator.pdf_layout import translate_pdf
-    from pdf_zh_translator.translators import CachedTranslator, VendorTranslator
+    from pdf_zh_translator.translators import (
+        CachedTranslator,
+        CacheOnlyTranslator,
+        VendorTranslator,
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     source_path = input_path
 
-    if config.backend == "deepseek":
+    if config.backend == "cache-only":
+        api_url, api_key, mode, model = "", "", "cache-only", ""
+        if not config.cache_file or not Path(config.cache_file).is_file():
+            return TranslationResult(error="离线翻译缓存不存在，请重新上传缓存")
+    elif config.backend == "deepseek":
         api_url = (
             config.base_url
             or os.environ.get("DEEPSEEK_API_URL", "")
@@ -571,7 +588,7 @@ def _translate_sync_native(
     staged_mono_path = staging_dir / mono_path.name
     staged_dual_path = staging_dir / dual_path.name
 
-    vendor = VendorTranslator(
+    vendor = None if config.backend == "cache-only" else VendorTranslator(
         api_url=api_url,
         api_key=api_key,
         mode=mode,
@@ -582,7 +599,8 @@ def _translate_sync_native(
         progress=False,
     )
     translator = _ProgressTranslator(
-        CachedTranslator(vendor, cache_path),
+        CacheOnlyTranslator(Path(config.cache_file), segment_source_styles=True)
+        if config.backend == "cache-only" else CachedTranslator(vendor, cache_path),
         progress_callback,
         concurrency=settings.translation_concurrency,
     )

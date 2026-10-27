@@ -61,7 +61,7 @@ export SUPER_TRANSLATE_HOME=/path/to/super_translate
 
 ## 4. 配置 API key
 
-任选其一（推荐写进 shell profile 或仓库根 `.env`）：
+CLI / Skill 使用导出的 shell 环境变量（可写进 shell profile）；仓库 `.env` 仅由 Web 服务加载，以下脚本不会加载或执行它：
 
 ```bash
 export PAPER_CHINA_DEEPSEEK_API_KEY=sk-...   # 与 Web 模式共用，推荐

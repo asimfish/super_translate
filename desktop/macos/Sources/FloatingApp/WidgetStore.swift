@@ -493,6 +493,7 @@ final class WidgetStore: ObservableObject {
         }
         guard let paperID = job.paperID else { return }
         let current = generation
+        var parkedRepair = false
         do {
             // A lost POST response may already have started the server job.
             // Reconcile first; never automatically create another translation.
@@ -502,6 +503,16 @@ final class WidgetStore: ObservableObject {
             if paper.translationStatus == "translating" || paper.translationStatus == "completed" {
                 return
             }
+            if ["repairing", "repair_pending"].contains(paper.translationStatus) {
+                parkedRepair = true
+                try await client.cancel(paper.id)
+                guard current == generation else { return }
+                let refreshed = try await client.paper(paper.id)
+                guard current == generation else { return }
+                apply(refreshed, to: job.id)
+                parkedRepair = ["repairing", "repair_pending"].contains(refreshed.translationStatus)
+                guard ["pending", "failed"].contains(refreshed.translationStatus) else { return }
+            }
             update(job.id) {
                 $0.phase = .starting; $0.message = "提交翻译…"; $0.cancellationRequested = false
             }
@@ -510,7 +521,10 @@ final class WidgetStore: ObservableObject {
             update(job.id) { $0.phase = .translating; $0.message = "翻译已排队" }
         } catch {
             guard current == generation else { return }
-            update(job.id) { $0.phase = .failed; $0.message = error.localizedDescription }
+            update(job.id) {
+                $0.phase = parkedRepair ? .repairing : .failed
+                $0.message = parkedRepair ? "修复重试未提交，保留草稿：\(error.localizedDescription)" : error.localizedDescription
+            }
             report(error)
         }
     }

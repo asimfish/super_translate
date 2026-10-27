@@ -23,6 +23,8 @@ _REVISION_FILES = (
     'pdf_zh_translator/layout_families.json',
     'pdf_zh_translator/prompt_layout.py',
     'pdf_zh_translator/task_formula_layout.py',
+    'pdf_zh_translator/formula_accessibility.py',
+    'app/services/offline_cache.py',
 )
 
 
