@@ -7,6 +7,7 @@ from pathlib import Path
 
 import fitz
 import pytest
+
 from scripts.check_layout_families import audit_case, digest, prepare_case
 
 
