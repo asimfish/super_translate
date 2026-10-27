@@ -55,8 +55,13 @@ def validate_cache(payload: bytes) -> bytes:
 
 
 def previous_cache(output_dir: Path, stored_stem: str) -> Path:
+    from app.services.pdf_sanitizer import safe_pdf_path
+
+    source_stems = (stored_stem, safe_pdf_path(Path(f"{stored_stem}.pdf")).stem)
+    patterns = [f"{stem}.translation-cache*.jsonl" for stem in source_stems]
+    patterns.append(".cache-only-*.jsonl")
     candidates = [
-        path for pattern in (f"{stored_stem}.translation-cache*.jsonl", ".cache-only-*.jsonl")
+        path for pattern in patterns
         for path in output_dir.glob(pattern)
         if path.is_file() and not path.is_symlink() and not path.name.endswith(".missing.jsonl")
     ]

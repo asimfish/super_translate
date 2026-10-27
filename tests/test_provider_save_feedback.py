@@ -123,3 +123,38 @@ def test_reader_submits_optional_cache_as_offline_multipart(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_offline_options_panel_does_not_resize_or_escape_toolbar(width):
+    from urllib.parse import urlsplit
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(
+            executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            headless=True,
+        )
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 1000})
+            def route(request):
+                path = urlsplit(request.request.url).path
+                if path.startswith("/static/"):
+                    request.fulfill(path=str(ROOT / "app" / path.lstrip("/")))
+                elif path == "/":
+                    request.fulfill(path=str(ROOT / "app/static/index.html"))
+                else:
+                    request.fulfill(json={"papers": [], "total": 0})
+            page.route("http://options.test/**", route)
+            page.goto("http://options.test/")
+            page.evaluate("showView('reader')")
+            toolbar = page.locator(".reader-toolbar")
+            before = toolbar.bounding_box()["height"]
+            page.locator(".translation-options summary").click()
+            assert toolbar.bounding_box()["height"] == pytest.approx(before, abs=1)
+            panel = page.locator(".translation-options-panel").bounding_box()
+            upload = page.locator("#translation-cache-file").bounding_box()
+            assert 0 <= panel["x"] and panel["x"] + panel["width"] <= width
+            assert panel["width"] >= 280
+            assert panel["y"] <= upload["y"] < panel["y"] + panel["height"]
+        finally:
+            browser.close()

@@ -188,3 +188,23 @@ def test_canonical_cache_size_limit_applies_to_persisted_snapshot(monkeypatch):
     monkeypatch.setattr(offline_cache, "MAX_CACHE_BYTES", len(payload))
     with pytest.raises(ValueError, match="规范化"):
         offline_cache.validate_cache(payload)
+
+
+@pytest.mark.asyncio
+async def test_sanitized_online_cache_can_be_exported_and_reused(offline_client):
+    client, sessions, payload, scheduled = offline_client
+    folder = settings.translations_path / PAPER_ID
+    folder.mkdir(parents=True)
+    existing = folder / ".source.safe.translation-cache.config-fixture.jsonl"
+    existing.write_bytes(payload)
+    response = await client.get(f"/api/papers/{PAPER_ID}/translation-cache")
+    assert response.status_code == 200
+    assert response.content == payload
+    response = await client.post(f"/api/papers/{PAPER_ID}/translate?cache_only=true")
+    assert response.status_code == 200, response.text
+    async with sessions() as db:
+        job = await db.get(TranslationJob, response.json()["job_id"])
+        assert job.backend == "cache-only" and job.status == "queued"
+        snapshot = folder / f".cache-only-{job.id}.jsonl"
+        assert validate_cache(snapshot.read_bytes()) == validate_cache(payload)
+    assert len(scheduled) == 1

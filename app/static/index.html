@@ -156,12 +156,6 @@
             </select>
             <details class="translation-options">
               <summary>翻译选项</summary>
-              <div class="translation-options-grid">
-                <label><input id="cache-only" type="checkbox"> 从缓存离线渲染（不调用模型）</label>
-                <label>翻译缓存（JSONL，可选）<input id="translation-cache-file" type="file" accept=".jsonl,application/x-ndjson"></label>
-                <p>未上传时复用本篇最近的缓存；缺失条目会提示失败，原有译文保留。</p>
-                <button type="button" class="btn btn-sm btn-outline" data-action="download-translation-cache">导出本篇缓存</button>
-              </div>
               <div class="translation-options-panel">
             <label class="translate-option" title="保留图中的英文短标签；可能减少图注和图旁正文的翻译覆盖">
               <input type="checkbox" id="preserve-graphics-text" checked> 保留图表文字
@@ -178,6 +172,12 @@
               <option value="auto">OCR 自动</option>
               <option value="force">OCR 强制</option>
             </select>
+                <div class="translation-cache-options">
+                  <label class="translate-option"><input id="cache-only" type="checkbox"> 从缓存离线渲染（不调用模型）</label>
+                  <label class="translation-cache-upload">翻译缓存（JSONL，可选）<input id="translation-cache-file" type="file" accept=".jsonl,application/x-ndjson"></label>
+                  <p>未上传时复用本篇最近的缓存；缺失条目会提示失败，原有译文保留。</p>
+                  <button type="button" class="btn btn-sm btn-outline" data-action="download-translation-cache">导出本篇缓存</button>
+                </div>
               </div>
             </details>
             <button class="btn btn-sm btn-primary" id="btn-translate" data-action="start-translate">翻译</button>
