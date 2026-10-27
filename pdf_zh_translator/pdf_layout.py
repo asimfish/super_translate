@@ -93,7 +93,7 @@ _CAPTION_REFERENCE_VERBS = (
     r"evaluates?|examines?|analy[sz]es?|studies)"
 )
 _CAPTION_RE = re.compile(
-    rf"^(?:(?:Figure|Fig\.|Table)\s*(?:\d+|[IVXLCDM]+)"
+    rf"^(?:(?:Figure|Fig\.?|Table)\s*(?:\d+|[IVXLCDM]+)"
     rf"(?:\s*[:.\-|\uff5c\u2013]\s*|\s+(?!{_CAPTION_REFERENCE_VERBS}\b))|(?:图|表)\s*\d)",
     re.IGNORECASE,
 )
@@ -182,7 +182,8 @@ _COLUMN_CLUSTER_GAP = 150.0  # minimum x0 separation for two-column layout
 SENTINEL_OPEN = "\ue000"
 SENTINEL_CLOSE = "\ue001"
 MATH_FONT_RE = re.compile(
-    r"(CMMI|CMSY|CMEX|MSAM|MSBM|rsfs|eufm|esint|wasy|stmary|Symbol|Math|STIX)",
+    r"(CMMI|CMSY|CMEX|MSAM|MSBM|rsfs|eufm|esint|wasy|stmary|Symbol|Math|"
+    r"STIX(?!(?:General|TwoText|2Text)))",
     re.IGNORECASE,
 )
 PLACEHOLDER_RE = re.compile(r"\u27e6\s*(\d+)\s*\u27e7")
@@ -873,11 +874,12 @@ def translate_pdf(
     font_pack = build_font_pack(font_file, warnings)
 
     document = open_pdf_detached(input_pdf)
-    try:
-        from .layout_profiles import detect_layout_profile
+    from .layout_families import apply_family_block_roles, bound_book_front_matter
+    from .layout_profiles import detect_layout_profile, profile_policy
 
-        profile = detect_layout_profile(document)
-        warnings.append(
+    profile = detect_layout_profile(document)
+    policy = profile_policy(profile)
+    warnings.append(
             "Detected layout profile: %s (confidence %.2f, %d column%s)"
             % (
                 profile.name,
@@ -885,9 +887,9 @@ def translate_pdf(
                 profile.columns,
                 "" if profile.columns == 1 else "s",
             )
-        )
-    except Exception:
-        pass
+    )
+    if profile.kind == "generic" or profile.risk == "high":
+        warnings.append("Unverified layout identity; using conservative source geometry.")
     preserved_regions: Dict[int, List[BBox]] = {}
     equation_rows: Dict[int, List[BBox]] = {}
     units, gutter_rects, skipped = prepare_translation_units(
@@ -1094,6 +1096,20 @@ def translate_pdf(
             )
         )
         page_gutter = gutter_rects.get(page_index, [])
+        from .journal_layout import apply_nature_block_roles, is_nature_document
+
+        if is_nature_document(document):
+            # Combining source style fragments creates fresh blocks. Reapply
+            # the publisher's size policy to their final paragraph owner.
+            apply_nature_block_roles(
+                [block for block, _ in candidate_items], document[page_index], page_index
+            )
+        apply_family_block_roles(
+            [block for block, _ in candidate_items], document[page_index], page_index, profile
+        )
+        bound_book_front_matter(
+            [block for block, _ in candidate_items], document[page_index], page_index, profile
+        )
         if not candidate_items and not page_gutter:
             continue
         page = document[page_index]
@@ -1105,6 +1121,7 @@ def translate_pdf(
         # Float obstacles (figures/tables/captions) that reflowed CJK must avoid.
         page_floats = list(_visual_regions_for_page(page))
         page_floats.extend(preserved_regions.get(page_index, []))
+        page_floats.extend(_source_margin_uri_obstacles(page))
         # Hairline frames (boxed prompts, framed notes): translated prose may
         # neither widen across their vertical rules nor grow across the
         # horizontal ones. Rules running through a candidate's own rows are
@@ -1121,7 +1138,10 @@ def translate_pdf(
             )
         ]
         page_frame_rules = (frame_horizontal, frame_vertical)
-        relax_caption_boxes(page, candidate_items, obstacles=page_floats)
+        relax_caption_boxes(
+            page, candidate_items, obstacles=page_floats,
+            extra_height=float(policy["caption_extra_height"]),
+        )
         page_floats.extend(
             block.bbox
             for block, _ in candidate_items
@@ -1355,6 +1375,11 @@ def translate_pdf(
             font_scale=font_scale,
             margin=margin,
         )
+        from .journal_layout import bound_reporting_summary_items
+
+        page_items = bound_reporting_summary_items(
+            page_items, page, font_pack=font_pack, margin=margin
+        )
         page_items = _cascade_expand_page_items(
             page_items,
             font_pack=font_pack,
@@ -1398,6 +1423,14 @@ def translate_pdf(
                 "Page %d: restored %d protected region(s) affected by PDF redaction"
                 % (page_index + 1, restored_regions)
             )
+        if policy.get("anchor_article_structure"):
+            from .layout_families import restore_article_metadata
+
+            restored_metadata = restore_article_metadata(page, source_document[page_index])
+            if restored_metadata:
+                warnings.append(
+                    f"Page {page_index + 1}: restored {restored_metadata} source metadata glyphs"
+                )
         register_font_pack(page, font_pack)
         restored_formulas = _restore_redacted_formula_atoms(
             page,
@@ -1416,6 +1449,12 @@ def translate_pdf(
             page,
             [block for block, _ in page_items],
         )
+        from .journal_layout import restore_reporting_summary_field_rules
+
+        restore_reporting_summary_field_rules(page, source_document[page_index])
+        from .journal_layout import restore_reporting_summary_metadata
+
+        restore_reporting_summary_metadata(page, source_document[page_index])
         for (block, translated_text), centered in zip(page_items, item_centered_flags):
             inserted = insert_translated_text(
                 page=page,
@@ -1436,6 +1475,9 @@ def translate_pdf(
                     "Page %d: translated text did not fully fit in bbox %s"
                     % (page_index + 1, compact_bbox(block.bbox))
                 )
+        page = document.reload_page(page)
+        _restore_source_uri_annotation_metadata(page, source_document[page_index])
+        _realign_exact_uri_links(page, source_document[page_index])
         if (page_index + 1) % 6 == 0:
             # Rendering probes, redaction backgrounds and formula sprites
             # allocate tens of MB of transient pixel buffers per page; on
@@ -2145,6 +2187,13 @@ def _translate_units_with_source_style_runs(
     acronym_expansions: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], int, int]:
     """Translate source-derived run-in prefix/body ranges independently."""
+    from .translators import CacheOnlyTranslator
+
+    if isinstance(translator, CacheOnlyTranslator):
+        for block, source, mapping in units:
+            translator.register_protected_source(
+                source, mapping, immutable_indices=block.preserved_math_placeholders
+            )
     if not getattr(translator, "supports_source_style_segments", True):
         return _translate_unique_sources(
             translator,
@@ -2156,6 +2205,18 @@ def _translate_units_with_source_style_runs(
         units,
         acronym_expansions,
     )
+    if isinstance(translator, CacheOnlyTranslator):
+        for (block, _source, mapping), (start, count) in zip(units, plans):
+            for source in sources[start : start + count]:
+                translator.register_protected_source(
+                    source, mapping, immutable_indices=block.preserved_math_placeholders
+                )
+        if not all(translator.can_translate(source) for source in sources):
+            whole_sources = [source for _block, source, _mapping in units]
+            if all(translator.can_translate(source) for source in whole_sources):
+                sources = whole_sources
+                block_types = [block.block_type for block, _source, _mapping in units]
+                plans = [(index, 1) for index in range(len(units))]
     outputs, request_count, response_count = _translate_unique_sources(
         translator,
         sources,
@@ -2212,6 +2273,233 @@ def _source_style_translation_plan(
         sources.extend((prefix_source, body_source))
         block_types.extend(("run_in_heading", block.block_type))
     return sources, block_types, plans
+
+
+def _safe_direct_uri_annotation_metadata(document: object, xref: int, uri: str) -> Optional[dict]:
+    """Copy only self-contained passive fields; never transplant document xrefs."""
+    import fitz
+
+    allowed_types = {
+        "A": {"dict"},
+        "Type": {"name"},
+        "Subtype": {"name"},
+        "Border": {"array"},
+        "BS": {"dict"},
+        "C": {"array"},
+        "H": {"name"},
+        "F": {"int"},
+        "Contents": {"string"},
+        "NM": {"string"},
+        "M": {"string"},
+    }
+    try:
+        keys = set(document.xref_get_keys(xref)) - {"Rect"}
+        if not {"A", "Subtype"} <= keys or not keys <= allowed_types.keys():
+            return None
+        values = {}
+        for key in keys:
+            kind, value = document.xref_get_key(xref, key)
+            if kind not in allowed_types[key] or re.search(r"\b\d+\s+\d+\s+R\b", value):
+                return None
+            if kind == "string":
+                if any(ord(char) < 32 or ord(char) > 126 for char in value):
+                    return None
+                value = fitz.get_pdf_str(value)
+            values[key] = value
+        if values["Subtype"] != "/Link" or values.get("Type", "/Annot") != "/Annot":
+            return None
+        # Ask the PDF parser to validate the direct action, rather than
+        # interpreting a serialized URI with regex or importing its xrefs.
+        with fitz.open() as scratch:
+            action = scratch.get_new_xref()
+            scratch.update_object(action, values["A"])
+            if not set(scratch.xref_get_keys(action)) <= {"S", "URI", "Type"}:
+                return None
+            if scratch.xref_get_key(action, "S") != ("name", "/URI"):
+                return None
+            if scratch.xref_get_key(action, "URI") != ("string", uri):
+                return None
+            if scratch.xref_get_key(action, "Type") not in (("null", "null"), ("name", "/Action")):
+                return None
+        return values
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return None
+
+def _restore_source_uri_annotation_metadata(page: object, source_page: object) -> int:
+    """Restore safe source fields to uniquely identified generated URI links."""
+    import fitz
+
+    if page.number != source_page.number or page.rotation or source_page.rotation:
+        return 0
+    groups = []
+    for owner in (source_page, page):
+        grouped = {}
+        for link in _page_links_for_restore(owner):
+            uri = link.get("uri")
+            if (
+                link.get("kind") != fitz.LINK_URI
+                or not isinstance(uri, str)
+                or not uri.startswith(("http://", "https://"))
+            ):
+                continue
+            rect = fitz.Rect(link["from"])
+            if rect.is_empty or rect.is_infinite:
+                continue
+            key = (uri, tuple(round(float(value), 2) for value in rect))
+            grouped.setdefault(key, []).append(link)
+        groups.append(grouped)
+    restored = 0
+    for key, source_links in groups[0].items():
+        current_links = groups[1].get(key, ())
+        if len(source_links) != 1 or len(current_links) != 1:
+            continue
+        current_xref = current_links[0].get("xref", 0)
+        source_xref = source_links[0].get("xref", 0)
+        if not current_xref or not source_xref:
+            continue
+        document = page.parent
+        # Only replace the known minimal object generated by insert_link.
+        # Extra/current opaque fields and nonzero border styles stay untouched.
+        if set(document.xref_get_keys(current_xref)) != {"A", "BS", "NM", "Rect", "Subtype"}:
+            continue
+        name_kind, name = document.xref_get_key(current_xref, "NM")
+        if name_kind != "string" or not re.fullmatch(r"fitz-L\d+", name):
+            continue
+        if document.xref_get_key(current_xref, "BS/W") != ("int", "0"):
+            continue
+        if document.xref_get_key(current_xref, "BS")[1].replace(" ", "") != "<</W0>>":
+            continue
+        current = _safe_direct_uri_annotation_metadata(document, current_xref, key[0])
+        source = _safe_direct_uri_annotation_metadata(source_page.parent, source_xref, key[0])
+        rect_kind, rect_value = document.xref_get_key(current_xref, "Rect")
+        if source is None or current is None or source == current or rect_kind != "array":
+            continue
+        # Keep the existing xref and Rect. All copied values are direct and
+        # validated; replacing this minimal object removes only generated keys.
+        values = dict(source, Rect=rect_value)
+        document.update_object(
+            current_xref,
+            "<< "
+            + " ".join("/" + field + " " + value for field, value in sorted(values.items()))
+            + " >>",
+        )
+        restored += 1
+    return restored
+
+
+def _exact_page_uri_matches(page: object, uri: str) -> List[List[Tuple[BBox, int]]]:
+    """Find complete literal URIs within one text owner, retaining glyph geometry."""
+    matches: List[List[Tuple[BBox, int]]] = []
+    uri_chars = (
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_~:/?#@!$&'()*+,;=%.-"
+    )
+    for block in page.get_text("rawdict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        glyphs = [
+            (letter, tuple(char["bbox"]), line_index)
+            for line_index, line in enumerate(block.get("lines", []))
+            for span in line.get("spans", [])
+            for char in span.get("chars", [])
+            for letter in char.get("c", "")
+        ]
+        text = "".join(letter for letter, _, _ in glyphs)
+        position = 0
+        while True:
+            start = text.find(uri, position)
+            if start < 0:
+                break
+            end = start + len(uri)
+            position = end
+            prefix, suffix = text[:start], text[end:]
+            marker = prefix.isdigit() and len(prefix) <= 2
+            if prefix and prefix[-1] in uri_chars and not marker:
+                continue
+            terminal_punctuation = (
+                suffix and suffix[0] in ".,;:" and (len(suffix) == 1 or suffix[1].isspace())
+            )
+            if suffix and suffix[0] in uri_chars and not terminal_punctuation:
+                continue
+            matches.append([(bbox, line) for _, bbox, line in glyphs[start:end]])
+    return matches
+
+def _realign_exact_uri_links(page: object, source_page: object) -> int:
+    """Move only source-verified complete URI annotations to their rendered glyphs."""
+    import fitz
+
+    if page.rotation or source_page.rotation:
+        return 0
+    source_links = _page_links_for_restore(source_page)
+    current_links = _page_links_for_restore(page)
+    groups: Dict[str, List[dict]] = {}
+    for link in source_links:
+        uri = link.get("uri")
+        if (
+            link.get("kind") == fitz.LINK_URI
+            and isinstance(uri, str)
+            and uri.startswith(("https://", "http://"))
+        ):
+            groups.setdefault(uri, []).append(link)
+    changed = 0
+    for uri, originals in groups.items():
+        source_matches = _exact_page_uri_matches(source_page, uri)
+        output_matches = _exact_page_uri_matches(page, uri)
+        if len(source_matches) != 1 or len(output_matches) != 1:
+            continue
+        source_boxes = [fitz.Rect(box) for box, _ in source_matches[0]]
+        annotated_boxes = [fitz.Rect(link["from"]) for link in originals]
+        if any(
+            box.is_empty
+            or max((box & annotation).get_area() for annotation in annotated_boxes)
+            < box.get_area() * 0.8
+            for box in source_boxes
+        ) or any(
+            not any((box & annotation).get_area() >= box.get_area() * 0.8 for box in source_boxes)
+            for annotation in annotated_boxes
+        ):
+            continue
+        line_boxes: Dict[int, List[BBox]] = {}
+        for box, line in output_matches[0]:
+            line_boxes.setdefault(line, []).append(box)
+        desired = [fitz.Rect(union_bbox(boxes)) for boxes in line_boxes.values()]
+        current = [
+            link
+            for link in current_links
+            if link.get("kind") == fitz.LINK_URI and link.get("uri") == uri
+        ]
+        current_boxes = [fitz.Rect(link["from"]) for link in current]
+        if current_boxes and all(
+            max((fitz.Rect(box) & annotation).get_area() for annotation in current_boxes)
+            >= fitz.Rect(box).get_area() * 0.8
+            for box, _ in output_matches[0]
+        ):
+            continue
+
+        def rectangle_key(rectangle):
+            return tuple(round(float(value), 2) for value in rectangle)
+
+        if sorted(rectangle_key(link["from"]) for link in current) == sorted(
+            rectangle_key(box) for box in desired
+        ):
+            continue
+        if len(current) != len(originals) or sorted(
+            rectangle_key(link["from"]) for link in current
+        ) != sorted(rectangle_key(link["from"]) for link in originals):
+            continue
+        if len(desired) != len(current):
+            continue
+        if any(int(link.get("xref", 0)) <= 0 for link in current):
+            continue
+        current.sort(key=lambda link: (link["from"].y0, link["from"].x0))
+        for link, box in zip(current, desired):
+            pdf_box = box * ~page.transformation_matrix
+            page.parent.xref_set_key(
+                link["xref"],
+                "Rect",
+                "[" + " ".join(f"{value:.8f}" for value in pdf_box) + "]",
+            )
+        changed += len(current)
+    return changed
 
 
 def _page_links_for_restore(page: object) -> List[dict]:
@@ -2886,6 +3174,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
 
         # Check for untranslated English paragraphs
         orig_blocks = orig_page.get_text("dict").get("blocks", [])
+        _annotate_source_fixed_pitch_module_paths(orig_page, orig_blocks)
         trans_blocks = trans_page.get_text("dict").get("blocks", [])
         translated_region_entries = _text_entries_from_blocks(trans_blocks)
         preserved_original_region_entries = _preserved_text_entries_from_blocks(
@@ -2903,6 +3192,20 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
         preserved_regions = preserved_regions_by_page.get(page_idx, [])
         equation_rows = equation_rows_by_page.get(page_idx, [])
         preserved_text_regions = _preserved_text_qa_regions(preserved_regions)
+        algorithm_prose_owners = _certified_algorithm_prose_owner_boxes(
+            orig_page, page_idx, preserved_text_regions,
+            translation_units_by_page.get(page_idx, []),
+        )
+        if algorithm_prose_owners:
+            preserved_text_regions = _subtract_source_prose_owner_boxes(
+                preserved_text_regions, algorithm_prose_owners,
+            )
+        preserved_text_regions = _subtract_source_table_field_regions(
+            preserved_text_regions,
+            _source_table_prose_owner_bboxes(
+                translation_units_by_page.get(page_idx, [])
+            ),
+        )
         reference_y = _reference_section_start_y(trans_page, blocks=trans_blocks)
         if reference_y is None:
             reference_y = _reference_section_start_y(orig_page, blocks=orig_blocks)
@@ -2964,6 +3267,33 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             page_formula_prose_bboxes,
             base_bboxes=page_formula_prose_bboxes,
         )
+        preserved_source_cjk = _cjk_glyph_entries(orig_page)
+        preserved_output_cjk = _cjk_glyph_entries(trans_page)
+        for bands in (
+            page_caption_bboxes,
+            page_preserved_label_bboxes,
+            page_formula_prose_bboxes,
+        ):
+            preserved_source_cjk = _entries_outside_caption_bands(
+                preserved_source_cjk, bands,
+            )
+            preserved_output_cjk = _entries_outside_caption_bands(
+                preserved_output_cjk, bands,
+            )
+        # Check actual source owners, not the rectangular envelope produced
+        # by merging disjoint owners across columns or different table rows.
+        for source_region in preserved_regions:
+            if _has_added_preserved_cjk_glyphs(
+                preserved_source_cjk, preserved_output_cjk, source_region,
+            ):
+                original_region_text = _text_overlapping_region(
+                    preserved_original_entries, source_region,
+                )
+                preserved_changed_examples.append(
+                    " ".join(original_region_text.split())[:80] or "protected source glyphs"
+                )
+                if len(preserved_changed_examples) >= 3:
+                    break
         for region in preserved_text_regions:
             original_region_text = _text_overlapping_region(
                 preserved_original_entries,
@@ -3015,6 +3345,20 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
             ):
                 continue
             text = _extract_text_from_block(block)
+            output_bbox = tuple(float(value) for value in block["bbox"])
+            source_owners = [
+                source_block
+                for source_block in translation_units_by_page.get(page_idx, [])
+                if bbox_intersection_area(source_block.bbox, output_bbox)
+                / max(1.0, bbox_area(output_bbox)) >= 0.55
+            ]
+            translated_prose_text = (
+                _without_source_monospace_identifiers(
+                    text, orig_blocks, source_owners[0].bbox,
+                )
+                if len(source_owners) == 1
+                else text
+            )
             if _looks_like_untranslated_caption(text):
                 untranslated_caption_examples.append(" ".join(text.split())[:80])
             elif _looks_like_stranded_formula_prose_tail(text):
@@ -3029,7 +3373,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 if _block_overlaps_preserved_regions(block, preserved_regions):
                     continue
                 untranslated_formula_examples.append(" ".join(text.split())[:80])
-            elif _looks_like_untranslated_english(text):
+            elif _looks_like_untranslated_english(translated_prose_text):
                 if _block_overlaps_preserved_regions(
                     block,
                     equation_rows,
@@ -3061,9 +3405,8 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 translation_units_by_page.get(page_idx, []),
             ):
                 continue
-            translated_unit_text = _text_overlapping_region(
-                translated_region_entries,
-                expand_bbox(source_block.bbox, 2.0),
+            translated_unit_text = _text_from_source_unit_owners(
+                translated_region_entries, source_block,
             )
             source_plain = " ".join(strip_sentinels(source_block.text).split())
             translated_plain = " ".join(translated_unit_text.split())
@@ -3076,9 +3419,14 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 looks_like_academic_structure_heading(source_block, source_plain)
                 and source_plain.casefold() in translated_plain.casefold()
             )
+            translated_prose_text = _without_source_monospace_identifiers(
+                translated_unit_text,
+                orig_blocks,
+                source_block.bbox,
+            )
             if _translation_retains_foreign_prose(
                 source_block,
-                translated_unit_text,
+                translated_prose_text,
             ):
                 example = " ".join(translated_unit_text.split())[:80]
                 if example and example not in untranslated_natural_language_examples:
@@ -3088,7 +3436,7 @@ def verify_translation_issues(original_pdf: Path, translated_pdf: Path) -> List[
                 not short_structure_echo
                 and not _translation_retains_source_prose_run(
                     source_block,
-                    translated_unit_text,
+                    translated_prose_text,
                 )
             ):
                 continue
@@ -3724,6 +4072,39 @@ def _entries_outside_caption_bands(
     return kept
 
 
+def _cjk_glyph_entries(page: object) -> List[Tuple[BBox, str]]:
+    """Retain per-glyph geometry so a run spanning multiple cells is still checked."""
+    entries: List[Tuple[BBox, str]] = []
+    for block in page.get_text("rawdict").get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                for char in span.get("chars", []):
+                    text = char.get("c", "")
+                    if _CJK_DETECT_RE.search(text):
+                        entries.append((tuple(char["bbox"]), text))
+    return entries
+
+def _has_added_preserved_cjk_glyphs(
+    source_entries: Sequence[Tuple[BBox, str]],
+    output_entries: Sequence[Tuple[BBox, str]],
+    region: BBox,
+) -> bool:
+    """Apply the existing region coverage rule to individual protected CJK glyphs."""
+    from collections import Counter
+
+    source = Counter(
+        char
+        for char in _text_overlapping_region(source_entries, region)
+        if _CJK_DETECT_RE.search(char)
+    )
+    output = Counter(
+        char
+        for char in _text_overlapping_region(output_entries, region)
+        if _CJK_DETECT_RE.search(char)
+    )
+    return any(count > source[char] for char, count in output.items())
+
+
 def _text_overlapping_region(
     entries: Sequence[Tuple[BBox, str]],
     region: BBox,
@@ -3999,6 +4380,106 @@ def _looks_like_cjk_file_payload(text: str) -> bool:
         or re.search(r"\.[A-Za-z0-9]{1,8}$", payload)
     )
 
+
+
+def _annotate_source_fixed_pitch_module_paths(
+    page: object,
+    source_blocks: Sequence[dict],
+) -> None:
+    """Verify namespace literals from glyph advances when a TeX font omits flags."""
+    font_re = re.compile(r"NimbusMonL-(?:Regu|Bold)(?:Obli)?", re.IGNORECASE)
+    eligible = {
+        (str(span.get("font", "")), tuple(span.get("bbox", ()))): span
+        for block in source_blocks
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+        if font_re.fullmatch(str(span.get("font", "")).rsplit("+", 1)[-1])
+    }
+    if not eligible:
+        return
+    module_re = re.compile(
+        r"(?<![A-Za-z0-9_.])"
+        r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*){2,}"
+        r"(?![A-Za-z0-9_.])"
+    )
+    for block in page.get_text("rawdict").get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                target = eligible.get((str(span.get("font", "")), tuple(span.get("bbox", ()))))
+                if target is None:
+                    continue
+                chars = span.get("chars", [])
+                text = "".join(char.get("c", "") for char in chars)
+                verified = []
+                for match in module_re.finditer(text):
+                    if len(match.group(0)) < 12:
+                        continue
+                    advances = [
+                        float(chars[index + 1]["origin"][0]) - float(chars[index]["origin"][0])
+                        for index in range(match.start(), match.end() - 1)
+                    ]
+                    if not advances or min(advances) <= 0.0:
+                        continue
+                    median_advance = statistics.median(advances)
+                    if max(advances) - min(advances) > max(0.005, median_advance * 0.01):
+                        continue
+                    verified.append(match.group(0))
+                if verified:
+                    target["_source_fixed_pitch_module_paths"] = tuple(verified)
+
+
+def _without_source_monospace_identifiers(
+    text: str,
+    source_blocks: Sequence[dict],
+    region: BBox,
+) -> str:
+    """Remove only code identifiers proven by the same source text owner."""
+    identifier_re = re.compile(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*){2,}|"
+        r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+)"
+    )
+    requested = set(identifier_re.findall(text))
+    if not requested:
+        return text
+    source_identifiers: set[str] = set()
+    for block in source_blocks:
+        if block.get("type") != 0 or not block.get("bbox"):
+            continue
+        owner = tuple(float(value) for value in block["bbox"])
+        if bbox_intersection_area(owner, region) / max(1.0, bbox_area(region)) < 0.55:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                font = str(span.get("font", "")).rsplit("+", 1)[-1]
+                span_bbox = tuple(float(value) for value in span.get("bbox", ()))
+                if len(span_bbox) != 4 or (
+                    bbox_intersection_area(span_bbox, region)
+                    / max(1.0, bbox_area(span_bbox)) < 0.55
+                ):
+                    continue
+                if re.fullmatch(r"NimbusMonL-(?:Regu|Bold)(?:Obli)?", font, re.IGNORECASE):
+                    source_identifiers.update(
+                        set(span.get("_source_fixed_pitch_module_paths", ())) & requested
+                    )
+                if not (int(span.get("flags", 0)) & 8) or not re.fullmatch(
+                    r"(?:SFTT\d+|CMTT\d+|CMRTypewriter(?:\d+)?|"
+                    r"Courier(?:New)?(?:[-,].*)?|"
+                    r"(?:Consolas|Menlo|Inconsolata|DejaVuSansMono|"
+                    r"LiberationMono|NotoSansMono)(?:[-,].*)?)",
+                    font,
+                    re.IGNORECASE,
+                ):
+                    continue
+                identifier = str(span.get("text", "")).strip(" ,.;:()[]{}")
+                if identifier_re.fullmatch(identifier) and identifier in requested:
+                    source_identifiers.add(identifier)
+    for identifier in source_identifiers:
+        text = re.sub(
+            r"(?<![A-Za-z0-9_])" + re.escape(identifier) + r"(?![A-Za-z0-9_])",
+            " ",
+            text,
+        )
+    return text
 
 def _looks_like_untranslated_english(text: str) -> bool:
     compact = " ".join(text.split())
@@ -4574,6 +5055,10 @@ def _looks_like_reference_entry_text(text: str) -> bool:
         # Narrative citations are grammatical subjects: ``Smith (2025)
         # defines ...`` or ``Smith (2024) and Jones (2025) show ...``.
         # A real bibliography range is still owned by the section classifier.
+        return False
+    # Conference checklist headings follow the bibliography. A venue name
+    # alone must not turn this known structural terminator into an entry.
+    if _CHECKLIST_HEADING_RE.match(compact):
         return False
     numbered_questions = re.findall(
         r"(?:^|[?]\s+)\d{1,2}\.(?!\d)\s+"
@@ -8831,6 +9316,28 @@ def _detach_terminal_formula_punctuation(block: TextBlock) -> None:
     )
 
 
+def _attach_unowned_equation_row_keepouts(
+    block: TextBlock,
+    equation_rows: Sequence[BBox],
+) -> None:
+    """Keep complete native equation tails out of a neighboring prose flow."""
+    for row in equation_rows:
+        area = max(0.1, bbox_area(row))
+        if (
+            not bboxes_intersect(expand_bbox(block.bbox, 0.8), row)
+            or any(bbox_intersection_area(row, prose) > 0.1
+                   for prose in block.source_prose_bboxes)
+            or any(bbox_intersection_area(row, owned) / area >= 0.8
+                   for owned in block.formula_anchors)
+        ):
+            continue
+        # A formula can be split into numerator/script and a long native
+        # operator tail in another PDF object. Individual attached atoms
+        # protect the first fragment only; the shared equation-row registry
+        # supplies the full ownership boundary without changing translation.
+        block.keepout_bboxes = list(dict.fromkeys([*(block.keepout_bboxes or []), row]))
+
+
 def prepare_translation_units(
     document: object,
     preserve_graphics_text: bool = False,
@@ -8854,6 +9361,10 @@ def prepare_translation_units(
     display_equation_regions: Dict[int, List[BBox]] = {}
     rule_bounded_sample_regions: Dict[int, List[BBox]] = {}
     compute_preserved = preserve_graphics_text or preserved_regions_out is not None
+    from .layout_families import apply_family_block_roles
+    from .layout_profiles import detect_layout_profile, profile_policy
+
+    layout_profile = detect_layout_profile(document)
     raw_blocks, gutter_rects = collect_text_blocks(
         document,
         algorithm_regions_out=(algorithm_regions if compute_preserved else None),
@@ -8862,6 +9373,36 @@ def prepare_translation_units(
         # graphics mode is off.
         display_equation_regions_out=display_equation_regions,
     )
+    from .journal_layout import (
+        apply_nature_block_roles,
+        is_nature_document,
+        is_reporting_summary,
+        preserve_nature_comparison_labels,
+    )
+
+    nature_layout = is_nature_document(document)
+    if (layout_profile.kind in {"book", "conference"}
+            or profile_policy(layout_profile).get("anchor_article_structure")):
+        for page_index in range(document.page_count):
+            apply_family_block_roles(
+                [block for block in raw_blocks if block.page_index == page_index],
+                document[page_index], page_index, layout_profile,
+            )
+        if compute_preserved and profile_policy(layout_profile).get("anchor_article_structure"):
+            for block in raw_blocks:
+                if block.block_type == "algorithm":
+                    algorithm_regions.setdefault(block.page_index, []).append(block.bbox)
+    if nature_layout:
+        for page_index in range(document.page_count):
+            apply_nature_block_roles(
+                [block for block in raw_blocks if block.page_index == page_index],
+                document[page_index], page_index,
+            )
+            if preserve_graphics_text:
+                preserve_nature_comparison_labels(
+                    [block for block in raw_blocks if block.page_index == page_index],
+                    document[page_index],
+                )
     piecewise_equation_regions = _piecewise_display_equation_regions(
         raw_blocks,
         display_equation_regions,
@@ -8890,6 +9431,44 @@ def prepare_translation_units(
         raw_blocks,
         graphic_regions_by_page=paragraph_merge_obstacles,
     )
+    # A same-row reference split has one prose owner even when extraction
+    # set no_merge on its left fragment. Join only a proven native body row.
+    for reference in list(blocks):
+        if (
+            not any(candidate is reference for candidate in blocks)
+            or reference.block_type != "body"
+            or reference.nowrap
+            or reference.preserve_position
+        ):
+            continue
+        left = _source_owned_caption_reference_left_fragment(
+            reference, strip_sentinels(reference.text), blocks
+        )
+        if left is None:
+            continue
+        insertion_index = min(
+            index
+            for index, candidate in enumerate(blocks)
+            if candidate is left or candidate is reference
+        )
+        merged = merge_two_blocks(left, reference)
+        # The left fragment belongs to the reference's first source row.
+        merged.source_lines = max(left.source_lines, reference.source_lines)
+        blocks = [
+            candidate
+            for candidate in blocks
+            if candidate is not left and candidate is not reference
+        ]
+        blocks.insert(insertion_index, merged)
+    if nature_layout:
+        # Formula continuation merging deliberately overrides no_merge for
+        # prose. A disclosure checkbox is an independent response owner even
+        # when its first row contains an italic variable such as sample n.
+        for page_index in range(document.page_count):
+            if is_reporting_summary(document[page_index]):
+                blocks = [block for block in blocks if block.page_index != page_index]
+                blocks.extend(block for block in raw_blocks if block.page_index == page_index)
+        blocks.sort(key=lambda block: block.page_index)
     for page_index in range(document.page_count):
         _attach_blank_completion_rule_vectors(
             document[page_index],
@@ -8914,6 +9493,11 @@ def prepare_translation_units(
         )
         page_blocks = [b for b in blocks if b.page_index == page_index]
         classify_blocks(page_blocks, page_index, page_height, image_zones)
+        apply_family_block_roles(page_blocks, page, page_index, layout_profile)
+        if nature_layout:
+            apply_nature_block_roles(page_blocks, page, page_index)
+            if preserve_graphics_text:
+                preserve_nature_comparison_labels(page_blocks, page)
         _promote_run_in_academic_statement_bodies(page_blocks)
         page_sample_regions = _rule_bounded_sample_table_regions(page, page_blocks)
         if page_sample_regions:
@@ -8947,14 +9531,65 @@ def prepare_translation_units(
                     dict.fromkeys(page_table_regions)
                 )
 
+    algorithm_prose_by_page = {
+        page_index: _source_algorithm_natural_language_blocks(
+            document[page_index], page_index, page_algorithm_regions,
+        )
+        for page_index, page_algorithm_regions in algorithm_regions.items()
+    }
+    # Ruled algorithm row numbers belong to the algorithm, even when their
+    # small source font resembles review-template gutter numbering.
+    algorithm_enum_boxes: Dict[int, List[BBox]] = {}
+    for page_index, page_prose in algorithm_prose_by_page.items():
+        heading_boxes = [
+            block.bbox for block in page_prose
+            if re.match(r"^Algorithm\s+\d+\s*[:.]", block.text, re.IGNORECASE)
+        ]
+        frames = [
+            region for region in algorithm_regions.get(page_index, [])
+            if region[3] - region[1] >= 40.0
+            and any(
+                bbox_intersection_area(heading, region) / max(1.0, bbox_area(heading)) >= 0.98
+                and heading[1] - region[1] <= 30.0
+                for heading in heading_boxes
+            )
+        ]
+        numeric_source_boxes = {
+            tuple(float(value) for value in span["bbox"])
+            for raw in document[page_index].get_text("dict").get("blocks", [])
+            for line in raw.get("lines", [])
+            for span in line.get("spans", [])
+            if re.fullmatch(r"\s*[0-9]{1,4}\s*", str(span.get("text", "")))
+            and span.get("bbox")
+        }
+        owned = [
+            box for box in gutter_rects.get(page_index, [])
+            if tuple(box) in numeric_source_boxes
+            and any(
+                2.0 <= region[0] - box[2] <= 12.0
+                and box[1] >= region[1] and box[3] <= region[3]
+                for region in frames
+            )
+        ]
+        if owned:
+            algorithm_enum_boxes[page_index] = owned
+            gutter_rects[page_index] = [
+                box for box in gutter_rects.get(page_index, []) if box not in owned
+            ]
     preserved_union: Dict[int, List[BBox]] = {}
     if compute_preserved:
         for block in blocks:
-            if should_preserve_original_block(
+            article_owner = (
+                profile_policy(layout_profile).get("anchor_article_structure")
+                and block.block_type in {"metadata", "algorithm"}
+            )
+            if (nature_layout and block.block_type == "metadata") or should_preserve_original_block(
                 block,
                 graphic_regions.get(block.page_index, []),
             ):
-                regions = _preserved_block_regions(block)
+                # Contact records and source code own their complete text,
+                # even when a superscript or command looks mathematical.
+                regions = [block.bbox] if article_owner else _preserved_block_regions(block)
                 preserved_union.setdefault(block.page_index, []).extend(regions)
         for page_index in range(document.page_count):
             page_blocks = [block for block in blocks if block.page_index == page_index]
@@ -8979,12 +9614,30 @@ def prepare_translation_units(
             preserved_union.setdefault(page_index, []).extend(
                 rule_bounded_sample_regions.get(page_index, ())
             )
+        for page_index, boxes in algorithm_enum_boxes.items():
+            preserved_union.setdefault(page_index, []).extend(boxes)
         for page_index, page_algorithm_regions in algorithm_regions.items():
-            preserved_union.setdefault(page_index, []).extend(page_algorithm_regions)
+            prose_boxes = [
+                bbox
+                for block in algorithm_prose_by_page.get(page_index, [])
+                for bbox in block.source_prose_bboxes
+            ]
+            preserved_union.setdefault(page_index, []).extend(
+                _subtract_source_prose_owner_boxes(page_algorithm_regions, prose_boxes)
+            )
         for page_index, page_table_regions in equation_table_regions.items():
             preserved_union.setdefault(page_index, []).extend(page_table_regions)
         for page_index, page_rows in piecewise_equation_regions.items():
             preserved_union.setdefault(page_index, []).extend(page_rows)
+
+        # Qualified prose fields own their text; native grid remains protected.
+        for page_index in range(document.page_count):
+            fields = [block.bbox for block in blocks if block.page_index == page_index
+                      and block.block_type == "table_prose"]
+            if fields:
+                preserved_union[page_index] = _subtract_source_table_field_regions(
+                    preserved_union.get(page_index, []), fields,
+                )
 
         # Mutually overlapping translation candidates would overprint each
         # other's Chinese text; keep their original typesetting and exempt
@@ -9075,6 +9728,10 @@ def prepare_translation_units(
             len(block.preserved_math_placeholders),
             block.keepout_bboxes or (),
         )
+        _attach_unowned_equation_row_keepouts(
+            block,
+            display_equation_regions.get(block.page_index, ()),
+        )
         if block.formula_anchors and not _uses_fixed_source_math(block):
             keepout_lines = [
                 _LineRec(text="", bbox=union_bbox(group), spans=[])
@@ -9101,6 +9758,17 @@ def prepare_translation_units(
             skipped += 1
             continue
         units.append((block, protected, mapping))
+    for page_index, page_algorithm_prose in algorithm_prose_by_page.items():
+        for block in page_algorithm_prose:
+            if any(
+                unit_block.page_index == page_index
+                and unit_block.bbox == block.bbox
+                and unit_block.text == block.text
+                for unit_block, _, _ in units
+            ):
+                continue
+            protected, mapping = protect_text(block.text)
+            units.append((block, protected, mapping))
     return units, gutter_rects, skipped
 
 
@@ -9214,6 +9882,10 @@ def _align_formula_anchors(
         anchor = source_bbox
         source_area = max(1.0, bbox_area(source_bbox))
         for related in related_bboxes:
+            if related in source_math_bboxes:
+                # An exact source run already has an owner. A neighboring
+                # keepout must not copy that ink into another formula anchor.
+                continue
             related_area = max(1.0, bbox_area(related))
             if related_area > source_area * 0.7:
                 continue
@@ -9620,9 +10292,11 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
         raise RuntimeError("PyMuPDF is required. Install with: pip install -e .") from exc
 
     page_rect = page.rect
+    page_blocks = page.get_text("dict").get("blocks", [])
+    drawings = _page_drawings(page)
+    background_rects = _vector_background_rects(page_rect, drawings, page_blocks)
     image_candidates: List[BBox] = []
-    page_dict = page.get_text("dict")
-    for raw_block in page_dict.get("blocks", []):
+    for raw_block in page_blocks:
         if raw_block.get("type") == 0 or "bbox" not in raw_block:
             continue
         bbox = tuple(float(value) for value in raw_block["bbox"])
@@ -9630,15 +10304,21 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
             image_candidates.append(bbox)
 
     drawing_candidates: List[BBox] = []
-    for drawing in _page_drawings(page):
+    for drawing in drawings:
         rect = drawing.get("rect")
         if not isinstance(rect, fitz.Rect):
             continue
         bbox = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+        if any(max(abs(a - b) for a, b in zip(bbox, background)) <= 1.0
+               for background in background_rects):
+            continue
         if _looks_like_page_background_rule(bbox, page_rect):
             continue
         if bbox_is_graphic_candidate(bbox, page_rect):
             drawing_candidates.append(bbox)
+    drawing_candidates.extend(_closed_vector_frame_bboxes(
+        page_rect, drawings, background_rects, page_blocks,
+    ))
 
     drawing_candidates = [
         bbox
@@ -9660,7 +10340,7 @@ def graphic_regions_for_page(page: object) -> List[BBox]:
         )
     ]
     candidates.extend(drawing_candidates)
-    candidates.extend(_diagram_cluster_regions(page, page_dict=page_dict))
+    candidates.extend(_diagram_cluster_regions(page, page_dict={"blocks": page_blocks}))
 
     merged = merge_nearby_bboxes(candidates, GRAPHIC_REGION_CLUSTER_GAP)
     output: List[BBox] = []
@@ -9906,6 +10586,8 @@ def merge_nearby_bboxes(bboxes: Sequence[BBox], gap: float) -> List[BBox]:
 
 def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[BBox]) -> bool:
     """Conservative-mode filter: keep figure/table internals and formulas untouched."""
+    if block.block_type == "table_prose":
+        return False
     plain = " ".join(strip_sentinels(block.text).split())
     if not plain:
         return True
@@ -9926,6 +10608,20 @@ def should_preserve_original_block(block: TextBlock, graphic_regions: Sequence[B
     if block.block_type == "caption" or _CAPTION_RE.match(plain):
         return False
     if block.block_type == "heading":
+        return False
+    if (
+        block.block_type == "formula_prose"
+        and block.no_merge
+        and block.nowrap
+        and block.preserve_position
+        and not block.source_math_bboxes
+        and block.source_prose_bboxes
+        and block.source_prose_bboxes == block.source_line_bboxes
+        and re.fullmatch(r"where\s*[:,]?", plain, re.IGNORECASE)
+    ):
+        # Extraction isolated a normal-font definition connector from a
+        # display equation. Its own source prose bbox owns the redaction;
+        # adjacent formula glyphs remain fixed source owners.
         return False
     if block.block_type == "table" and block.nowrap and block.no_merge:
         return True
@@ -10069,7 +10765,6 @@ def _looks_like_prose_grazing_graphic_padding(
     if (
         block.source_lines != 1
         or block.nowrap
-        or block.font_size <= DIAGRAM_INTERNAL_MAX_FONT_SIZE
         or width < max(220.0, block.font_size * 22.0)
         or substantial_prose_word_count(plain) < 10
         or _looks_like_code_or_symbolic_text(plain)
@@ -10103,9 +10798,17 @@ def _looks_like_prose_grazing_graphic_padding(
         vertical_overlap = min(block.bbox[3], region[3]) - max(
             block.bbox[1], region[1]
         )
+        if (
+            crosses_horizontal_edge
+            and width - horizontal_overlap >= max(block.font_size * 3, width * 0.2)
+        ):
+            # A full-width prose row may cross an oversized vector hull while
+            # starting well outside it. Interior labels cannot establish this
+            # substantial exterior text column; keep their existing protection.
+            continue
+        vertical_overlap = min(block.bbox[3], region[3]) - max(block.bbox[1], region[1])
         crosses_vertical_edge = (
-            block.bbox[1] < region[1] < block.bbox[3]
-            or block.bbox[1] < region[3] < block.bbox[3]
+            block.bbox[1] < region[1] < block.bbox[3] or block.bbox[1] < region[3] < block.bbox[3]
         )
         edge_grazing = crosses_vertical_edge and vertical_overlap <= height * 0.60
         if bbox_contains_point(region, center_x, center_y) and not edge_grazing:
@@ -10126,6 +10829,15 @@ def looks_like_author_metadata(block: TextBlock, plain: str) -> bool:
     """
     if block.page_index != 0:
         return False
+    if (
+        block.block_type == "metadata"
+        and not block.should_translate
+        and any(
+            run.role == "author_byline" and run.bbox == block.bbox
+            for run in block.source_style_runs
+        )
+    ):
+        return True
     x0, y0, x1, y1 = block.bbox
     width = x1 - x0
     height = y1 - y0
@@ -10142,13 +10854,9 @@ def looks_like_author_metadata(block: TextBlock, plain: str) -> bool:
         # walls qualify: rows of capitalized name pairs with almost no
         # lowercase sentence words.
         lowercase_words = [
-            word
-            for word in re.findall(r"\b[a-z]{3,}\b", compact)
-            if not re.match(r"^https?", word)
+            word for word in re.findall(r"\b[a-z]{3,}\b", compact) if not re.match(r"^https?", word)
         ]
-        return len(name_pairs) >= 12 and len(lowercase_words) <= max(
-            3, len(name_pairs) // 6
-        )
+        return len(name_pairs) >= 12 and len(lowercase_words) <= max(3, len(name_pairs) // 6)
     if re.search(r"\bauthor\s+names?\s+omitted\b|\banonymous\s+review\b|\bpaper-?\s*id\b", lower):
         return True
     affiliation_cue = re.search(
@@ -10493,6 +11201,402 @@ def _record_in_regions(record: _RawBlockRec, regions: Sequence[BBox]) -> bool:
     return any(bbox_contains_point(region, center_x, center_y) for region in regions)
 
 
+def _source_margin_uri_obstacles(page: object) -> List[BBox]:
+    """Bound reflow by a printed margin URI and its visible separator rule."""
+    try:
+        page_width = float(page.rect.width)
+        page_height = float(page.rect.height)
+        page_dict = page.get_text("dict")
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return []
+    rules: List[BBox] = []
+    for drawing in _page_drawings(page):
+        rect = drawing.get("rect")
+        if rect is None or rect.width < page_width * 0.6 or not 0.0 <= rect.height <= 1.0:
+            continue
+        paint = (
+            (drawing.get("color"), drawing.get("stroke_opacity", 1.0)),
+            (drawing.get("fill"), drawing.get("fill_opacity", 1.0)),
+        )
+        if not any(
+            color and min(color) < 0.98 and float(opacity) > 0.0 for color, opacity in paint
+        ):
+            continue
+        rules.append(tuple(float(value) for value in rect))
+    obstacles: List[BBox] = []
+    for block in page_dict.get("blocks", []):
+        for line in block.get("lines", []):
+            text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+            if not re.fullmatch(r"https?://[A-Za-z0-9~:/?#\[\]@!$&'()*+,;=%._-]{4,}", text):
+                continue
+            bbox = tuple(float(value) for value in line.get("bbox", ()))
+            if len(bbox) != 4 or bbox[3] <= bbox[1]:
+                continue
+            top_margin = bbox[3] <= page_height * 0.1
+            bottom_margin = bbox[1] >= page_height * 0.9
+            distance = max(12.0, (bbox[3] - bbox[1]) * 2.0)
+            for rule in rules:
+                if (top_margin and 0.0 <= rule[1] - bbox[3] <= distance) or (
+                    bottom_margin and 0.0 <= bbox[1] - rule[3] <= distance
+                ):
+                    obstacles.append(union_bbox([bbox, rule]))
+    return list(dict.fromkeys(obstacles))
+
+
+
+def _preserve_annotated_uri_lines(page: object, page_dict: dict) -> None:
+    """Keep exact displayed URI paths, including wrapped lines, in the source."""
+    import fitz
+
+    try:
+        links = page.get_links()
+    except (AttributeError, RuntimeError, ValueError):
+        return
+    uri_regions = []
+    for link in links:
+        uri = link.get("uri")
+        if not isinstance(uri, str) or not uri.startswith(("https://", "http://")):
+            continue
+        try:
+            rect = fitz.Rect(link["from"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not rect.is_empty and not rect.is_infinite:
+            uri_regions.append((uri, rect))
+    if not uri_regions:
+        return
+    for block in page_dict.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        texts = [
+            re.sub(
+                r"^\d{1,2}(?=https?://|www\.)",
+                "",
+                "".join(span.get("text", "") for span in line.get("spans", [])).strip(),
+            )
+            for line in block.get("lines", [])
+        ]
+        complete_uri = "".join(texts)
+        complete_annotated_uri = complete_uri in {uri for uri, _ in uri_regions}
+        retained = []
+        for line in block.get("lines", []):
+            text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+            # A footnote marker may precede the URL; natural link labels and
+            # prose containing a path are still ordinary translatable text.
+            text = re.sub(r"^\d{1,2}(?=https?://|www\.)", "", text)
+            is_uri_text = bool(
+                (complete_annotated_uri or ("/" in text and len(text) >= 4))
+                and re.fullmatch(r"[A-Za-z0-9~:/?#\[\]@!$&'()*+,;=%._-]+", text)
+            )
+            owned = False
+            if is_uri_text and line.get("bbox"):
+                rect = fitz.Rect(line["bbox"])
+                area = rect.get_area()
+                owned = area > 0 and any(
+                    text in uri and (rect & link_rect).get_area() >= area * 0.8
+                    for uri, link_rect in uri_regions
+                )
+            if not owned:
+                retained.append(line)
+        # Mixed prose and links must keep a single reflow owner. Detaching a
+        # wrapped suffix would leave it behind while its prefix moves.
+        if block.get("lines") and not retained:
+            block["lines"] = []
+def _source_compact_author_blocks(
+    page: object, page_dict: dict, page_index: int
+) -> List[TextBlock]:
+    """Keep a verified publisher byline and its symbol glyphs as one owner."""
+    if page_index != 0:
+        return []
+    raw_blocks = [raw for raw in page_dict.get("blocks", ()) if raw.get("type") == 0]
+    publisher = any(
+        (raw["bbox"][1] < page.rect.height * 0.1 or raw["bbox"][1] > page.rect.height * 0.9)
+        and re.search(
+            r"\bScientific Reports\b",
+            " ".join(
+                span.get("text", "")
+                for line in raw.get("lines", ())
+                for span in line.get("spans", ())
+            ),
+        )
+        for raw in raw_blocks
+    )
+    if not publisher or not any(
+        "10.1038/" in span.get("text", "")
+        for raw in raw_blocks
+        for line in raw.get("lines", ())
+        for span in line.get("spans", ())
+    ):
+        return []
+    name_word = r"[A-Z][A-Za-z]*(?:[-‐‑’'][A-Z]?[A-Za-z]+)*"
+    person = rf"{name_word}(?:\s+{name_word}){{1,3}}"
+    result: List[TextBlock] = []
+    for raw in raw_blocks:
+        lines = raw.get("lines", ())
+        spans = [span for line in lines for span in line.get("spans", ())]
+        size = max((float(span.get("size", 0.0)) for span in spans), default=0.0)
+        if not (
+            1 <= len(lines) <= 2 and 0.0 < size < 12.0 and raw["bbox"][1] < page.rect.height * 0.48
+        ):
+            continue
+        if not any(
+            int(span.get("flags", 0)) & 1 and re.fullmatch(r"[\d,]+", span.get("text", "").strip())
+            for span in spans
+        ):
+            continue
+        name_list = " ".join(
+            " ".join(
+                span.get("text", "")
+                for span in spans
+                if not int(span.get("flags", 0)) & 1
+                and "wingdings" not in str(span.get("font", "")).lower()
+            ).split()
+        )
+        if len(re.findall(person, name_list)) < 3 or not re.fullmatch(
+            rf"{person}(?:\s*,\s*{person})+(?:\s*(?:&|and)\s+{person})?", name_list
+        ):
+            continue
+        result.append(
+            TextBlock(
+                page_index=page_index,
+                bbox=tuple(float(value) for value in raw["bbox"]),
+                text="".join(span.get("text", "") for span in spans),
+                font_size=size,
+                color=int_to_rgb(int(spans[0].get("color", 0))),
+                block_type="metadata",
+                should_translate=False,
+                preserve_position=True,
+                no_merge=True,
+                source_style_runs=(
+                    SourceStyleRun(
+                        role="author_byline",
+                        bbox=tuple(float(value) for value in raw["bbox"]),
+                        baseline=float(spans[0].get("origin", (0.0, raw["bbox"][3]))[1]),
+                        font_size=size,
+                        bold=False,
+                    ),
+                ),
+            )
+        )
+    return result
+
+
+def _split_ruled_prose_table_records(
+    records: Sequence[_RawBlockRec],
+    page: object,
+) -> Tuple[List[_RawBlockRec], set[int]]:
+    """Qualify description-table fields by native rules and source row owners."""
+    rules = []
+    for drawing in page.get_drawings():
+        if drawing.get("type") not in {"s", "fs"}:
+            continue
+        if float(drawing.get("stroke_opacity", 1.0)) < 0.99:
+            continue
+        for item in drawing.get("items", ()):
+            if item[0] != "l":
+                continue
+            start, end = item[1:3]
+            width = abs(float(start.x) - float(end.x))
+            if width < float(page.rect.width) * 0.3:
+                continue
+            if abs(float(start.y) - float(end.y)) > max(0.1, width * 0.0001):
+                continue
+            rules.append((min(start.x, end.x), (start.y + end.y) / 2.0, max(start.x, end.x)))
+    rules = sorted(set(rules), key=lambda rule: rule[1])
+    consumed: set[int] = set()
+    cells: List[_RawBlockRec] = []
+    flat = [line for record in records for line in record.lines]
+    if len({id(line) for line in flat}) != len(flat):
+        return list(records), set()
+    for top, separator, bottom in zip(rules, rules[1:], rules[2:]):
+        inside = [
+            line
+            for line in flat
+            if id(line) not in consumed
+            and top[1] < (line.bbox[1] + line.bbox[3]) / 2.0 < bottom[1]
+            and line.bbox[0] >= top[0]
+            and line.bbox[2] <= top[2]
+        ]
+        if len(inside) < 8 or any(
+            line.math_bboxes or sentinel_char_count(line.text) for line in inside
+        ):
+            continue
+        sizes = [
+            float(span.get("size", 0))
+            for line in inside
+            for span in line.spans
+            if float(span.get("size", 0)) > 0
+        ]
+        if not sizes:
+            continue
+        tolerance = min(sizes) * 0.2
+        if any(
+            abs(rule[index] - top[index]) > tolerance
+            for rule in (separator, bottom)
+            for index in (0, 2)
+        ):
+            continue
+        columns: List[List[_LineRec]] = []
+        for line in sorted(inside, key=lambda item: item.bbox[0]):
+            if not columns or abs(line.bbox[0] - columns[-1][0].bbox[0]) > tolerance:
+                columns.append([line])
+            else:
+                columns[-1].append(line)
+        if len(columns) != 2:
+            continue
+        left, right = [sorted(column, key=lambda line: line.bbox[1]) for column in columns]
+        if any(int(span.get("flags", 0)) & 8 for line in inside for span in line.spans):
+            continue
+        if any(
+            re.search(
+                r"(?:SFTT|CMTT|Courier|Consolas|Menlo|NimbusMon|Typewriter)",
+                str(span.get("font", "")),
+                re.IGNORECASE,
+            )
+            for line in inside
+            for span in line.spans
+        ):
+            continue
+        if max(line.bbox[2] for line in left) + min(sizes) <= right[0].bbox[0]:
+            pass
+        else:
+            continue
+        header_left = [line for line in left if line.bbox[3] < separator[1]]
+        header_right = [line for line in right if line.bbox[3] < separator[1]]
+        labels = [line for line in left if line.bbox[1] > separator[1]]
+        values = [line for line in right if line.bbox[1] > separator[1]]
+        if len(header_left) != 1 or len(header_right) != 1 or len(labels) < 3:
+            continue
+        if abs(header_left[0].bbox[1] - header_right[0].bbox[1]) > tolerance:
+            continue
+        if not re.search(
+            r"\b(?:definition|description|instruction|meaning)\b",
+            strip_sentinels(header_right[0].text),
+            re.IGNORECASE,
+        ):
+            continue
+        if any(
+            not 1 <= len(_PROSE_WORD_RE.findall(strip_sentinels(line.text))) <= 6 for line in labels
+        ):
+            continue
+        if any(
+            not re.fullmatch(r"[A-Za-z]+(?:[ -][A-Za-z]+)*", strip_sentinels(line.text).strip())
+            for line in labels
+        ):
+            continue
+        groups = []
+        for index, label in enumerate(labels):
+            next_top = labels[index + 1].bbox[1] if index + 1 < len(labels) else bottom[1]
+            group = [
+                line
+                for line in values
+                if label.bbox[1] - tolerance <= line.bbox[1] < next_top - tolerance
+            ]
+            plain = " ".join(strip_sentinels(line.text) for line in group)
+            if (
+                not group
+                or abs(group[0].bbox[1] - label.bbox[1]) > tolerance
+                or len(_PROSE_WORD_RE.findall(plain)) < 6
+                or len(_PROSE_STOPWORD_RE.findall(plain)) < 2
+                or not re.search(r"[.!?]\s*$", plain)
+            ):
+                groups = []
+                break
+            groups.append(group)
+        covered = [
+            *header_left,
+            *header_right,
+            *labels,
+            *(line for group in groups for line in group),
+        ]
+        if len(groups) != len(labels) or {id(line) for line in covered} != {
+            id(line) for line in inside
+        }:
+            continue
+        for group in ([header_left[0]], [header_right[0]], *([label] for label in labels), *groups):
+            cells.append(_RawBlockRec(lines=list(group)))
+        consumed.update(id(line) for line in inside)
+    if not consumed:
+        return list(records), set()
+    remaining = []
+    for record in records:
+        lines = [line for line in record.lines if id(line) not in consumed]
+        if lines:
+            remaining.append(
+                record
+                if len(lines) == len(record.lines)
+                else _RawBlockRec(
+                    lines=lines,
+                    detached_inline_scripts=record.detached_inline_scripts,
+                    flow_inline_math=record.flow_inline_math,
+                )
+            )
+    cells.sort(key=lambda record: (record.bbox[1], record.bbox[0]))
+    return [*remaining, *cells], {id(record) for record in cells}
+
+
+def _source_table_prose_owner_bboxes(blocks: Sequence[TextBlock]) -> List[BBox]:
+    """Return original cell owners that survive renderer dataclass copies."""
+    owners: List[BBox] = []
+    for block in blocks:
+        if (
+            block.block_type != "table_prose"
+            or not block.should_translate
+            or not block.source_line_bboxes
+            or not block.source_prose_bboxes
+            or block.source_math_bboxes
+            or block.source_math_atom_bboxes
+            or block.source_math_atom_groups
+            or block.formula_anchors
+            or block.preserved_math_placeholders
+            or block.flow_inline_math
+            or SENTINEL_OPEN in block.text
+            or SENTINEL_CLOSE in block.text
+        ):
+            continue
+        source_rows = block.source_line_bboxes
+        if any(
+            len(row) != 4
+            or not all(float("-inf") < value < float("inf") for value in row)
+            or not (row[2] > row[0] and row[3] > row[1])
+            for row in source_rows
+        ):
+            continue
+        # Spaces between lines belong to this one qualified prose cell.
+        # Rendered bbox may move; these source rows remain immutable.
+        owner = (
+            min(row[0] for row in source_rows),
+            min(row[1] for row in source_rows),
+            max(row[2] for row in source_rows),
+            max(row[3] for row in source_rows),
+        )
+        owners.append(owner)
+    return list(dict.fromkeys(owners))
+
+
+def _subtract_source_table_field_regions(
+    regions: Sequence[BBox], fields: Sequence[BBox],
+) -> List[BBox]:
+    """Keep native grid regions while removing qualified translation owners."""
+    pieces = list(regions)
+    for source_field in fields:
+        output = []
+        for rectangle in pieces:
+            x0, y0 = max(rectangle[0], source_field[0]), max(rectangle[1], source_field[1])
+            x1, y1 = min(rectangle[2], source_field[2]), min(rectangle[3], source_field[3])
+            if x1 <= x0 or y1 <= y0:
+                output.append(rectangle)
+                continue
+            candidates = ((rectangle[0], rectangle[1], x0, rectangle[3]),
+                          (x1, rectangle[1], rectangle[2], rectangle[3]),
+                          (x0, rectangle[1], x1, y0),
+                          (x0, y1, x1, rectangle[3]))
+            output.extend(piece for piece in candidates
+                          if piece[2] > piece[0] and piece[3] > piece[1])
+        pieces = output
+    return pieces
+
+
 def collect_text_blocks(
     document: object,
     *,
@@ -10508,11 +11612,24 @@ def collect_text_blocks(
     """
     blocks: List[TextBlock] = []
     gutter_rects: Dict[int, List[BBox]] = {}
-    from .prompt_layout import (
-        join_prompt_list_continuations,
-        paired_markdown_openings,
-        split_fenced_code_blocks,
+    from .journal_layout import is_nature_document, is_reporting_summary, split_nature_text_blocks
+    from .layout_families import (
+        book_definition_record,
+        merge_book_records_around_code,
+        page_layout,
+        split_article_text_blocks,
+        split_book_code_blocks,
+        split_book_contents_blocks,
     )
+    from .layout_profiles import detect_layout_profile, profile_policy
+
+    nature_layout = is_nature_document(document)
+    layout_profile = detect_layout_profile(document)
+    policy = profile_policy(layout_profile)
+    book_layout = layout_profile.kind == "book"
+    code_layout = bool(policy.get("preserve_code"))
+    glyph_ink_cache: Dict[int, Dict[int, Tuple[BBox, float]]] = {}
+    from .prompt_layout import paired_markdown_openings, split_fenced_code_blocks
 
     markdown_fence = None
     fence_openings = paired_markdown_openings(document)
@@ -10521,15 +11638,29 @@ def collect_text_blocks(
         page = document[page_index]
         page_width = float(page.rect.width)
         page_dict = page.get_text("dict")
-        page_dict["blocks"], fenced_code_boxes, markdown_fence = split_fenced_code_blocks(
-            page_dict.get("blocks", []), markdown_fence,
+        _attach_source_glyph_ink_bboxes(page, page_dict, glyph_ink_cache)
+        author_blocks = _source_compact_author_blocks(page, page_dict, page_index)
+        blocks.extend(author_blocks)
+        _preserve_annotated_uri_lines(page, page_dict)
+        page_dict['blocks'], fenced_code_boxes, markdown_fence = split_fenced_code_blocks(
+            page_dict.get('blocks', []), markdown_fence,
             valid_openings=fence_openings.get(page_index, set()),
         )
+        if nature_layout:
+            page_dict["blocks"] = split_nature_text_blocks(page, page_dict.get("blocks", []))
+        elif book_layout:
+            page_dict["blocks"] = split_book_contents_blocks(page, page_dict.get("blocks", []))
+        elif policy.get("anchor_article_structure"):
+            page_dict["blocks"] = split_article_text_blocks(page, page_dict.get("blocks", []))
+        if code_layout:
+            page_dict["blocks"] = split_book_code_blocks(page_dict["blocks"])
         page_dict["blocks"] = join_task_condition_records(page_dict.get("blocks", []))
         review_line_number_bboxes = _review_line_number_bboxes(page_dict)
         records: List[_RawBlockRec] = []
         for raw_block in page_dict.get("blocks", []):
             if raw_block.get("type") != 0:
+                continue
+            if any(tuple(raw_block.get("bbox", ())) == author.bbox for author in author_blocks):
                 continue
             task_blocks = task_condition_blocks(raw_block, page_index)
             if task_blocks is not None:
@@ -10545,9 +11676,26 @@ def collect_text_blocks(
             if record is not None:
                 for column_record in _split_column_straddling_record(record):
                     records.extend(_split_leading_prose_before_code(column_record))
-        records = _merge_wrapped_formula_continuation_records(records)
+        if not (nature_layout and is_reporting_summary(page)):
+            if book_layout and page_layout(page, page_index, kind="book").role == "contents":
+                pass  # Page-number columns are source owners, never formula continuations.
+            elif code_layout:
+                records = merge_book_records_around_code(
+                    records,
+                    page,
+                    _merge_wrapped_formula_continuation_records,
+                )
+            else:
+                records = _merge_wrapped_formula_continuation_records(records)
+        records, prose_table_records = _split_ruled_prose_table_records(records, page)
         equation_flags = mark_equation_blocks(records)
-        algorithm_flags = [record_is_algorithm(record) for record in records]
+        book_definitions = [
+            book_layout and book_definition_record(record, page) for record in records
+        ]
+        algorithm_flags = [
+            not definition and record_is_algorithm(record)
+            for record, definition in zip(records, book_definitions)
+        ]
         if equation_table_regions_out is not None:
             page_table_regions = _equation_table_region_bboxes(records, equation_flags)
             if page_table_regions:
@@ -10574,9 +11722,7 @@ def collect_text_blocks(
                     is not None
                 ):
                     continue
-                formula_lines_in_record = [
-                    line for line in record.lines if not line_is_prose(line)
-                ]
+                formula_lines_in_record = [line for line in record.lines if not line_is_prose(line)]
                 # Only display-equation-DOMINANT records register rows. A
                 # prose paragraph carrying inline math (placeholder-kept)
                 # would otherwise register its own fragments and get its
@@ -10584,9 +11730,7 @@ def collect_text_blocks(
                 if len(formula_lines_in_record) <= len(record.lines) / 2.0:
                     continue
                 for row in group_same_y_lines(record.lines):
-                    formula_bboxes = [
-                        line.bbox for line in row if not line_is_prose(line)
-                    ]
+                    formula_bboxes = [line.bbox for line in row if not line_is_prose(line)]
                     if formula_bboxes:
                         row_regions.append(union_bbox(formula_bboxes))
             if row_regions:
@@ -10599,6 +11743,21 @@ def collect_text_blocks(
             if not line_is_prose(line)
         ]
         alg_regions = algorithm_regions_for_page(page, records)
+        if book_layout:
+            alg_regions = [
+                region
+                for region in alg_regions
+                if not (
+                    any(
+                        definition and _record_in_regions(record, [region])
+                        for record, definition in zip(records, book_definitions)
+                    )
+                    and not any(
+                        is_algorithm and _record_in_regions(record, [region])
+                        for record, is_algorithm in zip(records, algorithm_flags)
+                    )
+                )
+            ]
         if algorithm_regions_out is not None:
             page_algorithm_regions = list(alg_regions)
             page_algorithm_regions.extend(fenced_code_boxes)
@@ -10608,9 +11767,7 @@ def collect_text_blocks(
                 if is_algorithm
             )
             if page_algorithm_regions:
-                algorithm_regions_out[page_index] = list(
-                    dict.fromkeys(page_algorithm_regions)
-                )
+                algorithm_regions_out[page_index] = list(dict.fromkeys(page_algorithm_regions))
         for record_index, (record, is_equation, is_algorithm) in enumerate(
             zip(records, equation_flags, algorithm_flags)
         ):
@@ -10618,28 +11775,35 @@ def collect_text_blocks(
                 continue
             if alg_regions and _record_in_regions(record, alg_regions):
                 continue
-            record_segments = segments_from_record(
-                page_index, record, equation_record=is_equation
-            )
+            record_segments = segments_from_record(page_index, record, equation_record=is_equation)
+            if id(record) in prose_table_records:
+                for block in record_segments:
+                    block.block_type = "table_prose"
+                    block.should_translate = True
+                    block.no_merge = True
+                    block.nowrap = False
+                    block.preserve_position = True
             structural_heading = bool(
                 record_segments
                 and all(segment.block_type == "heading" for segment in record_segments)
             )
-            if is_equation and not structural_heading and (
-                _inline_formula_record_is_part_of_2d_cluster(
-                    records,
-                    record_index,
-                )
-                or _equation_record_is_numbered_formula_row(
-                    records,
-                    equation_flags,
-                    record_index,
+            if (
+                is_equation
+                and not structural_heading
+                and (
+                    _inline_formula_record_is_part_of_2d_cluster(
+                        records,
+                        record_index,
+                    )
+                    or _equation_record_is_numbered_formula_row(
+                        records,
+                        equation_flags,
+                        record_index,
+                    )
                 )
             ):
                 connector_texts = {
-                    " ".join(strip_sentinels(segment.text).split())
-                    .casefold()
-                    .rstrip(":,")
+                    " ".join(strip_sentinels(segment.text).split()).casefold().rstrip(":,")
                     for segment in record_segments
                 }
                 if not connector_texts or not connector_texts <= {
@@ -10678,6 +11842,8 @@ def collect_text_blocks(
             _attach_formula_keepouts(record_segments, formula_lines)
             _trim_redacts_against_block_keepouts(record_segments)
             blocks.extend(record_segments)
+    from .prompt_layout import join_prompt_list_continuations
+
     joined_blocks: List[TextBlock] = []
     for page_index in range(document.page_count):
         joined_blocks.extend(join_prompt_list_continuations(
@@ -10773,6 +11939,53 @@ def _records_form_wrapped_inline_sentence(
     )
 
 
+def _records_share_proven_inline_glyph_row(
+    current: _RawBlockRec,
+    following: _RawBlockRec,
+) -> bool:
+    """Rejoin an ordinary paragraph split midway through a proven glyph row."""
+    if not current.lines or len(following.lines) < 2:
+        return False
+    if (
+        len(_prose_words(_text_outside_sentinels(current.bare_text()))) < 8
+        or sentence_final_text(current.bare_text())
+        or abs(current.bbox[0] - following.bbox[0]) > 3.0
+        or abs(current.bbox[2] - following.bbox[2]) > 3.0
+        or any(line_looks_like_section_heading(line) for line in [*current.lines, *following.lines])
+        or any(
+            EQUATION_NUMBER_RE.fullmatch("".join(strip_sentinels(line.text).split()))
+            for line in [*current.lines, *following.lines]
+        )
+    ):
+        return False
+    last = current.lines[-1]
+    first = following.lines[0]
+    glyphs = [glyph for span in last.spans for glyph in span.get("_source_glyph_ink", ())]
+    if not glyphs or not last.math_bboxes or not first.math_bboxes or line_is_prose(first):
+        return False
+    if not any(
+        line_is_prose(line) and len(_prose_words(_text_outside_sentinels(line.text))) >= 5
+        for line in following.lines[1:5]
+    ):
+        return False
+    # The physical formula continues to the right on the same painted row;
+    # this is stronger than overlap of font-wide extraction descenders.
+    tail = union_bbox(last.math_bboxes)
+    head = union_bbox(first.math_bboxes)
+    height = min(tail[3] - tail[1], head[3] - head[1])
+    overlap = min(tail[3], head[3]) - max(tail[1], head[1])
+    return bool(
+        height > 0.0
+        and overlap >= height * 0.6
+        # Protected subscripts may overlap within the same physical glyph row.
+        and -max(3.0, height * 0.75) <= head[0] - tail[2] <= 3.0
+        and first.bbox[0] > current.bbox[0] + (current.bbox[2] - current.bbox[0]) * 0.6
+        and any(
+            glyph["ink_bbox"][3] >= head[1] and glyph["ink_bbox"][1] <= head[3] for glyph in glyphs
+        )
+    )
+
+
 def _merge_wrapped_formula_continuation_records(
     records: Sequence[_RawBlockRec],
 ) -> List[_RawBlockRec]:
@@ -10789,6 +12002,21 @@ def _merge_wrapped_formula_continuation_records(
     index = 0
     while index < len(records):
         current = records[index]
+        if index + 1 < len(records) and _records_share_proven_inline_glyph_row(
+            current, records[index + 1]
+        ):
+            following = records[index + 1]
+            output.append(
+                _RawBlockRec(
+                    lines=_promote_stacked_plain_formula_fragments(
+                        [*current.lines, *following.lines]
+                    ),
+                    detached_inline_scripts=True,
+                    flow_inline_math=True,
+                )
+            )
+            index += 2
+            continue
         if _records_form_wrapped_inline_sentence(records, index):
             output.append(_RawBlockRec(
                 lines=_promote_stacked_plain_formula_fragments(
@@ -10808,11 +12036,7 @@ def _merge_wrapped_formula_continuation_records(
             output.append(
                 _RawBlockRec(
                     lines=_promote_stacked_plain_formula_fragments(
-                        [
-                            line
-                            for record in merged_records
-                            for line in record.lines
-                        ]
+                        [line for record in merged_records for line in record.lines]
                     ),
                     detached_inline_scripts=True,
                     flow_inline_math=True,
@@ -10842,11 +12066,7 @@ def _merge_wrapped_formula_continuation_records(
             output.append(
                 _RawBlockRec(
                     lines=_promote_stacked_plain_formula_fragments(
-                        [
-                            line
-                            for record in merged_records
-                            for line in record.lines
-                        ]
+                        [line for record in merged_records for line in record.lines]
                     ),
                     detached_inline_scripts=True,
                 )
@@ -10862,11 +12082,7 @@ def _merge_wrapped_formula_continuation_records(
             output.append(
                 _RawBlockRec(
                     lines=_promote_stacked_plain_formula_fragments(
-                        [
-                            line
-                            for record in merged_records
-                            for line in record.lines
-                        ]
+                        [line for record in merged_records for line in record.lines]
                     ),
                     detached_inline_scripts=True,
                 )
@@ -10882,11 +12098,7 @@ def _merge_wrapped_formula_continuation_records(
             output.append(
                 _RawBlockRec(
                     lines=_promote_stacked_plain_formula_fragments(
-                        [
-                            line
-                            for record in merged_records
-                            for line in record.lines
-                        ]
+                        [line for record in merged_records for line in record.lines]
                     ),
                     detached_inline_scripts=True,
                 )
@@ -10952,9 +12164,7 @@ def _merge_wrapped_formula_continuation_records(
         bridge_end = _formula_bridge_sequence_end(records, index)
         if bridge_end is not None:
             merged_lines = [
-                line
-                for record in records[index : bridge_end + 1]
-                for line in record.lines
+                line for record in records[index : bridge_end + 1] for line in record.lines
             ]
             output.append(
                 _RawBlockRec(
@@ -10976,8 +12186,7 @@ def _merge_wrapped_formula_continuation_records(
                 _RawBlockRec(
                     lines=merged_lines,
                     detached_inline_scripts=(
-                        current.detached_inline_scripts
-                        or following.detached_inline_scripts
+                        current.detached_inline_scripts or following.detached_inline_scripts
                     ),
                 )
             )
@@ -12158,6 +13367,15 @@ def _inline_formula_record_is_part_of_2d_cluster(
     record = records[record_index]
     if any(_line_is_equation_explanation(line) for line in record.lines):
         return False
+    if any(
+        line_is_prose(line)
+        and not line.math_bboxes
+        and substantial_prose_word_count(_text_outside_sentinels(line.text)) >= 3
+        for line in record.lines
+    ):
+        # A fraction tower can share a record with a complete explanation.
+        # Only its math rows belong to the tower, not the ordinary prose row.
+        return False
     first = max(0, record_index - 2)
     last = min(len(records), record_index + 3)
 
@@ -12456,6 +13674,19 @@ def _promote_equation_table_neighbor_blocks(
         if block.block_type in excluded_types or block.source_lines > 4:
             continue
         plain = " ".join(strip_sentinels(block.text).split())
+        if (
+            block.block_type == "formula_prose"
+            and block.no_merge
+            and block.nowrap
+            and block.preserve_position
+            and not block.source_math_bboxes
+            and block.source_prose_bboxes
+            and block.source_prose_bboxes == block.source_line_bboxes
+            and re.fullmatch(r"where\s*[:,]?", plain, re.IGNORECASE)
+        ):
+            # A separately extracted definition connector is paper prose,
+            # even when neighboring formula owners resemble table cells.
+            continue
         if not plain or len(plain) > 180 or block.font_size > 11.5:
             continue
         # Section headings are structural anchors, never table components; a
@@ -12898,17 +14129,28 @@ def _table_region_bboxes(blocks: Sequence[TextBlock]) -> List[BBox]:
                         else caption.bbox[1] - region[3]
                     ),
                 )
-                regions.append(
-                    (
-                        min(region[0], anchor.bbox[0]),
-                        region[1],
-                        max(region[2], anchor.bbox[2]),
-                        region[3],
-                    )
+                expanded = (
+                    min(region[0], anchor.bbox[0]), region[1],
+                    max(region[2], anchor.bbox[2]), region[3],
                 )
+                # A preceding full-width caption can be closer than a small
+                # table's own caption below. Its width must not claim ink in
+                # the neighbouring prose column: one covered line is enough
+                # to freeze the whole paragraph in the collision safeguard.
+                external_prose = any(
+                    block.block_type == "body"
+                    and len(_PROSE_WORD_RE.findall(strip_sentinels(block.text))) >= 20
+                    and block.bbox[3] - block.bbox[1] >= 2.0 * block.font_size
+                    and bbox_intersection_area(block.bbox, region)
+                        <= 0.10 * max(1.0, bbox_area(block.bbox))
+                    and bbox_intersection_area(block.bbox, expanded) >= 2.0
+                    for block in blocks
+                )
+                regions.append(region if external_prose else expanded)
             elif _is_strong_uncaptioned_table_component(sub_component):
                 regions.append(region)
     return regions
+
 
 
 def _formatted_dataset_example_region_bboxes(
@@ -13189,6 +14431,18 @@ def _vector_table_region_bboxes(
 
     horizontal = merge_collinear(horizontal, horizontal_axis=True)
     vertical = merge_collinear(vertical, horizontal_axis=False)
+
+    def running_prose_cells(cell_blocks: Sequence[TextBlock]) -> bool:
+        return bool(cell_blocks) and all(
+            block.block_type == "body"
+            and block.should_translate
+            and not block.nowrap
+            and len(_PROSE_WORD_RE.findall(strip_sentinels(block.text))) >= 20
+            and len(_PROSE_STOPWORD_RE.findall(strip_sentinels(block.text))) >= 5
+            and bool(re.search(r"[.!?](?:\s|$)", strip_sentinels(block.text)))
+            for block in cell_blocks
+        )
+
     horizontal_only_regions: List[BBox] = []
     long_horizontal = sorted(
         (segment for segment in horizontal if segment[2] - segment[0] >= 180.0),
@@ -13240,7 +14494,7 @@ def _vector_table_region_bboxes(
         )
         if footer_rule_with_following_section:
             continue
-        if anchors and len(cell_blocks) >= 3:
+        if anchors and len(cell_blocks) >= 3 and not running_prose_cells(cell_blocks):
             horizontal_only_regions.append((x0, y0, x1, y1))
     if len(horizontal) >= 3:
         groups: List[List[List[float]]] = []
@@ -13320,7 +14574,7 @@ def _vector_table_region_bboxes(
                 and x0 <= (block.bbox[0] + block.bbox[2]) / 2.0 <= x1
                 and y0 <= (block.bbox[1] + block.bbox[3]) / 2.0 <= y1
             ]
-            if anchors and len(cell_blocks) >= 3:
+            if anchors and len(cell_blocks) >= 3 and not running_prose_cells(cell_blocks):
                 horizontal_only_regions.append((x0, y0, x1, y1))
     single_separator_grid = bool(
         len(horizontal) >= 5
@@ -14097,13 +15351,13 @@ def classify_blocks(
             current_numbers[0] == previous_numbers[-1] + 1
             and abs(current.bbox[0] - previous.bbox[0]) <= 6.0
             and abs(current.font_size - previous.font_size) <= 0.5
-            and -4.0
-            <= vertical_gap
-            <= max(18.0, min(current.font_size, previous.font_size) * 2.0)
+            and -4.0 <= vertical_gap <= max(18.0, min(current.font_size, previous.font_size) * 2.0)
         ):
             numbered_list_block_ids.update((id(previous), id(current)))
 
     for block in blocks:
+        if block.block_type == "table_prose":
+            continue
         text = block.text.strip()
         plain = " ".join(strip_sentinels(text).split())
         x0, y0, x1, y1 = block.bbox
@@ -14155,8 +15409,7 @@ def classify_blocks(
         # typographic hint; otherwise the fast path below reopens translation
         # in the middle of a reference entry or its next column.
         if (
-            block.block_type == "run_in_heading"
-            or _looks_like_reference_author_line(plain)
+            block.block_type == "run_in_heading" or _looks_like_reference_author_line(plain)
         ) and _is_bibliography_context(block, blocks):
             block.block_type = "bibliography"
             block.should_translate = False
@@ -14217,9 +15470,9 @@ def classify_blocks(
             block.preserve_position = True
             continue
 
-        if looks_like_author_metadata(
-            block, plain
-        ) or _looks_like_fragmented_byline_metadata(block, plain, blocks):
+        if looks_like_author_metadata(block, plain) or _looks_like_fragmented_byline_metadata(
+            block, plain, blocks
+        ):
             block.block_type = "metadata"
             block.should_translate = False
             block.preserve_position = True
@@ -14348,8 +15601,7 @@ def classify_blocks(
         if block.block_type == "heading":
             block.should_translate = True
             if not (
-                _APPENDIX_STYLE_HEADING_LINE_RE.match(plain)
-                or _ROMAN_HEADING_LINE_RE.match(plain)
+                _APPENDIX_STYLE_HEADING_LINE_RE.match(plain) or _ROMAN_HEADING_LINE_RE.match(plain)
             ):
                 block.bold = True
             block.no_merge = True
@@ -14371,7 +15623,60 @@ def classify_blocks(
         block.block_type = "body"
         block.should_translate = True
 
-    _promote_table_component_blocks(blocks)
+    _promote_table_component_blocks(
+        [block for block in blocks if block.block_type != "table_prose"]
+    )
+
+
+def _source_owned_caption_reference_left_fragment(
+    block: TextBlock,
+    plain: str,
+    blocks: Sequence[TextBlock],
+) -> Optional[TextBlock]:
+    """Find a body fragment owning the left side of a native reference row."""
+    if not re.match(
+        r"^(?:Figure|Fig\.|Table)\s*(?:\d+|[IVXLCDM]+)(?:[.:]\s+|\s+)",
+        plain,
+        re.IGNORECASE,
+    ):
+        return None
+    if block.source_lines < 2 or not block.source_line_bboxes:
+        return None
+    first_line = block.source_line_bboxes[0]
+    row_tolerance = max(0.6, block.font_size * 0.12)
+    if (
+        first_line[0] - block.bbox[0] <= max(6.0, block.font_size)
+        or abs(first_line[1] - block.bbox[1]) > row_tolerance
+    ):
+        return None
+    for previous in blocks:
+        if (
+            previous is block
+            or previous.page_index != block.page_index
+            or previous.block_type != "body"
+            or not previous.should_translate
+            or previous.preserve_position
+            or previous.nowrap
+            or previous.source_lines != 1
+            or abs(previous.font_size - block.font_size) > 0.5
+        ):
+            continue
+        previous_plain = strip_sentinels(previous.text).strip()
+        if (
+            len(re.findall(r"[A-Za-z][A-Za-z0-9]*", previous_plain)) < 2
+            or not previous_plain.endswith((".", "!", "?"))
+        ):
+            continue
+        for source_owner in previous.source_prose_bboxes or ():
+            if (
+                abs(source_owner[1] - first_line[1]) <= row_tolerance
+                and abs(source_owner[3] - first_line[3]) <= row_tolerance
+                and abs(source_owner[0] - block.bbox[0]) <= row_tolerance
+                and 0.0 < first_line[0] - source_owner[2]
+                <= max(12.0, block.font_size * 1.5)
+            ):
+                return previous
+    return None
 
 
 def _looks_like_split_caption_reference(
@@ -14379,7 +15684,7 @@ def _looks_like_split_caption_reference(
     plain: str,
     blocks: Sequence[TextBlock],
 ) -> bool:
-    """Detect a prose reference split immediately after phrases like `shown in`."""
+    """Detect a prose reference split from preceding source-owned text."""
     if re.match(
         r"^(?:Figure|Fig\.)\s*\d+\s*\([a-z]\)\.\s*"
         r"(?:Consider|Suppose|Assume|Let|Observe|Note|We)\b",
@@ -14393,6 +15698,9 @@ def _looks_like_split_caption_reference(
         re.IGNORECASE,
     ):
         return False
+    if _source_owned_caption_reference_left_fragment(block, plain, blocks) is not None:
+        return True
+
     for previous in blocks:
         if previous is block or previous.page_index != block.page_index:
             continue
@@ -15390,6 +16698,243 @@ def _format_script_fragment(text: str, position: str) -> str:
     return "^{%s}" % stripped
 
 
+def _embedded_font_glyph_ink_bounds(document: object, xref: int) -> Dict[int, Tuple[BBox, float]]:
+    """Read actual outlines of a simple embedded CFF font, in em units.
+
+    CID fonts, unsupported outlines, malformed data and ambiguous transforms
+    deliberately return no evidence. Their extraction boxes remain intact.
+    """
+    try:
+        import io
+
+        from fontTools.cffLib import CFFFontSet
+        from fontTools.pens.boundsPen import BoundsPen
+
+        _name, extension, _type, data = document.extract_font(xref)
+        if extension != "cff" or not data:
+            return {}
+        cff = CFFFontSet()
+        cff.decompile(io.BytesIO(data), None)
+        if len(cff.topDictIndex) != 1:
+            return {}
+        font = cff.topDictIndex[0]
+        if hasattr(font, "ROS"):
+            return {}  # CID-to-glyph mappings need separate evidence.
+        matrix = tuple(float(value) for value in font.FontMatrix)
+        if len(matrix) != 6 or abs(matrix[1]) > 1e-9 or abs(matrix[2]) > 1e-9:
+            return {}
+        a, _b, _c, d, e, f = matrix
+        if (
+            a <= 0.0
+            or d <= 0.0
+            or abs(a - d) > 1e-9
+            or abs(e) > 1e-9
+            or abs(f) > 1e-9
+            or not all(math.isfinite(value) for value in matrix)
+        ):
+            return {}
+        result: Dict[int, Tuple[BBox, float]] = {}
+        for glyph_id, name in enumerate(font.charset):
+            if glyph_id == 0:
+                continue
+            pen = BoundsPen(font.CharStrings)
+            font.CharStrings[name].draw(pen)
+            if pen.bounds is None:
+                continue
+            x0, y0, x1, y1 = pen.bounds
+            bounds = (a * x0 + e, d * y0 + f, a * x1 + e, d * y1 + f)
+            if all(math.isfinite(value) for value in bounds):
+                advance = a * float(font.CharStrings[name].width)
+                if math.isfinite(advance) and advance > 0.0:
+                    result[glyph_id] = (bounds, advance)
+        return result
+    except Exception:
+        # Optional physical evidence must never make PDF extraction fail.
+        return {}
+
+
+def _attach_source_glyph_ink_bboxes(
+    page: object,
+    page_dict: dict,
+    font_ink_cache: Optional[Dict[int, Dict[int, Tuple[BBox, float]]]] = None,
+) -> None:
+    """Attach per-glyph origin/outline evidence to unusually tall spans.
+
+    A trace bbox also uses font-wide metrics, so it is not an ink bbox. Trace
+    glyph IDs and individual origins are matched to raw extraction characters,
+    then transformed using the embedded outline. Synthetic spacing has no
+    trace ink. Any uncertain character, font or direction keeps the raw box.
+    """
+    spans: Dict[tuple, List[dict]] = {}
+    for block in page_dict.get("blocks", []):
+        for line in block.get("lines", []):
+            if tuple(line.get("dir", (1.0, 0.0))) != (1.0, 0.0):
+                continue
+            for span in line.get("spans", []):
+                # These TeX math faces already have calibrated extraction and
+                # restoration bounds. Early mutation would normalize them a
+                # second time and discard the raw radical/delete ownership.
+                font_name = str(span.get("font", "")).split("+")[-1].upper()
+                if font_name.startswith(("CMEX", "CMSY", "CMMI")):
+                    continue
+                size = float(span.get("size", 0.0))
+                bbox = span.get("bbox", ())
+                if size <= 0.0 or len(bbox) != 4 or bbox[3] - bbox[1] <= size * 1.5:
+                    continue
+                key = (
+                    span.get("font"),
+                    size,
+                    tuple(span.get("origin", ())),
+                    tuple(bbox),
+                    span.get("text", ""),
+                )
+                spans.setdefault(key, []).append(span)
+    if not spans:
+        return
+    try:
+        font_xrefs: Dict[str, set] = {}
+        for font in page.get_fonts(full=True):
+            if font[1] != "cff" or font[2] != "Type1":
+                continue
+            name = re.sub(r"^[A-Z]{6}\+", "", str(font[3]))
+            font_xrefs.setdefault(name, set()).add(int(font[0]))
+        needed_fonts = {str(key[0]) for key in spans}
+        font_bounds: Dict[str, Tuple[int, Dict[int, Tuple[BBox, float]]]] = {}
+        cache = font_ink_cache if font_ink_cache is not None else {}
+        for name in needed_fonts:
+            xrefs = font_xrefs.get(name, set())
+            if len(xrefs) != 1:
+                continue
+            xref = next(iter(xrefs))
+            if xref not in cache:
+                cache[xref] = _embedded_font_glyph_ink_bounds(page.parent, xref)
+            if cache[xref]:
+                font_bounds[name] = (xref, cache[xref])
+        if not font_bounds:
+            return
+        traces: Dict[tuple, List[dict]] = {}
+        all_trace_origins = set()
+        stroked_trace_origins = set()
+        for trace in page.get_texttrace():
+            name = str(trace.get("font", ""))
+            if name not in font_bounds:
+                continue
+            size = float(trace.get("size", 0.0))
+            for _unicode, _glyph_id, origin, _trace_bbox in trace.get("chars", []):
+                trace_origin = (name, round(size, 3), round(origin[0], 3), round(origin[1], 3))
+                all_trace_origins.add(trace_origin)
+                if trace.get("type") == 1 and float(trace.get("opacity", 1.0)) > 0.0:
+                    stroked_trace_origins.add(trace_origin)
+            if trace.get("type") != 0 or trace.get("wmode", 0) != 0:
+                continue
+            if tuple(trace.get("dir", ())) != (1.0, 0.0) or float(trace.get("opacity", 1.0)) <= 0.0:
+                continue
+            xref, bounds = font_bounds[name]
+            for _unicode, glyph_id, origin, _trace_bbox in trace.get("chars", []):
+                glyph_metrics = bounds.get(glyph_id)
+                if glyph_metrics is None:
+                    continue
+                outline, advance = glyph_metrics
+                # Horizontal stretching, PDF width overrides and unproven
+                # font transforms invalidate this outline-to-page mapping.
+                if abs((_trace_bbox[2] - _trace_bbox[0]) - size * advance) > max(
+                    0.02, size * advance * 0.005
+                ):
+                    continue
+                ox, oy = (float(value) for value in origin)
+                x0, y0, x1, y1 = outline
+                ink = (ox + size * x0, oy - size * y1, ox + size * x1, oy - size * y0)
+                key = (name, round(size, 3), round(ox, 3), round(oy, 3))
+                evidence = {
+                    "font_xref": xref,
+                    "glyph_id": glyph_id,
+                    "origin": (ox, oy),
+                    "size": size,
+                    "outline_em_bbox": outline,
+                    "advance_em": advance,
+                    "ink_bbox": ink,
+                }
+                if evidence not in traces.setdefault(key, []):
+                    traces[key].append(evidence)
+        raw_dict = page.get_text("rawdict")
+        for block in raw_dict.get("blocks", []):
+            for line in block.get("lines", []):
+                if tuple(line.get("dir", (1.0, 0.0))) != (1.0, 0.0):
+                    continue
+                for raw in line.get("spans", []):
+                    text = "".join(char.get("c", "") for char in raw.get("chars", []))
+                    size = float(raw.get("size", 0.0))
+                    key = (
+                        raw.get("font"),
+                        size,
+                        tuple(raw.get("origin", ())),
+                        tuple(raw.get("bbox", ())),
+                        text,
+                    )
+                    targets = spans.get(key, ())
+                    if not targets or str(raw.get("font", "")) not in font_bounds:
+                        continue
+                    glyphs: List[dict] = []
+                    complete = True
+                    for char in raw.get("chars", []):
+                        origin = char.get("origin", ())
+                        if len(origin) != 2:
+                            complete = False
+                            break
+                        trace_key = (
+                            raw.get("font"),
+                            round(size, 3),
+                            round(origin[0], 3),
+                            round(origin[1], 3),
+                        )
+                        # Fill-and-stroke emits both trace types at the same
+                        # origin. The fill outline does not bound stroke ink.
+                        if trace_key in stroked_trace_origins:
+                            complete = False
+                            break
+                        evidence = traces.get(trace_key, ())
+                        if len(evidence) == 1:
+                            glyphs.append(evidence[0])
+                        elif (
+                            not evidence
+                            and char.get("c") == " "
+                            and trace_key not in all_trace_origins
+                            and any(key[0] == raw.get("font") for key in traces)
+                        ):
+                            continue  # MuPDF inserted spacing, no source paint.
+                        else:
+                            complete = False
+                            break
+                    if not complete or not raw.get("chars"):
+                        continue
+                    for target in targets:
+                        target["_source_glyph_ink_complete"] = True
+                        target["_source_glyph_ink"] = tuple(glyphs)
+                        target["_source_glyph_ink_bbox"] = (
+                            union_bbox([glyph["ink_bbox"] for glyph in glyphs]) if glyphs else None
+                        )
+                        target.update(_normalized_extracted_math_span(target))
+        # Journal structure and column splitting also consume extraction
+        # geometry. Correct the proven glyph boxes before those owners form.
+        for block in page_dict.get("blocks", []):
+            lines = block.get("lines", [])
+            for line in lines:
+                if any(span.get("_source_glyph_ink_complete") for span in line.get("spans", [])):
+                    line["bbox"] = union_bbox(
+                        [tuple(span["bbox"]) for span in line["spans"] if "bbox" in span]
+                    )
+            if lines and any(
+                span.get("_source_glyph_ink_complete")
+                for line in lines
+                for span in line.get("spans", [])
+            ):
+                block["bbox"] = union_bbox(
+                    [tuple(line["bbox"]) for line in lines if "bbox" in line]
+                )
+    except Exception:
+        return  # Preserve original extraction on unsupported page APIs.
+
+
 def _normalized_extracted_math_span(span: dict) -> dict:
     """Clamp known MuPDF math-font bbox inflation to the painted glyph row.
 
@@ -15406,16 +16951,31 @@ def _normalized_extracted_math_span(span: dict) -> dict:
     origin = span.get("origin")
     font = str(span.get("font", ""))
     size = float(span.get("size", 0.0))
-    if (
-        not bbox
-        or len(bbox) != 4
-        or not origin
-        or len(origin) < 2
-        or size <= 0.0
-    ):
+    if not bbox or len(bbox) != 4 or not origin or len(origin) < 2 or size <= 0.0:
         return span
     x0, y0, x1, y1 = (float(value) for value in bbox)
     origin_y = float(origin[1])
+    # CMEX restoration uses its calibrated baseline and source clip bounds.
+    # Preserve that ownership before applying outline recovery to other fonts.
+    if span.get("_source_glyph_ink_complete") and "CMEX" not in font.upper():
+        ink = span.get("_source_glyph_ink_bbox")
+        normalized = dict(span)
+        normalized.setdefault("_raw_bbox", (x0, y0, x1, y1))
+        if ink is None and not str(span.get("text", "")).strip():
+            normalized["bbox"] = (x0, origin_y, x1, origin_y)
+            return normalized
+        if ink is not None and len(ink) == 4:
+            # Keep horizontal advance/spacing, and all real ink (including
+            # genuinely tall operators); only font-wide phantom tails leave.
+            pad = 0.15
+            normalized["bbox"] = (
+                min(x0, ink[0] - pad),
+                ink[1] - pad,
+                max(x1, ink[2] + pad),
+                ink[3] + pad,
+            )
+            return normalized
+        return span
     font_upper = font.upper()
     normalized_text = normalize_span_text(span.get("text", "")).strip()
     if (
@@ -15451,11 +17011,7 @@ def _normalized_extracted_math_span(span: dict) -> dict:
             return normalized
     if "CMEX" not in font_upper:
         return span
-    if (
-        y1 - y0 <= size * 2.2
-        or y1 - origin_y <= size * 1.5
-        or origin_y - y0 >= size * 1.2
-    ):
+    if y1 - y0 <= size * 2.2 or y1 - origin_y <= size * 1.5 or origin_y - y0 >= size * 1.2:
         return span
     # Computer Modern extension-font summation/product glyphs extract as
     # ``P``/``X``. Their painted operator legitimately descends about one em
@@ -15692,12 +17248,111 @@ def parse_block_lines(
     if not lines:
         return None, dropped_rects
     lines = _coalesce_fragmented_same_baseline_lines(lines)
+    lines = _coalesce_fragmented_prose_math_row_lines(lines)
     _promote_adjacent_short_formula_lines(lines)
     detached_inline_scripts = _promote_detached_inline_formula_scripts(lines)
     return _RawBlockRec(
         lines=lines,
         detached_inline_scripts=detached_inline_scripts,
     ), dropped_rects
+
+
+def _coalesce_fragmented_prose_math_row_lines(lines: Sequence[_LineRec]) -> List[_LineRec]:
+    """Recover a justified prose row using its source glyph origins."""
+    metrics: List[Optional[Tuple[float, float]]] = []
+    for line in lines:
+        size = max((float(span.get("size", 0.0)) for span in line.spans), default=0.0)
+        baselines = sorted(
+            float(span["origin"][1])
+            for span in line.spans
+            if len(span.get("origin", ())) == 2
+            and float(span.get("size", 0.0)) >= size * 0.85
+            and normalize_span_text(span.get("text", "")).strip()
+        )
+        metrics.append(
+            (size, baselines[len(baselines) // 2])
+            if size > 0.0 and baselines and not line.is_cell
+            else None
+        )
+
+    result: List[_LineRec] = []
+    index = 0
+    while index < len(lines):
+        stop = index + 1
+        while stop < len(lines) and metrics[stop - 1] is not None and metrics[stop] is not None:
+            previous, following = lines[stop - 1], lines[stop]
+            previous_size, previous_baseline = metrics[stop - 1]
+            following_size, following_baseline = metrics[stop]
+            size = min(previous_size, following_size)
+            gap = following.bbox[0] - previous.bbox[2]
+            if (
+                min(previous_size, following_size) < max(previous_size, following_size) * 0.85
+                or abs(previous_baseline - following_baseline) > max(0.5, size * 0.10)
+                or following.bbox[0] <= previous.bbox[0]
+                or not -0.5 <= gap <= size * 1.10
+            ):
+                break
+            stop += 1
+        group = lines[index:stop]
+        prose = " ".join(line.text.strip() for line in group if not line.math_bboxes)
+        words = _prose_words(prose)
+        grammatical_prose = bool(
+            len(words) >= 4
+            and re.search(
+                r"\b(?:a|an|the|this|these|that|those|we|it)\s+[A-Za-z]", prose, re.IGNORECASE
+            )
+            and len(
+                [
+                    word
+                    for word in words
+                    if word.lower() not in _SHORT_PROSE_WORDS | _FORMULA_CONTEXT_WORDS
+                ]
+            )
+            >= 2
+        )
+        if len(group) >= 3 and grammatical_prose and any(line.math_bboxes for line in group):
+            normalized_group: List[_LineRec] = []
+            for line in group:
+                outside_math = SENTINEL_RUN_RE.sub("", line.text)
+                atoms = [
+                    tuple(span["bbox"])
+                    for span in line.spans
+                    if normalize_span_text(span.get("text", "")).strip()
+                    and len(span.get("bbox", ())) == 4
+                ]
+                if line.math_bboxes and atoms and not re.search(r"[A-Za-z]{2,}", outside_math):
+                    # This source fragment is one physical formula family. Keep
+                    # its unmarked Greek glyphs and scripts with the marked ink,
+                    # rather than translating or reflowing them independently.
+                    normalized_group.append(
+                        _LineRec(
+                            text=SENTINEL_OPEN
+                            + strip_sentinels(line.text).strip()
+                            + SENTINEL_CLOSE,
+                            bbox=line.bbox,
+                            spans=line.spans,
+                            math_bboxes=atoms,
+                            prose_bboxes=[],
+                            math_run_bboxes=[union_bbox(atoms)],
+                        )
+                    )
+                else:
+                    normalized_group.append(line)
+            group = normalized_group
+            result.append(
+                _LineRec(
+                    text=" ".join(line.text.strip() for line in group),
+                    bbox=union_bbox([line.bbox for line in group]),
+                    spans=[span for line in group for span in line.spans],
+                    math_bboxes=[bbox for line in group for bbox in line.math_bboxes],
+                    prose_bboxes=[bbox for line in group for bbox in line.prose_bboxes],
+                    math_run_bboxes=[bbox for line in group for bbox in line.math_run_bboxes],
+                )
+            )
+        else:
+            result.extend(group)
+        index = stop
+    return result
 
 
 def _coalesce_fragmented_same_baseline_lines(lines: Sequence[_LineRec]) -> List[_LineRec]:
@@ -15991,7 +17646,21 @@ def _fragile_overlap_overrides_prose_majority(record: _RawBlockRec) -> bool:
         and prose_lines / max(len(record.lines), 1) >= 0.5
         and prose_words >= 60
     )
+    if not long_continuous_prose and prose_words >= 60:
+        # Publisher PDFs can expose every inline bracket and superscript as
+        # another physical line. Count complete visual rows before treating
+        # those fragments as a structural math tower: long body paragraphs
+        # and captions still contain prose on most of their printed rows.
+        rows = group_same_y_lines(record.lines)
+        prose_rows = sum(
+            substantial_prose_word_count(
+                " ".join(strip_sentinels(line.text) for line in row)
+            ) >= 6
+            for row in rows
+        )
+        long_continuous_prose = len(rows) >= 8 and prose_rows >= len(rows) * 0.65
     return not long_continuous_prose
+
 
 
 def _record_is_single_line_numbered_display_equation(record: _RawBlockRec) -> bool:
@@ -16678,8 +18347,21 @@ def line_has_short_formula_prose_fragment(line: _LineRec) -> bool:
     words = [word for word in _PROSE_WORD_RE.findall(bare) if word.lower() not in _MATH_WORDS]
     if not words:
         return False
-    return bool(_FORMULA_PROSE_FRAGMENT_CUE_RE.search(bare))
-
+    if _FORMULA_PROSE_FRAGMENT_CUE_RE.search(bare):
+        return True
+    # Publishers split sentence starts beside math into short physical lines.
+    # Require ordinary text and a grammatical start, never a math/axis label.
+    outside = " ".join(_text_outside_sentinels(line.text).split()).lstrip(".;:, ")
+    content_words = [
+        word
+        for word in _PROSE_WORD_RE.findall(outside)
+        if word.lower() not in _MATH_WORDS | _SHORT_PROSE_WORDS | _FORMULA_CONTEXT_WORDS
+    ]
+    return bool(
+        not line.math_bboxes
+        and content_words
+        and re.fullmatch(r"(?:As|A|An|The)\s+[A-Za-z][A-Za-z -]*", outside)
+    )
 
 def line_formula_prefix_prose_tail(line: _LineRec) -> Optional[_LineRec]:
     """Return the prose tail when a physical line starts with display math.
@@ -17038,6 +18720,11 @@ def line_looks_like_section_heading(line: _LineRec) -> bool:
             return False
 
     numbered_match = _NUMBERED_HEADING_LINE_RE.match(compact)
+    if numbered_match and re.match(r"^\d{4,}\s", compact):
+        # A wrapped body line may begin with a hardware model or year
+        # ("7302 16-Core CPU ..."). A bare four-digit integer is not a
+        # section marker; dotted hierarchical section numbers still qualify.
+        return False
     appendix_match = _APPENDIX_STYLE_HEADING_LINE_RE.match(compact)
     roman_match = _ROMAN_HEADING_LINE_RE.match(compact)
     bare_appendix_match = re.fullmatch(
@@ -17624,6 +19311,34 @@ def _trim_redacts_against_block_keepouts(blocks: Sequence[TextBlock]) -> None:
                     horizontal_overlap = min(segment[2], keepout[2]) - max(
                         segment[0], keepout[0]
                     )
+                    lower_prose_strip = keepout[3] + EQUATION_TABLE_REDACT_GAP
+                    if (
+                        vertical_overlap > 0.0
+                        and horizontal_overlap > 0.0
+                        and segment[1] - keepout[1]
+                        >= max(2.0, (segment[3] - segment[1]) * 0.5)
+                        and segment[3] - lower_prose_strip >= 1.0
+                        # Tall extraction boxes require the restoration path
+                        # below; a clear ink strip alone does not preserve their
+                        # full PDF character-deletion ownership.
+                        and keepout[3] - keepout[1] <= block.font_size * 2.2
+                        and any(
+                            abs(source_bbox[0] - segment[0]) <= 0.8
+                            and abs(source_bbox[2] - segment[2]) <= 0.8
+                            and source_bbox[1] <= segment[1] + 0.8
+                            and source_bbox[3] >= segment[3] - 0.8
+                            for source_bbox in block.source_prose_bboxes
+                        )
+                    ):
+                        # A preceding formula's descent may enter this prose
+                        # row while a full-width lower strip stays clear of
+                        # every formula object. MuPDF removes intersected
+                        # prose glyphs; carving horizontally instead leaves
+                        # an English island under the formula.
+                        next_segments.append(
+                            (segment[0], lower_prose_strip, segment[2], segment[3])
+                        )
+                        continue
                     tall_cross_line_formula = bool(
                         vertical_overlap > 0.0
                         and horizontal_overlap > 0.0
@@ -18320,6 +20035,12 @@ def _math_line_prose_fragments(line: _LineRec) -> List[_LineRec]:
                 )
             )
         )
+        # A sentence start can share a normal-font span with the terminal
+        # numeral of a formula, e.g. "= 0. A similar". Its article is one
+        # letter, so the ordinary two-letter word counter misses it.
+        sentence_connector = sentence_connector or bool(
+            re.search(r"[.;]\s+(?:A|An|The)\s+[A-Za-z]{3,}\b", compact_fragment)
+        )
         if not significant or (
             len(prose_words) == 1
             and len(significant[0]) < 8
@@ -18466,7 +20187,15 @@ def _line_continues_wrapped_prose_connector(
     if not current.lines or sentinel_char_count(line.text):
         return False
     plain = " ".join(strip_sentinels(line.text).split()).strip()
-    if not _WRAPPED_PROSE_CONNECTOR_RE.fullmatch(plain):
+    sentence_tail = bool(
+        not line.math_bboxes
+        and line.prose_bboxes
+        and not sentinel_char_count(current.lines[-1])
+        and len(_prose_words(current.lines[-1])) >= 2
+        and len(_prose_words(plain)) >= 2
+        and re.fullmatch(r"(?:of|in|with|to|from|for)\s+[A-Za-z][A-Za-z ,'-]*[.!?]", plain)
+    )
+    if not _WRAPPED_PROSE_CONNECTOR_RE.fullmatch(plain) and not sentence_tail:
         return False
     if sentence_final_text(current.lines[-1]):
         return False
@@ -18476,6 +20205,7 @@ def _line_continues_wrapped_prose_connector(
     return (
         -2.0 <= vertical_gap <= max(16.0, line_height * 1.8)
         and line.bbox[0] <= previous[0] + max(12.0, line_height * 1.3)
+        and (not sentence_tail or vertical_gap <= max(2.0, line_height * 0.6))
     )
 
 
@@ -19434,14 +21164,21 @@ def _detached_equation_connector_block(
     connector_lines = []
     for line_index, candidate in enumerate(record.lines):
         outside = " ".join(_text_outside_sentinels(candidate.text).split())
-        if (
-            not candidate.math_bboxes
-            and re.fullmatch(
-                r"(?:and|for|given|if|when|where|with)\s*[:,]?",
-                outside,
-                re.IGNORECASE,
-            )
+        if not re.fullmatch(
+            r"(?:and|for|given|if|when|where|with)\s*[:,]?",
+            outside,
+            re.IGNORECASE,
         ):
+            continue
+        if candidate.math_bboxes:
+            fragments = _math_line_prose_fragments(candidate)
+            if len(fragments) != 1:
+                continue
+            fragment = fragments[0]
+            if " ".join(fragment.text.split()) != outside:
+                continue
+            connector_lines.append((line_index, fragment))
+        else:
             connector_lines.append((line_index, candidate))
     if len(connector_lines) != 1:
         return None
@@ -20018,7 +21755,7 @@ def segments_from_record(
             compact_line = " ".join(strip_sentinels(line.text).split()).strip()
             if _CAPTION_RE.match(compact_line):
                 flush_current()
-        if not equation_record and not caption_record:
+        if not caption_record and (not equation_record or not line.math_bboxes):
             split = split_bold_leadin_line(line)
             if split is not None:
                 flush_current()
@@ -20661,6 +22398,21 @@ def is_math_span(
     if MATH_FONT_RE.search(font or ""):
         return True
     stripped = text.strip()
+    if any(ord(char) < 32 and not char.isspace() for char in stripped):
+        # Custom symbol fonts expose painted accents/operators as control
+        # codes. Keep their source glyphs; no ordinary font can redraw them.
+        return True
+    if re.search(r"(?:^|\+)PI_chars(?:_\d+)?$", font or "") and len(stripped) <= 3:
+        # These publisher symbol fonts can decode Psi as the ASCII letter C.
+        # Preserve the physical glyph without guessing a Unicode replacement.
+        return bool(stripped)
+    if re.search(r"STIXGeneral", font or "", re.I) and (
+        _formula_like_plain_span_text(stripped)
+        or re.fullmatch(r"[\u0370-\u03ff\u2200-\u22ff\s]+", stripped)
+    ):
+        # General is a text face that also contains mathematical glyphs.
+        # Its English prose must translate; actual math stays source-owned.
+        return True
     if flags & 1:  # superscript bit
         if (
             stripped.lower() in _SHORT_PROSE_WORDS
@@ -20694,6 +22446,13 @@ def _translation_repeats_source(block: TextBlock, translated_text: str) -> bool:
     if not source or source != target:
         return False
     return not any(is_cjk_char(char) for char in target)
+
+
+_TRANSLATION_NUMERIC_TOKEN_RE = re.compile(
+    r"(?<![\w⟦])[+\-−]?(?:\d+(?:[.,]\d+)*|\.\d+)"
+    r"(?:[eE][+\-−]?\d+)?(?:st|nd|rd|th)?(?![\w⟧])",
+    re.IGNORECASE,
+)
 
 
 def protect_text(text: str) -> Tuple[str, Dict[int, str]]:
@@ -20771,6 +22530,23 @@ def protect_text(text: str) -> Tuple[str, Dict[int, str]]:
         protected = protected[:start] + placeholder + protected[end:]
     protected = _protect_contribution_names(protected, stash)
     protected = MATH_TOKEN_RE.sub(stash_math_token, protected)
+    def stash_numeric(match: re.Match) -> str:
+        # Caption/section labels are structural anchors (``Table 2``) and
+        # their number is already part of the visible owner identity.  Keep
+        # that label text plain so caption detection and reading-order logic
+        # continue to see it; ordinary numeric literals remain protected.
+        prefix = protected[: match.start()]
+        if re.search(
+            r"(?i)\b(?:table|tab\.?|figure|fig\.?|section|sec\.?|algorithm|alg\.?|"
+            r"equations?|eqs?\.?|theorem|thm\.?|lemma|lem\.?|proposition|prop\.?|"
+            r"corollary|cor\.?|definition|def\.?|assumption)\s*(?:\(\s*)?$",
+            prefix,
+        ):
+            return match.group(0)
+        return stash(match.group(0))
+
+
+    protected = _TRANSLATION_NUMERIC_TOKEN_RE.sub(stash_numeric, protected)
     return protected, mapping
 
 
@@ -22270,6 +24046,181 @@ def redact_original_text(
         page.apply_redactions()
 
 
+def _restore_overlapping_preserved_native_text(page, source_page, region) -> bool:
+    """Restore a qualified horizontal label with its original PDF font resource.
+
+    Only opaque, filled, horizontal source text with an unambiguous encoding
+    is supported. Every glyph keeps its source origin; unsupported fonts or
+    transforms leave the QA error visible rather than substituting a font.
+    """
+    import fitz
+
+    source_doc, target_doc = source_page.parent, page.parent
+    if source_page.rect != page.rect or source_page.rotation != page.rotation:
+        return False
+    box = fitz.Rect(region) + (-0.15, -0.15, 0.15, 0.15)
+    traces = [
+        t
+        for t in source_page.get_texttrace()
+        if box.contains(fitz.Rect(t["bbox"])) and t.get("chars")
+    ]
+    if not traces:
+        return False
+    operations = []
+    fonts = {}
+    for trace in traces:
+        if (
+            tuple(trace["dir"]) != (1.0, 0.0)
+            or trace["wmode"] != 0
+            or trace["type"] not in (0, 3)
+            or trace["opacity"] != 1.0
+            or trace.get("layer")
+            or trace["size"] <= 0
+        ):
+            return False
+        matching = {
+            f[0] for f in source_page.get_fonts(full=True) if f[3].split("+")[-1] == trace["font"]
+        }
+        if len(matching) != 1:
+            return False
+        xref = matching.pop()
+        if target_doc.xref_object(xref) != source_doc.xref_object(xref):
+            return False
+        kind, encoding = source_doc.xref_get_key(xref, "Encoding")
+        subtype = source_doc.xref_get_key(xref, "Subtype")[1]
+        code_map = {}
+        if subtype == "/Type3" and kind in ("dict", "xref"):
+            if kind == "xref":
+                encoding = source_doc.xref_object(int(encoding.split()[0]))
+            differences = re.search(r"/Differences\s*\[([^\]]*)\]", encoding)
+            if not differences:
+                return False
+            code = None
+            names = {
+                "space": " ",
+                "hyphen": "-",
+                "period": ".",
+                "parenleft": "(",
+                "parenright": ")",
+                "plus": "+",
+                "percent": "%",
+            }
+            for token in re.findall(r"\d+|/[A-Za-z0-9]+", differences.group(1)):
+                if token.isdigit():
+                    code = int(token)
+                    continue
+                if code is None or code > 255:
+                    return False
+                name = token[1:]
+                char = name if len(name) == 1 else names.get(name)
+                if char is not None:
+                    if ord(char) in code_map:
+                        return False
+                    code_map[ord(char)] = bytes([code])
+                code += 1
+        elif subtype == "/Type0" and kind == "name" and encoding == "/Identity-H":
+            cmkind, cmref = source_doc.xref_get_key(xref, "ToUnicode")
+            if cmkind != "xref":
+                return False
+            cmap = source_doc.xref_stream(int(cmref.split()[0])).decode("ascii")
+            pairs = []
+            for section in re.findall(r"beginbfchar(.*?)endbfchar", cmap, re.S):
+                pairs.extend(
+                    (int(a, 16), b)
+                    for a, b in re.findall(r"<([0-9A-Fa-f]{4})>\s*<([0-9A-Fa-f]{4})>", section)
+                )
+            for section in re.findall(r"beginbfrange(.*?)endbfrange", cmap, re.S):
+                for a, b, values in re.findall(
+                    r"<([0-9A-Fa-f]{4})>\s*<([0-9A-Fa-f]{4})>\s*\[([^\]]+)\]", section
+                ):
+                    first, last = int(a, 16), int(b, 16)
+                    values = re.findall(r"<([0-9A-Fa-f]{4})>", values)
+                    if last - first + 1 != len(values):
+                        return False
+                    pairs.extend((first + i, v) for i, v in enumerate(values))
+            for code, unicode_hex in pairs:
+                unicode_value = int(unicode_hex, 16)
+                if unicode_value in code_map:
+                    return False
+                code_map[unicode_value] = code.to_bytes(2, "big")
+        else:
+            return False
+        if any(c[0] not in code_map for c in trace["chars"]):
+            return False
+        alias = "SourcePreserved%s" % xref
+        fonts[alias] = xref
+        colorspace, color = trace["colorspace"], trace["color"]
+        if trace["type"] == 3:
+            # MuPDF 1.26 reports a Type3 glyph as ignored text after painting
+            # its visible outline. Accept only that immediate opaque filled
+            # outline, owned by this single glyph; invisible text has none.
+            if subtype != "/Type3" or len(trace["chars"]) != 1:
+                return False
+            paints = [d for d in source_page.get_drawings() if d.get("seqno") == trace["seqno"] - 1]
+            if (
+                len(paints) != 1
+                or paints[0].get("type") != "f"
+                or paints[0].get("fill_opacity") != 1.0
+                or paints[0].get("fill") is None
+                or not (fitz.Rect(trace["chars"][0][3]) + (-0.2, -0.2, 0.2, 0.2)).contains(
+                    paints[0]["rect"]
+                )
+            ):
+                return False
+            colorspace, color = 3, paints[0]["fill"]
+        if colorspace not in (1, 3, 4) or len(color) != colorspace:
+            return False
+        operations.append(
+            " ".join("%.9f" % c for c in color) + {1: " g", 3: " rg", 4: " k"}[colorspace]
+        )
+        operations.append("BT /%s %.9f Tf 0 Tr 100 Tz 0 Tc 0 Tw 0 Ts" % (alias, trace["size"]))
+        for unicode_value, _gid, origin, _bbox in trace["chars"]:
+            point = fitz.Point(origin) * ~page.transformation_matrix
+            operations.append(
+                "1 0 0 1 %.9f %.9f Tm <%s> Tj" % (point.x, point.y, code_map[unicode_value].hex())
+            )
+        operations.append("ET")
+    if target_doc.xref_get_key(page.xref, "Resources")[0] not in ("xref", "dict"):
+        return False
+    # Clear any surviving suffix first; otherwise restoration doubles its ink.
+    page.add_redact_annot(fitz.Rect(region), fill=None)
+    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
+    # Resource dictionaries can be indirect or shared between pages. Clone
+    # the page's current dictionaries after redaction, preserving all other
+    # resources and avoiding changes to any other page.
+    resource_kind, resource_value = target_doc.xref_get_key(page.xref, "Resources")
+    resource_object = (
+        target_doc.xref_object(int(resource_value.split()[0]))
+        if resource_kind == "xref"
+        else resource_value
+    )
+    resource_xref = target_doc.get_new_xref()
+    target_doc.update_object(resource_xref, resource_object)
+    font_kind, font_value = target_doc.xref_get_key(resource_xref, "Font")
+    font_object = (
+        target_doc.xref_object(int(font_value.split()[0]))
+        if font_kind == "xref"
+        else font_value
+        if font_kind == "dict"
+        else "<<>>"
+    )
+    font_xref = target_doc.get_new_xref()
+    target_doc.update_object(font_xref, font_object)
+    for alias, xref in fonts.items():
+        target_doc.xref_set_key(font_xref, alias, "%s 0 R" % xref)
+    target_doc.xref_set_key(resource_xref, "Font", "%s 0 R" % font_xref)
+    target_doc.xref_set_key(page.xref, "Resources", "%s 0 R" % resource_xref)
+    page.wrap_contents()
+    stream = target_doc.get_new_xref()
+    target_doc.update_object(stream, "<<>>")
+    target_doc.update_stream(stream, ("q\n" + "\n".join(operations) + "\nQ\n").encode("ascii"))
+    contents = page.get_contents() + [stream]
+    target_doc.xref_set_key(
+        page.xref, "Contents", "[ " + " ".join("%s 0 R" % x for x in contents) + " ]"
+    )
+    return True
+
+
 def _restore_redaction_damaged_preserved_regions(
     page: object,
     source_document: object,
@@ -22302,12 +24253,28 @@ def _restore_redaction_damaged_preserved_regions(
         for bbox in (block.redact_bboxes or [block.bbox])
     ]
     restored = 0
-    for region in _preserved_text_qa_regions(preserved_regions):
+    restore_regions = _preserved_text_qa_regions(preserved_regions)
+    algorithm_prose_owners = _certified_algorithm_prose_owner_boxes(
+        source_page, page_index, restore_regions, translated_blocks,
+    )
+    # Merging protection atoms can fill a translated algorithm heading's
+    # source-prose hole again. Reapply those exact owners after the merge.
+    if algorithm_prose_owners:
+        restore_regions = _subtract_source_prose_owner_boxes(
+            restore_regions, algorithm_prose_owners,
+        )
+    restore_regions = _subtract_source_table_field_regions(
+        restore_regions,
+        _source_table_prose_owner_bboxes(translated_blocks),
+    )
+    for region in restore_regions:
         region_area = max(1.0, bbox_area(region))
         if any(
             bbox_intersection_area(region, redaction) / region_area >= 0.02
             for redaction in redaction_regions
         ):
+            if _restore_overlapping_preserved_native_text(page, source_page, region):
+                restored += 1
             continue
         source_text = _text_overlapping_region(source_entries, region)
         if not source_text:
@@ -22717,6 +24684,8 @@ def requested_translation_font_size(
     min_font_size: float,
     font_scale: float,
 ) -> float:
+    if block.fixed_translation_font_size is not None:
+        return block.fixed_translation_font_size
     base_size = max(min_font_size, block.font_size * font_scale)
     plain = " ".join(strip_sentinels(block.text).split()).strip()
     source_weight_lettered_heading = bool(
@@ -24390,6 +26359,7 @@ def _expand_multiline_block_bbox(
     page_height: float,
     *,
     obstacles: Sequence[BBox] = (),
+    fixed_obstacles: Sequence[BBox] = (),
 ) -> TextBlock:
     """Grow a multi-line paragraph into adjacent whitespace before shrinking.
 
@@ -24421,6 +26391,15 @@ def _expand_multiline_block_bbox(
         return block
 
     x0, y0, x1, y1 = block.bbox
+    # A previous paragraph can own a following display equation that is not
+    # present in the page's coarse equation-row index. Its native keepouts
+    # still bound whitespace borrowed above this paragraph.
+    upward_obstacles = [
+        *obstacles,
+        *(keepout for other in page_blocks
+          if other is not block and other.page_index == block.page_index
+          for keepout in (other.keepout_bboxes or ())),
+    ]
 
     def preceding_clearance_limit(candidate: BBox, clearance: float) -> Optional[float]:
         if candidate[1] >= y0 - 0.5:
@@ -24476,7 +26455,7 @@ def _expand_multiline_block_bbox(
                 candidate_limit = preceding_clearance_limit(other.bbox, 0.8)
                 if horizontal_overlap > 0.0 and candidate_limit is not None:
                     top_limit = max(top_limit, candidate_limit)
-            for obstacle in obstacles:
+            for obstacle in upward_obstacles:
                 horizontal_overlap = min(x1, obstacle[2]) - max(x0, obstacle[0])
                 candidate_limit = preceding_clearance_limit(obstacle, 0.8)
                 if horizontal_overlap > 0.0 and candidate_limit is not None:
@@ -24578,7 +26557,7 @@ def _expand_multiline_block_bbox(
             continue
         if obstacle[1] > y0 + 1.0:
             free_side = max(obstacle[0] - x0, x1 - obstacle[2])
-            if free_side >= 120.0:
+            if free_side >= 120.0 and obstacle not in fixed_obstacles:
                 float_keepouts.append(
                     (
                         float(obstacle[0]),
@@ -24603,7 +26582,7 @@ def _expand_multiline_block_bbox(
             candidate_limit = preceding_clearance_limit(other.bbox, 2.0)
             if horizontal_overlap > 0.0 and candidate_limit is not None:
                 top_limit = max(top_limit, candidate_limit)
-        for obstacle in obstacles:
+        for obstacle in upward_obstacles:
             horizontal_overlap = min(x1, obstacle[2]) - max(x0, obstacle[0])
             candidate_limit = preceding_clearance_limit(obstacle, 2.0)
             if horizontal_overlap > 0.0 and candidate_limit is not None:
@@ -24693,6 +26672,17 @@ def _expand_single_line_body_bbox(
         and not block.formula_anchors
         and block.bbox[2] - block.bbox[0] >= page_width * 0.55
     )
+    fixed_plain_formula_tail = bool(
+        block.block_type == "formula_prose"
+        and block.source_lines == 1
+        and block.preserve_position
+        and not block.formula_anchors
+        and not block.source_math_bboxes
+        and SENTINEL_OPEN not in block.text
+        and block.source_prose_bboxes
+        and block.keepout_bboxes
+        and all(keepout[2] <= block.bbox[0] + 0.8 for keepout in block.keepout_bboxes)
+    )
     if (
         block.block_type not in {"body", "formula_prose"}
         or (
@@ -24700,8 +26690,8 @@ def _expand_single_line_body_bbox(
             and not inline_style_flow
             and not compact_two_line_body
         )
-        or block.nowrap
-        or block.preserve_position
+        or (block.nowrap and not fixed_plain_formula_tail)
+        or (block.preserve_position and not fixed_plain_formula_tail)
     ):
         return block
 
@@ -24797,6 +26787,11 @@ def _expand_single_line_body_bbox(
         if embedded_in_equation_row
         else min(row_right, max(x1, x0 + desired_width))
     )
+    if fixed_plain_formula_tail:
+        # Keep the original math/prose baseline and redaction ownership.
+        # The sibling scan above bounds only verified empty right space;
+        # this never pushes the suffix into another column or another row.
+        return replace(block, bbox=(x0, y0, new_x1, y1))
     if compact_two_line_body:
         if (
             desired_width <= row_right - x0 + 0.1
@@ -24811,6 +26806,9 @@ def _expand_single_line_body_bbox(
         # Still two lines after widening: keep the source box. Widening a
         # wrapped paragraph only pushes its first line past the frame or into
         # the margin without saving a line.
+        return block
+
+    if compact_two_line_body:
         return block
 
     top_limit = 0.0
@@ -24876,6 +26874,7 @@ def relax_caption_boxes(
     items: Sequence[Tuple[TextBlock, str]],
     *,
     obstacles: Sequence[BBox] = (),
+    extra_height: float = _CAPTION_EXTRA_HEIGHT,
 ) -> None:
     """Give translated captions a little extra vertical room when it is free."""
     if not items:
@@ -24916,7 +26915,7 @@ def relax_caption_boxes(
             if overlap <= min(x1 - x0, ox1 - ox0) * 0.2:
                 continue
             next_y = min(next_y, oy0 - 3.0)
-        relaxed_y1 = min(y1 + _CAPTION_EXTRA_HEIGHT, next_y, page_bottom)
+        relaxed_y1 = min(y1 + extra_height, next_y, page_bottom)
         if relaxed_y1 > y1 + 2.0:
             if block.redact_bboxes is None:
                 block.redact_bboxes = [block.bbox]
@@ -24945,7 +26944,9 @@ def _clear_table_caption_rules(
 
     for (block, translated_text), centered in zip(items, centered_flags):
         plain = " ".join(strip_sentinels(block.text).split()).strip()
-        if block.block_type != "caption" or not re.match(r"^Table\s+\w+\s*[:.]", plain, re.I):
+        if block.block_type != "caption" or not re.match(
+            r"^Table\s+\w+\s*(?:[:.]|(?:[-–—－]+\s*)?continued\b)", plain, re.I
+        ):
             continue
         x0, y0, x1, y1 = block.bbox
         rendered_bottom = _caption_rendered_bottom(
@@ -24980,15 +26981,30 @@ def _clear_table_caption_rules(
         safe_redact_y1 = first_rule_y - margin - 0.9
         if safe_redact_y1 > y0 + 2.0:
             block.redact_bboxes = [
-                (rx0, ry0, rx1, min(ry1, safe_redact_y1))
-                for rx0, ry0, rx1, ry1 in redacts
+                (rx0, ry0, rx1, min(ry1, safe_redact_y1)) for rx0, ry0, rx1, ry1 in redacts
             ]
         required_gap = 3.1
-        current_gap = first_rule_y - rendered_bottom
-        if current_gap >= required_gap:
-            continue
-        shift = required_gap - current_gap
-        block.bbox = (x0, max(0.0, y0 - shift), x1, max(0.0, y1 - shift))
+        # Moving a caption can let keepout layout select a larger font, so
+        # its bottom need not move by the same amount as the block. Refit
+        # after each shift, with a finite bound and the page edge as stops.
+        for _ in range(12):
+            current_gap = first_rule_y - rendered_bottom
+            if current_gap >= required_gap:
+                break
+            x0, y0, x1, y1 = block.bbox
+            shift = min(required_gap - current_gap, y0)
+            if shift <= 1e-6:
+                break
+            block.bbox = (x0, y0 - shift, x1, y1 - shift)
+            rendered_bottom = _caption_rendered_bottom(
+                block,
+                translated_text,
+                font_pack=font_pack,
+                font_size=requested_translation_font_size(block, min_font_size, font_scale),
+                min_font_size=min_font_size,
+                margin=margin,
+                centered=centered,
+            )
 
 
 def _caption_rendered_bottom(
@@ -25034,6 +27050,47 @@ def _caption_rendered_bottom(
             baseline = min(rect.y1 - layout_descent, baseline)
         return float(baseline + ink_descent)
 
+    # Captions with overlapping table keepouts use slot layout before the
+    # ordinary top-aligned path. Mirror that fit and its uncapped initial
+    # baseline, or the predicted bottom can be too high by 0.14em.
+    keepouts = _block_keepouts(block, rect)
+    if keepouts:
+        layout_fonts = [font for font, _ in [*fonts, *bold_fonts]]
+        ascent = max(
+            (max(0.0, float(font.ascender)) for font in layout_fonts),
+            default=0.82,
+        )
+        descent = max(
+            (abs(min(0.0, float(font.descender))) for font in layout_fonts),
+            default=0.24,
+        )
+        size = font_size
+        while size >= min_size - 1e-6:
+            for leading in leading_options(block):
+                slots = keepout_line_slots(
+                    rect, size, leading, ascent, keepouts, descent=descent
+                )
+                if not slots:
+                    continue
+                lines = break_lines(
+                    tokens,
+                    fonts,
+                    size,
+                    rect.width,
+                    prefer_space_break=centered and block.block_type != "caption",
+                    bold_fonts=bold_fonts,
+                    line_widths=[x1 - x0 for _, x0, x1 in slots],
+                )
+                adjusted = _formula_aware_slot_baselines(
+                    lines, slots, size, rect, keepouts, fonts, bold_fonts
+                )
+                if adjusted is not None:
+                    return max(
+                        float(baseline + _line_font_descent(line, size, fonts, bold_fonts))
+                        for line, (baseline, _x0, _x1) in zip(lines, adjusted)
+                    )
+            size -= _FONT_SIZE_SEARCH_STEP
+
     chosen: Optional[Tuple[float, float, List[List[_Token]]]] = None
     size = font_size
     while size >= min_size - 1e-6:
@@ -25042,7 +27099,7 @@ def _caption_rendered_bottom(
             fonts,
             size,
             rect.width,
-            prefer_space_break=centered,
+            prefer_space_break=centered and block.block_type != "caption",
             bold_fonts=bold_fonts,
         )
         for leading in leading_options(block):
@@ -25068,7 +27125,7 @@ def _caption_rendered_bottom(
                 break
         if chosen is not None:
             break
-        size -= 0.25
+        size -= _FONT_SIZE_SEARCH_STEP
     if chosen is None:
         chosen = choose_compressed_layout(
             tokens,
@@ -26045,6 +28102,9 @@ def _unresolved_formula_keepouts(block: TextBlock) -> List[BBox]:
                 block.bbox[1], keepout[1]
             )
             boundary_crossing_formula = bool(
+                keepout_center_y > block.bbox[3]
+                and bbox_intersection_area(keepout, block.bbox) > 0.0
+            ) or bool(
                 keepout[1] < block.bbox[3] < keepout[3]
                 and keepout[3] - block.bbox[3]
                 >= max(
@@ -26074,7 +28134,7 @@ def _unresolved_formula_keepouts(block: TextBlock) -> List[BBox]:
                 keepout[1] < block.bbox[1] < keepout[3]
                 and keepout[2] - keepout[0] >= (block.bbox[2] - block.bbox[0]) * 0.25
                 and keepout[3] - keepout[1] >= block.font_size * 2
-                and vertical_overlap >= block.font_size * 0.5
+                and vertical_overlap > block.font_size * 0.5
             )
             if not (
                 compact_boundary_fragment or boundary_crossing_formula or upper_side_float
@@ -26554,6 +28614,140 @@ def _demote_unanchorable_math_blocks(
     return updated
 
 
+def _plain_prose_occupies_one_source_row(block: TextBlock) -> bool:
+    """Recognize prose fragments that share one physical source baseline."""
+    if block.formula_anchors or not block.source_prose_bboxes:
+        return False
+    centers = [(bbox[1] + bbox[3]) / 2.0 for bbox in block.source_prose_bboxes]
+    return max(centers) - min(centers) <= max(0.8, block.font_size * 0.4)
+
+
+def _fixed_two_row_formula_prose_rect(
+    block: TextBlock,
+    tokens: Sequence[_Token],
+    rect: object,
+    margin: float,
+) -> object:
+    """Use the same exact owned rows for fixed figure-label fit and rendering."""
+    formulas = [token for token in tokens if token.kind == "formula"]
+    if (
+        block.block_type != "formula_prose"
+        or not block.preserve_position
+        or block.nowrap
+        or _uses_fixed_source_math(block)
+        or block.source_lines != 2
+        or len(block.source_line_bboxes) != 2
+        or not block.formula_anchors
+        or len(formulas) != len(block.formula_anchors)
+        or any(not token.source_atom_bboxes for token in formulas)
+        or _unresolved_formula_keepouts(block)
+    ):
+        return rect
+    rows = sorted(block.source_line_bboxes, key=lambda bbox: bbox[1])
+    row_center_gap = (rows[1][1] + rows[1][3] - rows[0][1] - rows[0][3]) / 2.0
+    if row_center_gap < max(2.0, block.font_size * 0.6):
+        # Multiple text objects on one physical baseline are still one row.
+        return rect
+    source_rows = union_bbox(rows)
+    if (
+        source_rows[1] < block.bbox[1] - 0.1
+        or source_rows[3] > block.bbox[3] + 0.1
+    ):
+        return rect
+    # Figure labels already own exact source glyph rows, not a padded prose
+    # rectangle. A second full margin at both ends unnecessarily shrinks two
+    # small rows. Retain the horizontal margin and a bounded vertical inset.
+    row_inset = min(margin, block.font_size * 0.03)
+    rect.y0 = max(block.bbox[1], source_rows[1]) + row_inset
+    rect.y1 = min(block.bbox[3], source_rows[3]) - row_inset
+    return rect
+
+
+def _source_bullet_formula_render_items(
+    block: TextBlock,
+    text: str,
+    margin: float,
+) -> Optional[List[Tuple[TextBlock, str]]]:
+    """Keep source bullet expressions on their own physical rows after cache."""
+    if (
+        block.block_type != "body"
+        or block.nowrap
+        or block.preserve_position
+        or not block.formula_anchors
+        or len(block.source_math_atom_groups) != len(block.formula_anchors)
+    ):
+        return None
+    source_parts = re.split(r"\s+(?=•\s)", block.text.strip())
+    translated_parts = re.split(r"\s+(?=•\s)", text.strip())
+    if (
+        len(source_parts) < 2
+        or len(source_parts) != len(translated_parts)
+        or any(not part.startswith("• ") for part in [*source_parts, *translated_parts])
+    ):
+        return None
+    counts = [len(SENTINEL_RUN_RE.findall(part)) for part in source_parts]
+    if (
+        any(count <= 0 for count in counts)
+        or sum(counts) != len(block.formula_anchors)
+        or counts != [len(SENTINEL_RUN_RE.findall(part)) for part in translated_parts]
+        or _formula_source_indexes_in_translation_order(text, block)
+        != tuple(range(len(block.formula_anchors)))
+    ):
+        return None
+    rows = sorted(block.source_line_bboxes, key=lambda row: (row[1], row[0]))
+    starts: List[int] = []
+    formula_offset = 0
+    for count in counts:
+        anchor = block.formula_anchors[formula_offset]
+        hits = [
+            (bbox_intersection_area(anchor, row), index)
+            for index, row in enumerate(rows)
+        ]
+        overlap, index = max(hits, default=(0.0, -1))
+        if overlap <= 0.0 or (starts and index <= starts[-1]):
+            return None
+        starts.append(index)
+        formula_offset += count
+    items: List[Tuple[TextBlock, str]] = []
+    formula_offset = 0
+    for index, (source_part, translated_part, count) in enumerate(
+        zip(source_parts, translated_parts, counts)
+    ):
+        row_stop = starts[index + 1] if index + 1 < len(starts) else len(rows)
+        owned_rows = tuple(rows[starts[index]:row_stop])
+        if not owned_rows:
+            return None
+        top = max(block.bbox[1], owned_rows[0][1])
+        bottom = (
+            min(block.bbox[3], rows[row_stop][1] - margin)
+            if row_stop < len(rows)
+            else block.bbox[3]
+        )
+        groups = block.source_math_atom_groups[formula_offset:formula_offset + count]
+        owned_prose = tuple(
+            prose for prose in block.source_prose_bboxes
+            if any(row[1] <= (prose[1] + prose[3]) / 2.0 <= row[3] for row in owned_rows)
+        )
+        if not owned_prose or bottom <= top:
+            return None
+        child = replace(
+            block,
+            bbox=(block.bbox[0], top, block.bbox[2], bottom),
+            text=source_part,
+            source_lines=len(owned_rows),
+            source_line_bboxes=owned_rows,
+            source_prose_bboxes=owned_prose,
+            source_math_bboxes=block.source_math_bboxes[formula_offset:formula_offset + count],
+            source_math_atom_groups=groups,
+            source_math_atom_bboxes=tuple(atom for group in groups for atom in group),
+            formula_anchors=block.formula_anchors[formula_offset:formula_offset + count],
+            no_merge=True,
+        )
+        items.append((child, translated_part))
+        formula_offset += count
+    return items
+
+
 def translated_text_fits(
     block: TextBlock,
     text: str,
@@ -26567,6 +28761,15 @@ def translated_text_fits(
         import fitz
     except ImportError as exc:
         raise RuntimeError("PyMuPDF is required. Install with: pip install -e .") from exc
+
+    bullet_items = _source_bullet_formula_render_items(block, text, margin)
+    if bullet_items is not None:
+        return all(
+            translated_text_fits(
+                child, translated, font_pack, font_size, min_font_size, margin, centered
+            )
+            for child, translated in bullet_items
+        )
 
     rect = shrink_rect(fitz.Rect(block.bbox), margin)
     if rect.width <= 1 or rect.height <= 1:
@@ -26587,10 +28790,7 @@ def translated_text_fits(
             min_size,
             centered,
         )
-        if (
-            anchored is not None
-            and anchored[0] >= font_size * _FIXED_MATH_MIN_FONT_SCALE
-        ):
+        if anchored is not None and anchored[0] >= font_size * _FIXED_MATH_MIN_FONT_SCALE:
             return anchored[1]
         tokens = tokenize_text(render_text)
     else:
@@ -26598,6 +28798,8 @@ def translated_text_fits(
     apply_inline_bold(tokens, block, render_text)
     if not tokens:
         return True
+
+    rect = _fixed_two_row_formula_prose_rect(block, tokens, rect, margin)
 
     if block.nowrap:
         width = sum(token_width(token, fonts, font_size, bold_fonts) for token in tokens)
@@ -26616,6 +28818,11 @@ def translated_text_fits(
         (abs(min(0.0, float(font.descender))) for font in layout_fonts),
         default=0.24,
     )
+    if _plain_prose_occupies_one_source_row(block):
+        # Compact fixed-math prose slots must use the same capped glyph
+        # metrics as their final text, without changing multi-row flows.
+        ascent = min(ascent, _LINE_METRIC_ASCENT_CAP)
+        descent = min(descent, _LINE_METRIC_DESCENT_CAP)
     size = font_size
     while size >= min_size - 1e-6:
         if keepouts:
@@ -26668,20 +28875,29 @@ def translated_text_fits(
         if block.block_type == "title":
             lines = balance_centered_title_lines(lines, rect.width)
         for leading in leading_options(block):
-            if line_block_height(
-                lines,
-                size,
-                leading,
-                fonts,
-                bold_fonts,
-            ) <= rect.height:
+            if (
+                line_block_height(
+                    lines,
+                    size,
+                    leading,
+                    fonts,
+                    bold_fonts,
+                )
+                <= rect.height
+            ):
                 return True
         size -= _FONT_SIZE_SEARCH_STEP
     if keepouts:
         side_column = _clip_exhausted_wrap_to_side_column(block, rect, keepouts)
         if side_column is not None:
             return translated_text_fits(
-                side_column, text, font_pack, font_size, min_font_size, margin, centered,
+                side_column,
+                text,
+                font_pack,
+                font_size,
+                min_font_size,
+                margin,
+                centered,
             )
     return False
 
@@ -26727,6 +28943,15 @@ def insert_translated_text(
         import fitz
     except ImportError as exc:
         raise RuntimeError("PyMuPDF is required. Install with: pip install -e .") from exc
+
+    bullet_items = _source_bullet_formula_render_items(block, text, margin)
+    if bullet_items is not None:
+        outcomes = [
+            insert_translated_text(page, child, translated, font_pack, font_size,
+                                   min_font_size, margin, centered, source_document)
+            for child, translated in bullet_items
+        ]
+        return all(outcomes)
 
     rect = shrink_rect(fitz.Rect(block.bbox), margin)
     if rect.width <= 1 or rect.height <= 1:
@@ -26776,6 +29001,8 @@ def insert_translated_text(
     if not tokens:
         return True
 
+    rect = _fixed_two_row_formula_prose_rect(block, tokens, rect, margin)
+
     if block.nowrap:
         # Table cell: one line at the original anchor, shrunk to the cell width.
         for token in tokens:
@@ -26803,6 +29030,11 @@ def insert_translated_text(
         (abs(min(0.0, float(font.descender))) for font in layout_fonts),
         default=0.24,
     )
+    if _plain_prose_occupies_one_source_row(block):
+        # Compact fixed-math prose slots must use the same capped glyph
+        # metrics as their final text, without changing multi-row flows.
+        ascent = min(ascent, _LINE_METRIC_ASCENT_CAP)
+        descent = min(descent, _LINE_METRIC_DESCENT_CAP)
     keepouts = _block_keepouts(block, rect)
     slot_layout: Optional[Tuple[float, List[List[_Token]], List[Tuple[float, float, float]]]] = None
     if keepouts:
@@ -28137,3 +30369,444 @@ def median_color(colors: Sequence[Color]) -> Color:
     blues = sorted(color[2] for color in colors)
     middle = len(colors) // 2
     return (reds[middle], greens[middle], blues[middle])
+
+
+def _vector_background_rects(
+    page_rect: object,
+    drawings: Sequence[dict],
+    blocks: Sequence[dict],
+) -> List[BBox]:
+    """Identify plain paper canvases and pale abstract panels, not figure ink.
+
+    A page-sized white PDF rectangle or an abstract's shaded rectangle is a
+    background for translatable prose. Treating it as artwork freezes ordinary
+    sentences. Require a single near-white rectangle plus either page-canvas
+    geometry or an explicit abstract heading with multiple long prose rows.
+    Real plots with vector marks inside the same pale rectangle remain artwork.
+    The paired inset outline is excluded by the caller using the same bounds.
+    """
+    width, height = float(page_rect.width), float(page_rect.height)
+    backgrounds: List[BBox] = []
+    for drawing in drawings:
+        items = drawing.get("items", ())
+        fill = drawing.get("fill")
+        if len(items) != 1 or items[0][0] != "re" or fill is None:
+            continue
+        if not fill or min(fill) < 0.95:
+            continue
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        bbox = tuple(float(value) for value in rect)
+        rect_width, rect_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        paper_canvas = (
+            min(fill) >= 0.99
+            and rect_width >= width * 0.80 and rect_height >= height * 0.82
+            and bbox[0] <= width * 0.10 and bbox[1] <= height * 0.10
+            and bbox[2] >= width * 0.90 and bbox[3] >= height * 0.90
+        )
+        if paper_canvas:
+            backgrounds.append(bbox)
+            continue
+        if rect_width < width * 0.65 or rect_height < 60.0:
+            continue
+        contents = [block for block in blocks if block.get("type") == 0
+                    and _bbox_overlap_ratio(tuple(block.get("bbox", (0, 0, 0, 0))), bbox) >= 0.90]
+        has_abstract = any(re.match(r"^\s*(?:abstract|summary|摘要)\b",
+            _extract_text_from_block(block), re.IGNORECASE) for block in contents)
+        prose_rows = sum(
+            len(_PROSE_WORD_RE.findall(_extract_text_from_block(block))) >= 10
+            and any(float(span.get("size", 0)) >= 9.0
+                    for line in block.get("lines", ()) for span in line.get("spans", ()))
+            for block in contents
+        )
+        if not has_abstract or prose_rows < 3:
+            continue
+        inner_ink = False
+        for other in drawings:
+            other_rect = other.get("rect")
+            if other_rect is None or len(other.get("items", ())) < 2:
+                continue
+            other_bbox = tuple(float(value) for value in other_rect)
+            if (bbox_area(other_bbox) >= 20.0
+                    and _bbox_overlap_ratio(other_bbox, bbox) >= 0.90
+                    and max(abs(a - b) for a, b in zip(other_bbox, bbox)) > 1.0):
+                inner_ink = True
+                break
+        if not inner_ink:
+            backgrounds.append(bbox)
+    return list(dict.fromkeys(backgrounds))
+
+
+
+def _closed_vector_frame_bboxes(
+    page_rect: object,
+    drawings: Sequence[dict],
+    background_rects: Sequence[BBox],
+    blocks: Sequence[dict],
+) -> List[BBox]:
+    """Recover caption-associated frames whose four thin edges are separate paths.
+
+    Plot axes and dashed workflow frames often have zero-area individual
+    drawings. The minimum-area graphic filter must apply to the reconstructed
+    enclosure, not discard each edge before it can protect the labels inside.
+    Require aligned top/bottom edges and both vertical sides; a paragraph rule,
+    underlined heading or open pair of axes cannot create a protected region.
+    """
+    captions = [tuple(block["bbox"]) for block in blocks
+                if block.get("type") == 0 and block.get("bbox")
+                and _CAPTION_RE.match(_extract_text_from_block(block).strip())]
+    if not captions:
+        return []
+    horizontal: List[Tuple[float, float, float]] = []
+    vertical: List[Tuple[float, float, float]] = []
+    for drawing in drawings:
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        bbox = tuple(float(value) for value in rect)
+        if any(max(abs(a - b) for a, b in zip(bbox, background)) <= 1.0
+               for background in background_rects):
+            continue
+        for item in drawing.get("items", ()):
+            if item[0] != "l":
+                continue
+            start, end = item[1], item[2]
+            x0, x1 = sorted((float(start.x), float(end.x)))
+            y0, y1 = sorted((float(start.y), float(end.y)))
+            if y1 - y0 <= 0.5 and x1 - x0 >= 60.0:
+                horizontal.append((x0, (y0 + y1) / 2.0, x1))
+            elif x1 - x0 <= 0.5 and y1 - y0 >= 30.0:
+                vertical.append(((x0 + x1) / 2.0, y0, y1))
+    frames: List[BBox] = []
+    corner_gap = 6.0  # Dashed frames intentionally leave a short gap at corners.
+    for index, top in enumerate(horizontal):
+        for bottom in horizontal[index + 1:]:
+            upper, lower = sorted((top, bottom), key=lambda line: line[1])
+            if lower[1] - upper[1] < 30.0:
+                continue
+            if abs(upper[0] - lower[0]) > corner_gap or abs(upper[2] - lower[2]) > corner_gap:
+                continue
+            left = [side for side in vertical if abs(side[0] - upper[0]) <= corner_gap
+                    and abs(side[1] - upper[1]) <= corner_gap
+                    and abs(side[2] - lower[1]) <= corner_gap]
+            right = [side for side in vertical if abs(side[0] - upper[2]) <= corner_gap
+                     and abs(side[1] - upper[1]) <= corner_gap
+                     and abs(side[2] - lower[1]) <= corner_gap]
+            if not left or not right:
+                continue
+            frame = (min(upper[0], lower[0], min(side[0] for side in left)), upper[1],
+                     max(upper[2], lower[2], max(side[0] for side in right)), lower[1])
+            if not bbox_is_graphic_candidate(frame, page_rect):
+                continue
+            if not any(0.0 <= caption[1] - frame[3] <= float(page_rect.height) * 0.70
+                       or 0.0 <= frame[1] - caption[3] <= 60.0 for caption in captions):
+                continue
+            frames.append(frame)
+    return list(dict.fromkeys(frames))
+
+
+def _source_algorithm_natural_language_blocks(
+    page: object,
+    page_index: int,
+    algorithm_regions: Sequence[BBox],
+) -> List[TextBlock]:
+    """Give ruled algorithm titles and I/O descriptions separate prose owners."""
+    regions = [region for region in algorithm_regions if region[3] - region[1] >= 40.0]
+    if not regions:
+        return []
+    raw_lines = []
+    for raw_block in page.get_text("rawdict").get("blocks", []):
+        if raw_block.get("type") != 0:
+            continue
+        for raw_line in raw_block.get("lines", []):
+            spans = []
+            for original_span in raw_line.get("spans", []):
+                chars = original_span.get("chars", [])
+                text = "".join(char.get("c", "") for char in chars)
+                visible_chars = [char for char in chars if char.get("c", "").strip()]
+                if not text or not visible_chars:
+                    continue
+                span = dict(original_span)
+                span["text"] = text
+                span["bbox"] = union_bbox([tuple(char["bbox"]) for char in visible_chars])
+                spans.append(span)
+            if spans:
+                raw_lines.append({"bbox": raw_line["bbox"], "spans": spans})
+
+    blocks: List[TextBlock] = []
+    seen: set[Tuple[BBox, str]] = set()
+    control_start = re.compile(
+        r"^(?:for|while|if|else|elif|end|return|repeat|until|do|"
+        r"initialize|init|sample|update|compute|calculate|sort|select|set|"
+        r"break|continue)\b",
+        re.IGNORECASE,
+    )
+    for region in regions:
+        rows = [
+            raw_line
+            for raw_line in raw_lines
+            if bbox_intersection_area(tuple(raw_line["bbox"]), region)
+            / max(1.0, bbox_area(tuple(raw_line["bbox"])))
+            >= 0.8
+        ]
+        rows.sort(key=lambda row: (row["bbox"][1], row["bbox"][0]))
+        row_texts = [
+            re.sub(
+                r"^\s*[0-9]+\s+",
+                "",
+                "".join(str(span.get("text", "")) for span in row["spans"]).strip(),
+            )
+            for row in rows
+        ]
+        has_heading = any(
+            re.match(r"^Algorithm\s+\d+\s*[:.]", text, re.IGNORECASE) for text in row_texts
+        )
+        has_io = any(
+            re.match(r"^(?:Inputs?|Outputs?|Require|Ensure)\s*:", text, re.IGNORECASE)
+            for text in row_texts
+        )
+        has_control = any(
+            re.match(r"^(?:(?:for|while)\b.*\bdo|if\b.*\bthen|end)\s*$", text, re.IGNORECASE)
+            for text in row_texts
+        )
+        if not (has_heading and has_io and has_control):
+            continue
+        active_io = False
+        previous_number: Optional[int] = None
+        previous_bottom: Optional[float] = None
+        for raw_line in rows:
+            plain = "".join(span["text"] for span in raw_line["spans"]).strip()
+            numbered = re.match(r"^\s*(\d+)\s+", plain)
+            number = int(numbered.group(1)) if numbered else None
+            body = plain[numbered.end() :] if numbered else plain
+            title = bool(re.match(r"^Algorithm\s+\d+\s*[:.]", plain, re.IGNORECASE))
+            io_start = bool(
+                re.match(r"^(?:Inputs?|Outputs?|Require|Ensure)\s*:", body, re.IGNORECASE)
+            )
+            continuation = bool(
+                active_io
+                and number is not None
+                and previous_number is not None
+                and number == previous_number + 1
+                and previous_bottom is not None
+                and raw_line["bbox"][1] - previous_bottom <= 8.0
+                and not control_start.match(body)
+                and not re.search(r"(?:←|<-|:=|->|=>)", body)
+            )
+            if not (title or io_start or continuation):
+                active_io = False
+                continue
+            # A numeral sharing one source text span with prose has no
+            # independently proved redaction boundary. Keep that whole row.
+            enum_span = next(
+                (span for span in raw_line["spans"] if str(span.get("text", "")).strip()),
+                None,
+            )
+            if number is not None and (
+                enum_span is None
+                or not re.fullmatch(r"\s*" + str(number) + r"\s*", str(enum_span.get("text", "")))
+            ):
+                active_io = False
+                continue
+            record, _ = parse_block_lines(
+                {"lines": [raw_line]},
+                page_width=float(page.rect.width),
+            )
+            if record is None or len(record.lines) != 1:
+                active_io = False
+                continue
+            line = record.lines[0]
+            if line_has_code_font(line):
+                active_io = False
+                continue
+            if continuation:
+                enum_box = tuple(float(value) for value in enum_span["bbox"])
+                variable_boxes = [
+                    box
+                    for box in line.math_bboxes
+                    if bbox_intersection_area(box, enum_box) / max(0.1, bbox_area(box)) < 0.55
+                ]
+                descriptor = re.sub(
+                    r"^\s*[0-9]+\s+",
+                    "",
+                    _text_outside_sentinels(line.text),
+                ).strip()
+                # Only a math-bearing parameter declaration list may extend
+                # an I/O row. Numbered prose instructions remain executable
+                # source rows, even when their verb is not a known keyword.
+                declaration = re.match(
+                    r"^(?:num(?:ber)?\b|"
+                    r"(?:[A-Za-z]+(?:ian|ic|al|ary|ive|ous)\s+)?"
+                    r"(?:multiplier|coefficient|rate|limit|threshold|"
+                    r"length|size|state|horizon|count)\b)",
+                    descriptor,
+                    re.IGNORECASE,
+                )
+                if (
+                    not declaration
+                    or not variable_boxes
+                    or "," not in body
+                    or re.search(r"[.;]\s*$", body)
+                ):
+                    active_io = False
+                    continue
+            if not title and len(_prose_words(_text_outside_sentinels(line.text))) < 2:
+                active_io = False
+                continue
+            active_io = not title
+            previous_number = number
+            previous_bottom = raw_line["bbox"][3]
+            prose_boxes = set(line.prose_bboxes)
+            groups: List[List[dict]] = []
+            current: List[dict] = []
+            for span in line.spans:
+                bbox = tuple(float(value) for value in span["bbox"])
+                text = str(span.get("text", ""))
+                if bbox in prose_boxes and re.search(r"[A-Za-z]{2,}", text):
+                    current.append(span)
+                elif current and bbox in prose_boxes and not text.strip():
+                    current.append(span)
+                else:
+                    if current:
+                        groups.append(current)
+                        current = []
+            if current:
+                groups.append(current)
+            fixed_boxes = list(line.math_bboxes)
+            fixed_boxes.extend(
+                tuple(float(value) for value in span["bbox"])
+                for span in line.spans
+                if re.fullmatch(r"\s*\d+\s*", str(span.get("text", "")))
+            )
+            for spans in groups:
+                boxes = [tuple(float(value) for value in span["bbox"]) for span in spans]
+                fragment = _LineRec(
+                    text="".join(str(span.get("text", "")) for span in spans).strip(),
+                    bbox=union_bbox(boxes),
+                    spans=spans,
+                    prose_bboxes=boxes,
+                )
+                accumulator = _SegmentAccumulator()
+                _accumulate_line(accumulator, fragment)
+                block = accumulator.flush(page_index)
+                if block is None or (block.bbox, block.text) in seen:
+                    continue
+                block.block_type = "formula_prose"
+                block.no_merge = True
+                block.nowrap = True
+                block.preserve_position = True
+                # MuPDF removes a complete character when its bbox intersects
+                # a redaction. Algorithm rows have overlapping font ascent /
+                # descent boxes, so delete through the middle of each certified
+                # prose span, leaving adjacent rows' original glyphs untouched.
+                # Keep the full source-owner boxes for layout and QA.
+                block.redact_bboxes = [
+                    (x0, y0 + (y1 - y0) * 0.28, x1, y1 - (y1 - y0) * 0.28)
+                    for x0, y0, x1, y1 in boxes
+                ]
+                block.keepout_bboxes = list(dict.fromkeys(fixed_boxes)) or None
+                block.source_line_bboxes = (block.bbox,)
+                block.source_prose_bboxes = (block.bbox,)
+                seen.add((block.bbox, block.text))
+                blocks.append(block)
+    return blocks
+
+def _subtract_source_prose_owner_boxes(
+    regions: Sequence[BBox],
+    prose_boxes: Sequence[BBox],
+) -> List[BBox]:
+    """Keep the protected part of each source region around actual prose owners."""
+    remaining = list(regions)
+    for owner in prose_boxes:
+        next_regions: List[BBox] = []
+        for region in remaining:
+            x0 = max(region[0], owner[0])
+            y0 = max(region[1], owner[1])
+            x1 = min(region[2], owner[2])
+            y1 = min(region[3], owner[3])
+            if x1 <= x0 or y1 <= y0:
+                next_regions.append(region)
+                continue
+            candidates = (
+                (region[0], region[1], region[2], y0),
+                (region[0], y1, region[2], region[3]),
+                (region[0], y0, x0, y1),
+                (x1, y0, region[2], y1),
+            )
+            next_regions.extend(
+                box for box in candidates
+                if box[2] > box[0] and box[3] > box[1]
+            )
+        remaining = next_regions
+    return list(dict.fromkeys(remaining))
+
+def _text_from_source_unit_owners(
+    entries: Sequence[Tuple[BBox, str]],
+    block: TextBlock,
+) -> str:
+    """Sample a source unit's own line bands rather than its cross-column hull."""
+    source_owners = block.source_line_bboxes or block.source_prose_bboxes
+    if not source_owners:
+        return _text_overlapping_region(entries, expand_bbox(block.bbox, 2.0))
+    bands = [expand_bbox(box, 2.0) for box in source_owners]
+    pieces: List[str] = []
+    for bbox, text in entries:
+        uncovered = _subtract_source_prose_owner_boxes([bbox], bands)
+        coverage = 1.0 - sum(bbox_area(box) for box in uncovered) / max(1.0, bbox_area(bbox))
+        if coverage >= 0.55:
+            pieces.append(text)
+    return " ".join(pieces)
+
+def _certified_algorithm_prose_owner_boxes(
+    source_page: object,
+    page_index: int,
+    merged_regions: Sequence[BBox],
+    blocks: Sequence[TextBlock],
+) -> List[BBox]:
+    """Match immutable source prose fields after layout copies a text block."""
+    source_prose = _source_algorithm_natural_language_blocks(
+        source_page, page_index, merged_regions,
+    )
+    source_owner_keys = {
+        (block.text, block.source_line_bboxes, block.source_prose_bboxes)
+        for block in source_prose
+    }
+    return list(dict.fromkeys(
+        box
+        for block in blocks
+        if block.page_index == page_index and block.should_translate
+        and block.block_type == "formula_prose"
+        and block.no_merge and block.nowrap and block.preserve_position
+        and block.source_line_bboxes and block.source_prose_bboxes
+        and not block.source_math_bboxes and not block.source_math_atom_bboxes
+        and not block.source_math_atom_groups and not block.formula_anchors
+        and (block.text, block.source_line_bboxes, block.source_prose_bboxes)
+        in source_owner_keys
+        for box in block.source_prose_bboxes
+    ))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+_FILE_PAYLOAD_TOKEN_RE = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_.\-]*\."
+    r"(?:md|jsonl?|py|sh|txt|ya?ml|toml|csv|[cm]?js|tsx?|html|xml)\b",
+    re.IGNORECASE,
+)

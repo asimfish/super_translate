@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-5"
     glm_api_key: SecretStr = SecretStr("")
     glm_model: str = "glm-5.2"
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_model: str = "gemini-3.8-flash"
+    qwen_api_key: SecretStr = SecretStr("")
+    qwen_model: str = "qwen3.8-flash"
+    doubao_api_key: SecretStr = SecretStr("")
+    doubao_model: str = "doubao-seed-2-1-pro-260915"
     deepl_api_key: SecretStr = SecretStr("")
     ollama_host: str = ""
 

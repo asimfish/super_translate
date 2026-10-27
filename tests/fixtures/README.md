@@ -623,3 +623,11 @@ polluted by paragraph tail text, a bibliography continuation translated after
 a false appendix boundary, and invisible selectable formula text incorrectly
 counted as visible small body text. Existing synthetic and production damage
 fixtures remain the non-target controls.
+
+### Source geometry and original-font fixtures (2026-10-27)
+
+`nature_quantum_51162_p9.pdf` and `scientificreports62361_p1.pdf` are open-access publisher excerpts used for scientific prose/formula ownership and title regressions. Their adjacent provenance JSON files record the source DOI/URL, page, license and source/fixture hashes; the original article attribution is retained.
+
+`native_type0_plot_title.pdf` and `native_type3_plot_title.pdf` contain synthetic prose and Latin glyphs with original embedded Inter font object graphs; no article prose is included. See `native_plot_title.provenance.json` for the construction and [INTER-OFL.txt](INTER-OFL.txt) for the Inter font copyright and SIL Open Font License 1.1. These fixture files are independent of the Zotero install package.
+
+The 2026-10-27 integration adds 17 records captured from the real DeepSeek supplier for new numeric protection and source segmentation, without removing older records. [cache-capture-20261027.json](cache-capture-20261027.json) records the model, record counts and before/after fixture hashes. Cache-only replay remains strict; malformed/missing markers and altered numeric literals remain errors.

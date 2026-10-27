@@ -1,0 +1,14 @@
+# Only files used by Dockerfile enter the build context.
+**
+!Dockerfile
+!pyproject.toml
+!README.md
+!uv.lock
+!app/
+!app/**
+!pdf_zh_translator/
+!pdf_zh_translator/**
+!scripts/
+!scripts/manage_users.py
+**/__pycache__/
+**/*.pyc

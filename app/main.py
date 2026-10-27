@@ -25,6 +25,7 @@ from app import __version__
 from app.api.auth import router as auth_router
 from app.api.papers import router as papers_router
 from app.api.provider_credentials import router as provider_credentials_router
+from app.api.terminology import router as terminology_router
 from app.core.access import access_decision_for_request, get_request_access_scope
 from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
@@ -293,6 +294,7 @@ async def _find_waiting_translation_jobs() -> list[dict[str, object]]:
             .where(
                 TranslationJob.id == latest_same_scope_job_id,
                 TranslationJob.status == TranslationJobStatus.QUEUED.value,
+                TranslationJob.cancel_requested.is_(False),
                 Paper.translation_status == TranslationStatus.TRANSLATING.value,
                 Paper.translation_stage.in_(_RECOVERY_WAITING_STAGES),
             )
@@ -316,7 +318,8 @@ async def _translation_recovery_watchdog(*, resume_queued: bool = True) -> None:
             await _repair_translation_state_drift()
             if not resume_queued:
                 continue
-            payloads = await _find_waiting_translation_jobs()
+            payloads = await _recover_repair_pending_translations()
+            payloads.extend(await _find_waiting_translation_jobs())
             scheduled = sum(
                 _schedule_recovered_translation(payload, delay_seconds=0) for payload in payloads
             )
@@ -335,11 +338,11 @@ async def _recover_stuck_translations(
 ) -> list[dict[str, object]]:
     """Recover durable translation records after a crash.
 
-    Queued jobs and interrupted running jobs are safe to resume when startup
-    recovery is enabled. The translation runner cleans the output directory
-    before a re-run, so stale partial PDFs are discarded instead of reused.
+    Only uncancelled stale jobs may resume when startup recovery is enabled.
+    Recorded owners, attempt budgets, drafts and translation caches survive a
+    restart; a cancellation must never be reset by the recovery claim.
     """
-    from sqlalchemy import and_, func, select
+    from sqlalchemy import and_, func, or_, select
     from sqlalchemy import update as sa_update
 
     from app.core.database import async_session
@@ -376,6 +379,7 @@ async def _recover_stuck_translations(
             )
             .where(TranslationJob.id == latest_same_scope_job_id)
             .where(TranslationJob.status == TranslationJobStatus.QUEUED.value)
+            .where(TranslationJob.cancel_requested.is_(False))
             .where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
             .order_by(TranslationJob.created_at.asc())
         )
@@ -391,6 +395,7 @@ async def _recover_stuck_translations(
             )
             .where(TranslationJob.id == latest_same_scope_job_id)
             .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
+            .where(TranslationJob.cancel_requested.is_(False))
             .where(Paper.translation_status == TranslationStatus.TRANSLATING.value)
             .order_by(TranslationJob.started_at.asc(), TranslationJob.created_at.asc())
         )
@@ -430,10 +435,22 @@ async def _recover_stuck_translations(
         resumed_job_result = None
         failed_running_job_result = None
         if resume_queued and resumable_job_ids:
+            active_owning_paper = (
+                select(Paper.id)
+                .where(
+                    Paper.id == TranslationJob.paper_id,
+                    Paper.access_scope == TranslationJob.access_scope,
+                    Paper.translation_status == TranslationStatus.TRANSLATING.value,
+                )
+                .correlate(TranslationJob)
+                .exists()
+            )
             resumed_job_result = await db.execute(
                 sa_update(TranslationJob)
                 .where(
                     TranslationJob.id.in_(resumable_job_ids),
+                    TranslationJob.cancel_requested.is_(False),
+                    active_owning_paper,
                     TranslationJob.status.in_(
                         [
                             TranslationJobStatus.QUEUED.value,
@@ -444,7 +461,6 @@ async def _recover_stuck_translations(
                 .values(
                     status=TranslationJobStatus.QUEUED.value,
                     progress=0.0,
-                    cancel_requested=False,
                     heartbeat_at=None,
                     started_at=None,
                     finished_at=None,
@@ -452,6 +468,13 @@ async def _recover_stuck_translations(
                     updated_at=func.now(),
                 ),
             )
+            if resumed_job_result.rowcount != len(resumable_job_ids):
+                # Cancellation, owner or active-paper changes committed after
+                # discovery must not leave stale payloads queued. Roll back the
+                # batch rather than emit a claim whose eligibility changed.
+                await db.rollback()
+                logger.warning("Startup recovery claim changed; batch not resumed")
+                return []
         stale_job_result = None
         if resume_queued:
             stale_job_update = sa_update(TranslationJob).where(
@@ -481,7 +504,8 @@ async def _recover_stuck_translations(
         elif not resume_queued:
             failed_running_job_result = await db.execute(
                 sa_update(TranslationJob)
-                .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
+                .where(TranslationJob.id == latest_same_scope_job_id)
+            .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
                 .values(
                     status=TranslationJobStatus.FAILED.value,
                     error="Translation was interrupted (server restart)",
@@ -507,7 +531,15 @@ async def _recover_stuck_translations(
         if resume_queued and resumable_paper_ids:
             resumable_paper_result = await db.execute(
                 sa_update(Paper)
-                .where(Paper.id.in_(resumable_paper_ids))
+                .where(
+                    Paper.id.in_(resumable_paper_ids),
+                    Paper.translation_status == TranslationStatus.TRANSLATING.value,
+                    or_(*(
+                        and_(Paper.id == job.paper_id,
+                             Paper.access_scope == job.access_scope)
+                        for job in resumable_jobs
+                    )),
+                )
                 .values(
                     translation_status=TranslationStatus.TRANSLATING.value,
                     translation_error=None,
@@ -517,6 +549,10 @@ async def _recover_stuck_translations(
                 ),
             )
             refreshed = resumable_paper_result.rowcount or 0
+            if refreshed != len(resumable_paper_ids):
+                await db.rollback()
+                logger.warning("Startup recovery lost an owning paper; batch not resumed")
+                return []
         recovered = (
             (paper_result.rowcount or 0)
             + ((resumed_job_result.rowcount or 0) if resumed_job_result is not None else 0)
@@ -541,93 +577,75 @@ async def _recover_stuck_translations(
 
 
 async def _recover_repair_pending_translations() -> list[dict[str, object]]:
-    """Requeue parked repair jobs when translation-engine code has changed."""
+    """Claim parked jobs once for a changed engine, within their owner's scope."""
     from sqlalchemy import and_, func, select
     from sqlalchemy import update as sa_update
+    from sqlalchemy.orm import aliased
 
     from app.core.database import async_session
-    from app.models.paper import (
-        Paper,
-        TranslationJob,
-        TranslationJobStatus,
-        TranslationStatus,
-    )
+    from app.models.document import PaperDocument
+    from app.models.paper import Paper, TranslationJob, TranslationJobStatus, TranslationStatus
 
     revision = current_engine_revision()
+    canonical = aliased(Paper)
+    latest_job = (
+        select(TranslationJob.id)
+        .where(TranslationJob.paper_id == Paper.id,
+               TranslationJob.access_scope == Paper.access_scope)
+        .order_by(TranslationJob.created_at.desc(), TranslationJob.id.desc())
+        .limit(1).correlate(Paper).scalar_subquery()
+    )
+    eligible = (
+        select(TranslationJob.id)
+        .join(Paper, and_(Paper.id == TranslationJob.paper_id,
+                          Paper.access_scope == TranslationJob.access_scope))
+        .outerjoin(PaperDocument, and_(PaperDocument.paper_id == Paper.id,
+                                     PaperDocument.access_scope == Paper.access_scope))
+        .outerjoin(canonical, and_(canonical.id == PaperDocument.canonical_paper_id,
+                                 canonical.id != Paper.id,
+                                 canonical.access_scope == Paper.access_scope))
+        .where(canonical.id.is_(None), TranslationJob.id == latest_job,
+               TranslationJob.status == TranslationJobStatus.REPAIR_PENDING.value,
+               TranslationJob.engine_revision != revision,
+               TranslationJob.cancel_requested.is_(False),
+               Paper.translation_status == TranslationStatus.REPAIRING.value)
+    )
     async with async_session() as db:
-        latest_same_scope_job_id = (
-            select(TranslationJob.id)
-            .where(
-                TranslationJob.paper_id == Paper.id,
-                TranslationJob.access_scope == Paper.access_scope,
+        jobs = (await db.scalars(
+            select(TranslationJob).where(TranslationJob.id.in_(eligible))
+            .order_by(TranslationJob.created_at.asc(), TranslationJob.id.asc())
+        )).all()
+        payloads = []
+        for job in jobs:
+            # Recheck eligibility in the write itself. A second scheduler or a
+            # cancellation after the read cannot claim the same repair twice.
+            claimed = await db.execute(
+                sa_update(TranslationJob)
+                .where(TranslationJob.id == job.id, TranslationJob.id.in_(eligible),
+                       TranslationJob.engine_revision == job.engine_revision)
+                .values(status=TranslationJobStatus.QUEUED.value, progress=0.0,
+                        attempt_count=0, engine_revision=revision,
+                        last_issue_fingerprint="", heartbeat_at=None, started_at=None,
+                        finished_at=None, error=None, updated_at=func.now())
             )
-            .order_by(TranslationJob.created_at.desc(), TranslationJob.id.desc())
-            .limit(1)
-            .correlate(Paper)
-            .scalar_subquery()
-        )
-        result = await db.execute(
-            select(TranslationJob)
-            .join(
-                Paper,
-                and_(
-                    Paper.id == TranslationJob.paper_id,
-                    Paper.access_scope == TranslationJob.access_scope,
-                ),
-            )
-            .where(
-                TranslationJob.id == latest_same_scope_job_id,
-                TranslationJob.status == TranslationJobStatus.REPAIR_PENDING.value,
-                Paper.translation_status == TranslationStatus.REPAIRING.value,
-            )
-            .order_by(TranslationJob.created_at.desc())
-        )
-        jobs = [job for job in result.scalars().all() if job.engine_revision != revision]
-        if not jobs:
-            return []
-
-        job_ids = [job.id for job in jobs]
-        paper_keys = [(job.paper_id, job.access_scope) for job in jobs]
-        payloads = [_translation_job_resume_payload(job) for job in reversed(jobs)]
-        await db.execute(
-            sa_update(TranslationJob)
-            .where(TranslationJob.id.in_(job_ids))
-            .values(
-                status=TranslationJobStatus.QUEUED.value,
-                progress=0.0,
-                attempt_count=0,
-                engine_revision=revision,
-                last_issue_fingerprint="",
-                cancel_requested=False,
-                heartbeat_at=None,
-                started_at=None,
-                finished_at=None,
-                error=None,
-                updated_at=func.now(),
-            )
-        )
-        for paper_id, access_scope in paper_keys:
-            await db.execute(
+            if claimed.rowcount != 1:
+                continue
+            changed = await db.execute(
                 sa_update(Paper)
-                .where(
-                    Paper.id == paper_id,
-                    Paper.access_scope == access_scope,
-                )
-                .values(
-                    translation_status=TranslationStatus.TRANSLATING.value,
-                    translation_error=None,
-                    translation_progress=0.0,
-                    translation_stage="等待恢复",
-                    translation_eta_seconds=None,
-                )
+                .where(Paper.id == job.paper_id, Paper.access_scope == job.access_scope,
+                       Paper.translation_status == TranslationStatus.REPAIRING.value)
+                .values(translation_status=TranslationStatus.TRANSLATING.value,
+                        translation_error=None, translation_progress=0.0,
+                        translation_stage="等待恢复", translation_eta_seconds=None)
             )
-        await db.commit()
-        logger.info(
-            "Requeued %d repair-pending translation job(s) for engine revision %s",
-            len(payloads),
-            revision,
-        )
+            if changed.rowcount != 1:
+                raise RuntimeError("Repair claim lost its owning paper; transaction aborted")
+            payloads.append(_translation_job_resume_payload(job))
+        if payloads:
+            await db.commit()
+            logger.info("Requeued %d parked jobs for engine revision %s", len(payloads), revision)
         return payloads
+
 
 
 @asynccontextmanager
@@ -761,6 +779,7 @@ async def validation_exception_handler(
 app.include_router(papers_router)
 app.include_router(auth_router)
 app.include_router(provider_credentials_router)
+app.include_router(terminology_router)
 
 static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

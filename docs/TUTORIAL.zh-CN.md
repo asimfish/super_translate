@@ -1,5 +1,7 @@
 # Super Translate 使用教程
 
+使用 Zotero 请看 [插件安装与第一篇翻译教程](ZOTERO.zh-CN.md)；使用 macOS 透明悬窗请看 [构建、安装和登录自启](../desktop/README.md)。三个入口连接同一服务与账号时，共用模型、文档库和任务状态。
+
 Super Translate 是一个把英文学术论文 PDF 翻译成中文的自托管系统：保留原始版面、
 公式、图表和引用，输出单语（纯中文）和双语（原文+译文对照）两种 PDF。
 

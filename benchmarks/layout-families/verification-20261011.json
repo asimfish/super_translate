@@ -1,0 +1,1649 @@
+{
+  "date": "2026-10-11",
+  "registry_version": "1.0.0",
+  "verdict": "CONDITIONAL",
+  "verdict_reason": "All fixed feature acceptance criteria pass; an existing cache-only regression failure reproduced on the frozen baseline and untested layout variants remain disclosed.",
+  "claim_scope": {
+    "registered_entries": 21,
+    "source_detection_documents": 25,
+    "source_detection_total_pages": 762,
+    "new_real_model_render_groups": 6,
+    "new_selected_translated_pages": 14,
+    "prior_nature_pages_rechecked": 19,
+    "all_publishers_fully_certified": false,
+    "full_244_page_book_translated": false,
+    "gui_click_automation_performed": false
+  },
+  "frozen_acceptance_contract": {
+    "renderer_sha256": "e5cc7b6e57ea14fa5bbac4b54da17cfddc9ae1f5f54579977667c64d245b868c",
+    "criteria": {
+      "registry_valid_and_packaged": true,
+      "25_original_source_detections": true,
+      "6_model_render_cases_14_pages_no_qa_errors": true,
+      "book_source_code_and_page_numbers_unchanged": true,
+      "prior_nature_19_pages_no_qa_errors": true,
+      "production_install_matches_candidate": true,
+      "fresh_worker_qa_no_error": true
+    },
+    "nonblocking_boundaries": [
+      "untested publishers registered only",
+      "not a full 244-page book translation",
+      "warnings retained",
+      "existing cache-only test failure reproduced against baseline"
+    ]
+  },
+  "source_detection": {
+    "registry_version": "1.0.0",
+    "cases": [
+      {
+        "id": "adam",
+        "status": "detection_only",
+        "profile": "iclr",
+        "source_sha256": "eab9c73ae2ceda884b94830bda99312254bac4806f6c9f045cbab90721ecda31",
+        "input_sha256": "32f247f4350dbeb65999cf0bfeafc31b1da25239e6f7374822a30575c5cae86b",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 15,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "attention",
+        "status": "detection_only",
+        "profile": "neurips",
+        "source_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "input_sha256": "c20e6de2a97532c1e85b8c8b86a8507c0ea317c870e900ed7fbebd329b93d08a",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 15,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "bahdanau",
+        "status": "detection_only",
+        "profile": "iclr",
+        "source_sha256": "84801c8410da51b449d379d2fa4939a416123f2c93991077a680f863026022a7",
+        "input_sha256": "7f5cf5ad89d4bb4181d536182df6b5482f4da3fd33e07d0a7b12e603d0063fb6",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 15,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "batchnorm",
+        "status": "detection_only",
+        "profile": "generic_two_column",
+        "source_sha256": "bdc69e0b568f41d8d3181cc9077a461f58fcdd1c70c9f49efe60a05ee6109655",
+        "input_sha256": "e7807a0ee55d6369df6617d826d1b9f58cb882971869e5d71485c9f499131bf8",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 11,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "bert",
+        "status": "detection_only",
+        "profile": "generic_two_column",
+        "source_sha256": "5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e",
+        "input_sha256": "0c5ea7b0d214617d11e2285f3e3c775a82bdf2b69cd9ebfed442fd721c989a67",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 16,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "clip",
+        "status": "detection_only",
+        "profile": "generic_two_column",
+        "source_sha256": "6478b6e571a7d6fcd846d8ef77bfd60c285f1986abb8f475eedc43de403074f5",
+        "input_sha256": "0bc1844979852149017346fb82d1a43bea0355c3567f09371adf77ce8b516990",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 48,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "ddpm",
+        "status": "detection_only",
+        "profile": "neurips",
+        "source_sha256": "aee5e07a802e8dfd2a386374c94fd61d1d056cb7e1e0fec4f28e8120ff5d8505",
+        "input_sha256": "e9b8409b1b212cd0e2681222934e24fd2f6eb13f65fde6702c4df73eb5fd8ada",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 25,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "dqn",
+        "status": "detection_only",
+        "profile": "single_column",
+        "source_sha256": "8db04120cace173151c77e0faa6f3eaa4207009da66b9417597dc70bfee56d9c",
+        "input_sha256": "f466dca231fa52bb71d8f6e3fe5219ad0083a4eeb863526846eeffda17b9b116",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 9,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "faster_rcnn",
+        "status": "detection_only",
+        "profile": "generic_two_column",
+        "source_sha256": "f2630182ccfabd6fc89ac20270b4daf15a0ca849298a7db1e5d124ca443051f1",
+        "input_sha256": "a6c89e21f3c199e4688aa9c83356ae7194abae3169a796b0aa06bdb56f9b2d8c",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 14,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "gan",
+        "status": "detection_only",
+        "profile": "single_column",
+        "source_sha256": "ff5819e3a7b713c3bd3107b7de3d51fe0a347aa5d8444f0efdcf2345ef0a8b63",
+        "input_sha256": "6b5b46a603abc101d31edd847c6c3ab2625cb64df12e90043bbca2fa333f83fd",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 9,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "gpt3",
+        "status": "detection_only",
+        "profile": "single_column",
+        "source_sha256": "97fd272f1fdfc18677462d0292f5fbf26ca86b4d1b485c2dba03269b643a0e83",
+        "input_sha256": "daa98de833e278247ee1f661be9e63514fbe3f6d78761d4290d4e219bcd6d492",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 75,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "instructgpt",
+        "status": "detection_only",
+        "profile": "single_column",
+        "source_sha256": "c1984bb50a5b90fddb895fdc3a0f72e5bc977148c9f63ef6040cbe7a3e1f0d98",
+        "input_sha256": "bb7b99c2ddf753b2346170d1a0e0ca2f42e5e0f2f7722484f28b2cbec1a7bd3d",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 68,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "latent_diffusion",
+        "status": "detection_only",
+        "profile": "generic_two_column",
+        "source_sha256": "46ede043a8dc07ca1f0f445620523fe1ad8b2436bd83856a3835612a47e9f79e",
+        "input_sha256": "a4c912f83c6ce1972dd4f31bc8e97c3d56949af4d1c851ed230e8681946083d0",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 45,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "lora",
+        "status": "detection_only",
+        "profile": "single_column",
+        "source_sha256": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a",
+        "input_sha256": "23b2d7969c74652068303f2e53f9d50a1cad2a7c36f1b464d42c22b5f77b7a04",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 26,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "mask_rcnn",
+        "status": "detection_only",
+        "profile": "generic_two_column",
+        "source_sha256": "b595a882b763d55d933543131f32a2c4b6f41d0818d418ef46a2b66f946b67a8",
+        "input_sha256": "c9ca20fdd288c1eaec01013efe2e103e2a65ff0369b8d887f9f33717d0643cf8",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 12,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 3,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "ppo",
+        "status": "detection_only",
+        "profile": "single_column",
+        "source_sha256": "e78feadadbdbb0b601b3c2bcc81404722cd431a489b307545f9b7bea1e8c4f5b",
+        "input_sha256": "0087a3482bd6af67b67128ac907003a8cd4c6088327c3b95d97600f67515b3aa",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 12,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "resnet",
+        "status": "detection_only",
+        "profile": "generic_two_column",
+        "source_sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a",
+        "input_sha256": "862a35136263f40e9f57468fdc1b23f0d22dd59cf4cec5c53158b5965cbd9a19",
+        "selected_pages": [
+          0,
+          1
+        ],
+        "source_pages": 12,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "unet",
+        "status": "detection_only",
+        "profile": "single_column",
+        "source_sha256": "a3172b2124f38e260dc2c7ed968d87c31bc94dbc19a42a7ab3dcbd7534319c44",
+        "input_sha256": "232a95342ed1c47bb6d35ae65e562eedc14deb4cbd7221569de90de7023668cb",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 8,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "vit",
+        "status": "detection_only",
+        "profile": "iclr",
+        "source_sha256": "8ce7b83971a14508ca711a27c875c9b6914c4f6767cf3150fb1ca6c07aa056d6",
+        "input_sha256": "b6930ff80cd53907e85c77e01319f74fdab244a5aaf6baf1ccca035c672a20e5",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 22,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "word2vec",
+        "status": "detection_only",
+        "profile": "single_column",
+        "source_sha256": "a44d7e22d2005752271c9cc1929c6462d4c8270916b063977992a883e3a54362",
+        "input_sha256": "a6c8a366d651b87452ef74678a5459dd20a3e027c66067fd1fd6c117ccff9c32",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 12,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "acl",
+        "status": "detection_only",
+        "profile": "acl_anthology",
+        "source_sha256": "94cd077715e7b13a75841b89d3bc46713fdaa9fd80842822524b7811b034a89d",
+        "input_sha256": "63588e08317fa4ab19bd5dabba30ca7fda40a655d3738a62f8de3d1606f134e7",
+        "selected_pages": [
+          0,
+          1
+        ],
+        "source_pages": 17,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "book",
+        "status": "detection_only",
+        "profile": "academic_book",
+        "source_sha256": "6033000bac3f9268ad75ee041bf8e5d9a3bc8a33bb156399cbd014918cb59f94",
+        "input_sha256": "f7870b8d2d0d521f31d28b15f07f46e64709060b17286f2a9ec1cc1cd614139b",
+        "selected_pages": [
+          2,
+          12,
+          22,
+          23,
+          30
+        ],
+        "source_pages": 244,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "front_matter"
+          },
+          {
+            "page_index": 1,
+            "columns": 1,
+            "role": "contents"
+          },
+          {
+            "page_index": 2,
+            "columns": 1,
+            "role": "chapter"
+          },
+          {
+            "page_index": 3,
+            "columns": 1,
+            "role": "body"
+          },
+          {
+            "page_index": 4,
+            "columns": 1,
+            "role": "chapter"
+          }
+        ]
+      },
+      {
+        "id": "elsevier_sc",
+        "status": "detection_only",
+        "profile": "elsevier_journal",
+        "source_sha256": "b20a601d0672507d87dbef01777a38180386993cf62b82b2d55a12ad59de603c",
+        "input_sha256": "4671e340d617d4d8a6bbe82b32e428408b86995e73155a6e947822e3596a830b",
+        "selected_pages": [
+          2,
+          3
+        ],
+        "source_pages": 7,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "elsevier_dc",
+        "status": "detection_only",
+        "profile": "elsevier_journal",
+        "source_sha256": "7c2a4ad5d7eaceee2553d0dd8151006c9a4f7194e8af2ebe360069266b0ea073",
+        "input_sha256": "e69f5ff55047fe3c3d21ce48b09d77b8262aa56be00d41960c2d162f328090a2",
+        "selected_pages": [
+          2,
+          3
+        ],
+        "source_pages": 6,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 2,
+            "role": "body"
+          }
+        ]
+      },
+      {
+        "id": "nature",
+        "status": "detection_only",
+        "profile": "nature_portfolio",
+        "source_sha256": "9a0b9dc6c1ea6bbff2625685719df6acd1f97b1ebfa5fad98f328c096a3e7ca8",
+        "input_sha256": "8e2b627f45bdc66f571410d4ae980c18089a314c92aa5dfc6d1bf244fa949f90",
+        "selected_pages": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18
+        ],
+        "source_pages": 19,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 3,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 2,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 3,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 4,
+            "columns": 3,
+            "role": "body"
+          },
+          {
+            "page_index": 5,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 6,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 7,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 8,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 9,
+            "columns": 3,
+            "role": "body"
+          },
+          {
+            "page_index": 10,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 11,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 12,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 13,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 14,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 15,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 16,
+            "columns": 1,
+            "role": "body"
+          },
+          {
+            "page_index": 17,
+            "columns": 1,
+            "role": "body"
+          },
+          {
+            "page_index": 18,
+            "columns": 1,
+            "role": "body"
+          }
+        ]
+      }
+    ],
+    "failures": []
+  },
+  "render_acceptance": {
+    "registry_version": "1.0.0",
+    "cases": [
+      {
+        "id": "attention",
+        "status": "rendered_qa_pass",
+        "profile": "neurips",
+        "source_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+        "input_sha256": "c20e6de2a97532c1e85b8c8b86a8507c0ea317c870e900ed7fbebd329b93d08a",
+        "selected_pages": [
+          0
+        ],
+        "source_pages": 15,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          }
+        ],
+        "translated_sha256": "ed5d069758311605fe5bd3ddcebd406ba3713e7fff4f2d5560ba355db0aacdbc",
+        "cjk_chars": 614,
+        "source_owner_checks": [],
+        "qa_errors": [],
+        "qa_warnings": [],
+        "real_model_render": {
+          "provider": "deepseek",
+          "model": "deepseek-v4-pro",
+          "renderer_sha256": "e5cc7b6e57ea14fa5bbac4b54da17cfddc9ae1f5f54579977667c64d245b868c",
+          "input_sha256": "c20e6de2a97532c1e85b8c8b86a8507c0ea317c870e900ed7fbebd329b93d08a",
+          "translated_sha256": "ed5d069758311605fe5bd3ddcebd406ba3713e7fff4f2d5560ba355db0aacdbc",
+          "page_count": 1,
+          "translated_blocks": 6,
+          "skipped_blocks": 8,
+          "replay_uses_real_provider_translation_cache": true
+        }
+      },
+      {
+        "id": "resnet",
+        "status": "rendered_qa_pass",
+        "profile": "generic_two_column",
+        "source_sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a",
+        "input_sha256": "862a35136263f40e9f57468fdc1b23f0d22dd59cf4cec5c53158b5965cbd9a19",
+        "selected_pages": [
+          0,
+          1
+        ],
+        "source_pages": 12,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 2,
+            "role": "body"
+          }
+        ],
+        "translated_sha256": "9e4f37d6b551f55add7c156580d7defe2daa2091780378f304f72d26614713fa",
+        "cjk_chars": 2127,
+        "source_owner_checks": [],
+        "qa_errors": [],
+        "qa_warnings": [
+          {
+            "page": 1,
+            "code": "high_risk_layout",
+            "message": "Page 1: high-risk layout feature detected: dense vector drawing or table grid",
+            "severity": "warning"
+          }
+        ],
+        "real_model_render": {
+          "provider": "deepseek",
+          "model": "deepseek-v4-pro",
+          "renderer_sha256": "e5cc7b6e57ea14fa5bbac4b54da17cfddc9ae1f5f54579977667c64d245b868c",
+          "input_sha256": "862a35136263f40e9f57468fdc1b23f0d22dd59cf4cec5c53158b5965cbd9a19",
+          "translated_sha256": "9e4f37d6b551f55add7c156580d7defe2daa2091780378f304f72d26614713fa",
+          "page_count": 2,
+          "translated_blocks": 13,
+          "skipped_blocks": 36,
+          "replay_uses_real_provider_translation_cache": true
+        }
+      },
+      {
+        "id": "acl",
+        "status": "rendered_qa_pass",
+        "profile": "acl_anthology",
+        "source_sha256": "94cd077715e7b13a75841b89d3bc46713fdaa9fd80842822524b7811b034a89d",
+        "input_sha256": "63588e08317fa4ab19bd5dabba30ca7fda40a655d3738a62f8de3d1606f134e7",
+        "selected_pages": [
+          0,
+          1
+        ],
+        "source_pages": 17,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 2,
+            "role": "body"
+          }
+        ],
+        "translated_sha256": "69ee017ac4729724830c091faba22930101799c3bd99fbefa2d2b28dfa41de3c",
+        "cjk_chars": 1763,
+        "source_owner_checks": [],
+        "qa_errors": [],
+        "qa_warnings": [
+          {
+            "page": 2,
+            "code": "high_risk_layout",
+            "message": "Page 2: high-risk layout feature detected: dense vector drawing or table grid",
+            "severity": "warning"
+          },
+          {
+            "page": 2,
+            "code": "high_risk_layout",
+            "message": "Page 2: high-risk layout feature detected: table-like text grid",
+            "severity": "warning"
+          },
+          {
+            "page": 2,
+            "code": "high_risk_layout",
+            "message": "Page 2: high-risk layout feature detected: float near page boundary",
+            "severity": "warning"
+          }
+        ],
+        "real_model_render": {
+          "provider": "deepseek",
+          "model": "deepseek-v4-pro",
+          "renderer_sha256": "e5cc7b6e57ea14fa5bbac4b54da17cfddc9ae1f5f54579977667c64d245b868c",
+          "input_sha256": "63588e08317fa4ab19bd5dabba30ca7fda40a655d3738a62f8de3d1606f134e7",
+          "translated_sha256": "69ee017ac4729724830c091faba22930101799c3bd99fbefa2d2b28dfa41de3c",
+          "page_count": 2,
+          "translated_blocks": 17,
+          "skipped_blocks": 46,
+          "replay_uses_real_provider_translation_cache": true
+        }
+      },
+      {
+        "id": "book",
+        "status": "rendered_qa_pass",
+        "profile": "academic_book",
+        "source_sha256": "6033000bac3f9268ad75ee041bf8e5d9a3bc8a33bb156399cbd014918cb59f94",
+        "input_sha256": "f7870b8d2d0d521f31d28b15f07f46e64709060b17286f2a9ec1cc1cd614139b",
+        "selected_pages": [
+          2,
+          12,
+          22,
+          23,
+          30
+        ],
+        "source_pages": 244,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "front_matter"
+          },
+          {
+            "page_index": 1,
+            "columns": 1,
+            "role": "contents"
+          },
+          {
+            "page_index": 2,
+            "columns": 1,
+            "role": "chapter"
+          },
+          {
+            "page_index": 3,
+            "columns": 1,
+            "role": "body"
+          },
+          {
+            "page_index": 4,
+            "columns": 1,
+            "role": "chapter"
+          }
+        ],
+        "translated_sha256": "f7dc76ad06e8385a1e36444c66472f4251c2a88080a3a0a01fc44716dacb2bd3",
+        "cjk_chars": 1425,
+        "source_owner_checks": [
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 1,
+            "kind": "page_number"
+          },
+          {
+            "page": 3,
+            "kind": "code"
+          },
+          {
+            "page": 3,
+            "kind": "code"
+          },
+          {
+            "page": 3,
+            "kind": "code"
+          },
+          {
+            "page": 3,
+            "kind": "code"
+          },
+          {
+            "page": 3,
+            "kind": "code"
+          },
+          {
+            "page": 3,
+            "kind": "code"
+          },
+          {
+            "page": 4,
+            "kind": "code"
+          },
+          {
+            "page": 4,
+            "kind": "code"
+          },
+          {
+            "page": 4,
+            "kind": "code"
+          }
+        ],
+        "qa_errors": [],
+        "qa_warnings": [
+          {
+            "page": 2,
+            "code": "fragmented_prose",
+            "message": "Page 2: 11 body line(s) were treated as fixed-width fragments; prose may have been translated line-by-line",
+            "severity": "warning"
+          }
+        ],
+        "real_model_render": {
+          "provider": "deepseek",
+          "model": "deepseek-v4-pro",
+          "renderer_sha256": "e5cc7b6e57ea14fa5bbac4b54da17cfddc9ae1f5f54579977667c64d245b868c",
+          "input_sha256": "f7870b8d2d0d521f31d28b15f07f46e64709060b17286f2a9ec1cc1cd614139b",
+          "translated_sha256": "f7dc76ad06e8385a1e36444c66472f4251c2a88080a3a0a01fc44716dacb2bd3",
+          "page_count": 5,
+          "translated_blocks": 63,
+          "skipped_blocks": 30,
+          "replay_uses_real_provider_translation_cache": true
+        }
+      },
+      {
+        "id": "elsevier_sc",
+        "status": "rendered_qa_pass",
+        "profile": "elsevier_journal",
+        "source_sha256": "b20a601d0672507d87dbef01777a38180386993cf62b82b2d55a12ad59de603c",
+        "input_sha256": "4671e340d617d4d8a6bbe82b32e428408b86995e73155a6e947822e3596a830b",
+        "selected_pages": [
+          2,
+          3
+        ],
+        "source_pages": 7,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 1,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 1,
+            "role": "body"
+          }
+        ],
+        "translated_sha256": "a2a687f5e5f2e94139df1e14327f42441dd01ce58c36d0063a28a008229130f0",
+        "cjk_chars": 904,
+        "source_owner_checks": [],
+        "qa_errors": [],
+        "qa_warnings": [],
+        "real_model_render": {
+          "provider": "deepseek",
+          "model": "deepseek-v4-pro",
+          "renderer_sha256": "e5cc7b6e57ea14fa5bbac4b54da17cfddc9ae1f5f54579977667c64d245b868c",
+          "input_sha256": "4671e340d617d4d8a6bbe82b32e428408b86995e73155a6e947822e3596a830b",
+          "translated_sha256": "a2a687f5e5f2e94139df1e14327f42441dd01ce58c36d0063a28a008229130f0",
+          "page_count": 2,
+          "translated_blocks": 30,
+          "skipped_blocks": 39,
+          "replay_uses_real_provider_translation_cache": true
+        }
+      },
+      {
+        "id": "elsevier_dc",
+        "status": "rendered_qa_pass",
+        "profile": "elsevier_journal",
+        "source_sha256": "7c2a4ad5d7eaceee2553d0dd8151006c9a4f7194e8af2ebe360069266b0ea073",
+        "input_sha256": "e69f5ff55047fe3c3d21ce48b09d77b8262aa56be00d41960c2d162f328090a2",
+        "selected_pages": [
+          2,
+          3
+        ],
+        "source_pages": 6,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 2,
+            "role": "body"
+          }
+        ],
+        "translated_sha256": "1ca8c60ab9b930496620627cb5ced89e090beb27440bbd7110d8a096d28c447a",
+        "cjk_chars": 1259,
+        "source_owner_checks": [],
+        "qa_errors": [],
+        "qa_warnings": [
+          {
+            "page": 2,
+            "code": "display_formula_misaligned",
+            "message": "Page 2: displayed equation at y=182 shifted horizontally by 19pt vs original",
+            "severity": "warning"
+          }
+        ],
+        "real_model_render": {
+          "provider": "deepseek",
+          "model": "deepseek-v4-pro",
+          "renderer_sha256": "e5cc7b6e57ea14fa5bbac4b54da17cfddc9ae1f5f54579977667c64d245b868c",
+          "input_sha256": "e69f5ff55047fe3c3d21ce48b09d77b8262aa56be00d41960c2d162f328090a2",
+          "translated_sha256": "1ca8c60ab9b930496620627cb5ced89e090beb27440bbd7110d8a096d28c447a",
+          "page_count": 2,
+          "translated_blocks": 41,
+          "skipped_blocks": 44,
+          "replay_uses_real_provider_translation_cache": true
+        }
+      },
+      {
+        "id": "nature",
+        "status": "rendered_qa_pass",
+        "profile": "nature_portfolio",
+        "source_sha256": "9a0b9dc6c1ea6bbff2625685719df6acd1f97b1ebfa5fad98f328c096a3e7ca8",
+        "input_sha256": "8e2b627f45bdc66f571410d4ae980c18089a314c92aa5dfc6d1bf244fa949f90",
+        "selected_pages": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18
+        ],
+        "source_pages": 19,
+        "page_roles": [
+          {
+            "page_index": 0,
+            "columns": 3,
+            "role": "body"
+          },
+          {
+            "page_index": 1,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 2,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 3,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 4,
+            "columns": 3,
+            "role": "body"
+          },
+          {
+            "page_index": 5,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 6,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 7,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 8,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 9,
+            "columns": 3,
+            "role": "body"
+          },
+          {
+            "page_index": 10,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 11,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 12,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 13,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 14,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 15,
+            "columns": 2,
+            "role": "body"
+          },
+          {
+            "page_index": 16,
+            "columns": 1,
+            "role": "body"
+          },
+          {
+            "page_index": 17,
+            "columns": 1,
+            "role": "body"
+          },
+          {
+            "page_index": 18,
+            "columns": 1,
+            "role": "body"
+          }
+        ],
+        "translated_sha256": "32cc31222ba1579088a37456e5db1402e3449ea6f3aa705b02cc64db6e045e84",
+        "cjk_chars": 17919,
+        "source_owner_checks": [],
+        "qa_errors": [],
+        "qa_warnings": [
+          {
+            "page": 1,
+            "code": "high_risk_layout",
+            "message": "Page 1: high-risk layout feature detected: dense vector drawing or table grid",
+            "severity": "warning"
+          },
+          {
+            "page": 3,
+            "code": "high_risk_layout",
+            "message": "Page 3: high-risk layout feature detected: dense vector drawing or table grid",
+            "severity": "warning"
+          },
+          {
+            "page": 3,
+            "code": "high_risk_layout",
+            "message": "Page 3: high-risk layout feature detected: float near page boundary",
+            "severity": "warning"
+          },
+          {
+            "page": 4,
+            "code": "high_risk_layout",
+            "message": "Page 4: high-risk layout feature detected: dense vector drawing or table grid",
+            "severity": "warning"
+          },
+          {
+            "page": 5,
+            "code": "high_risk_layout",
+            "message": "Page 5: high-risk layout feature detected: float near page boundary",
+            "severity": "warning"
+          },
+          {
+            "page": 7,
+            "code": "high_risk_layout",
+            "message": "Page 7: high-risk layout feature detected: dense vector drawing or table grid",
+            "severity": "warning"
+          },
+          {
+            "page": 7,
+            "code": "high_risk_layout",
+            "message": "Page 7: high-risk layout feature detected: float near page boundary",
+            "severity": "warning"
+          },
+          {
+            "page": 8,
+            "code": "high_risk_layout",
+            "message": "Page 8: high-risk layout feature detected: dense vector drawing or table grid",
+            "severity": "warning"
+          },
+          {
+            "page": 8,
+            "code": "high_risk_layout",
+            "message": "Page 8: high-risk layout feature detected: table-like text grid",
+            "severity": "warning"
+          },
+          {
+            "page": 17,
+            "code": "high_risk_layout",
+            "message": "Page 17: high-risk layout feature detected: dense vector drawing or table grid",
+            "severity": "warning"
+          },
+          {
+            "page": 17,
+            "code": "high_risk_layout",
+            "message": "Page 17: high-risk layout feature detected: float near page boundary",
+            "severity": "warning"
+          },
+          {
+            "page": 18,
+            "code": "high_risk_layout",
+            "message": "Page 18: high-risk layout feature detected: dense vector drawing or table grid",
+            "severity": "warning"
+          },
+          {
+            "page": 18,
+            "code": "high_risk_layout",
+            "message": "Page 18: high-risk layout feature detected: float near page boundary",
+            "severity": "warning"
+          },
+          {
+            "page": 19,
+            "code": "high_risk_layout",
+            "message": "Page 19: high-risk layout feature detected: float near page boundary",
+            "severity": "warning"
+          }
+        ],
+        "generation_provenance": "Previously delivered real-provider 19-page translation; rechecked with current QA; not rerendered for this change."
+      }
+    ],
+    "failures": []
+  },
+  "production_worker_qa": [
+    {
+      "id": "attention",
+      "errors": [],
+      "warnings": [],
+      "worker_exit": 0,
+      "translated_sha256": "ed5d069758311605fe5bd3ddcebd406ba3713e7fff4f2d5560ba355db0aacdbc"
+    },
+    {
+      "id": "resnet",
+      "errors": [],
+      "warnings": [
+        {
+          "page": 1,
+          "code": "high_risk_layout",
+          "message": "Page 1: high-risk layout feature detected: dense vector drawing or table grid",
+          "severity": "warning"
+        }
+      ],
+      "worker_exit": 0,
+      "translated_sha256": "9e4f37d6b551f55add7c156580d7defe2daa2091780378f304f72d26614713fa"
+    },
+    {
+      "id": "acl",
+      "errors": [],
+      "warnings": [
+        {
+          "page": 2,
+          "code": "high_risk_layout",
+          "message": "Page 2: high-risk layout feature detected: dense vector drawing or table grid",
+          "severity": "warning"
+        },
+        {
+          "page": 2,
+          "code": "high_risk_layout",
+          "message": "Page 2: high-risk layout feature detected: table-like text grid",
+          "severity": "warning"
+        },
+        {
+          "page": 2,
+          "code": "high_risk_layout",
+          "message": "Page 2: high-risk layout feature detected: float near page boundary",
+          "severity": "warning"
+        }
+      ],
+      "worker_exit": 0,
+      "translated_sha256": "69ee017ac4729724830c091faba22930101799c3bd99fbefa2d2b28dfa41de3c"
+    },
+    {
+      "id": "book",
+      "errors": [],
+      "warnings": [
+        {
+          "page": 2,
+          "code": "fragmented_prose",
+          "message": "Page 2: 11 body line(s) were treated as fixed-width fragments; prose may have been translated line-by-line",
+          "severity": "warning"
+        }
+      ],
+      "worker_exit": 0,
+      "translated_sha256": "f7dc76ad06e8385a1e36444c66472f4251c2a88080a3a0a01fc44716dacb2bd3"
+    },
+    {
+      "id": "elsevier_sc",
+      "errors": [],
+      "warnings": [],
+      "worker_exit": 0,
+      "translated_sha256": "a2a687f5e5f2e94139df1e14327f42441dd01ce58c36d0063a28a008229130f0"
+    },
+    {
+      "id": "elsevier_dc",
+      "errors": [],
+      "warnings": [],
+      "worker_exit": 0,
+      "translated_sha256": "1ca8c60ab9b930496620627cb5ced89e090beb27440bbd7110d8a096d28c447a"
+    },
+    {
+      "id": "nature",
+      "errors": [],
+      "warnings": [
+        {
+          "page": 1,
+          "code": "high_risk_layout",
+          "message": "Page 1: high-risk layout feature detected: dense vector drawing or table grid",
+          "severity": "warning"
+        },
+        {
+          "page": 3,
+          "code": "high_risk_layout",
+          "message": "Page 3: high-risk layout feature detected: dense vector drawing or table grid",
+          "severity": "warning"
+        },
+        {
+          "page": 3,
+          "code": "high_risk_layout",
+          "message": "Page 3: high-risk layout feature detected: float near page boundary",
+          "severity": "warning"
+        },
+        {
+          "page": 4,
+          "code": "high_risk_layout",
+          "message": "Page 4: high-risk layout feature detected: dense vector drawing or table grid",
+          "severity": "warning"
+        },
+        {
+          "page": 5,
+          "code": "high_risk_layout",
+          "message": "Page 5: high-risk layout feature detected: float near page boundary",
+          "severity": "warning"
+        },
+        {
+          "page": 7,
+          "code": "high_risk_layout",
+          "message": "Page 7: high-risk layout feature detected: dense vector drawing or table grid",
+          "severity": "warning"
+        },
+        {
+          "page": 7,
+          "code": "high_risk_layout",
+          "message": "Page 7: high-risk layout feature detected: float near page boundary",
+          "severity": "warning"
+        },
+        {
+          "page": 8,
+          "code": "high_risk_layout",
+          "message": "Page 8: high-risk layout feature detected: dense vector drawing or table grid",
+          "severity": "warning"
+        },
+        {
+          "page": 8,
+          "code": "high_risk_layout",
+          "message": "Page 8: high-risk layout feature detected: table-like text grid",
+          "severity": "warning"
+        },
+        {
+          "page": 17,
+          "code": "high_risk_layout",
+          "message": "Page 17: high-risk layout feature detected: dense vector drawing or table grid",
+          "severity": "warning"
+        },
+        {
+          "page": 17,
+          "code": "high_risk_layout",
+          "message": "Page 17: high-risk layout feature detected: float near page boundary",
+          "severity": "warning"
+        },
+        {
+          "page": 18,
+          "code": "high_risk_layout",
+          "message": "Page 18: high-risk layout feature detected: dense vector drawing or table grid",
+          "severity": "warning"
+        },
+        {
+          "page": 18,
+          "code": "high_risk_layout",
+          "message": "Page 18: high-risk layout feature detected: float near page boundary",
+          "severity": "warning"
+        },
+        {
+          "page": 19,
+          "code": "high_risk_layout",
+          "message": "Page 19: high-risk layout feature detected: float near page boundary",
+          "severity": "warning"
+        }
+      ],
+      "worker_exit": 0,
+      "translated_sha256": "32cc31222ba1579088a37456e5db1402e3449ea6f3aa705b02cc64db6e045e84"
+    }
+  ],
+  "production_translation_journey": {
+    "backend": "deepseek",
+    "model": "deepseek-v4-pro",
+    "native_engine": true,
+    "real_provider_cache": true,
+    "mono_generated": true,
+    "dual_generated": true,
+    "qa": {
+      "id": "journey-elsevier-sc-output",
+      "errors": [],
+      "warnings": [],
+      "worker_exit": 0,
+      "translated_sha256": "0decd1f0e1a201c4866abc540990f3cc704128042948c5f26ca814edf81759cd"
+    }
+  },
+  "production_install": {
+    "status": "installed",
+    "before_sha256": {
+      "pdf_layout.py": "4ac69cda2531f5158b8fbed8ce38eb30d6f1a79806b813772fb215004aae6d4e",
+      "layout_profiles.py": "0122fb1c0567fabc97ddd207368f03cf65676f43fb5cb8a81533b97de06eb51f",
+      "journal_layout.py": "01d28c77f62516fee67364fa0accd0abccf27f825c0136e07df9de97de8cee1d"
+    },
+    "installed_sha256": {
+      "layout_families.json": "d4733191f8d2d5a4646ea9c5d0b0e2b06ef5cc81349ebd248ab0fe5e52899627",
+      "layout_families.py": "e7620a05890196bd0f4165f2846faf1bcba794509ecc6f0072afbca2a08773de",
+      "layout_profiles.py": "6f8e1ee67ab5b7b5ae0e6485c5b7da4a791c1759e42e1f98168a53596bc12585",
+      "pdf_layout.py": "688848fd58598507056c23baa0e6405ca9129b87b1fe1cbee39fdbe15e77b1cd"
+    },
+    "registry_version": "1.0.0",
+    "journal_layout_sha256": "01d28c77f62516fee67364fa0accd0abccf27f825c0136e07df9de97de8cee1d"
+  },
+  "production_read_only_health": {
+    "http_status": 200,
+    "installed_sha256_matches_candidate": true
+  },
+  "production_patch": {
+    "path": "docs/patches/layout-families-production.patch",
+    "sha256": "889ee4d6ea539912326c780a4529c93595f35c8e90c7588fbcbc5d9eeda26bad",
+    "applied_to_frozen_production_baseline": true,
+    "result_matches_all_4_installed_file_hashes": true
+  },
+  "source_hyperlink_checks": [
+    {
+      "id": "elsevier_sc",
+      "source_unique_uri_count": 2,
+      "missing_source_uris": []
+    },
+    {
+      "id": "elsevier_dc",
+      "source_unique_uri_count": 2,
+      "missing_source_uris": []
+    }
+  ],
+  "tests": {
+    "focused": {
+      "argv": [
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_pdf_layout_preserve.py",
+        "tests/test_page_inspector.py",
+        "tests/test_nature_layout.py",
+        "tests/test_formula_obstacle_boundary.py",
+        "tests/test_following_formula_keepout.py",
+        "tests/test_source_formula_ownership.py",
+        "tests/test_source_prose_numeric_owner.py",
+        "tests/test_layout_families.py",
+        "tests/test_layout_corpus.py",
+        "tests/test_layout_profiles.py",
+        "tests/test_scientific_text_fonts.py",
+        "tests/test_article_layout.py",
+        "tests/test_conference_byline.py",
+        "tests/test_book_definitions.py"
+      ],
+      "passed": 693,
+      "subtests_passed": 6,
+      "seconds": 19.85,
+      "exit": 0,
+      "log_sha256": "8f3c4fae5783522b83735d7d19765409e59110d5319c98012d8b9989b3a30268"
+    },
+    "object_and_font": {
+      "argv": [
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_object_qa.py",
+        "tests/test_source_prose_numeric_owner.py",
+        "tests/test_scientific_text_fonts.py",
+        "tests/test_article_layout.py",
+        "tests/test_book_definitions.py",
+        "tests/test_conference_byline.py"
+      ],
+      "passed": 65,
+      "seconds": 0.57,
+      "exit": 0,
+      "overlaps_focused_suite": true,
+      "log_sha256": "e0893a2edb66fc7245812acd47360650a17be3900c1f3a4680adca57c71e4fef"
+    },
+    "broad_cached_regression": {
+      "argv": [
+        ".venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_pdf_layout_e2e.py",
+        "tests/test_golden_pages.py"
+      ],
+      "passed": 222,
+      "failed": 1,
+      "seconds": 1585.84,
+      "exit": 1,
+      "failed_node": "tests/test_golden_pages.py::test_otf_production_replay_has_no_title_or_inline_formula_errors",
+      "baseline_reproduced": true,
+      "missing_cache_blocks": [
+        "32/178",
+        "2/162"
+      ],
+      "log_sha256": "a2fb357b0cf596b3fdbd328868a1c34d276f84b65d44242736708e3f3a3ca59e"
+    },
+    "baseline_cache_reproduction": {
+      "failed": 1,
+      "seconds": 3.05,
+      "exit": 1,
+      "frozen_pdf_layout_sha256": "cd10cf5676c6f5eef2824cbd8649062c736161ceec3a41d1f4a59fbb03041d45",
+      "frozen_layout_profiles_sha256": "0122fb1c0567fabc97ddd207368f03cf65676f43fb5cb8a81533b97de06eb51f",
+      "method": "Loaded the pre-change pdf_layout and layout_profiles with importlib, then invoked the same failed pytest node.",
+      "log_sha256": "080237cd7b27fe8f5e913d399bfbd64e337d17869c143879a08dfb9738f6ca96"
+    },
+    "ruff": {
+      "modified_python_files_checked": 10,
+      "exit": 0
+    },
+    "python_compatibility": {
+      "syntax_feature_version": "3.10",
+      "syntax_exit": 0,
+      "actual_runtime": "Python 3.12 on macOS and Linux",
+      "python_310_runtime_tested": false
+    }
+  },
+  "corpus_commands": [
+    {
+      "action": "source_detection",
+      "argv": [
+        ".venv/bin/python",
+        "scripts/check_layout_families.py",
+        "check",
+        "--source-root",
+        "$ARTIFACT_ROOT/sources",
+        "--input-root",
+        "$ARTIFACT_ROOT/inputs",
+        "--report",
+        "$ARTIFACT_ROOT/detection-report.json"
+      ],
+      "exit": 0
+    },
+    {
+      "action": "real_output_acceptance",
+      "argv": [
+        ".venv/bin/python",
+        "scripts/check_layout_families.py",
+        "check",
+        "--ids",
+        "attention",
+        "resnet",
+        "acl",
+        "book",
+        "elsevier_sc",
+        "elsevier_dc",
+        "nature",
+        "--source-root",
+        "$ARTIFACT_ROOT/sources",
+        "--input-root",
+        "$ARTIFACT_ROOT/inputs",
+        "--translated-root",
+        "$ARTIFACT_ROOT/outputs",
+        "--require-render",
+        "--report",
+        "$ARTIFACT_ROOT/accepted-render-qa.json"
+      ],
+      "exit": 0
+    }
+  ],
+  "boundaries": [
+    "untested publishers registered only",
+    "not a full 244-page book translation",
+    "warnings retained",
+    "existing cache-only test failure reproduced against baseline",
+    "Unknown layouts use source geometry with uncertainty warnings; OCR, vertical/RTL text, rare print fonts and cross-page tables require separate acceptance.",
+    "A QA pass is not a guarantee of perfect typography for arbitrary PDFs."
+  ],
+  "public_copy_note": "Local artifact paths are redacted as $ARTIFACT_ROOT; this is historical evidence from 2026-10-11, not a new release run."
+}

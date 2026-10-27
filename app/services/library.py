@@ -62,13 +62,15 @@ def normalize_title_text(title: str) -> str:
     return " ".join(folded.split())
 
 
-def extract_title_from_pdf(pdf_path: Path) -> str:
+def extract_title_from_pdf(pdf_path: Path, original_filename: str = "") -> str:
     """Try to extract title from PDF metadata or first page."""
     try:
         with fitz.open(str(pdf_path)) as doc:
             meta_title = normalize_title_text(doc.metadata.get("title", "") or "")
-            if meta_title:
-                return meta_title
+            from app.services.document_metadata import clean_title, useful_metadata_title
+
+            if useful_metadata_title(meta_title):
+                return clean_title(meta_title)
 
             if doc.page_count > 0:
                 title = _extract_title_from_first_page(doc[0])
@@ -76,20 +78,15 @@ def extract_title_from_pdf(pdf_path: Path) -> str:
                     return normalize_title_text(title)
     except Exception as e:
         logger.debug("Could not extract title from %s: %s", pdf_path.name, e)
-    return pdf_path.stem.replace("_", " ").replace("-", " ").title()
+    fallback = Path(original_filename or pdf_path.name).stem
+    return fallback.replace("_", " ").replace("-", " ").title()[:500]
 
 
 def _extract_title_from_first_page(page: object) -> str | None:
     """Extract title from the first page's text blocks by font size."""
-    blocks = page.get_text("dict")["blocks"]
-    for block in blocks:
-        if block.get("type") != 0:
-            continue
-        for line in block.get("lines", []):
-            title = _find_large_text_in_line(line)
-            if title:
-                return title
-    return None
+    from app.services.document_metadata import first_page_title
+
+    return first_page_title(page)
 
 
 def _find_large_text_in_line(line: dict) -> str | None:

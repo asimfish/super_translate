@@ -82,6 +82,7 @@ class ProviderModelOptionResponse(BaseModel):
     id: str
     group: str
     description: str
+    availability: str = "reference"
 
 
 class ProviderModelCatalogResponse(BaseModel):
@@ -97,6 +98,7 @@ class ProviderModelCatalogResponse(BaseModel):
     refreshed_at: datetime | None = None
     catalog_verified_on: date
     warning: str = ""
+    refresh_interval_seconds: int = 300
 
 
 def _key_hint(api_key: str) -> str:
@@ -163,6 +165,12 @@ def _catalog_response(
                 id=model,
                 group=group,
                 description=description,
+                availability=(
+                    "listed" if model in catalog.available_models and catalog.source != "stale"
+                    else "previously_listed" if model in catalog.available_models
+                    else "custom" if model == selected_model and model not in catalog.models
+                    else "reference"
+                ),
             )
         )
     return ProviderModelCatalogResponse(
@@ -184,7 +192,7 @@ async def list_provider_models(
     db: DbSession,
     access_scope: AccessScope,
 ) -> list[ProviderModelCatalogResponse]:
-    """List model choices and lazily refresh configured providers every six hours."""
+    """List model choices and refresh configured providers every five minutes."""
     credentials = {}
     for provider in PROVIDER_SPECS:
         credentials[provider] = await _catalog_credential(provider, db, access_scope)

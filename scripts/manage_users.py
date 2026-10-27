@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select  # noqa: E402
 
+from app.core.config import ensure_dirs  # noqa: E402
 from app.core.database import async_session, init_db  # noqa: E402
 from app.core.users import create_user, hash_password  # noqa: E402
 from app.models.user import User  # noqa: E402
@@ -80,6 +81,7 @@ def main() -> None:
     reset.add_argument("username")
     args = parser.parse_args()
 
+    ensure_dirs()
     if args.command == "create":
         asyncio.run(_create(args.username, args.scope))
     elif args.command == "list":

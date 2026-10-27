@@ -53,6 +53,7 @@ INSPECTOR_ISSUE_CODES = frozenset(
         "reference_content_changed",
         "untranslated_block",
         "display_formula_misaligned",
+        "text_visual_overlap",
     }
 )
 
@@ -442,6 +443,131 @@ def _dominant_span_size_in_bbox(block: _Block, bbox: BBox) -> float:
     return max(weights, key=lambda size: (weights[size], size))
 
 
+def _text_visual_overlap_issues(
+    original_page: object,
+    translated_page: object,
+    page_number: int,
+    *,
+    original_visual_regions: Sequence[BBox] = (),
+    translated_visual_regions: Sequence[BBox] = (),
+) -> List[object]:
+    """Detect translated body text newly painted over figure/image regions."""
+    if not original_visual_regions or not translated_visual_regions:
+        return []
+
+    def intersection(left: BBox, right: BBox) -> Optional[BBox]:
+        box = (
+            max(left[0], right[0]),
+            max(left[1], right[1]),
+            min(left[2], right[2]),
+            min(left[3], right[3]),
+        )
+        return box if box[2] > box[0] and box[3] > box[1] else None
+
+    def area(box: BBox) -> float:
+        return max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+
+    def page_text_spans(page: object) -> List[dict]:
+        spans: List[dict] = []
+        for block in page.get_text("dict").get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if (
+                        span.get("text", "").strip()
+                        and len(span.get("bbox", ())) == 4
+                    ):
+                        spans.append(span)
+        return spans
+
+    source_anchors: List[Tuple[BBox, BBox]] = []
+    for span in page_text_spans(original_page):
+        text = str(span.get("text", "")).strip()
+        raw_bbox = span.get("bbox")
+        if not text or not raw_bbox:
+            continue
+        source_bbox = tuple(float(value) for value in raw_bbox)
+        source_area = area(source_bbox)
+        if source_area <= 0.0:
+            continue
+        for region in original_visual_regions:
+            region_box = tuple(float(value) for value in region)
+            overlap = intersection(source_bbox, region_box)
+            if overlap is not None and area(overlap) / source_area >= 0.20:
+                source_anchors.append((source_bbox, region_box))
+
+    issues: List[object] = []
+    for span in page_text_spans(translated_page):
+        text = " ".join(str(span.get("text", "")).split())
+        raw_bbox = span.get("bbox")
+        if not text or not raw_bbox or not _CJK_HAN_RE.search(text):
+            continue
+        target_bbox = tuple(float(value) for value in raw_bbox)
+        target_area = area(target_bbox)
+        if target_area <= 0.0:
+            continue
+        tx = (target_bbox[0] + target_bbox[2]) / 2.0
+        ty = (target_bbox[1] + target_bbox[3]) / 2.0
+        for target_region in translated_visual_regions:
+            target_region_box = tuple(float(value) for value in target_region)
+            # Native formula stamps also become image regions in the output.
+            # This detector owns the original figure footprint; formula/ink
+            # collisions have separate checks. Intersect both observations so
+            # split images still count, without treating new math as a figure.
+            shared_regions = [
+                shared
+                for source_region in original_visual_regions
+                if (shared := intersection(target_region_box, tuple(source_region))) is not None
+            ]
+            overlaps = [
+                hit for shared in shared_regions
+                if (hit := intersection(target_bbox, shared)) is not None
+            ]
+            overlap = max(overlaps, key=area, default=None)
+            if overlap is None:
+                continue
+            overlap_area = area(overlap)
+            if overlap_area / target_area < 0.12 or overlap[3] - overlap[1] < 1.0:
+                continue
+            region_w = max(1.0, target_region_box[2] - target_region_box[0])
+            region_h = max(1.0, target_region_box[3] - target_region_box[1])
+            preserved_source_text = False
+            for source_bbox, source_region_box in source_anchors:
+                source_width = max(1.0, source_region_box[2] - source_region_box[0])
+                source_height = max(1.0, source_region_box[3] - source_region_box[1])
+                if abs(source_width - region_w) > max(20.0, 0.25 * region_w):
+                    continue
+                if abs(source_height - region_h) > max(20.0, 0.25 * region_h):
+                    continue
+                sx = (source_bbox[0] + source_bbox[2]) / 2.0
+                sy = (source_bbox[1] + source_bbox[3]) / 2.0
+                if (
+                    abs(sx - tx) <= max(8.0, 0.10 * region_w)
+                    and abs(sy - ty) <= max(8.0, 0.10 * region_h)
+                ):
+                    preserved_source_text = True
+                    break
+            if preserved_source_text:
+                continue
+            issues.append(
+                _issue(
+                    page_number,
+                    "text_visual_overlap",
+                    (
+                        f"Page {page_number}: translated text overlaps a figure/image "
+                        f"region by {overlap_area / target_area:.0%} at "
+                        f"x={overlap[0]:.1f}, y={overlap[1]:.1f}: {text[:80]}"
+                    ),
+                    severity="error",
+                )
+            )
+            if len(issues) >= 4:
+                return issues
+            break
+    return issues
+
+
 def _font_size_issues(
     original_page: object,
     translated_page: object,
@@ -450,12 +576,10 @@ def _font_size_issues(
     exclusion_bboxes: Sequence[BBox],
     source_role_blocks: Sequence[object] = (),
 ) -> List[object]:
-    original_blocks = [
-        block for block in _text_blocks(original_page) if block.dominant_size() > 0
-    ]
+    original_blocks = [block for block in _text_blocks(original_page) if block.dominant_size() > 0]
     translated_blocks = _text_blocks(translated_page)
 
-    candidates: List[Tuple[_Block, float, float]] = []  # block, size, expected
+    candidates: List[Tuple[_Block, float, float, str]] = []  # block, size, expected, role
     for block in translated_blocks:
         if block.cjk_chars() < _MIN_BLOCK_CJK_CHARS:
             continue
@@ -480,6 +604,7 @@ def _font_size_issues(
         best_overlap = 0.0
         best_score = 0.0
         expected = 0.0
+        expected_role = ""
         expected_bbox: Optional[BBox] = None
         for source in source_role_blocks:
             source_bbox = tuple(float(value) for value in source.bbox)
@@ -495,6 +620,7 @@ def _font_size_issues(
                 best_overlap = overlap
                 expected = float(source.font_size)
                 expected_bbox = source_bbox
+                expected_role = str(getattr(source, "block_type", ""))
         for source in original_blocks:
             overlap = _bbox_overlap_area(block.bbox, source.bbox)
             if overlap <= 0.25 * area:
@@ -514,20 +640,20 @@ def _font_size_issues(
             role_local_size = _dominant_span_size_in_bbox(block, expected_bbox)
             if role_local_size > 0.0:
                 size = role_local_size
-        candidates.append((block, size, expected))
+        candidates.append((block, size, expected, expected_role))
 
     if len(candidates) < 3:
         return []
-    ratios = [size / expected for _, size, expected in candidates]
+    ratios = [size / expected for _, size, expected, _ in candidates]
     median_ratio = _median(ratios)
     if median_ratio <= 0:
         return []
-    cohorts: Dict[float, List[float]] = {}
-    for _, size, expected in candidates:
-        cohorts.setdefault(round(expected, 1), []).append(size / expected)
+    cohorts: Dict[Tuple[str, float], List[float]] = {}
+    for _, size, expected, role in candidates:
+        cohorts.setdefault((role, round(expected, 1)), []).append(size / expected)
 
     issues: List[object] = []
-    for block, size, expected in candidates:
+    for block, size, expected, role in candidates:
         ratio = size / expected
         # Only the shrink direction is a reader-visible defect (crushed
         # bullets/paragraphs); a block that keeps its size while its source
@@ -538,11 +664,13 @@ def _font_size_issues(
         # healthy modes and the page-wide median would flag whichever mode
         # loses (dreamerv3 appendix). A cohort that is itself crushed still
         # fails the absolute floor.
-        cohort = cohorts[round(expected, 1)]
+        # The same source size can belong to different typography roles. A
+        # title that keeps its original size must not inherit body-font growth.
+        # A singleton has no peer evidence: cap the page reference at the source
+        # scale (1.0), while keeping genuine shrinkage and existing floors live.
+        cohort = cohorts[(role, round(expected, 1))]
         reference = (
-            min(_median(cohort), median_ratio)
-            if len(cohort) >= 2
-            else median_ratio
+            min(_median(cohort), median_ratio) if len(cohort) >= 2 else min(1.0, median_ratio)
         )
         uniform_with_cohort = ratio >= reference - _SIZE_RATIO_TOLERANCE * reference
         cohort_itself_crushed = reference < 0.80 and ratio < 0.72
@@ -564,9 +692,7 @@ def _font_size_issues(
         if len(issues) >= 4:
             break
 
-    issues.extend(
-        _sibling_list_issues(translated_blocks, page_number, exclusion_bboxes)
-    )
+    issues.extend(_sibling_list_issues(translated_blocks, page_number, exclusion_bboxes))
     return issues
 
 
@@ -1098,11 +1224,11 @@ def _rule_is_text_underline(page: object, rule: Tuple[float, float, float]) -> b
     the text they decorate; only free-standing table rules must survive.
     """
     rule_y, rule_x0, rule_x1 = rule
-    width = max(1.0, rule_x1 - rule_x0)
     try:
         data = page.get_text("dict")
     except Exception:
         return False
+    spans: List[Tuple[float, float]] = []
     for block in data.get("blocks", []):
         if block.get("type") != 0:
             continue
@@ -1113,14 +1239,55 @@ def _rule_is_text_underline(page: object, rule: Tuple[float, float, float]) -> b
                 # bottom (descender space), up to a couple of points below.
                 if not (by1 - 2.5 <= rule_y <= by1 + 2.8):
                     continue
-                # An underline hugs its text horizontally; a table rule that
-                # merely touches a caption's glyph box extends well past it.
-                if rule_x0 < bx0 - 6.0 or rule_x1 > bx1 + 6.0:
-                    continue
-                overlap = min(rule_x1, bx1) - max(rule_x0, bx0)
+                spans.append((bx0, bx1))
+
+    def underlines_span(x0: float, x1: float) -> bool:
+        width = max(1.0, x1 - x0)
+        for bx0, bx1 in spans:
+            # A table rule merely touching a caption extends past its text.
+            if x0 >= bx0 - 6.0 and x1 <= bx1 + 6.0:
+                overlap = min(x1, bx1) - max(x0, bx0)
                 if overlap >= 0.7 * width:
                     return True
-    return False
+        return False
+
+    if underlines_span(rule_x0, rule_x1):
+        return True
+
+    # Horizontal-rule extraction merges disjoint segments at the same y.
+    # Two separate hyperlinks can therefore become one apparent table rule.
+    # Require every actual segment to decorate text, including any continuous
+    # line beneath them; never exempt a real rule merely for spanning words.
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        return False
+    segments: List[Tuple[float, float]] = []
+    for drawing in drawings:
+        if drawing.get("dashes") not in (None, "", "[] 0"):
+            continue
+        for item in drawing.get("items", []):
+            if item[0] == "l":
+                p0, p1 = item[1:3]
+                if abs(p0.y - p1.y) > 0.6:
+                    continue
+                y, x0, x1 = (p0.y + p1.y) / 2, min(p0.x, p1.x), max(p0.x, p1.x)
+            elif item[0] == "re":
+                rect = item[1]
+                if rect.height > 1.6:
+                    continue
+                y, x0, x1 = (rect.y0 + rect.y1) / 2, rect.x0, rect.x1
+            else:
+                continue
+            if abs(y - rule_y) <= 0.6 and x1 - x0 >= 40.0:
+                if x0 >= rule_x0 - 0.6 and x1 <= rule_x1 + 0.6:
+                    segments.append((x0, x1))
+    return bool(
+        len(segments) >= 2
+        and abs(min(x0 for x0, _ in segments) - rule_x0) <= 0.6
+        and abs(max(x1 for _, x1 in segments) - rule_x1) <= 0.6
+        and all(underlines_span(x0, x1) for x0, x1 in segments)
+    )
 
 
 def _rule_pixel_coverage(
@@ -1939,6 +2106,46 @@ def _reference_region_bboxes(
         heading_bbox[0] >= midpoint - gutter_tolerance
         and heading_bbox[2] > midpoint + gutter_tolerance
     )
+    # A short heading also sits in the left half of a single-column page.
+    # Require source text lines in both columns before treating the opposite
+    # column above that heading as bibliography.  Use line boxes so PDF text
+    # blocks that merge the two reading columns still expose their geometry.
+    source_columns: Dict[str, List[BBox]] = {"left": [], "right": []}
+    for raw_block in page.get_text("dict").get("blocks", []):
+        if raw_block.get("type") != 0:
+            continue
+        for line in raw_block.get("lines", []):
+            bbox = line.get("bbox")
+            text = " ".join(span.get("text", "") for span in line.get("spans", []))
+            if (
+                bbox is None
+                or len(text.strip()) < 20
+                or bbox[1] < height * 0.05
+                or bbox[3] > height * 0.95
+            ):
+                continue
+            if (
+                bbox[0] < midpoint - gutter_tolerance
+                and bbox[2] <= midpoint + gutter_tolerance
+            ):
+                source_columns["left"].append(tuple(bbox))
+            elif (
+                bbox[0] >= midpoint - gutter_tolerance
+                and bbox[2] > midpoint + gutter_tolerance
+            ):
+                source_columns["right"].append(tuple(bbox))
+    # Isolated running titles and short citation tails can occupy opposite
+    # halves of a single text column. Require multiple shared reading rows;
+    # repeated fragments on the same physical row count only once.
+    paired_rows: Dict[str, set[float]] = {"left": set(), "right": set()}
+    for left in source_columns["left"]:
+        for right in source_columns["right"]:
+            if min(left[3], right[3]) <= max(left[1], right[1]):
+                continue
+            paired_rows["left"].add(round((left[1] + left[3]) / 2.0, 1))
+            paired_rows["right"].add(round((right[1] + right[3]) / 2.0, 1))
+    if any(len(rows) < 2 for rows in paired_rows.values()):
+        return [(0.0, reference_y - 4.0, width, height)]
     if narrow_heading and heading_in_left_column:
         return [
             (0.0, reference_y - 4.0, midpoint, height),
@@ -2781,6 +2988,7 @@ def inspect_translation(
         _combine_list_continuation_translation_items,
         _page_looks_like_reference_continuation,
         _reference_section_start_y,
+        _visual_regions_for_page,
         expand_bbox,
         open_pdf_detached,
         prepare_translation_units,
@@ -2931,6 +3139,23 @@ def inspect_translation(
                 )
             table_bands.extend(_line_table_bboxes(translated_page))
             table_bands.extend(structural_table_regions.get(index, ()))
+
+            try:
+                translated_graphic_regions = _visual_regions_for_page(
+                    translated_page,
+                    blocks=translated_page.get_text("dict").get("blocks", []),
+                )
+            except Exception:
+                translated_graphic_regions = []
+            issues.extend(
+                _text_visual_overlap_issues(
+                    original_page,
+                    translated_page,
+                    page_number,
+                    original_visual_regions=raw_graphic_regions,
+                    translated_visual_regions=translated_graphic_regions,
+                )
+            )
             reference_regions = (
                 carried_reference_regions
                 if carried_reference_regions is not None

@@ -1,0 +1,35 @@
+{
+  "version": "1.0.0",
+  "sampling": {"front_pages": 16, "spread_pages": 4},
+  "geometry": {"min_line_width_ratio": 0.18, "wide_line_ratio": 0.6, "wide_weight_ratio": 0.45, "wide_line_min": 3, "identity_top_ratio": 0.14, "identity_bottom_ratio": 0.88, "identity_pages": 3},
+  "policies": {
+    "conservative": {"caption_extra_height": 36.0, "min_caption_font_size": 3.8, "warn_complex_floats": false},
+    "conference": {"caption_extra_height": 46.0, "min_caption_font_size": 3.6, "warn_complex_floats": true},
+    "compact": {"caption_extra_height": 40.0, "min_caption_font_size": 3.8, "warn_complex_floats": true},
+    "article": {"caption_extra_height": 36.0, "min_caption_font_size": 3.8, "warn_complex_floats": true, "anchor_article_structure": true, "preserve_code": true},
+    "book": {"caption_extra_height": 36.0, "min_caption_font_size": 3.8, "warn_complex_floats": true, "source_chapter_fonts": true, "preserve_code": true, "anchor_contents": true}
+  },
+  "families": [
+    {"name": "nature_portfolio", "kind": "journal", "policy": "conservative", "adapter": "nature", "markers": [], "examples": ["Nature", "Nature Computational Science", "Nature Communications"]},
+    {"name": "acl_anthology", "kind": "conference", "policy": "conference", "columns": [2, 3], "markers": ["association for computational linguistics", "proceedings of[^\\n]{0,150}(?:acl|emnlp|naacl)", "(?:acl|emnlp|naacl)[^\\n]{0,80}proceedings"], "examples": ["ACL", "EMNLP", "NAACL"]},
+    {"name": "acm_two_column", "kind": "conference", "policy": "conference", "columns": [2, 3], "markers": ["permission to make digital", "acm reference format", "^acm(?: conference| transactions| proceedings|\\s+\\d)"], "examples": ["ACM proceedings"]},
+    {"name": "ieee_two_column", "kind": "conference", "policy": "conference", "columns": [2, 3], "markers": ["^ieee(?:\\s|/)", "©[^\\n]{0,80}ieee", "index terms[—–:-]"], "examples": ["IEEE proceedings", "CVPR", "ICCV"]},
+    {"name": "neurips", "kind": "conference", "policy": "conservative", "markers": ["(?:conference|advances) (?:on|in) neural information processing systems"], "examples": ["NeurIPS", "NIPS"]},
+    {"name": "icml", "kind": "conference", "policy": "conference", "markers": ["(?:proceedings of|international conference on)[^\\n]{0,100}machine learning", "^proceedings of machine learning research"], "examples": ["ICML", "PMLR"]},
+    {"name": "iclr", "kind": "conference", "policy": "conservative", "markers": ["published as a conference paper at iclr", "international conference on learning representations"], "examples": ["ICLR"]},
+    {"name": "springer_lncs", "kind": "conference", "policy": "compact", "markers": ["lecture notes in computer science", "^lncs\\b", "^lnai\\b"], "examples": ["Springer LNCS", "ECCV"]},
+    {"name": "elsevier_journal", "kind": "journal", "policy": "article", "markers": ["^contents lists available at sciencedirect", "^journal homepage:", "^elsevier\\b", "preprint submitted to elsevier", "^https?://(?:dx\\.)?doi.org/10.1016/"], "examples": ["Elsevier single column", "Elsevier double column"]},
+    {"name": "springer_journal", "kind": "journal", "policy": "conservative", "markers": ["^springer(?: nature)?\\b", "^https?://(?:dx\\.)?doi.org/10.1007/"], "examples": ["Springer journals"]},
+    {"name": "wiley_journal", "kind": "journal", "policy": "conservative", "markers": ["^wiley(?: online library|[- ]vch|\\b)", "^https?://(?:dx\\.)?doi.org/10.1002/"], "examples": ["Wiley journals"]},
+    {"name": "acs_journal", "kind": "journal", "policy": "conservative", "markers": ["^acs publications", "^pubs.acs.org/", "^https?://(?:dx\\.)?doi.org/10.1021/"], "examples": ["ACS chemistry journals"]},
+    {"name": "rsc_journal", "kind": "journal", "policy": "conservative", "markers": ["^royal society of chemistry", "^rsc.li/", "^https?://(?:dx\\.)?doi.org/10.1039/"], "examples": ["RSC chemistry journals"]},
+    {"name": "plos_journal", "kind": "journal", "policy": "conservative", "markers": ["^plos (?:one|biology|medicine|genetics|computational biology|pathogens)", "^https?://(?:dx\\.)?doi.org/10.1371/"], "examples": ["PLOS ONE", "PLOS Biology"]},
+    {"name": "frontiers_journal", "kind": "journal", "policy": "conservative", "markers": ["^frontiers in [a-z ]+", "^https?://(?:dx\\.)?doi.org/10.3389/"], "examples": ["Frontiers journals"]},
+    {"name": "science_journal", "kind": "journal", "policy": "conservative", "markers": ["^science(?: advances| robotics| translational medicine)?\\s*$", "^https?://(?:dx\\.)?doi.org/10.1126/"], "examples": ["Science", "Science Advances"]},
+    {"name": "cell_journal", "kind": "journal", "policy": "conservative", "markers": ["^cell(?: reports| systems| chemical biology| metabolism)?\\s*$"], "examples": ["Cell", "Cell Reports"]},
+    {"name": "academic_book", "kind": "book", "policy": "book", "adapter": "book", "markers": [], "examples": ["Academic textbooks", "Technical books", "Monographs"]},
+    {"name": "generic_two_column", "kind": "generic", "policy": "conservative", "markers": [], "examples": ["Unidentified double-column documents"]},
+    {"name": "single_column", "kind": "generic", "policy": "conservative", "markers": [], "examples": ["Unidentified single-column documents"]},
+    {"name": "unknown", "kind": "generic", "policy": "conservative", "markers": [], "examples": ["Scans and unsupported geometry"]}
+  ]
+}

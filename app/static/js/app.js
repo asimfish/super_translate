@@ -38,7 +38,7 @@ function authHeaders(extra = {}) {
 
 // === Login ===
 let loginPromptPromise = null;
-let providerSettingsReturnFocus = null;
+
 
 function focusableElements(container) {
   return Array.from(container?.querySelectorAll(
@@ -159,13 +159,14 @@ async function apiFetch(url, options = {}, retryAuth = true) {
 }
 
 const api = {
-  async listPapers(search = '', status = '', tag = '', offset = 0, limit = 50) {
+  async listPapers(search = '', status = '', tag = '', offset = 0, limit = 50, sort = 'recent') {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     if (status) params.set('status', status);
     if (tag) params.set('tag', tag);
     params.set('offset', offset);
     params.set('limit', limit);
+    params.set('sort', sort);
     const res = await apiFetch(`/api/papers/?${params}`);
     if (!res.ok) throw new Error(await errorDetail(res, 'Failed to load papers'));
     return res.json();
@@ -287,15 +288,12 @@ const api = {
   },
   async listProviderModels() {
     const res = await apiFetch('/api/provider-credentials/models');
-    if (!res.ok) throw new Error(await errorDetail(res, '模型列表加载失败'));
+    if (!res.ok) throw new Error(await errorDetail(res, '模型目录加载失败'));
     return res.json();
   },
   async refreshProviderModels(provider) {
-    const res = await apiFetch(
-      `/api/provider-credentials/models/${encodeURIComponent(provider)}/refresh`,
-      { method: 'POST' }
-    );
-    if (!res.ok) throw new Error(await errorDetail(res, '模型列表更新失败'));
+    const res = await apiFetch(`/api/provider-credentials/models/${encodeURIComponent(provider)}/refresh`, { method: 'POST' });
+    if (!res.ok) throw new Error(await errorDetail(res, '模型目录更新失败'));
     return res.json();
   },
   async saveProviderCredential(provider, payload) {
@@ -356,137 +354,147 @@ const api = {
 };
 
 // === Provider credentials ===
+let providerSettingsReturnFocus = null;
+let providerCatalogTimer = null;
+let providerCatalogGeneration = 0;
+let providerCatalogRequest = null;
+const providerCatalogs = new Map();
+
 function hideProviderSettings() {
   const modal = document.getElementById('provider-settings-modal');
   const wasOpen = modal && !modal.classList.contains('hidden');
   modal?.classList.add('hidden');
   modal?.querySelectorAll('.provider-key').forEach(input => { input.value = ''; });
+  providerCatalogGeneration++;
+  if (providerCatalogTimer) clearInterval(providerCatalogTimer);
+  providerCatalogTimer = null;
+  providerCatalogRequest = null;
+  providerCatalogs.clear();
+  modal?.querySelectorAll('.provider-row').forEach(row => {
+    row.dataset.modelDirty = '';
+    const select = row.querySelector('.provider-model');
+    select.replaceChildren();
+    ensureProviderModel(select, row.dataset.defaultModel);
+    row.querySelector('.provider-state').textContent = '未配置';
+    row.querySelector('.provider-state').classList.remove('configured');
+    row.querySelector('.provider-delete').disabled = true;
+    row.querySelector('.provider-model-meta').textContent = '等待加载模型目录';
+    row.querySelector('.provider-model-custom').value = '';
+    row.querySelector('.provider-model-search').value = '';
+  });
   const error = document.getElementById('provider-settings-error');
   if (error) error.textContent = '';
-  if (wasOpen && providerSettingsReturnFocus?.isConnected) {
-    providerSettingsReturnFocus.focus();
-  }
+  if (wasOpen && providerSettingsReturnFocus?.isConnected) providerSettingsReturnFocus.focus();
   providerSettingsReturnFocus = null;
+}
+
+function ensureProviderModel(select, model) {
+  if (![...select.options].some(option => option.value === model)) {
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = `${model} · 当前配置`;
+    select.append(option);
+  }
+  select.value = model;
 }
 
 function renderProviderCredentials(statuses) {
   for (const status of statuses) {
-    const row = document.querySelector(`.provider-row[data-provider="${status.provider}"]`);
+    const row = [...document.querySelectorAll('.provider-row')]
+      .find(item => item.dataset.provider === status.provider);
     if (!row) continue;
     const state = row.querySelector('.provider-state');
-    const model = row.querySelector('.provider-model');
-    const remove = row.querySelector('.provider-delete');
-    if (state) {
-      state.textContent = status.configured
-        ? `已配置 ${status.key_hint || ''}`.trim()
-        : '未配置';
-      state.classList.toggle('configured', status.configured);
+    state.textContent = status.configured ? `已配置 ${status.key_hint || ''}`.trim() : '未配置';
+    state.classList.toggle('configured', status.configured);
+    if (!row.dataset.modelDirty && status.model) {
+      ensureProviderModel(row.querySelector('.provider-model'), status.model);
     }
-    if (model && status.model) model.value = status.model;
-    if (remove) remove.disabled = status.source !== 'personal';
+    row.querySelector('.provider-delete').disabled = status.source !== 'personal';
   }
 }
 
 function providerCatalogTimestamp(value) {
   if (!value) return '';
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toLocaleString('zh-CN', { hour12: false });
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString('zh-CN', { hour12: false });
 }
 
 function renderProviderModelCatalogs(catalogs) {
-  const groupDefinitions = [
-    ['latest', '最新推荐'],
-    ['quality', '质量优先'],
-    ['balanced', '均衡'],
-    ['economy', '低成本 / 高速'],
-    ['specialized', '专项模型'],
-    ['legacy', '兼容旧版'],
-    ['account', '账号可用'],
-  ];
+  const labels = { listed: '账号接口列出', previously_listed: '上次查询',
+    reference: '内置参考', custom: '自定义 / 当前配置' };
   for (const catalog of catalogs) {
-    const row = document.querySelector(`.provider-row[data-provider="${catalog.provider}"]`);
+    const row = [...document.querySelectorAll('.provider-row')]
+      .find(item => item.dataset.provider === catalog.provider);
     if (!row) continue;
+    providerCatalogs.set(catalog.provider, catalog);
     const select = row.querySelector('.provider-model');
-    if (!select) continue;
-    const selected = catalog.selected_model || select.value || catalog.default_model;
+    const selected = (row.dataset.modelDirty ? select.value : catalog.selected_model)
+      || select.value || catalog.default_model;
+    const search = row.querySelector('.provider-model-search').value.trim().toLowerCase();
+    const metadata = new Map((catalog.model_options || []).map(option => [option.id, option]));
     const models = [...new Set([selected, ...(catalog.models || [])].filter(Boolean))];
-    const guidance = new Map(
-      (catalog.model_options || []).map(option => [option.id, option])
-    );
-    const groupedModels = new Map(groupDefinitions.map(([id]) => [id, []]));
+    const groups = new Map();
     for (const model of models) {
-      const metadata = guidance.get(model) || {
-        id: model,
-        group: 'account',
-        description: '当前账号可用',
-      };
-      const group = groupedModels.has(metadata.group) ? metadata.group : 'account';
-      groupedModels.get(group).push({ ...metadata, id: model });
+      if (search && model !== selected && !model.toLowerCase().includes(search)) continue;
+      const info = metadata.get(model) || {};
+      const availability = info.availability || 'reference';
+      if (!groups.has(availability)) {
+        const group = document.createElement('optgroup');
+        group.label = labels[availability] || '内置参考';
+        groups.set(availability, group);
+      }
+      const option = document.createElement('option');
+      option.value = model;
+      option.textContent = info.description ? `${model} · ${info.description}` : model;
+      groups.get(availability).append(option);
     }
-    const groups = groupDefinitions.flatMap(([groupId, groupLabel]) => {
-      const entries = groupedModels.get(groupId);
-      if (!entries.length) return [];
-      const group = document.createElement('optgroup');
-      group.label = groupLabel;
-      group.replaceChildren(...entries.map(metadata => {
-        const option = document.createElement('option');
-        option.value = metadata.id;
-        option.textContent = metadata.description
-          ? `${metadata.id} · ${metadata.description}`
-          : metadata.id;
-        option.title = metadata.description || metadata.id;
-        return option;
-      }));
-      return [group];
-    });
-    select.replaceChildren(...groups);
-    select.value = selected;
-
+    select.replaceChildren(...groups.values());
+    ensureProviderModel(select, selected);
     const refreshed = providerCatalogTimestamp(catalog.refreshed_at);
-    const verified = catalog.catalog_verified_on
-      ? `内置目录核对 ${catalog.catalog_verified_on}`
-      : '';
-    const meta = row.querySelector('.provider-model-meta');
-    if (meta) {
-      meta.textContent = catalog.warning || (
-        refreshed ? `账号模型更新 ${refreshed}` : verified
-      );
-    }
-    const refresh = row.querySelector('.provider-model-refresh');
-    if (refresh) {
-      refresh.title = [
-        catalog.warning || `${catalog.label} 模型列表：${catalog.source}`,
-        verified,
-        refreshed ? `账号模型更新 ${refreshed}` : '',
-      ].filter(Boolean).join('；');
-    }
+    const source = { provider: '账号接口', cache: '账号目录缓存', stale: '保留上次目录',
+      curated: '内置参考 · 保存密钥后自动查询' }[catalog.source] || '模型目录';
+    row.querySelector('.provider-model-meta').textContent = catalog.warning
+      || `${source}${refreshed ? ` · ${refreshed}` : ''} · ${models.length} 个模型`;
+    row.querySelector('.provider-model-refresh').title = '立即查询官方模型接口，不修改已保存模型';
   }
 }
 
 async function refreshProviderCredentials() {
+  const generation = providerCatalogGeneration;
+  if (providerCatalogRequest?.generation === generation) return providerCatalogRequest.promise;
   const error = document.getElementById('provider-settings-error');
   if (error) error.textContent = '';
-  try {
-    const [catalogs, statuses] = await Promise.all([
-      api.listProviderModels(),
-      api.listProviderCredentials(),
-    ]);
-    renderProviderModelCatalogs(catalogs);
-    renderProviderCredentials(statuses);
-  } catch (err) {
-    if (error) error.textContent = err.message;
-  }
+  const promise = (async () => {
+    try {
+      const [catalogs, statuses] = await Promise.all([
+        api.listProviderModels(), api.listProviderCredentials(),
+      ]);
+      if (generation !== providerCatalogGeneration) return;
+      renderProviderModelCatalogs(catalogs);
+      renderProviderCredentials(statuses);
+    } catch (err) {
+      if (generation === providerCatalogGeneration && error) error.textContent = err.message;
+    } finally {
+      if (providerCatalogRequest?.generation === generation) providerCatalogRequest = null;
+    }
+  })();
+  providerCatalogRequest = { generation, promise };
+  return promise;
 }
 
 async function showProviderSettings() {
   const modal = document.getElementById('provider-settings-modal');
-  const username = localStorage.getItem('paperChinaUsername') || '本地管理员';
   const user = document.getElementById('provider-settings-user');
-  if (user) user.textContent = username;
+  if (user) user.textContent = localStorage.getItem('paperChinaUsername') || '本地管理员';
   providerSettingsReturnFocus = document.activeElement;
   modal?.classList.remove('hidden');
-  focusableElements(modal)[0]?.focus();
+  modal?.querySelector('button')?.focus();
+  if (providerCatalogTimer) clearInterval(providerCatalogTimer);
+  providerCatalogTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && !modal.classList.contains('hidden')) {
+      refreshProviderCredentials();
+    }
+  }, 60000);
   await refreshProviderCredentials();
 }
 
@@ -495,24 +503,32 @@ async function saveProviderCredential(e) {
   if (!row) return;
   const provider = row.dataset.provider;
   const keyInput = row.querySelector('.provider-key');
-  const modelInput = row.querySelector('.provider-model');
+  const custom = row.querySelector('.provider-model-custom');
+  const selected = () => custom.value.trim() || row.querySelector('.provider-model').value.trim();
+  const model = selected();
+  const key = keyInput.value.trim();
+  const generation = providerCatalogGeneration;
   const button = e.target;
-  const payload = { model: modelInput?.value.trim() || null };
-  if (keyInput?.value.trim()) payload['api_key'] = keyInput.value.trim();
+  const payload = { model: model || null };
+  if (key) payload['api_key'] = key;
   button.disabled = true;
   try {
     const status = await api.saveProviderCredential(provider, payload);
-    keyInput.value = '';
+    if (generation !== providerCatalogGeneration) return;
+    if (keyInput.value.trim() === key) keyInput.value = '';
+    if (selected() === model) {
+      row.dataset.modelDirty = '';
+      custom.value = '';
+      ensureProviderModel(row.querySelector('.provider-model'), status.model);
+    }
     renderProviderCredentials([status]);
     toastSuccess(`${status.label} API 配置已保存`);
-    api.refreshProviderModels(provider)
-      .then(catalog => {
-        renderProviderModelCatalogs([catalog]);
-        if (catalog.warning) toastError(catalog.warning);
-      })
-      .catch(err => toastError(err.message));
+    const catalog = await api.refreshProviderModels(provider);
+    if (generation !== providerCatalogGeneration) return;
+    renderProviderModelCatalogs([catalog]);
+    if (catalog.warning) toastError(catalog.warning);
   } catch (err) {
-    toastError(err.message);
+    if (generation === providerCatalogGeneration) toastError(err.message);
   } finally {
     button.disabled = false;
   }
@@ -522,14 +538,16 @@ async function refreshProviderModelsForRow(e) {
   const row = e.target.closest('.provider-row');
   if (!row) return;
   const button = e.target;
+  const generation = providerCatalogGeneration;
   button.disabled = true;
   try {
     const catalog = await api.refreshProviderModels(row.dataset.provider);
+    if (generation !== providerCatalogGeneration) return;
     renderProviderModelCatalogs([catalog]);
     if (catalog.warning) toastError(catalog.warning);
     else toastSuccess(`${catalog.label} 模型列表已更新`);
   } catch (err) {
-    toastError(err.message);
+    if (generation === providerCatalogGeneration) toastError(err.message);
   } finally {
     button.disabled = false;
   }
@@ -596,7 +614,8 @@ async function loadPapers() {
   }
 
   try {
-    const data = await api.listPapers(search, status, tag, pagination.offset, pagination.limit);
+    const sort = document.getElementById('library-sort')?.value || 'recent';
+    const data = await api.listPapers(search, status, tag, pagination.offset, pagination.limit, sort);
     papers = data.papers;
     pagination.total = data.total;
     renderPaperList();
@@ -605,7 +624,31 @@ async function loadPapers() {
   } catch (e) {
     console.error('Failed to load papers:', e);
     const container = document.getElementById('paper-list');
-    if (container) container.innerHTML = '<div class="empty-state"><p style="color:var(--error)">加载失败</p><button class="btn btn-primary" onclick="loadPapers()">重试</button></div>';
+    if (container) {
+      const state = document.createElement('div');
+      state.className = 'empty-state';
+      state.setAttribute('role', 'alert');
+      const message = document.createElement('p');
+      message.style.color = 'var(--error)';
+      const detail = typeof e?.message === 'string' ? e.message : '';
+      if (detail === 'Remote API access requires PAPER_CHINA_API_TOKEN') {
+        message.textContent = '此服务尚未配置远程访问，论文接口已拒绝请求。请在运行服务的电脑上直接访问本机地址，或请管理员配置访问令牌后再连接。反复重试不能解除此限制。';
+      } else if (e instanceof TypeError && /fetch|network|load failed/i.test(detail)) {
+        message.textContent = '无法连接服务。请确认服务或访问隧道正在运行，并核对页面端口；恢复连接后点击重试。';
+      } else if (detail === 'Invalid or missing API token') {
+        message.textContent = '登录凭证无效或已过期，请重新登录后重试。';
+      } else {
+        message.textContent = `论文列表加载失败：${detail || '未知错误，请稍后重试'}`;
+      }
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'btn btn-primary';
+      retry.textContent = '重试';
+      retry.addEventListener('click', () => loadPapers());
+      state.append(message, retry);
+      // Error details are untrusted text, never HTML or an executable handler.
+      container.replaceChildren(state);
+    }
   } finally {
     // Hide skeleton after data loads
     if (skeleton) skeleton.classList.add('hidden');
@@ -617,7 +660,12 @@ async function updateStats() {
     const stats = await api.getStats();
     const statsEl = document.getElementById('stats-bar');
     if (statsEl) {
-      statsEl.textContent = `${stats.total_papers} 篇论文 | ${stats.completed_translations} 已翻译`;
+      const total = document.createElement('span');
+      const completed = document.createElement('span');
+      total.textContent = `${stats.total_papers} 篇论文`;
+      completed.textContent = `${stats.completed_translations} 篇已翻译`;
+      completed.className = 'stats-completed';
+      statsEl.replaceChildren(total, completed);
     }
   } catch (e) {
     // ignore
@@ -669,6 +717,7 @@ async function batchTranslate() {
 
 function debounceSearch() {
   clearTimeout(searchTimer);
+  pagination.offset = 0;
   searchTimer = setTimeout(loadPapers, 300);
 }
 
@@ -683,42 +732,61 @@ function renderPaperList() {
   }
   empty.classList.add('hidden');
 
-  container.innerHTML = papers.map(p => `
-    <article class="paper-card" data-paper-id="${esc(p.id)}" data-action="open-reader">
-      <h2 class="title"><button type="button" class="paper-card-link" data-action="open-reader" data-paper-id="${esc(p.id)}" title="${esc(p.title)}" aria-label="打开论文：${esc(p.title)}">${esc(p.title)}</button></h2>
+  container.innerHTML = papers.map((p, index) => {
+    const tags = (Array.isArray(p.tags) ? p.tags : String(p.tags || '').split(','))
+      .map(t => String(t).trim()).filter(Boolean);
+    const progress = Math.max(0, Math.min(100, Math.round((Number(p.translation_progress) || 0) * 100)));
+    const day = libraryDay(p.last_imported_at || p.created_at);
+    const previous = index ? libraryDay(papers[index - 1].last_imported_at || papers[index - 1].created_at) : '';
+    const dateGroup = document.getElementById('library-sort')?.value !== 'title' && day !== previous;
+    const versioned = Number(p.version_count) > 1;
+    const displayTitle = versioned ? `内容版本 ${Number(p.version_number)} · ${p.title}` : p.title;
+    return `
+    ${dateGroup ? `<div class="library-date-group">${esc(day)}</div>` : ''}
+    <article class="paper-card" tabindex="0" role="link" aria-label="打开 ${esc(displayTitle)}" data-paper-id="${esc(p.id)}" data-action="open-reader">
+      <div class="paper-file-mark" aria-hidden="true">PDF</div>
+      <div class="paper-content">
+      <h2 class="title"><button type="button" class="paper-card-link" data-action="open-reader" data-paper-id="${esc(p.id)}" title="${esc(p.title)}" aria-label="打开论文：${esc(p.title)}">${esc(displayTitle)}</button></h2>
+      <div class="paper-source-name" title="${esc(p.original_filename || '')}">${esc(p.original_filename || '')}</div>
       <div class="meta">
-        <span>${p.page_count} 页</span>
+        <span>${esc(String(p.page_count))} 页</span>
         <span>${formatSize(p.file_size)}</span>
-        <span>${formatDate(p.created_at)}</span>
+        <span>最近导入 ${formatDate(p.last_imported_at || p.created_at)}</span>
+        ${Number(p.import_count) > 1 ? `<span class="document-badge">导入 ${Number(p.import_count)} 次 · 已去重</span>` : ''}
+        ${versioned ? `<span class="document-badge">不同内容 · ${Number(p.version_number)}/${Number(p.version_count)} · 首次导入 ${formatDate(p.created_at)}</span>` : ''}
       </div>
+      ${tags.length ? `<div class="tags-row">${tags.map(t => `<button type="button" class="tag-chip" data-action="filter-by-tag" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
+      ${['failed', 'repairing'].includes(p.translation_status) && p.translation_error ? `<p class="paper-error" title="${esc(p.translation_error)}">${esc(p.translation_error)}</p>` : ''}
+      ${p.translation_status === 'repairing' ? `<p class="paper-error" title="${esc(p.translation_error || '')}">自动修复已暂停，尚未通过质检；已保留译文草稿，引擎更新后自动重试</p>` : ''}
+      </div>
+      <div class="paper-state">
       <span class="status status-${sanitizeClass(p.translation_status)}">${statusLabel(p.translation_status)}</span>
       ${p.translation_status === 'translating' ? `
-        <div class="progress-bar" style="margin-top:8px" role="progressbar" aria-label="${esc(p.title)} 翻译进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(p.translation_progress * 100)}">
-          <div class="progress-fill" style="width:${Math.round(p.translation_progress * 100)}%"></div>
+        <div class="paper-progress-label">${progress}% · ${esc(p.translation_stage || '翻译中')}</div>
+        <div class="progress-bar" role="progressbar" aria-label="翻译进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
+          <div class="progress-fill" style="width:${progress}%"></div>
         </div>
       ` : ''}
-      ${p.translation_status === 'completed' ? `
-        <div class="meta" style="margin-top:4px;color:var(--success)">✓ 翻译完成 ${formatDate(p.updated_at)}</div>
-      ` : ''}
-      ${p.translation_status === 'failed' && p.translation_error ? `
-        <div class="meta" style="margin-top:4px;color:var(--error);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.translation_error)}">⚠ ${esc(p.translation_error)}</div>
-      ` : ''}
-      ${p.translation_status === 'repairing' ? `
-        <div class="meta" style="margin-top:4px;color:var(--warning);font-size:11px" title="${esc(p.translation_error || '')}">任务已停止，不占用翻译队列；已保留最佳译文，修复发布后自动重试</div>
-      ` : ''}
-      ${p.tags ? `<div class="meta tags-row" style="margin-top:6px"><span aria-hidden="true">🏷</span> ${p.tags.split(',').map(t => `<button type="button" class="tag-chip" data-action="filter-by-tag" data-tag="${esc(t.trim())}">${esc(t.trim())}</button>`).join(' ')}</div>` : ''}
+      </div>
       <div class="actions" data-action="stop-propagation">
         ${p.translation_status === 'pending' || p.translation_status === 'failed' ?
-          `<button class="btn btn-sm btn-primary" data-action="quick-translate" data-paper-id="${esc(p.id)}">翻译</button>` : ''}
+          `<button class="btn btn-sm btn-primary" data-action="quick-translate" data-paper-id="${esc(p.id)}">${p.translation_status === 'failed' ? '重试翻译' : '开始翻译'}</button>` : ''}
+        ${p.translation_status === 'completed' ? `<button class="btn btn-sm btn-primary" data-action="open-reader" data-paper-id="${esc(p.id)}">对照阅读</button>` : ''}
         ${p.has_translated ?
-          `<button class="btn btn-sm btn-outline" data-action="download-translated-by-id" data-paper-id="${esc(p.id)}">译文</button>` : ''}
+          `<button class="btn btn-sm btn-outline" data-action="download-translated-by-id" data-paper-id="${esc(p.id)}">下载译文</button>` : ''}
         ${p.has_dual ?
           `<button class="btn btn-sm btn-outline" data-action="download-dual-by-id" data-paper-id="${esc(p.id)}">双语</button>` : ''}
-        <button class="btn btn-sm btn-outline" data-action="confirm-delete" data-paper-id="${esc(p.id)}" data-paper-title="${esc(p.title)}">删除</button>
+        <button class="btn btn-sm btn-text delete-action" data-action="confirm-delete" data-paper-id="${esc(p.id)}" data-paper-title="${esc(p.title)}">删除</button>
       </div>
     </article>
-  `).join('');
+  `; }).join('');
 }
+
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Enter' || !event.target.matches('.paper-card')) return;
+  event.preventDefault();
+  openReader(event.target.dataset.paperId);
+});
 
 function renderPagination() {
   const container = document.getElementById('pagination');
@@ -1489,12 +1557,14 @@ async function openReader(paperId) {
     // Show error details and retry button for failed translations
     const placeholderIcon = placeholder.querySelector('.placeholder-icon');
     const placeholderText = placeholder.querySelector('p');
-    if (currentPaper.translation_status === 'failed') {
+    if (['failed', 'repairing'].includes(currentPaper.translation_status)) {
       if (placeholderIcon) placeholderIcon.textContent = '⚠️';
       if (placeholderText) {
+        const failureLabel = currentPaper.translation_status === 'repairing'
+          ? '自动修复已暂停（未通过），引擎更新后自动重试' : '翻译失败';
         placeholderText.textContent = currentPaper.translation_error
-          ? `翻译失败: ${currentPaper.translation_error}`
-          : '翻译失败';
+          ? `${failureLabel}: ${currentPaper.translation_error}`
+          : failureLabel;
         placeholderText.style.color = 'var(--error)';
       }
     } else {
@@ -1590,8 +1660,26 @@ async function loadPdfDocument(panel, url, loadId = currentLoadId) {
   } catch (e) {
     container.textContent = '';
     const errDiv = document.createElement('div');
-    errDiv.style.cssText = 'color:#f44336;padding:20px;';
-    errDiv.textContent = '加载失败: ' + (e.message || '未知错误');
+    errDiv.className = 'pdf-load-error';
+    errDiv.setAttribute('role', 'alert');
+    const status = Number(e?.status || e?.statusCode || 0);
+    const detail = String(e?.message || '').trim();
+    let message = 'PDF 预览加载失败，请检查文件后重试。';
+    if (status === 401 || status === 403 || /401|403|unauthori[sz]ed|forbidden/i.test(detail)) {
+      message = 'PDF 预览请求被拒绝，请重新登录或检查访问令牌后重试。';
+    } else if (/failed to fetch|network|load failed|接收数据失败/i.test(detail)) {
+      message = '无法连接 PDF 预览服务，请确认服务正在运行并检查网络后重试。';
+    } else if (/worker|pdf\.js|pdfjs|getdocument/i.test(detail)) {
+      message = 'PDF 阅读组件启动失败，请刷新页面或检查静态资源后重试。';
+    }
+    const text = document.createElement('p');
+    text.textContent = message;
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-primary btn-sm';
+    retry.textContent = '重试';
+    retry.addEventListener('click', () => void loadPdfDocument(panel, url, currentLoadId));
+    errDiv.append(text, retry);
     container.appendChild(errDiv);
   }
 }
@@ -2110,12 +2198,13 @@ function pollTranslationStatus(paperId) {
           }
           loadPapers();
         }, 1500);
-      } else if (paper.translation_status === 'failed') {
+      } else if (['failed', 'repairing'].includes(paper.translation_status)) {
         clearInterval(translationPollId);
         translationPollId = null;
         translationPollPaperId = null;
         fill.classList.remove('progress-fill-active', 'progress-fill-pending');
-        statusEl.textContent = `翻译失败 (${elapsedStr})`;
+        statusEl.textContent = paper.translation_status === 'repairing'
+          ? `自动修复已暂停（未通过），引擎更新后自动重试 (${elapsedStr})` : `翻译失败 (${elapsedStr})`;
         fill.style.background = 'var(--error)';
         loadPapers();
       } else if (paper.translation_status === 'repairing') {
@@ -2125,8 +2214,8 @@ function pollTranslationStatus(paperId) {
         fill.classList.remove('progress-fill-active', 'progress-fill-pending');
         setProgressValue(fill, Math.max(1, pct));
         fill.style.background = 'var(--warning)';
-        statusEl.textContent = '待修复（任务已停止，已保留最佳译文）';
-        addTransLog('任务已停止且不占用翻译队列；修复发布后会自动重试');
+        statusEl.textContent = '自动修复已暂停（未通过），引擎更新后自动重试';
+        addTransLog('自动修复已暂停；已保留草稿，引擎更新后自动重试');
         loadPapers();
       } else {
         const stage = paper.translation_stage || (waitingForProgress ? '准备翻译' : '翻译中');
@@ -2361,7 +2450,7 @@ async function downloadFile(url) {
     const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = objectUrl;
-    a.download = '';
+    a.download = documentDownloadName(res.headers.get('Content-Disposition'));
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
@@ -2567,7 +2656,8 @@ function formatDate(iso) {
 }
 
 function statusLabel(s) {
-  const map = { pending: '待翻译', translating: '翻译中', repairing: '待修复（任务已停止）', completed: '已完成', failed: '失败' };
+  const map = { pending: '待翻译', translating: '翻译中', completed: '已完成', failed: '失败',
+    repairing: '修复已暂停（未通过）', repair_pending: '修复已暂停（未通过）' };
   return map[s] || esc(s);
 }
 
@@ -2750,3 +2840,29 @@ document.addEventListener('DOMContentLoaded', () => {
   updateReaderModeButton();
   loadPapers();
 });
+
+// Mark drafts before refresh responses arrive; keep input and key values in the DOM only.
+document.getElementById('provider-settings-list')?.addEventListener('input', event => {
+  const row = event.target.closest('.provider-row');
+  if (!row) return;
+  if (event.target.matches('.provider-model-search')) {
+    const catalog = providerCatalogs.get(row.dataset.provider);
+    if (catalog) renderProviderModelCatalogs([catalog]);
+  } else if (event.target.matches('.provider-model, .provider-model-custom')) {
+    row.dataset.modelDirty = '1';
+  }
+});
+
+function libraryDay(value) {
+  if (!value) return '未注明时间';
+  const date = new Date(/(Z|[+-]\d\d:\d\d)$/.test(value) ? value : value + 'Z');
+  return Number.isNaN(date.getTime()) ? '未注明时间' : date.toLocaleDateString('zh-CN');
+}
+
+function documentDownloadName(disposition) {
+  const utf = disposition?.match(/filename\*=utf-8''([^;]+)/i);
+  const plain = disposition?.match(/filename="([^"]+)"/i);
+  let name = plain?.[1] || '论文.pdf';
+  if (utf) { try { name = decodeURIComponent(utf[1]); } catch { /* use safe fallback */ } }
+  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').trim() || '论文.pdf';
+}

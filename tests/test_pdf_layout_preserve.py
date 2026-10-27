@@ -1900,8 +1900,12 @@ class PreserveOriginalBlockTests(unittest.TestCase):
         protected, mapping = protect_text(line.text)
         self.assertIn("Hongsuck Seo et al.", protected)
         self.assertIn("Vo et al.", protected)
-        self.assertIn("2018", protected)
-        self.assertIn("2017", protected)
+        # Citation years are now protected numeric literals; author text must
+        # remain outside math and both years must restore byte-for-byte.
+        restored, missing = restore_text(protected, mapping)
+        self.assertFalse(missing)
+        self.assertIn("2018", restored)
+        self.assertIn("2017", restored)
         self.assertTrue(all("et al." not in value for value in mapping.values()))
         self.assertEqual(len(line.math_run_bboxes), 2)
 

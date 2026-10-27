@@ -45,6 +45,11 @@ class RetryRegressions(unittest.TestCase):
             module.parent.mkdir(parents=True)
             prompt = root / "pdf_zh_translator/prompt_layout.py"
             prompt.parent.mkdir()
+            for relative in recovery._REVISION_FILES:
+                original = Path(recovery.__file__).resolve().parents[2] / relative
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(original.read_bytes())
             prompt.write_text("before")
             try:
                 with patch.object(recovery, "__file__", str(module)):

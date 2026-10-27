@@ -1,0 +1,408 @@
+{
+  "schema_version": 1,
+  "registry_version": "1.0.0",
+  "indexing": "zero-based selected pages",
+  "cases": [
+    {
+      "id": "adam",
+      "source_file": "adam.pdf",
+      "source_url": "https://arxiv.org/pdf/1412.6980",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "eab9c73ae2ceda884b94830bda99312254bac4806f6c9f045cbab90721ecda31",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "iclr",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "attention",
+      "source_file": "attention.pdf",
+      "source_url": "https://arxiv.org/pdf/1706.03762",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "neurips",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "bahdanau",
+      "source_file": "bahdanau.pdf",
+      "source_url": "https://arxiv.org/pdf/1409.0473",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "84801c8410da51b449d379d2fa4939a416123f2c93991077a680f863026022a7",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "iclr",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "batchnorm",
+      "source_file": "batchnorm.pdf",
+      "source_url": "https://arxiv.org/pdf/1502.03167",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "bdc69e0b568f41d8d3181cc9077a461f58fcdd1c70c9f49efe60a05ee6109655",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "generic_two_column",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "bert",
+      "source_file": "bert.pdf",
+      "source_url": "https://arxiv.org/pdf/1810.04805",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "generic_two_column",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "clip",
+      "source_file": "clip.pdf",
+      "source_url": "https://arxiv.org/pdf/2103.00020",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "6478b6e571a7d6fcd846d8ef77bfd60c285f1986abb8f475eedc43de403074f5",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "generic_two_column",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "ddpm",
+      "source_file": "ddpm.pdf",
+      "source_url": "https://arxiv.org/pdf/2006.11239",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "aee5e07a802e8dfd2a386374c94fd61d1d056cb7e1e0fec4f28e8120ff5d8505",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "neurips",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "dqn",
+      "source_file": "dqn.pdf",
+      "source_url": "https://arxiv.org/pdf/1312.5602",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "8db04120cace173151c77e0faa6f3eaa4207009da66b9417597dc70bfee56d9c",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "single_column",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "faster_rcnn",
+      "source_file": "faster_rcnn.pdf",
+      "source_url": "https://arxiv.org/pdf/1506.01497",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "f2630182ccfabd6fc89ac20270b4daf15a0ca849298a7db1e5d124ca443051f1",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "generic_two_column",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "gan",
+      "source_file": "gan.pdf",
+      "source_url": "https://arxiv.org/pdf/1406.2661",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "ff5819e3a7b713c3bd3107b7de3d51fe0a347aa5d8444f0efdcf2345ef0a8b63",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "single_column",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "gpt3",
+      "source_file": "gpt3.pdf",
+      "source_url": "https://arxiv.org/pdf/2005.14165",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "97fd272f1fdfc18677462d0292f5fbf26ca86b4d1b485c2dba03269b643a0e83",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "single_column",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "instructgpt",
+      "source_file": "instructgpt.pdf",
+      "source_url": "https://arxiv.org/pdf/2203.02155",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "c1984bb50a5b90fddb895fdc3a0f72e5bc977148c9f63ef6040cbe7a3e1f0d98",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "single_column",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "latent_diffusion",
+      "source_file": "latent_diffusion.pdf",
+      "source_url": "https://arxiv.org/pdf/2112.10752",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "46ede043a8dc07ca1f0f445620523fe1ad8b2436bd83856a3835612a47e9f79e",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "generic_two_column",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "lora",
+      "source_file": "lora.pdf",
+      "source_url": "https://arxiv.org/pdf/2106.09685",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "single_column",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "mask_rcnn",
+      "source_file": "mask_rcnn.pdf",
+      "source_url": "https://arxiv.org/pdf/1703.06870",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "b595a882b763d55d933543131f32a2c4b6f41d0818d418ef46a2b66f946b67a8",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "generic_two_column",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "ppo",
+      "source_file": "ppo.pdf",
+      "source_url": "https://arxiv.org/pdf/1707.06347",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "e78feadadbdbb0b601b3c2bcc81404722cd431a489b307545f9b7bea1e8c4f5b",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "single_column",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "resnet",
+      "source_file": "resnet.pdf",
+      "source_url": "https://arxiv.org/pdf/1512.03385",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a",
+      "pages": [
+        0,
+        1
+      ],
+      "expected_profile": {
+        "name": "generic_two_column",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "unet",
+      "source_file": "unet.pdf",
+      "source_url": "https://arxiv.org/pdf/1505.04597",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "a3172b2124f38e260dc2c7ed968d87c31bc94dbc19a42a7ab3dcbd7534319c44",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "single_column",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "vit",
+      "source_file": "vit.pdf",
+      "source_url": "https://arxiv.org/pdf/2010.11929",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "8ce7b83971a14508ca711a27c875c9b6914c4f6767cf3150fb1ca6c07aa056d6",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "iclr",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "word2vec",
+      "source_file": "word2vec.pdf",
+      "source_url": "https://arxiv.org/pdf/1301.3781",
+      "provenance": "arXiv author manuscript; private regression use, no PDF redistribution",
+      "source_sha256": "a44d7e22d2005752271c9cc1929c6462d4c8270916b063977992a883e3a54362",
+      "pages": [
+        0
+      ],
+      "expected_profile": {
+        "name": "single_column",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "acl",
+      "source_file": "acl.pdf",
+      "source_url": "https://aclanthology.org/2024.acl-long.1.pdf",
+      "provenance": "ACL Anthology open access; no PDF committed",
+      "source_sha256": "94cd077715e7b13a75841b89d3bc46713fdaa9fd80842822524b7811b034a89d",
+      "pages": [
+        0,
+        1
+      ],
+      "expected_profile": {
+        "name": "acl_anthology",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "book",
+      "source_file": "book.pdf",
+      "source_url": "https://greenteapress.com/thinkpython2/thinkpython2.pdf",
+      "provenance": "CC BY-NC 3.0, author PDF version 2.4.1",
+      "source_sha256": "6033000bac3f9268ad75ee041bf8e5d9a3bc8a33bb156399cbd014918cb59f94",
+      "pages": [
+        2,
+        12,
+        22,
+        23,
+        30
+      ],
+      "expected_profile": {
+        "name": "academic_book",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "elsevier_sc",
+      "source_file": "elsevier_sc.pdf",
+      "source_url": "https://ctan.math.illinois.edu/macros/latex/contrib/els-cas-templates.zip",
+      "provenance": "Elsevier CAS official template, LPPL distribution; no PDF committed",
+      "source_sha256": "b20a601d0672507d87dbef01777a38180386993cf62b82b2d55a12ad59de603c",
+      "pages": [
+        2,
+        3
+      ],
+      "expected_profile": {
+        "name": "elsevier_journal",
+        "columns": 1
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "elsevier_dc",
+      "source_file": "elsevier_dc.pdf",
+      "source_url": "https://ctan.math.illinois.edu/macros/latex/contrib/els-cas-templates.zip",
+      "provenance": "Elsevier CAS official template, LPPL distribution; no PDF committed",
+      "source_sha256": "7c2a4ad5d7eaceee2553d0dd8151006c9a4f7194e8af2ebe360069266b0ea073",
+      "pages": [
+        2,
+        3
+      ],
+      "expected_profile": {
+        "name": "elsevier_journal",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    },
+    {
+      "id": "nature",
+      "source_file": "nature.pdf",
+      "source_url": "https://www.nature.com/articles/s43588-025-00924-4",
+      "provenance": "User-provided article; no redistribution",
+      "source_sha256": "9a0b9dc6c1ea6bbff2625685719df6acd1f97b1ebfa5fad98f328c096a3e7ca8",
+      "pages": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "expected_profile": {
+        "name": "nature_portfolio",
+        "columns": 2
+      },
+      "support_claim": "detection only until independently translated, QA checked and visually reviewed"
+    }
+  ]
+}

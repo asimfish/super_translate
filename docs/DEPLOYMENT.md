@@ -54,7 +54,7 @@ PAPER_CHINA_BASE_URL=https://translate.example.com
 ```
 
 Users enter DeepSeek, Kimi, OpenAI, Anthropic, or GLM keys in **API 设置** after
-login. Keep the encryption key with database backups; changing or losing it
+login; Gemini, Qwen and Doubao are also supported. Keep the encryption key with database backups; changing or losing it
 makes existing encrypted provider keys unreadable.
 
 Then edit `Caddyfile` and replace `your-domain.example.com` with your domain.
@@ -102,6 +102,27 @@ First start:
 
 Health check: `curl https://your-domain/health` returns
 `{"status":"ok","version":...}` without authentication.
+
+### Connect Zotero or the macOS floating client
+
+Both clients use username/password login. After the container is running, create
+an account inside the image (the password is prompted without echo):
+
+```sh
+docker compose exec app python scripts/manage_users.py create reader --scope local
+# Other users get an independent library and configure their own provider keys:
+docker compose exec app python scripts/manage_users.py create colleague
+```
+
+Use `https://your-domain` as the service URL in both clients. A loopback URL
+refers to the computer running Zotero, so it only works for a local service or an
+existing tunnel. The XPI does not start a server or provision an account.
+
+The main branch includes document identity, library history, terminology and model
+catalog APIs used by the clients. Update the backend before updating the clients;
+back up the persistent `data/` volume and preserve the credential-encryption key.
+See the [complete Zotero installation guide](ZOTERO.zh-CN.md) and
+[macOS build and login-startup guide](../desktop/README.md).
 
 ## 4. Chinese fonts (already handled)
 

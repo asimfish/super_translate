@@ -94,7 +94,10 @@ async def test_pipeline_counts_only_actual_attempts_and_preserves_draft(
     query.scalar_one_or_none.return_value = paper
     db = AsyncMock()
     db.execute.return_value = query
-    db.get.return_value = None
+    db.get.return_value = SimpleNamespace(
+        id="job", paper_id=paper.id, access_scope="local", cancel_requested=False,
+        engine_revision="", attempt_count=0, max_attempts=3,
+    )
 
     @asynccontextmanager
     async def sessions():

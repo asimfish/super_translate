@@ -5,6 +5,7 @@ import json
 import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import unquote
 
 import pytest
 from fastapi import HTTPException
@@ -16,8 +17,14 @@ from app.models.paper import Paper
 
 
 @pytest.fixture
-def client():
-    """Create test client."""
+def client(monkeypatch):
+    """Create an API client without depending on a developer's real key."""
+    from pydantic import SecretStr
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "translation_backend", "deepseek")
+    monkeypatch.setattr(settings, "deepseek_api_key", SecretStr("integration-test-key"))
     # Reset rate limiter to avoid 429s from accumulated requests across tests
     from app.core.rate_limit import RateLimitMiddleware
 
@@ -44,6 +51,26 @@ def client():
         TestClient(app) as test_client,
     ):
         yield test_client
+
+
+def test_translation_missing_credentials_still_rejects_before_scheduling(
+    client, mock_db, monkeypatch,
+):
+    from pydantic import SecretStr
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "deepseek_api_key", SecretStr(""))
+    monkeypatch.delenv("PAPER_CHINA_DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    with patch("app.api.papers._schedule_background_task") as schedule:
+        response = client.post("/api/papers/000000000000/translate")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "请先在 API 设置中填写 DeepSeek API key"
+    schedule.assert_not_called()
+    mock_db.commit.assert_not_awaited()
+    mock_db.add.assert_not_called()
 
 
 @pytest.fixture
@@ -221,7 +248,10 @@ class TestPapersListEndpoint:
         mock_scalars = MagicMock()
         mock_scalars.all.return_value = [sample_paper]
         mock_result.scalars.return_value = mock_scalars
-        mock_db.execute.return_value = mock_result
+        organization_result = MagicMock()
+        organization_result.scalars.return_value.all.return_value = []
+        organization_result.all.return_value = []
+        mock_db.execute.side_effect = [mock_result, organization_result, organization_result]
 
         with patch("pathlib.Path.exists", return_value=False):
             response = client.get("/api/papers/")
@@ -977,7 +1007,7 @@ class TestTranslationEndpoint:
             )
 
         assert [(item.code, item.severity) for item in unresolved] == [
-            ("qa_failed", "warning")
+            ("qa_failed", "error")
         ]
         assert mono_path.read_bytes() == b"%PDF-1.4 mono-original"
         assert dual_path.read_bytes() == b"%PDF-1.4 dual-original"
@@ -1342,7 +1372,8 @@ class TestDownloadEndpoints:
             mock_settings.translations_path = tmp_path
             response = client.get(f"/api/papers/{sample_paper.id}/download/translated")
             assert response.status_code == 200
-            assert "paper_zh.pdf" in response.headers.get("content-disposition", "")
+            name = unquote(response.headers["content-disposition"].split("''", 1)[1])
+            assert name == f"Test Paper--未注明时间--{sample_paper.id}--中文.pdf"
 
     def test_download_dual_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful dual PDF download."""
@@ -1361,7 +1392,8 @@ class TestDownloadEndpoints:
             mock_settings.translations_path = tmp_path
             response = client.get(f"/api/papers/{sample_paper.id}/download/dual")
             assert response.status_code == 200
-            assert "paper_dual.pdf" in response.headers.get("content-disposition", "")
+            name = unquote(response.headers["content-disposition"].split("''", 1)[1])
+            assert name == f"Test Paper--未注明时间--{sample_paper.id}--双语.pdf"
 
     def test_get_qa_report_success(self, client, mock_db, sample_paper, tmp_path):
         """Test successful QA report lookup."""
@@ -2103,6 +2135,25 @@ class TestRunTranslation:
         mock_result.scalar_one_or_none.return_value = paper
         db = AsyncMock()
         db.execute = AsyncMock(return_value=mock_result)
+        # This fixture models a legacy paper with no custom terminology. Keep
+        # the real resolver active; represent its new SELECTs explicitly.
+        paper.access_scope = "local"
+
+        async def scalar(statement):
+            entity = statement.column_descriptions[0].get("entity")
+            return paper if entity is Paper else None
+
+        empty = MagicMock()
+        empty.all.return_value = []
+        db.scalar = AsyncMock(side_effect=scalar)
+        db.scalars = AsyncMock(return_value=empty)
+        from app.models.paper import TranslationJob
+
+        db.get = AsyncMock(return_value=TranslationJob(
+            id="unit-managed-job", paper_id=paper.id, access_scope="local",
+            status="running", attempt_count=0, max_attempts=3, engine_revision="",
+            cancel_requested=False,
+        ))
         db.commit = AsyncMock()
         return db
 
@@ -2238,10 +2289,10 @@ class TestRunTranslation:
             patch("app.core.database.async_session", self._make_async_session_mock(db)),
             patch("app.api.papers._run_post_translation_qa", return_value=[qa_issue]),
         ):
-            _run_translation("paper123", "google", "fast")
+            _run_translation("paper123", "google", "fast", job_id="unit-managed-job")
 
         assert paper.translation_status == "repairing"
-        assert paper.translation_stage == "等待系统修复"
+        assert paper.translation_stage == "修复已暂停，等待引擎更新后自动重试"
         assert "译后检查未通过：1 个错误" in paper.translation_error
         assert "公式变更（第 1 页）" in paper.translation_error
         assert paper.translated_filename == "paper123/test-mono.pdf"
@@ -2292,7 +2343,7 @@ class TestRunTranslation:
             patch("app.core.database.async_session", self._make_async_session_mock(db)),
             patch("app.api.papers._run_post_translation_qa", return_value=[qa_issue]),
         ):
-            _run_translation("paper123", "google", "fast")
+            _run_translation("paper123", "google", "fast", job_id="unit-managed-job")
 
         assert paper.translation_status == "repairing"
         assert "译后检查阻断：1 个错误" in paper.translation_error
@@ -2560,7 +2611,7 @@ class TestRunTranslation:
         mock_translate.side_effect = Exception("API error")
 
         with patch("app.core.database.async_session", self._make_async_session_mock(db)):
-            _run_translation("paper123", "deepseek", "balanced")
+            _run_translation("paper123", "deepseek", "balanced", job_id="unit-managed-job")
 
         assert paper.translation_status == "repairing"
         assert paper.translation_error is not None
@@ -2568,7 +2619,7 @@ class TestRunTranslation:
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
     def test_translation_crash_cleans_up_output_dir(self, mock_settings, mock_translate, tmp_path):
-        """Test that crash handler cleans up partial output directory."""
+        """A crash retains resumable files without publishing an incomplete PDF."""
         from app.api.papers import _run_translation
 
         paper = MagicMock()
@@ -2595,10 +2646,11 @@ class TestRunTranslation:
         mock_translate.side_effect = Exception("API crash")
 
         with patch("app.core.database.async_session", self._make_async_session_mock(db)):
-            _run_translation("paper123", "deepseek", "balanced")
+            _run_translation("paper123", "deepseek", "balanced", job_id="unit-managed-job")
 
         assert paper.translation_status == "repairing"
-        assert not output_dir.exists()
+        assert (output_dir / "partial.pdf").read_bytes() == b"partial"
+        assert not isinstance(paper.translated_filename, str)
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
@@ -2630,10 +2682,11 @@ class TestRunTranslation:
         mock_translate.return_value = TranslationResult(error="Translation failed")
 
         with patch("app.core.database.async_session", self._make_async_session_mock(db)):
-            _run_translation("paper123", "deepseek", "balanced")
+            _run_translation("paper123", "deepseek", "balanced", job_id="unit-managed-job")
 
         assert paper.translation_status == "repairing"
-        assert not partial_dir.exists()
+        assert (partial_dir / "partial.pdf").read_bytes() == b"partial"
+        assert not isinstance(paper.translated_filename, str)
 
     @patch("app.api.papers._run_translate_in_worker", new_callable=AsyncMock)
     @patch("app.api.papers.settings")
@@ -4338,13 +4391,13 @@ class TestSelfHealingRetry:
                   TestRunTranslation._make_async_session_mock(self, db)),
             patch("app.api.papers._run_post_translation_qa", side_effect=qa_results),
         ):
-            _run_translation("paper123", "google", "fast")
+            _run_translation("paper123", "google", "fast", job_id="unit-managed-job")
 
         # The second identical QA result has no progress; do not render a
         # third identical PDF merely to exhaust the configured budget.
         assert mock_translate.call_count == 2
         assert paper.translation_status == "repairing"
-        assert paper.translation_stage == "等待系统修复"
+        assert paper.translation_stage == "修复已暂停，等待引擎更新后自动重试"
         assert paper.translated_filename
 
 
