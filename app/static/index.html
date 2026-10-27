@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Super Translate - AI 论文翻译阅读系统</title>
-<link rel="stylesheet" href="/static/css/style.css">
+<link rel="stylesheet" href="/static/css/style.css?v=5b7efb350d9a">
+<link rel="stylesheet" href="/static/css/terminology.css">
 </head>
 <body>
 <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -13,10 +14,15 @@
   <header class="header">
     <div class="header-left">
       <h1 class="logo"><span class="logo-mark" aria-hidden="true">ST</span><span>Super Translate</span></h1>
-      <span class="subtitle">AI 论文翻译阅读系统</span>
+      <span class="subtitle">PDF 翻译工作台</span>
     </div>
+    <nav class="workspace-nav" aria-label="主导航">
+      <button class="nav-link" data-action="show-library">论文库</button>
+      <button class="nav-link" data-action="show-upload">上传文件</button>
+    </nav>
     <div class="header-right">
       <span id="current-user" class="current-user hidden"></span>
+      <button class="btn btn-outline btn-sm" id="btn-terminology" data-term-action="open">术语库</button>
       <button class="btn btn-outline btn-sm" id="btn-provider-settings" data-action="show-provider-settings">API 设置</button>
       <button class="btn btn-outline btn-sm hidden" id="btn-logout" data-action="logout">退出</button>
       <!-- AGPL-3.0 network-use source offer: keep this link pointing at the running code's repository. -->
@@ -29,26 +35,36 @@
   <main class="main" id="main-content" tabindex="-1">
     <!-- Paper Library View -->
     <div id="library-view" class="view active">
+      <div class="library-heading">
+        <div><p class="workspace-label">YOUR WORKSPACE</p><h2>我的论文</h2><p class="section-description">管理 PDF，查看翻译进度，随时对照阅读。</p></div>
+        <span id="stats-bar" class="stats-bar" aria-live="polite"></span>
+      </div>
       <div class="toolbar">
         <div class="search-box">
-          <input type="text" id="search-input" placeholder="搜索论文标题..." aria-label="搜索论文标题" data-action="debounce-search">
+          <span class="search-symbol" aria-hidden="true">⌕</span>
+          <input type="text" id="search-input" placeholder="搜索论文标题或原文件名" aria-label="搜索论文标题或原文件名" data-action="debounce-search">
         </div>
         <div class="filter-box">
+          <select id="library-sort" aria-label="文档排序" data-action="debounce-search">
+            <option value="recent">最近导入</option>
+            <option value="oldest">最早导入</option>
+            <option value="title">论文标题</option>
+          </select>
           <select id="status-filter" aria-label="按状态筛选" data-action="load-papers">
             <option value="">全部状态</option>
             <option value="pending">待翻译</option>
             <option value="translating">翻译中</option>
             <option value="repairing">待修复（已停止）</option>
             <option value="completed">已完成</option>
-            <option value="failed">失败</option>
+            <option value="failed">需要重试</option>
           </select>
           <input type="text" id="tag-filter" placeholder="按标签筛选..." aria-label="按标签筛选" data-action="debounce-search">
         </div>
         <div class="toolbar-actions">
-          <span id="stats-bar" class="stats-bar"></span>
           <button class="btn btn-outline btn-sm" data-action="batch-translate">批量翻译</button>
         </div>
       </div>
+      <div class="list-caption" aria-hidden="true"><span>论文与文件</span><span>翻译状态 · 操作</span></div>
       <div id="loading-skeleton" class="paper-grid">
         <div class="paper-card skeleton-card"><div class="skeleton-line" style="width:80%"></div><div class="skeleton-line" style="width:60%"></div><div class="skeleton-line" style="width:40%"></div></div>
         <div class="paper-card skeleton-card"><div class="skeleton-line" style="width:70%"></div><div class="skeleton-line" style="width:50%"></div><div class="skeleton-line" style="width:30%"></div></div>
@@ -57,10 +73,22 @@
       <div id="paper-list" class="paper-grid"></div>
       <div id="pagination"></div>
       <div id="empty-state" class="empty-state hidden">
-        <div class="empty-icon" aria-hidden="true">PDF</div>
-        <h3>还没有论文</h3>
-        <p>上传英文 PDF 开始使用</p>
-        <button class="btn btn-primary" data-action="show-upload">上传第一篇论文</button>
+        <div class="empty-hero">
+          <div class="empty-icon" aria-hidden="true">ST</div>
+          <div class="empty-copy">
+            <h2>从第一份 PDF 开始</h2>
+            <p class="empty-lede">上传论文后即可翻译。完成后对照阅读原文与中文，或下载 PDF 在熟悉的阅读器中查看。</p>
+            <div class="empty-actions">
+              <button class="btn btn-primary" data-action="show-upload">上传第一篇论文</button>
+              <a class="btn btn-outline" href="https://github.com/asimfish/super_translate" target="_blank" rel="noopener">查看源码与文档</a>
+            </div>
+          </div>
+        </div>
+        <div class="empty-steps" aria-label="三步开始">
+          <div><span class="step-number">1</span><div><strong>上传 PDF</strong><small>拖入文件，确认上传</small></div></div>
+          <div><span class="step-number">2</span><div><strong>开始翻译</strong><small>选择模型，查看进度</small></div></div>
+          <div><span class="step-number">3</span><div><strong>阅读与下载</strong><small>对照原文，检查译文</small></div></div>
+        </div>
       </div>
     </div>
 
@@ -68,10 +96,16 @@
     <div id="upload-view" class="view">
       <div class="upload-container">
         <button class="btn-back" data-action="show-library">← 返回</button>
-        <h2>上传论文</h2>
+        <p class="workspace-label">ADD DOCUMENTS</p>
+        <h2>把论文放进工作台</h2>
+        <p class="section-description">支持一次选择多个 PDF，确认后再上传。</p>
+        <p class="upload-privacy-notice" role="note">
+          论文文本会发送到你在翻译设置中选择的模型服务商；请只上传你有权处理的文档。
+        </p>
         <div id="drop-zone" class="drop-zone">
           <div class="drop-icon" aria-hidden="true">PDF</div>
-          <p>拖拽 PDF 文件到这里，或</p>
+          <p class="drop-title">拖动 PDF 到这里</p>
+          <p class="drop-description">也可以从电脑中选择文件</p>
           <label class="btn btn-outline">
             选择文件
             <input type="file" id="file-input" accept=".pdf" multiple hidden data-action="handle-file-select">
@@ -102,6 +136,7 @@
         <button class="btn-back" data-action="show-library">← 返回</button>
         <div class="reader-title" id="reader-title"></div>
         <div class="reader-actions">
+          <button class="btn btn-outline btn-sm" data-term-action="open-paper">术语设置</button>
           <div class="translate-controls">
             <select id="translation-backend" class="quality-select" aria-label="翻译模型">
               <option value="deepseek" selected>DeepSeek V4 Pro</option>
@@ -109,6 +144,9 @@
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic Claude</option>
               <option value="glm">智谱 GLM</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="qwen">通义千问 Qwen</option>
+              <option value="doubao">豆包 Doubao</option>
               <option value="google">Google 翻译</option>
             </select>
             <select id="quality-preset" class="quality-select" aria-label="翻译质量">
@@ -116,6 +154,9 @@
               <option value="balanced" selected>标准</option>
               <option value="quality">高质量 (增强提示)</option>
             </select>
+            <details class="translation-options">
+              <summary>翻译选项</summary>
+              <div class="translation-options-panel">
             <label class="translate-option" title="保留图中的英文短标签；可能减少图注和图旁正文的翻译覆盖">
               <input type="checkbox" id="preserve-graphics-text" checked> 保留图表文字
             </label>
@@ -131,6 +172,8 @@
               <option value="auto">OCR 自动</option>
               <option value="force">OCR 强制</option>
             </select>
+              </div>
+            </details>
             <button class="btn btn-sm btn-primary" id="btn-translate" data-action="start-translate">翻译</button>
             <button class="btn btn-sm btn-outline hidden" id="btn-retranslate" data-action="retranslate">重新翻译</button>
           </div>
@@ -187,6 +230,79 @@
         <div id="editable-figures-content" class="side-panel-content"></div>
       </div>
     </div>
+    <div id="terminology-view" class="view">
+      <div class="term-heading">
+        <div><p class="workspace-label">TERMINOLOGY LIBRARY</p><h2>让每个学科，都有自己的译法</h2>
+          <p class="section-description">按学科、领域整理可复用的术语库，为单篇论文保留专用译法。新增方向不需要改代码。</p></div>
+        <button class="btn btn-outline" data-action="show-library">返回论文库</button>
+      </div>
+      <div id="term-status" class="term-status" role="status" aria-live="polite"></div>
+      <section class="term-panel term-profile" aria-labelledby="term-profile-title">
+        <h3 id="term-profile-title">选择翻译使用的术语</h3>
+        <div class="term-layout">
+          <label class="term-field">默认设置或单篇论文<select id="term-profile-paper" aria-label="术语适用论文"></select></label>
+          <label class="term-field">学科 / 领域<select id="term-profile-category" aria-label="论文所属领域"></select></label>
+          <label class="term-field">查找论文<input id="term-paper-search" placeholder="输入标题，可查找更早的论文" maxlength="200"></label>
+          <div><label class="term-muted"><input id="term-use-builtin" type="checkbox" checked> 同时使用内置 AI / 计算机术语</label><p id="term-profile-inherited" class="term-muted"></p></div>
+        </div>
+        <details class="term-details"><summary>额外选用的术语库（跨学科使用）</summary><div id="term-extra-libraries" class="term-profile-checks"></div><p class="term-muted">分类库会从学科到领域自动生效，额外勾选的库优先级更高。论文专用库最后覆盖。</p></details>
+        <div class="term-actions"><button class="btn btn-primary" data-term-action="save-profile">保存设置</button><button class="btn btn-outline" data-term-action="reset-profile">本篇恢复默认</button></div>
+        <p class="term-muted">术语约束用于标准 / 高质量 AI 翻译。快速 Google 翻译不支持术语约束；设置不会改写已经生成的 PDF。</p>
+        <div id="term-preview" class="term-preview"></div>
+      </section>
+      <div class="term-grid">
+        <aside class="term-panel">
+          <h3>我的术语库</h3>
+          <label class="term-field">按学科 / 领域查看<select id="term-category-filter" data-term-action="category-filter"></select></label>
+          <div id="term-library-list"></div>
+          <details class="term-details" open><summary>新建术语库</summary>
+            <label class="term-field">库名称<input id="term-new-library-name" maxlength="120" placeholder="如：有机合成常用术语"></label>
+            <div class="term-actions"><button class="btn btn-sm btn-primary" data-term-action="create-library">建立可复用库</button><button class="btn btn-sm btn-outline" data-term-action="create-paper-library">建立论文专用库</button></div>
+            <p class="term-muted">可复用库建立在当前筛选的分类下，未选分类则为通用库。专用库绑定上方选中的论文。</p>
+          </details>
+          <details class="term-details"><summary>管理学科 / 领域</summary>
+            <div class="term-field"><label for="term-category-name">分类名称</label><input id="term-category-name" maxlength="120" placeholder="如：化学、材料科学、生态学"></div>
+            <label class="term-field">新增位置<select id="term-category-parent"></select></label>
+            <div class="term-actions"><button class="btn btn-sm btn-primary" data-term-action="create-category">新增分类</button></div>
+            <label class="term-field">已有分类<select id="term-category-rename"></select></label>
+            <div class="term-actions"><button class="btn btn-sm btn-outline" data-term-action="rename-category">改名</button><button class="btn btn-sm btn-text" data-term-action="delete-category">删除空分类</button></div>
+          </details>
+          <details class="term-details" open><summary>从入门模板开始</summary><p class="term-muted">建立学科与常用领域，附少量基础示例，可继续编辑扩展。</p><div class="term-actions"><button class="btn btn-sm btn-outline" data-term-action="template" data-template="chemistry">化学模板</button><button class="btn btn-sm btn-outline" data-term-action="template" data-template="biology">生物模板</button></div></details>
+        </aside>
+        <section class="term-panel" aria-labelledby="term-library-title">
+          <h3 id="term-library-title">选择术语库</h3>
+          <div class="term-actions"><input id="term-query" class="term-search" maxlength="200" placeholder="搜索原词、中文译法或别名" aria-label="搜索术语"><button class="btn btn-outline btn-sm" data-term-action="export">导出 JSON</button></div>
+          <p id="term-entry-count" class="term-muted"></p>
+          <div class="term-table-wrap"><table class="term-table"><thead><tr><th scope="col">原词 / 别名</th><th scope="col">中文译法 / 备注</th><th scope="col">操作</th></tr></thead><tbody id="term-entry-body"></tbody></table></div>
+          <div class="term-actions"><button id="term-prev" class="btn btn-outline btn-sm" data-term-action="prev">上一页</button><span id="term-pager" class="term-muted"></span><button id="term-next" class="btn btn-outline btn-sm" data-term-action="next">下一页</button></div>
+          <div id="term-custom-controls" class="hidden">
+            <details id="term-entry-details" class="term-details" open><summary id="term-editing">新增词条</summary>
+              <form id="term-entry-form" class="term-form">
+                <div class="term-layout">
+                  <label class="term-field">英文原词<input id="term-source" required maxlength="240" placeholder="如：gene expression"></label>
+                  <label class="term-field">中文译法<input id="term-translation" required maxlength="240" placeholder="如：基因表达"></label>
+                  <label class="term-field">别名（用 | 分隔）<input id="term-aliases" maxlength="2410" placeholder="缩写 | 其他写法"></label>
+                  <label class="term-field">来源 / 依据<input id="term-reference" maxlength="500" placeholder="教材、论文或术语标准"></label>
+                  <label class="term-field">备注<textarea id="term-notes" maxlength="1000" placeholder="适用语境、译法选择依据"></textarea></label>
+                </div>
+                <div class="term-actions"><button id="term-save-entry" class="btn btn-primary" type="submit">保存词条</button><button class="btn btn-outline" type="button" data-term-action="cancel-entry">取消编辑</button></div>
+              </form>
+            </details>
+            <details class="term-details"><summary>批量导入 CSV / JSON</summary>
+              <p class="term-muted">每次最多 1000 词条、2 MiB。支持直接导入系统导出的 JSON；CSV 必须包含 source,translation，其他可选列为 aliases,notes,reference。别名用 | 分隔。</p>
+              <div class="term-layout"><label class="term-field">格式<select id="term-import-format"><option value="csv">CSV</option><option value="json">JSON</option></select></label><label class="term-field">同名词条<select id="term-import-conflict"><option value="keep">保留已有译法</option><option value="overwrite">用导入内容覆盖</option></select></label></div>
+              <label class="term-field">选择文件<input id="term-import-file" type="file" accept=".csv,.json,text/csv,application/json"></label>
+              <label class="term-field">或粘贴内容<textarea id="term-import-content" placeholder="source,translation&#10;activation energy,活化能"></textarea></label>
+              <div class="term-actions"><button class="btn btn-primary" data-term-action="import-entries">导入词条</button></div>
+            </details>
+            <details class="term-details"><summary>库设置（改名、移动分类、停用）</summary>
+              <div class="term-layout"><label class="term-field">库名称<input id="term-library-name" maxlength="120"></label><label class="term-field">所属学科 / 领域<select id="term-library-category"></select></label><label class="term-field">说明<textarea id="term-library-description" maxlength="1000"></textarea></label><label class="term-muted"><input id="term-library-enabled" type="checkbox" checked> 参与翻译（关闭后保留词条）</label></div>
+              <div class="term-actions"><button class="btn btn-primary" data-term-action="save-library">保存库设置</button><button class="btn btn-text" data-term-action="delete-library">删除库及词条</button></div>
+            </details>
+          </div>
+        </section>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -200,41 +316,104 @@
       </div>
       <button class="btn btn-outline btn-sm" data-action="hide-provider-settings" aria-label="关闭 API 设置">关闭</button>
     </div>
+    <p id="provider-settings-guide" class="login-hint">选择要使用的服务，填写自己的 API key 并保存。状态为“已配置”的服务可以用于翻译。设置页每分钟检查目录，服务器缓存 5 分钟；“更新”可立即查询。账号接口列出不代表已开通或有余额，内置参考模型请以供应商控制台为准。</p>
+    <details class="provider-security"><summary>账号与密钥说明</summary><p>首次使用请填写自己的 API key；已配置的服务账号可直接使用。密钥以 AES-GCM 加密保存；服务端不会在接口响应、任务文件或日志中返回完整 key，页面也不会再次显示。</p></details>
     <div class="provider-list" id="provider-settings-list">
-      <div class="provider-row" data-provider="deepseek">
-        <div class="provider-identity"><strong>DeepSeek</strong><span class="provider-state">未配置</span></div>
-        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="DeepSeek API key">
-        <div class="provider-model-control"><select class="provider-model" aria-label="DeepSeek 模型"><option value="deepseek-v4-pro">deepseek-v4-pro</option></select><button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" title="更新 DeepSeek 模型列表" aria-label="更新 DeepSeek 模型列表">更新</button><span class="provider-model-meta" aria-live="polite"></span></div>
-        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
-        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      <div class="provider-row" data-provider="deepseek" data-default-model="deepseek-v4-pro">
+        <div class="provider-identity"><strong>DeepSeek</strong><span class="provider-state">未配置</span><span class="provider-endpoint">官方 API</span></div>
+        <input class="provider-key" type="password" placeholder="填写 API Key；留空保留已存密钥" autocomplete="new-password" aria-label="DeepSeek API key">
+        <div class="provider-model-control">
+          <input class="provider-model-search" type="search" placeholder="搜索模型名称" aria-label="搜索 DeepSeek 模型">
+          <select class="provider-model" aria-label="DeepSeek 模型"><option value="deepseek-v4-pro">deepseek-v4-pro</option></select>
+          <button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" aria-label="更新 DeepSeek 模型列表">更新</button>
+          <input class="provider-model-custom" type="text" maxlength="100" placeholder="自定义模型 / Endpoint ID（可选）" aria-label="DeepSeek 自定义模型">
+          <span class="provider-model-meta" aria-live="polite">等待加载模型目录</span>
+        </div>
+        <div class="provider-actions"><button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button><button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button></div>
       </div>
-      <div class="provider-row" data-provider="kimi">
-        <div class="provider-identity"><strong>Kimi</strong><span class="provider-state">未配置</span></div>
-        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="Kimi API key">
-        <div class="provider-model-control"><select class="provider-model" aria-label="Kimi 模型"><option value="kimi-k3">kimi-k3</option></select><button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" title="更新 Kimi 模型列表" aria-label="更新 Kimi 模型列表">更新</button><span class="provider-model-meta" aria-live="polite"></span></div>
-        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
-        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      <div class="provider-row" data-provider="kimi" data-default-model="kimi-k3">
+        <div class="provider-identity"><strong>Kimi</strong><span class="provider-state">未配置</span><span class="provider-endpoint">官方 API</span></div>
+        <input class="provider-key" type="password" placeholder="填写 API Key；留空保留已存密钥" autocomplete="new-password" aria-label="Kimi API key">
+        <div class="provider-model-control">
+          <input class="provider-model-search" type="search" placeholder="搜索模型名称" aria-label="搜索 Kimi 模型">
+          <select class="provider-model" aria-label="Kimi 模型"><option value="kimi-k3">kimi-k3</option></select>
+          <button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" aria-label="更新 Kimi 模型列表">更新</button>
+          <input class="provider-model-custom" type="text" maxlength="100" placeholder="自定义模型 / Endpoint ID（可选）" aria-label="Kimi 自定义模型">
+          <span class="provider-model-meta" aria-live="polite">等待加载模型目录</span>
+        </div>
+        <div class="provider-actions"><button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button><button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button></div>
       </div>
-      <div class="provider-row" data-provider="openai">
-        <div class="provider-identity"><strong>OpenAI</strong><span class="provider-state">未配置</span></div>
-        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="OpenAI API key">
-        <div class="provider-model-control"><select class="provider-model" aria-label="OpenAI 模型"><option value="gpt-4o-mini">gpt-4o-mini</option></select><button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" title="更新 OpenAI 模型列表" aria-label="更新 OpenAI 模型列表">更新</button><span class="provider-model-meta" aria-live="polite"></span></div>
-        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
-        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      <div class="provider-row" data-provider="openai" data-default-model="gpt-4o-mini">
+        <div class="provider-identity"><strong>OpenAI</strong><span class="provider-state">未配置</span><span class="provider-endpoint">官方 API</span></div>
+        <input class="provider-key" type="password" placeholder="填写 API Key；留空保留已存密钥" autocomplete="new-password" aria-label="OpenAI API key">
+        <div class="provider-model-control">
+          <input class="provider-model-search" type="search" placeholder="搜索模型名称" aria-label="搜索 OpenAI 模型">
+          <select class="provider-model" aria-label="OpenAI 模型"><option value="gpt-4o-mini">gpt-4o-mini</option></select>
+          <button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" aria-label="更新 OpenAI 模型列表">更新</button>
+          <input class="provider-model-custom" type="text" maxlength="100" placeholder="自定义模型 / Endpoint ID（可选）" aria-label="OpenAI 自定义模型">
+          <span class="provider-model-meta" aria-live="polite">等待加载模型目录</span>
+        </div>
+        <div class="provider-actions"><button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button><button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button></div>
       </div>
-      <div class="provider-row" data-provider="anthropic">
-        <div class="provider-identity"><strong>Anthropic</strong><span class="provider-state">未配置</span></div>
-        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="Anthropic API key">
-        <div class="provider-model-control"><select class="provider-model" aria-label="Anthropic 模型"><option value="claude-sonnet-5">claude-sonnet-5</option></select><button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" title="更新 Anthropic 模型列表" aria-label="更新 Anthropic 模型列表">更新</button><span class="provider-model-meta" aria-live="polite"></span></div>
-        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
-        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      <div class="provider-row" data-provider="anthropic" data-default-model="claude-sonnet-5">
+        <div class="provider-identity"><strong>Anthropic</strong><span class="provider-state">未配置</span><span class="provider-endpoint">官方 API</span></div>
+        <input class="provider-key" type="password" placeholder="填写 API Key；留空保留已存密钥" autocomplete="new-password" aria-label="Anthropic API key">
+        <div class="provider-model-control">
+          <input class="provider-model-search" type="search" placeholder="搜索模型名称" aria-label="搜索 Anthropic 模型">
+          <select class="provider-model" aria-label="Anthropic 模型"><option value="claude-sonnet-5">claude-sonnet-5</option></select>
+          <button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" aria-label="更新 Anthropic 模型列表">更新</button>
+          <input class="provider-model-custom" type="text" maxlength="100" placeholder="自定义模型 / Endpoint ID（可选）" aria-label="Anthropic 自定义模型">
+          <span class="provider-model-meta" aria-live="polite">等待加载模型目录</span>
+        </div>
+        <div class="provider-actions"><button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button><button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button></div>
       </div>
-      <div class="provider-row" data-provider="glm">
-        <div class="provider-identity"><strong>智谱 GLM</strong><span class="provider-state">未配置</span></div>
-        <input class="provider-key" type="password" placeholder="API key" autocomplete="new-password" aria-label="智谱 GLM API key">
-        <div class="provider-model-control"><select class="provider-model" aria-label="智谱 GLM 模型"><option value="glm-5.2">glm-5.2</option></select><button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" title="更新智谱 GLM 模型列表" aria-label="更新智谱 GLM 模型列表">更新</button><span class="provider-model-meta" aria-live="polite"></span></div>
-        <button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button>
-        <button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button>
+      <div class="provider-row" data-provider="glm" data-default-model="glm-5.2">
+        <div class="provider-identity"><strong>智谱 GLM</strong><span class="provider-state">未配置</span><span class="provider-endpoint">官方 API</span></div>
+        <input class="provider-key" type="password" placeholder="填写 API Key；留空保留已存密钥" autocomplete="new-password" aria-label="智谱 GLM API key">
+        <div class="provider-model-control">
+          <input class="provider-model-search" type="search" placeholder="搜索模型名称" aria-label="搜索 智谱 GLM 模型">
+          <select class="provider-model" aria-label="智谱 GLM 模型"><option value="glm-5.2">glm-5.2</option></select>
+          <button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" aria-label="更新 智谱 GLM 模型列表">更新</button>
+          <input class="provider-model-custom" type="text" maxlength="100" placeholder="自定义模型 / Endpoint ID（可选）" aria-label="智谱 GLM 自定义模型">
+          <span class="provider-model-meta" aria-live="polite">等待加载模型目录</span>
+        </div>
+        <div class="provider-actions"><button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button><button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button></div>
+      </div>
+      <div class="provider-row" data-provider="gemini" data-default-model="gemini-3.8-flash">
+        <div class="provider-identity"><strong>Google Gemini</strong><span class="provider-state">未配置</span><span class="provider-endpoint">官方 API</span></div>
+        <input class="provider-key" type="password" placeholder="填写 API Key；留空保留已存密钥" autocomplete="new-password" aria-label="Google Gemini API key">
+        <div class="provider-model-control">
+          <input class="provider-model-search" type="search" placeholder="搜索模型名称" aria-label="搜索 Google Gemini 模型">
+          <select class="provider-model" aria-label="Google Gemini 模型"><option value="gemini-3.8-flash">gemini-3.8-flash</option></select>
+          <button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" aria-label="更新 Google Gemini 模型列表">更新</button>
+          <input class="provider-model-custom" type="text" maxlength="100" placeholder="自定义模型 / Endpoint ID（可选）" aria-label="Google Gemini 自定义模型">
+          <span class="provider-model-meta" aria-live="polite">等待加载模型目录</span>
+        </div>
+        <div class="provider-actions"><button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button><button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button></div>
+      </div>
+      <div class="provider-row" data-provider="qwen" data-default-model="qwen3.8-flash">
+        <div class="provider-identity"><strong>通义千问 Qwen</strong><span class="provider-state">未配置</span><span class="provider-endpoint">中国北京接入</span></div>
+        <input class="provider-key" type="password" placeholder="填写 API Key；留空保留已存密钥" autocomplete="new-password" aria-label="通义千问 Qwen API key">
+        <div class="provider-model-control">
+          <input class="provider-model-search" type="search" placeholder="搜索模型名称" aria-label="搜索 通义千问 Qwen 模型">
+          <select class="provider-model" aria-label="通义千问 Qwen 模型"><option value="qwen3.8-flash">qwen3.8-flash</option></select>
+          <button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" aria-label="更新 通义千问 Qwen 模型列表">更新</button>
+          <input class="provider-model-custom" type="text" maxlength="100" placeholder="自定义模型 / Endpoint ID（可选）" aria-label="通义千问 Qwen 自定义模型">
+          <span class="provider-model-meta" aria-live="polite">等待加载模型目录</span>
+        </div>
+        <div class="provider-actions"><button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button><button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button></div>
+      </div>
+      <div class="provider-row" data-provider="doubao" data-default-model="doubao-seed-2-1-pro-260915">
+        <div class="provider-identity"><strong>豆包 Doubao</strong><span class="provider-state">未配置</span><span class="provider-endpoint">中国北京接入</span></div>
+        <input class="provider-key" type="password" placeholder="填写 API Key；留空保留已存密钥" autocomplete="new-password" aria-label="豆包 Doubao API key">
+        <div class="provider-model-control">
+          <input class="provider-model-search" type="search" placeholder="搜索模型名称" aria-label="搜索 豆包 Doubao 模型">
+          <select class="provider-model" aria-label="豆包 Doubao 模型"><option value="doubao-seed-2-1-pro-260915">doubao-seed-2-1-pro-260915</option></select>
+          <button class="btn btn-outline btn-sm provider-model-refresh" data-action="refresh-provider-models" aria-label="更新 豆包 Doubao 模型列表">更新</button>
+          <input class="provider-model-custom" type="text" maxlength="100" placeholder="自定义模型 / Endpoint ID（可选）" aria-label="豆包 Doubao 自定义模型">
+          <span class="provider-model-meta" aria-live="polite">等待加载模型目录</span>
+        </div>
+        <div class="provider-actions"><button class="btn btn-primary btn-sm" data-action="save-provider-credential">保存</button><button class="btn btn-outline btn-sm provider-delete" data-action="delete-provider-credential">删除</button></div>
       </div>
     </div>
     <div id="provider-settings-error" class="login-error" role="alert"></div>
@@ -246,13 +425,16 @@
   <form class="login-card" id="login-form">
     <h2 id="login-title">登录 Super Translate</h2>
     <p class="login-hint">每位用户有独立的论文库</p>
-    <input type="text" id="login-username" placeholder="用户名" aria-label="用户名" autocomplete="username" required>
-    <input type="password" id="login-password" placeholder="密码" aria-label="密码" autocomplete="current-password" required>
+    <label for="login-username">用户名</label>
+    <input type="text" id="login-username" placeholder="输入已有账号" autocomplete="username" required>
+    <label for="login-password">密码</label>
+    <input type="password" id="login-password" placeholder="输入密码" autocomplete="current-password" required>
     <div id="login-error" class="login-error" role="alert"></div>
     <button type="submit" class="btn btn-primary" id="login-submit">登录</button>
   </form>
 </div>
 
-<script src="/static/js/app.js" defer></script>
+<script src="/static/js/app.js?v=8cc0f4a8b6e6" defer></script>
+<script src="/static/js/terminology.js" defer></script>
 </body>
 </html>

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "source_url": "https://www.nature.com/articles/s41467-024-51162-7.pdf",
+  "doi": "10.1038/s41467-024-51162-7",
+  "source_sha256": "9cdf7d4ef97e8ad499afe744ffbec1609d6c2643adb221dcde810aedbf4ba1a9",
+  "source_page": 9,
+  "fixture_sha256": "7bf9d85b84085549b6823ea067f1cd2e5e6c02a6ac74972f0a0b912028354f35",
+  "license": "CC BY 4.0 (source article license text)",
+  "purpose": "Natural-language fragments beside inline/display math must enter translation without altering formula ownership",
+  "access_policy": "Public open-access publisher PDF page, attribution retained",
+  "compatible_source": "Production snapshot failure-dedupe-20261011/production; incremental formula-fragment fix"
+}

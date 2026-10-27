@@ -1,0 +1,30 @@
+{
+  "purpose": "Native original-font restoration after intersecting prose redaction; fixtures retain the exact original font object graph and glyph programs, remapping only PDF xrefs.",
+  "source": {
+    "title": "HumanEgo: Zero-Shot Robot Learning from Minutes of Human Egocentric Videos",
+    "sha256": "d55c8a444478d9a851bfbdb8da7a79835d114e7e1d23c39b7ba29d239f4ba03f",
+    "origin": "User-provided source PDF; no paper prose is included in these synthetic font fixtures."
+  },
+  "fixtures": [
+    {
+      "file": "native_type3_plot_title.pdf",
+      "sha256": "42495431b7ad18a2afd9e6cff6023d8aa161361e10d3c0f05ec044b002a4f179",
+      "bytes": 16442,
+      "source_font": "Type3 Inter-Bold",
+      "source_font_xref": 522,
+      "source_page": 23,
+      "content": "Synthetic overlapping English prose and two Latin characters drawn with the original embedded source font."
+    },
+    {
+      "file": "native_type0_plot_title.pdf",
+      "sha256": "0bd82882fd55cb967fd6202d897dd2a99439f27c3d26426e13ae0735a3d0cf2e",
+      "bytes": 258565,
+      "source_font": "Type0 Inter-ExtraBold",
+      "source_font_xref": 540,
+      "source_page": 24,
+      "content": "Synthetic overlapping English prose and two Latin characters drawn with the original embedded source font."
+    }
+  ],
+  "font_license": "SIL Open Font License 1.1; see INTER-OFL.txt",
+  "font_license_source": "https://github.com/rsms/inter/blob/master/LICENSE.txt"
+}

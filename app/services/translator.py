@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
@@ -103,6 +105,7 @@ class TranslationConfig:
     ocr_mode: str = "off"  # off | auto | force
     ocr_language: str = "eng"
     ocr_dpi: int = 180
+    terminology: dict[str, str] | None = None
 
 
 # Quality presets configuration
@@ -312,16 +315,21 @@ def _build_pdf2zh_envs(
 
 # Backends the native engine can drive. Anthropic uses its Messages protocol;
 # the others use DeepSeek or OpenAI-compatible chat requests.
-_NATIVE_ENGINE_BACKENDS = {"deepseek", "openai", "kimi", "anthropic", "glm"}
+_NATIVE_ENGINE_BACKENDS = {
+    "deepseek", "openai", "kimi", "anthropic", "glm", "gemini", "qwen", "doubao",
+}
 
 
 def _use_native_engine(config: TranslationConfig) -> bool:
     from app.core.config import settings
 
+    if config.terminology is not None and config.backend in _NATIVE_ENGINE_BACKENDS:
+        return True
+
     # Kimi K3 fixes its sampling parameters server-side, while pdf2zh's bundled
     # OpenAI adapter always sends temperature=0. Keep Kimi on our constraint-aware
     # native adapter even when the global fallback engine is set to pdf2zh.
-    if config.backend in {"kimi", "anthropic", "glm"}:
+    if config.backend in {"kimi", "anthropic", "glm", "gemini", "qwen", "doubao"}:
         return True
     return settings.translation_engine == "native" and config.backend in _NATIVE_ENGINE_BACKENDS
 
@@ -419,6 +427,15 @@ class _ProgressTranslator:
         # Forward so translate_pdf's structure-aware hints (caption/heading/title)
         # reach the supplier through the cache wrapper in the Web path.
         self._inner.block_types = value
+
+    @property
+    def quality_retry(self) -> bool:
+        return bool(getattr(self._inner, "quality_retry", False))
+
+    @quality_retry.setter
+    def quality_retry(self, value: bool) -> None:
+        if hasattr(self._inner, "quality_retry"):
+            self._inner.quality_retry = bool(value)
 
     def translate_batch(self, texts):
         texts = list(texts)
@@ -521,6 +538,15 @@ def _translate_sync_native(
         api_key = config.api_key or os.environ.get("GLM_API_KEY", "")
         mode = "openai-compatible"
         model = config.model or "glm-5.2"
+    elif config.backend in {"gemini", "qwen", "doubao"}:
+        from app.core.provider_credentials import PROVIDER_SPECS, server_provider_credential
+
+        spec = PROVIDER_SPECS[config.backend]
+        credential = None if config.api_key else server_provider_credential(config.backend)
+        api_url = config.base_url or spec.base_url
+        api_key = config.api_key or (credential.api_key if credential else "")
+        mode = spec.protocol
+        model = config.model or (credential.model if credential else spec.default_model)
     else:  # openai
         api_url = config.base_url or "https://api.openai.com/v1"
         api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
@@ -529,7 +555,18 @@ def _translate_sync_native(
 
     mono_path = output_dir / f"{input_path.stem}-mono.pdf"
     dual_path = output_dir / f"{input_path.stem}-dual.pdf"
-    cache_path = output_dir / f"{input_path.stem}.translation-cache.jsonl"
+    # Retained retries may reuse this cache, but switching models must not.
+    cache_identity = json.dumps(
+        [config.backend, mode, api_url.rstrip("/"), model, config.lang_in,
+         config.lang_out, config.quality.value],
+        ensure_ascii=False, separators=(",", ":"),
+    )
+    cache_suffix = ".config-" + hashlib.sha256(cache_identity.encode()).hexdigest()[:16]
+    if config.terminology is not None:
+        from app.services.terminology import terminology_fingerprint
+
+        cache_suffix += ".terms-" + terminology_fingerprint(config.terminology)
+    cache_path = output_dir / f"{input_path.stem}.translation-cache{cache_suffix}.jsonl"
     staging_dir = output_dir / f".{input_path.stem}.native-{uuid.uuid4().hex}"
     staged_mono_path = staging_dir / mono_path.name
     staged_dual_path = staging_dir / dual_path.name
@@ -541,6 +578,7 @@ def _translate_sync_native(
         model=model,
         source_lang=config.lang_in,
         target_lang=config.lang_out,
+        terminology=config.terminology,
         progress=False,
     )
     translator = _ProgressTranslator(

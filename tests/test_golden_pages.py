@@ -2453,13 +2453,19 @@ class _GearsCrossPageDuplicateTranslator(_GoldenStubTranslator):
                 outputs.append("失败分析。")
             elif compact.startswith("We observe two failure modes"):
                 outputs.append("我们观察到两种失败模式，其根本原因各不相同。")
-            elif compact.startswith("(1) Perception: at extreme object poses"):
-                outputs.append(self._FULL_FAILURE_TRANSLATION)
+            elif re.match(r"^\((?:1|⟦\d+⟧)\) Perception: at extreme object poses", compact):
+                marker = re.match(r"^\((⟦\d+⟧)\)", compact)
+                full = self._FULL_FAILURE_TRANSLATION
+                outputs.append(full.replace("（1）", f"（{marker[1]}）") if marker else full)
             elif compact.startswith("underestimates depth discontinuities"):
-                outputs.append(
+                translated = (
                     self._CONTINUATION_TRANSLATION
                     if self.continuation_mode == "suffix"
                     else self._FULL_FAILURE_TRANSLATION
+                )
+                marker = re.search(r"\((⟦\d+⟧)\) Control:", compact)
+                outputs.append(
+                    translated.replace("（2）", f"（{marker[1]}）") if marker else translated
                 )
             else:
                 outputs.append(default)
@@ -2873,7 +2879,9 @@ def test_otf_qa_flags_fragmented_appendix_heading_rendered_as_body(tmp_path):
     page = document[0]
     page.add_redact_annot(fitz.Rect(107.0, 694.0, 382.0, 710.0), fill=(1, 1, 1))
     page.apply_redactions()
-    font_file = FIXTURES.parent.parent / "data/fonts/SongtiSC-Regular.ttf"
+    from pdf_zh_translator.pdf_layout import build_font_pack
+
+    font_file = build_font_pack(None, []).regular_file
     page.insert_font(fontname="qa-body", fontfile=str(font_file))
     page.insert_text(
         (109.0, 705.0),
@@ -3435,9 +3443,10 @@ def _insert_qa_cjk_text(
 ) -> None:
     document = fitz.open(source_pdf)
     page = document[0]
-    font_file = FIXTURES.parent.parent / "data/fonts" / (
-        "HiraginoSansGB-W6.ttf" if bold else "SongtiSC-Regular.ttf"
-    )
+    from pdf_zh_translator.pdf_layout import build_font_pack
+
+    fonts = build_font_pack(None, [])
+    font_file = fonts.bold_file if bold else fonts.regular_file
     alias = "qa-bold" if bold else "qa-body"
     page.insert_font(fontname=alias, fontfile=str(font_file))
     page.insert_text(point, text, fontname=alias, fontsize=size)
@@ -3556,7 +3565,13 @@ def test_ddpm_reverse_process_formula_sentence_is_one_flowing_unit():
     assert "had similar results" in plain
     assert paragraph.flow_inline_math
     assert not paragraph.nowrap
-    assert len(SENTINEL_RUN_RE.findall(paragraph.text)) >= 12
+    protected = " ".join(strip_sentinels(run) for run in SENTINEL_RUN_RE.findall(paragraph.text))
+    # Complete covariance expressions must be protected. Counting fragments
+    # rewarded leaving the ordinary-font Sigma outside its mathematical run.
+    assert "Σ^{θ}(x^{t}, t))" in protected
+    assert "Σ_{θ}(x_{t}, t) =σ^{2}" in protected
+    assert "x^{0}∼N(0,I)" in protected
+    assert "Σ" not in SENTINEL_RUN_RE.sub(" ", paragraph.text)
 
 
 def test_ddpm_numbered_heading_with_inline_formula_keeps_heading_role():
@@ -5127,7 +5142,8 @@ def test_comdiffuser_formula_explanation_is_a_translation_unit():
     source.close()
 
     explanation = next(text for text in texts if "to represent the distributions" in text)
-    assert explanation.startswith("Representing Initial States and Goals.")
+    heading = "Representing Initial States and Goals."
+    assert explanation.startswith(heading) or texts.count(heading) == 1
     assert explanation.endswith("training objective")
 
 

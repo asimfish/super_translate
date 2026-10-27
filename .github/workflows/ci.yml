@@ -49,3 +49,71 @@ jobs:
 
       - name: Smoke test
         run: PYTHON=.venv/bin/python bash scripts/smoke_test.sh
+
+  zotero:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Zotero protocol and task regressions
+        run: npm test --prefix zotero
+      - name: Validate runtime syntax and preferences XML
+        run: |
+          node --check zotero/content/core.js
+          node --check zotero/content/plugin.js
+          node --check zotero/content/preferences.js
+          python3 -c "from xml.etree import ElementTree; ElementTree.parse('zotero/content/preferences.xhtml')"
+      - name: Reproducible install package
+        run: |
+          python3 zotero/scripts/build.py
+          cp zotero/dist/SHA256.json /tmp/zotero-sha-first.json
+          python3 zotero/scripts/build.py
+          cmp /tmp/zotero-sha-first.json zotero/dist/SHA256.json
+      - name: Save install package and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: supertranslate-zotero
+          path: |
+            zotero/dist/*.xpi
+            zotero/dist/SHA256.json
+
+  backend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - name: Shared client API and recovery regressions
+        run: >-
+          uv run pytest -q
+          tests/test_document_organization.py
+          tests/test_installation_bootstrap.py
+          tests/test_terminology.py
+          tests/test_provider_model_catalog.py
+          tests/test_canonical_repair_recovery.py
+          tests/test_startup_recovery_integrity.py
+          tests/test_resumable_document_identity.py
+          tests/test_translation_engine_fingerprint.py
+          tests/test_translation_draft_retention.py
+          tests/test_translation_cache_model_identity.py
+          tests/test_translators.py
+
+  desktop:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Floating client tests
+        run: swift test --package-path desktop/macos
+      - name: Build and verify signed app
+        run: ./desktop/macos/build.sh

@@ -481,8 +481,8 @@ def test_translation_repairing_state_is_visible_without_leaking_live_polling():
     css = (ROOT / "app/static/css/style.css").read_text(encoding="utf-8")
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
 
-    assert "repairing: '待修复（任务已停止）'" in js
-    assert "任务已停止，不占用翻译队列" in js
+    assert "repairing: '修复已暂停（未通过）'" in js
+    assert "自动修复已暂停；已保留草稿，引擎更新后自动重试" in js
     assert "paper.translation_status === 'repairing'" in js
     assert "p.translation_status === 'repairing'" in js
     assert "currentPaper.translation_status === 'repairing'" in js
@@ -577,6 +577,8 @@ def test_upload_view_stages_files_until_user_confirms_upload():
     assert "selectedFiles = failedFiles;" in js
     assert "pendingUploadSessions" in js
     assert ".upload-queue-header" in css
+    assert 'class="upload-privacy-notice"' in html
+    assert "文本会发送到你在翻译设置中选择的模型服务商" in html
 
 
 @pytest.mark.e2e
@@ -702,6 +704,11 @@ def test_reader_renders_pdf_text_layer_for_selection():
     assert "user-select: text" in css
     assert ".textLayer ::selection" in css
     assert ".textLayer span::selection" in css
+    assert "className = 'pdf-load-error'" in js
+    assert "PDF 预览请求被拒绝" in js
+    assert "无法连接 PDF 预览服务" in js
+    assert "PDF 阅读组件启动失败" in js
+    assert "retry.addEventListener('click', () => void loadPdfDocument" in js
 
 
 def test_reader_uses_authenticated_pdf_worker_on_whalent_preview():

@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access import LOCAL_ACCESS_SCOPE
 from app.core.config import settings
 from app.models.provider_credential import ProviderCredential
 
@@ -76,10 +77,33 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         default_model="glm-5.2",
         protocol="openai-compatible",
     ),
+    "gemini": ProviderSpec(
+        label="Google Gemini",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        default_model="gemini-3.8-flash",
+        protocol="openai-compatible",
+    ),
+    "qwen": ProviderSpec(
+        label="通义千问 Qwen",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        default_model="qwen3.8-flash",
+        protocol="openai-compatible",
+    ),
+    "doubao": ProviderSpec(
+        label="豆包 Doubao",
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        default_model="doubao-seed-2-1-pro-260915",
+        protocol="openai-compatible",
+    ),
 }
 
 _CIPHERTEXT_VERSION = b"\x01"
 _NONCE_BYTES = 12
+
+
+def can_use_server_provider_credentials(access_scope: str) -> bool:
+    """Only the explicitly trusted local scope inherits server provider keys."""
+    return access_scope == LOCAL_ACCESS_SCOPE
 
 
 def validate_provider(provider: str) -> str:
@@ -217,6 +241,24 @@ def server_provider_credential(provider: str) -> ResolvedProviderCredential | No
             settings.glm_api_key.get_secret_value() or os.environ.get("GLM_API_KEY", ""),
             spec.base_url,
             settings.glm_model,
+        ),
+        "gemini": (
+            settings.gemini_api_key.get_secret_value()
+            or os.environ.get("GEMINI_API_KEY", ""),
+            spec.base_url,
+            settings.gemini_model,
+        ),
+        "qwen": (
+            settings.qwen_api_key.get_secret_value()
+            or os.environ.get("DASHSCOPE_API_KEY", ""),
+            spec.base_url,
+            settings.qwen_model,
+        ),
+        "doubao": (
+            settings.doubao_api_key.get_secret_value()
+            or os.environ.get("ARK_API_KEY", ""),
+            spec.base_url,
+            settings.doubao_model,
         ),
     }
     api_key, base_url, model = configured[normalized]

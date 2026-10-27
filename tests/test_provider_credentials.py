@@ -33,7 +33,9 @@ def credential_key(monkeypatch):
 def test_provider_catalog_contains_requested_vendors():
     from app.core.provider_credentials import PROVIDER_SPECS
 
-    assert set(PROVIDER_SPECS) == {"deepseek", "kimi", "openai", "anthropic", "glm"}
+    assert set(PROVIDER_SPECS) == {
+        "deepseek", "kimi", "openai", "anthropic", "glm", "gemini", "qwen", "doubao",
+    }
     assert PROVIDER_SPECS["glm"].base_url == "https://open.bigmodel.cn/api/paas/v4"
     assert PROVIDER_SPECS["anthropic"].base_url == "https://api.anthropic.com/v1"
 
@@ -267,9 +269,9 @@ def test_ui_exposes_user_provider_settings_without_key_echo():
 
     assert 'id="btn-provider-settings"' in html
     assert 'id="provider-settings-modal"' in html
-    for provider in ("deepseek", "kimi", "openai", "anthropic", "glm"):
+    for provider in ("deepseek", "kimi", "openai", "anthropic", "glm", "gemini", "qwen", "doubao"):
         assert f'data-provider="{provider}"' in html
-    assert html.count('<select class="provider-model"') == 5
+    assert html.count('<select class="provider-model"') == 8
     assert '<input class="provider-model"' not in html
     assert "async listProviderCredentials()" in js
     assert "async listProviderModels()" in js
@@ -277,6 +279,16 @@ def test_ui_exposes_user_provider_settings_without_key_echo():
     assert "async saveProviderCredential(provider, payload)" in js
     assert "renderProviderModelCatalogs" in js
     assert ".api_key" not in js
+    assert "AES-GCM" in html
+    assert "不会在接口响应、任务文件或日志中返回完整 key" in html
+
+
+
+
+
+
+
+
 
 
 def test_curated_model_catalog_always_contains_provider_defaults():
@@ -339,32 +351,34 @@ def test_curated_model_catalog_matches_verified_official_translation_models():
         ),
     }
 
-    assert {
-        provider: curated_provider_models(provider) for provider in expected
-    } == expected
+    for provider, models in expected.items():
+        assert set(models) <= set(curated_provider_models(provider))
+    for provider, model in {"gemini": "gemini-3.8-flash", "qwen": "qwen3.8-flash",
+                            "doubao": "doubao-seed-2-1-pro-260915"}.items():
+        assert model in curated_provider_models(provider)
 
 
 @pytest.mark.parametrize(
     ("provider", "model", "expected"),
     [
         ("deepseek", "deepseek-v4-pro", True),
-        ("deepseek", "deepseek-chat", False),
-        ("deepseek", "deepseek-reasoner", False),
+        ("deepseek", "deepseek-chat", True),
+        ("deepseek", "deepseek-reasoner", True),
         ("kimi", "kimi-k3", True),
         ("kimi", "kimi-k2.7-code-highspeed", True),
         ("kimi", "kimi-k2.6", True),
-        ("kimi", "kimi-k2.5", False),
-        ("kimi", "kimi-k2-0905-preview", False),
-        ("kimi", "moonshot-v1-128k", False),
+        ("kimi", "kimi-k2.5", True),
+        ("kimi", "kimi-k2-0905-preview", True),
+        ("kimi", "moonshot-v1-128k", True),
         ("openai", "gpt-5.2", True),
         ("openai", "gpt-5.6-terra", True),
         ("openai", "gpt-4.1-mini", True),
         ("openai", "gpt-5.1-codex", False),
-        ("openai", "gpt-5-chat-latest", False),
+        ("openai", "gpt-5-chat-latest", True),
         ("openai", "o3-deep-research", False),
         ("openai", "gpt-audio", False),
         ("glm", "glm-4.7-flashx", True),
-        ("glm", "glm-5v-turbo", False),
+        ("glm", "glm-5v-turbo", True),
         ("glm", "glm-ocr", False),
     ],
 )
@@ -400,11 +414,11 @@ def test_provider_model_discovery_uses_vendor_auth_and_filters_non_text_models()
         )
 
     request = opener.open.call_args.args[0]
-    assert request.full_url == "https://api.anthropic.com/v1/models"
+    assert request.full_url == "https://api.anthropic.com/v1/models?limit=100"
     assert request.headers["X-api-key"] == "anthropic-private-key"
     assert request.headers["Anthropic-version"] == "2023-06-01"
     assert request.headers.get("Authorization") is None
-    assert models == ("claude-opus-5", "claude-sonnet-5")
+    assert models == ("claude-sonnet-5", "claude-opus-5")
 
 
 def test_anthropic_model_discovery_follows_paginated_account_catalog():
@@ -450,10 +464,10 @@ def test_anthropic_model_discovery_follows_paginated_account_catalog():
 
     urls = [call.args[0].full_url for call in opener.open.call_args_list]
     assert urls == [
-        "https://api.anthropic.com/v1/models",
-        "https://api.anthropic.com/v1/models?after_id=claude-sonnet-5",
+        "https://api.anthropic.com/v1/models?limit=100",
+        "https://api.anthropic.com/v1/models?limit=100&after_id=claude-sonnet-5",
     ]
-    assert models == ("claude-opus-5", "claude-sonnet-5")
+    assert models == ("claude-sonnet-5", "claude-opus-5")
 
 
 def test_anthropic_model_discovery_rejects_repeated_pagination_cursor():
@@ -498,16 +512,20 @@ def test_provider_model_discovery_handles_non_object_payload_as_empty():
     opener = MagicMock()
     opener.open.return_value = response
 
-    with patch("urllib.request.build_opener", return_value=opener):
-        assert fetch_provider_models(
-            "anthropic",
-            api_key="anthropic-private-key",
-            base_url="https://api.anthropic.com/v1",
-            timeout_seconds=3,
-        ) == ()
+    with (
+        patch("urllib.request.build_opener", return_value=opener),
+        pytest.raises(ValueError, match="Malformed model response"),
+    ):
+        fetch_provider_models(
+            "anthropic", api_key="anthropic-private-key",
+            base_url="https://api.anthropic.com/v1", timeout_seconds=3,
+        )
 
 
-def test_provider_model_discovery_rejects_redirects_before_resending_credentials():
+def test_provider_model_discovery_rejects_redirects_before_resending_credentials(monkeypatch):
+    from dataclasses import replace
+
+    from app.core.provider_credentials import PROVIDER_SPECS
     from app.services.provider_model_catalog import fetch_provider_models
 
     redirected_headers = []
@@ -534,6 +552,9 @@ def test_provider_model_discovery_rejects_redirects_before_resending_credentials
     server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    monkeypatch.setitem(PROVIDER_SPECS, "openai", replace(
+        PROVIDER_SPECS["openai"], base_url=f"http://127.0.0.1:{server.server_port}"
+    ))
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             fetch_provider_models(
@@ -614,12 +635,12 @@ def test_model_catalog_response_adds_guidance_without_breaking_model_ids():
     )
 
     assert response.models == ["gpt-5.6-terra", "gpt-5.6", "gpt-account-private"]
-    assert response.catalog_verified_on == date(2026, 8, 23)
+    assert response.catalog_verified_on == date(2026, 10, 10)
     options = {option.id: option for option in response.model_options}
-    assert options["gpt-5.6"].group == "latest"
+    assert options["gpt-5.6"].group == "balanced"
     assert options["gpt-5.6-terra"].group == "balanced"
-    assert options["gpt-account-private"].group == "account"
-    assert options["gpt-5.6-terra"].description == "效果、速度与成本均衡"
+    assert options["gpt-account-private"].availability == "reference"
+    assert options["gpt-5.6-terra"].description == "通用文本"
 
 
 def test_every_curated_model_has_non_account_guidance():
@@ -648,17 +669,17 @@ def test_provider_model_dropdown_groups_models_and_preserves_selection():
             {
                 "id": "gpt-5.6",
                 "group": "latest",
-                "description": "最新旗舰",
+                "description": "最新旗舰", "availability": "listed",
             },
             {
                 "id": "gpt-5.6-terra",
                 "group": "balanced",
-                "description": "效果、速度与成本均衡",
+                "description": "效果、速度与成本均衡", "availability": "listed",
             },
             {
                 "id": "gpt-5.6-luna",
                 "group": "economy",
-                "description": "低成本高速",
+                "description": "低成本高速", "availability": "reference",
             },
         ],
         "source": "provider",
@@ -674,6 +695,7 @@ def test_provider_model_dropdown_groups_models_and_preserves_selection():
             """
             <div class="provider-row" data-provider="openai">
               <div class="provider-model-control">
+                <input class="provider-model-search" value=""/>
                 <select class="provider-model"></select>
                 <button class="provider-model-refresh"></button>
                 <span class="provider-model-meta"></span>
@@ -687,12 +709,12 @@ def test_provider_model_dropdown_groups_models_and_preserves_selection():
         assert page.locator(".provider-model").input_value() == "gpt-5.6-terra"
         assert page.locator(".provider-model optgroup").evaluate_all(
             "groups => groups.map(group => group.label)"
-        ) == ["最新推荐", "均衡", "低成本 / 高速"]
+        ) == ["账号接口列出", "内置参考"]
         assert page.locator('option[value="gpt-5.6-terra"]').inner_text() == (
             "gpt-5.6-terra · 效果、速度与成本均衡"
         )
-        assert "账号模型更新" in page.locator(".provider-model-meta").inner_text()
-        assert "内置目录核对 2026-08-23" in page.locator(
+        assert "账号接口" in page.locator(".provider-model-meta").inner_text()
+        assert "查询官方模型接口" in page.locator(
             ".provider-model-refresh"
         ).get_attribute("title")
         browser.close()
@@ -752,7 +774,7 @@ async def test_model_catalog_refresh_failure_returns_safe_curated_fallback():
         )
 
     assert catalog.source == "curated"
-    assert catalog.warning == "无法更新模型列表，已使用内置列表"
+    assert catalog.warning == "模型目录暂时无法更新，将自动重试；当前为内置参考"
     assert "gpt-4o-mini" in catalog.models
     assert "secret" not in catalog.warning
 

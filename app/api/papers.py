@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -28,7 +29,8 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.access import LOCAL_ACCESS_SCOPE, get_request_access_scope
@@ -39,19 +41,31 @@ from app.core.provider_credentials import (
     CredentialConfigurationError,
     CredentialDecryptionError,
     ResolvedProviderCredential,
+    can_use_server_provider_credentials,
     load_provider_credential,
     server_provider_credential,
 )
+from app.models.document import PaperDocument, PaperImport
 from app.models.paper import (
     Paper,
     TranslationJob,
     TranslationJobStatus,
     TranslationStatus,
+    generate_id,
     generate_job_id,
 )
 from app.models.pdf_upload_session import PdfUploadSession
+from app.services.document_library import (
+    attach_document_info,
+    find_duplicate,
+    library_history,
+    new_document,
+    organize_existing,
+    record_import,
+    utc_now,
+)
+from app.services.document_metadata import export_filename, pdf_fingerprints
 from app.services.library import (
-    cleanup_output_dir,
     delete_paper_files,
     extract_title_from_pdf,
     generate_stored_filename,
@@ -64,6 +78,7 @@ from app.services.quality_agent import (
     create_quality_agent,
     has_retranslatable_error,
     issue_fingerprint,
+    plan_quality_retry,
 )
 from app.services.resumable_uploads import (
     FilesystemChunkUploadStore,
@@ -224,6 +239,12 @@ class PaperResponse(BaseModel):
     has_qa_report: bool = False
     created_at: str
     updated_at: str
+    last_imported_at: str = ""
+    import_count: int = 1
+    version_count: int = 1
+    version_number: int = 1
+    canonical_paper_id: str | None = None
+    duplicate: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -364,6 +385,9 @@ def _paper_to_response(
 ) -> PaperResponse:
     """Convert a Paper model to a PaperResponse."""
     progress_meta = _translation_progress_meta(paper)
+    document_info = getattr(paper, "_document_info", {})
+    if not isinstance(document_info, dict):
+        document_info = {}
     return PaperResponse(
         id=paper.id,
         title=paper.title,
@@ -385,6 +409,7 @@ def _paper_to_response(
         has_qa_report=has_qa_report,
         created_at=_iso_utc(paper.created_at),
         updated_at=_iso_utc(paper.updated_at),
+        **document_info,
     )
 
 
@@ -769,7 +794,7 @@ async def _prepare_paper_record(
 ) -> Paper:
     (page_count, file_size), title = await asyncio.gather(
         asyncio.to_thread(get_pdf_info, stored_path),
-        asyncio.to_thread(extract_title_from_pdf, stored_path),
+        asyncio.to_thread(extract_title_from_pdf, stored_path, original_filename),
     )
     return Paper(
         access_scope=access_scope,
@@ -779,6 +804,7 @@ async def _prepare_paper_record(
         file_size=file_size,
         page_count=page_count,
         tags=tags,
+        created_at=utc_now(),
     )
 
 
@@ -802,6 +828,7 @@ async def list_papers(
     tag: str = "",
     offset: int = 0,
     limit: int = 50,
+    sort: str = "recent",
 ) -> PaperListResponse:
     """List papers with optional filtering and pagination.
 
@@ -824,14 +851,23 @@ async def list_papers(
         raise HTTPException(400, f"Search term too long (max {_MAX_SEARCH_LEN} characters)")
 
     # Base query with filters
-    base = (
-        select(Paper)
-        .where(Paper.access_scope == access_scope)
-        .order_by(Paper.created_at.desc())
-    )
+    if sort not in {"recent", "oldest", "title"}:
+        raise HTTPException(400, "Invalid library order")
+    imported = func.coalesce(PaperDocument.last_imported_at, Paper.created_at)
+    ordering = imported.asc() if sort == "oldest" else imported.desc()
+    base = select(Paper).outerjoin(PaperDocument, PaperDocument.paper_id == Paper.id).where(
+        Paper.access_scope == access_scope, PaperDocument.canonical_paper_id.is_(None),
+    ).order_by(Paper.title.asc() if sort == "title" else ordering, Paper.id.desc())
     if search:
         escaped = _escape_like(search)
-        base = base.where(Paper.title.like(f"%{escaped}%", escape="\\"))
+        pattern = f"%{escaped}%"
+        alias = select(PaperImport.id).where(
+            PaperImport.paper_id == Paper.id, PaperImport.access_scope == access_scope,
+            or_(PaperImport.filename.like(pattern, escape="\\"),
+                PaperImport.source_title.like(pattern, escape="\\")),
+        ).exists()
+        base = base.where(or_(Paper.title.like(pattern, escape="\\"),
+                              Paper.original_filename.like(pattern, escape="\\"), alias))
     if status:
         base = base.where(Paper.translation_status == status)
     if tag:
@@ -843,6 +879,7 @@ async def list_papers(
     query = base.offset(offset).limit(limit)
     result = await db.execute(query)
     papers = result.scalars().all()
+    await attach_document_info(db, papers)
 
     # Check file existence per paper (safe path validation, max 200 papers)
     # Pre-resolve base dirs once to avoid repeated resolve() calls per paper
@@ -971,6 +1008,82 @@ async def upload_resumable_chunk(
     return await _upload_response(upload, store)
 
 
+async def _register_resumable_document(
+    db: AsyncSession,
+    upload: PdfUploadSession,
+    stored_path: Path,
+    fingerprints: tuple[str, str],
+    content_sha256: str,
+) -> tuple[Paper, bool, bool]:
+    """Commit the canonical document, import and upload session together."""
+    upload_id = upload.id
+    access_scope = upload.access_scope
+    for attempt in range(2):
+        duplicate = await find_duplicate(db, access_scope, fingerprints)
+        if duplicate is None:
+            # Uploads created before the document library still have exact byte
+            # identity in their durable upload sessions. Index those in place.
+            duplicate = await db.scalar(
+                select(Paper)
+                .join(PdfUploadSession, PdfUploadSession.paper_id == Paper.id)
+                .where(
+                    PdfUploadSession.access_scope == access_scope,
+                    PdfUploadSession.content_sha256 == content_sha256,
+                    PdfUploadSession.file_size == upload.file_size,
+                    Paper.access_scope == access_scope,
+                )
+                .order_by(PdfUploadSession.created_at, Paper.id)
+                .limit(1)
+            )
+            if duplicate is not None:
+                identity = await db.get(PaperDocument, duplicate.id)
+                if identity is not None and identity.access_scope == access_scope:
+                    if identity.canonical_paper_id:
+                        duplicate = await _get_paper_or_404(
+                            identity.canonical_paper_id, db, access_scope
+                        )
+                elif identity is None:
+                    db.add(new_document(duplicate, fingerprints))
+
+        paper = duplicate or await _prepare_paper_record(
+            access_scope=access_scope,
+            original_filename=upload.original_filename,
+            stored_path=stored_path,
+            tags=upload.tags,
+        )
+        adopted = duplicate is not None and not _file_exists_safe(
+            settings.papers_path, paper.stored_filename
+        )
+        try:
+            if duplicate is None:
+                db.add(paper)
+                await db.flush()
+                db.add(new_document(paper, fingerprints))
+            elif adopted:
+                paper.stored_filename = stored_path.name
+            await record_import(
+                db,
+                paper,
+                upload.original_filename,
+                source_title=await asyncio.to_thread(
+                    extract_title_from_pdf, stored_path, upload.original_filename
+                ),
+            )
+            upload.content_sha256 = content_sha256
+            upload.paper_id = paper.id
+            upload.updated_at = utc_now()
+            await db.commit()
+            return paper, duplicate is not None, adopted
+        except IntegrityError:
+            # A multipart request can win the canonical identity while this
+            # chunk-upload request is preparing its record. Reuse that winner.
+            await db.rollback()
+            if attempt:
+                raise
+            upload = await _get_upload_or_404(upload_id, db, access_scope)
+    raise RuntimeError("Unable to register uploaded document")
+
+
 @router.post("/uploads/{upload_id}/complete")
 async def complete_resumable_upload(
     upload_id: str,
@@ -984,11 +1097,27 @@ async def complete_resumable_upload(
     assembled_path = settings.papers_path / f".upload-{upload.id}-{uuid.uuid4().hex}.part"
     stored_path: Path | None = None
     content_lock = None
+    durable = False
     try:
         await db.refresh(upload)
         if upload.paper_id:
             paper = await _get_paper_or_404(upload.paper_id, db, access_scope)
-            return _paper_to_response(paper, has_original=True)
+            identity = await db.get(PaperDocument, paper.id)
+            if identity and identity.access_scope == access_scope and identity.canonical_paper_id:
+                paper = await _get_paper_or_404(identity.canonical_paper_id, db, access_scope)
+                upload.paper_id = paper.id
+                await db.commit()
+                await db.refresh(paper)
+            await attach_document_info(db, [paper])
+            return _paper_to_response(
+                paper,
+                has_original=_file_exists_safe(settings.papers_path, paper.stored_filename),
+                has_translated=_file_exists_safe(
+                    settings.translations_path, paper.translated_filename
+                ),
+                has_dual=_file_exists_safe(settings.translations_path, paper.dual_filename),
+                has_qa_report=_qa_report_exists(paper),
+            ).model_copy(update={"duplicate": True})
 
         content_sha256 = await asyncio.to_thread(
             store.assemble_pdf,
@@ -997,69 +1126,59 @@ async def complete_resumable_upload(
             upload.file_size,
             assembled_path,
         )
+        fingerprints = await asyncio.to_thread(pdf_fingerprints, assembled_path)
         content_lock = await asyncio.to_thread(
             store.acquire_lock,
-            f"content:{access_scope}:{content_sha256}",
+            f"document:{access_scope}:{fingerprints[1]}",
         )
-        duplicate = await db.scalar(
-            select(Paper)
-            .join(PdfUploadSession, PdfUploadSession.paper_id == Paper.id)
-            .where(
-                PdfUploadSession.access_scope == access_scope,
-                PdfUploadSession.content_sha256 == content_sha256,
-                PdfUploadSession.file_size == upload.file_size,
-                PdfUploadSession.paper_id.is_not(None),
-                Paper.access_scope == access_scope,
-            )
-            .order_by(PdfUploadSession.created_at.asc())
-        )
-        if duplicate is not None:
-            upload.content_sha256 = content_sha256
-            upload.paper_id = duplicate.id
-            upload.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            await db.commit()
-            assembled_path.unlink(missing_ok=True)
-            await asyncio.to_thread(store.cleanup_session, upload.id)
-            return _paper_to_response(duplicate, has_original=True)
-
-        stored_path = settings.papers_path / generate_stored_filename(
-            upload.original_filename
-        )
+        stored_path = settings.papers_path / generate_stored_filename(upload.original_filename)
         await asyncio.to_thread(os.replace, assembled_path, stored_path)
-        paper = await _prepare_paper_record(
-            access_scope=access_scope,
-            original_filename=upload.original_filename,
-            stored_path=stored_path,
-            tags=upload.tags,
+        paper, duplicate, adopted = await _register_resumable_document(
+            db,
+            upload,
+            stored_path,
+            fingerprints,
+            content_sha256,
         )
-        db.add(paper)
-        await db.flush()
-        upload.content_sha256 = content_sha256
-        upload.paper_id = paper.id
-        upload.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        await db.commit()
+        durable = True
+        if duplicate and not adopted:
+            stored_path.unlink(missing_ok=True)
         await db.refresh(paper)
-        await asyncio.to_thread(store.cleanup_session, upload.id)
-        await _prepare_safe_preview(paper, stored_path)
-        return _paper_to_response(paper, has_original=True)
+        await attach_document_info(db, [paper])
+        await asyncio.to_thread(store.cleanup_session, upload_id)
+        if not duplicate or adopted:
+            await _prepare_safe_preview(paper, stored_path)
+        return _paper_to_response(
+            paper,
+            has_original=True,
+            has_translated=_file_exists_safe(settings.translations_path, paper.translated_filename),
+            has_dual=_file_exists_safe(settings.translations_path, paper.dual_filename),
+            has_qa_report=_qa_report_exists(paper),
+        ).model_copy(update={"duplicate": duplicate})
+    except asyncio.CancelledError:
+        await db.rollback()
+        assembled_path.unlink(missing_ok=True)
+        if stored_path is not None and not durable:
+            stored_path.unlink(missing_ok=True)
+        raise
     except UploadValidationError as exc:
         await db.rollback()
         assembled_path.unlink(missing_ok=True)
-        if stored_path is not None:
+        if stored_path is not None and not durable:
             stored_path.unlink(missing_ok=True)
         raise HTTPException(400, str(exc)) from None
     except HTTPException:
         await db.rollback()
         assembled_path.unlink(missing_ok=True)
-        if stored_path is not None:
+        if stored_path is not None and not durable:
             stored_path.unlink(missing_ok=True)
         raise
     except Exception:
         await db.rollback()
         assembled_path.unlink(missing_ok=True)
-        if stored_path is not None:
+        if stored_path is not None and not durable:
             stored_path.unlink(missing_ok=True)
-        logger.exception("Failed to complete resumable upload %s", upload.id)
+        logger.exception("Failed to complete resumable upload %s", upload_id)
         raise HTTPException(500, "Failed to complete uploaded PDF") from None
     finally:
         if content_lock is not None:
@@ -1114,29 +1233,105 @@ async def upload_paper(
         raise HTTPException(400, "Empty PDF file")
 
     try:
-        paper = await _prepare_paper_record(
-            access_scope=access_scope,
-            original_filename=file.filename,
-            stored_path=stored_path,
-            tags=tags,
+        (page_count, file_size), title, fingerprints = await asyncio.gather(
+            asyncio.to_thread(get_pdf_info, stored_path),
+            asyncio.to_thread(extract_title_from_pdf, stored_path, file.filename),
+            asyncio.to_thread(pdf_fingerprints, stored_path),
         )
     except Exception:
         stored_path.unlink(missing_ok=True)
         logger.exception("Error processing uploaded PDF")
         raise HTTPException(500, "Failed to process uploaded PDF") from None
+
+    duplicate = await find_duplicate(db, access_scope, fingerprints)
+    if duplicate is not None:
+        return await _reuse_uploaded_paper(db, duplicate, stored_path, file.filename, title)
+
+    paper = Paper(
+        id=generate_id(),
+        access_scope=access_scope,
+        title=title,
+        original_filename=file.filename,
+        stored_filename=stored_path.name,
+        file_size=file_size,
+        page_count=page_count,
+        tags=tags,
+        created_at=utc_now(),
+    )
     db.add(paper)
     try:
+        await db.flush()
+        db.add(new_document(paper, fingerprints))
+        db.add(PaperImport(paper_id=paper.id, access_scope=access_scope,
+                           filename=Path(file.filename.replace("\\", "/")).name[:500],
+                           source_title=title,
+                           imported_at=paper.created_at))
         await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        duplicate = await find_duplicate(db, access_scope, fingerprints)
+        if duplicate is None:
+            stored_path.unlink(missing_ok=True)
+            raise HTTPException(500, "Failed to save paper record") from None
+        return await _reuse_uploaded_paper(db, duplicate, stored_path, file.filename, title)
     except Exception:
         await db.rollback()
         stored_path.unlink(missing_ok=True)
         logger.exception("Failed to save paper record, cleaned up file")
         raise HTTPException(500, "Failed to save paper record") from None
     await db.refresh(paper)
+    await attach_document_info(db, [paper])
 
-    await _prepare_safe_preview(paper, stored_path)
+    try:
+        safe_path = await asyncio.to_thread(safe_pdf_for_use, stored_path)
+        if safe_path != stored_path.resolve():
+            logger.info("Prepared safe PDF preview for uploaded paper %s", paper.id)
+    except Exception:
+        # The upload is durable; first view can retry preview preparation.
+        logger.exception("Deferred safe preview preparation for paper %s", paper.id)
 
     return _paper_to_response(paper, has_original=True)
+
+
+async def _reuse_uploaded_paper(db: AsyncSession, paper: Paper, stored_path: Path,
+                               filename: str, source_title: str) -> PaperResponse:
+    paper_id = paper.id
+    adopt = not _file_exists_safe(settings.papers_path, paper.stored_filename)
+    committed = False
+    try:
+        if adopt:
+            paper.stored_filename = stored_path.name
+        await record_import(db, paper, filename, source_title=source_title)
+        await db.commit()
+        committed = True
+        await db.refresh(paper)
+        await attach_document_info(db, [paper])
+        return _paper_to_response(
+            paper, has_original=True,
+            has_translated=_file_exists_safe(settings.translations_path, paper.translated_filename),
+            has_dual=_file_exists_safe(settings.translations_path, paper.dual_filename),
+            has_qa_report=_qa_report_exists(paper),
+        ).model_copy(update={"duplicate": True})
+    except Exception:
+        await db.rollback()
+        logger.exception("Failed to record repeated import for paper %s", paper_id)
+        raise HTTPException(500, "Failed to save import record") from None
+    finally:
+        if not adopt or not committed:
+            stored_path.unlink(missing_ok=True)
+
+
+@router.post("/organize")
+async def organize_library(db: Annotated[AsyncSession, Depends(get_session)],
+                           access_scope: AccessScope) -> dict:
+    return await organize_existing(db, access_scope)
+
+
+@router.get("/{paper_id}/library-history")
+async def get_library_history(paper_id: str, db: Annotated[AsyncSession, Depends(get_session)],
+                              access_scope: AccessScope) -> dict:
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
+    return await library_history(db, paper)
 
 
 @router.get("/{paper_id}")
@@ -1157,6 +1352,7 @@ async def get_paper(
         HTTPException: If paper not found (404)
     """
     paper = await _get_paper_or_404(paper_id, db, access_scope)
+    await attach_document_info(db, [paper])
     # Check file existence safely (respects path traversal guard)
     has_original = _file_exists_safe(settings.papers_path, paper.stored_filename)
     has_translated = _file_exists_safe(settings.translations_path, paper.translated_filename)
@@ -1277,8 +1473,6 @@ async def start_translation(
             translation_status=TranslationStatus.TRANSLATING.value,
             translation_progress=0.0,
             translation_error=None,
-            translated_filename="",
-            dual_filename="",
             translation_log="",
             translation_stage="已提交",
             translation_eta_seconds=None,
@@ -1427,6 +1621,9 @@ _BACKEND_API_KEY_ATTRS = {
     "openai": "openai_api_key",
     "anthropic": "anthropic_api_key",
     "glm": "glm_api_key",
+    "gemini": "gemini_api_key",
+    "qwen": "qwen_api_key",
+    "doubao": "doubao_api_key",
     "deepl": "deepl_api_key",
 }
 
@@ -1450,6 +1647,17 @@ def _resolve_backend_config(
     api_key = ""
     base_url = ""
     model_name = ""
+
+    if (
+        quality_preset != QualityPreset.FAST
+        and backend in PROVIDER_SPECS
+        and provider_credential is None
+        and not allow_server_default
+    ):
+        raise HTTPException(
+            400,
+            f"Backend '{backend}' requires an API key. Configure it in API 设置.",
+        )
 
     if provider_credential is not None:
         if provider_credential.provider != backend:
@@ -1476,6 +1684,12 @@ def _resolve_backend_config(
         api_key = settings.glm_api_key.get_secret_value()
         base_url = PROVIDER_SPECS[backend].base_url
         model_name = settings.glm_model
+    elif backend in {"gemini", "qwen", "doubao"}:
+        credential = server_provider_credential(backend) if allow_server_default else None
+        if credential:
+            api_key = credential.api_key
+            base_url = credential.base_url
+            model_name = credential.model
     elif backend == "deepl":
         api_key = settings.deepl_api_key.get_secret_value()
     elif backend == "ollama":
@@ -1541,7 +1755,7 @@ async def _update_translation_job(
     if attempt_count is not None:
         values["attempt_count"] = max(0, attempt_count)
     if max_attempts is not None:
-        values["max_attempts"] = max(1, max_attempts)
+        values["max_attempts"] = recovery_attempt_limit(max_attempts)
     if engine_revision is not None:
         values["engine_revision"] = engine_revision[:64]
     if last_issue_fingerprint is not None:
@@ -1695,7 +1909,9 @@ def _run_translation(
                         return await load_provider_credential(db, access_scope, backend)
 
                 provider_credential = asyncio.run(_load_credential())
-                if provider_credential is None and access_scope == LOCAL_ACCESS_SCOPE:
+                if provider_credential is None and can_use_server_provider_credentials(
+                    access_scope
+                ):
                     provider_credential = server_provider_credential(backend)
                 if provider_credential is None:
                     raise HTTPException(
@@ -1711,7 +1927,9 @@ def _run_translation(
             ocr_language=ocr_language,
             ocr_dpi=ocr_dpi,
             provider_credential=provider_credential,
-            allow_server_default=access_scope in (None, LOCAL_ACCESS_SCOPE),
+            allow_server_default=(
+                access_scope is None or can_use_server_provider_credentials(access_scope)
+            ),
         )
 
         asyncio.run(_do_translate(paper_id, config, quality, qa_mode, qa_max_passes, job_id))
@@ -1770,7 +1988,6 @@ async def _finalize_cancelled_translation(
                 finished=True,
             )
             await db.commit()
-    cleanup_output_dir(output_dir)
     _clear_cancel_requested(paper_id)
 
 
@@ -1956,6 +2173,46 @@ async def _run_translate_in_worker(
     )
 
 
+def _quarantine_unmanaged_partial_outputs(
+    output_dir: Path, *, include_qa_reports: bool = False,
+) -> Path | None:
+    """Recoverably isolate only obvious non-PDF remnants of a legacy failure.
+
+    Potential PDFs, caches, assets, links and incomplete/changing reads are
+    retained in place. Durable jobs never use this legacy cleanup path.
+    """
+    try:
+        root = settings.translations_path.resolve()
+        if output_dir.is_symlink() or output_dir.resolve().parent != root:
+            return None
+        for path in output_dir.iterdir():
+            if path.is_symlink() or not path.is_file():
+                return None
+            if include_qa_reports and path.name.endswith(".qa.json"):
+                # Only globally deleted papers may relocate their runtime
+                # reports with invalid PDFs; report bytes remain untouched.
+                continue
+            if path.suffix.lower() != ".pdf":
+                return None
+            before = path.stat()
+            with path.open("rb") as handle:
+                prefix = handle.read(1024)
+                after = os.fstat(handle.fileno())
+            before_identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            if (before_identity != after_identity
+                    or len(prefix) != min(1024, before.st_size)
+                    or b"%PDF-" in prefix):
+                return None
+        destination = output_dir.with_name(f".failed-{output_dir.name}-{uuid.uuid4().hex}")
+        output_dir.rename(destination)
+        logger.info("Legacy invalid output isolated recoverably for %s", output_dir.name)
+        return destination
+    except OSError:
+        logger.warning("Unable to isolate legacy output for %s; retained", output_dir.name)
+        return None
+
+
 async def _do_translate(
     paper_id: str,
     config: TranslationConfig,
@@ -1974,9 +2231,16 @@ async def _do_translate(
     from app.core.database import async_session
 
     loop = asyncio.get_running_loop()
+    engine_revision = current_engine_revision()
+    max_attempts = recovery_attempt_limit(settings.translation_recovery_attempts)
+    starting_attempt = 0
 
     # Phase 1: Load and validate (short session)
     async with async_session() as db:
+        durable_job = await db.get(TranslationJob, job_id) if job_id else None
+        if job_id and (durable_job is None or durable_job.paper_id != paper_id):
+            logger.error("Translation job does not belong to paper %s", paper_id)
+            return
         result = await db.execute(select(Paper).where(Paper.id == paper_id))
         paper = result.scalar_one_or_none()
         if not paper:
@@ -1992,7 +2256,39 @@ async def _do_translate(
             _clear_cancel_requested(paper_id)
             return
 
+        if job_id:
+            recovery_job = await db.get(TranslationJob, job_id)
+            if recovery_job is not None:
+                if (
+                    recovery_job.paper_id != paper_id
+                    or recovery_job.access_scope != paper.access_scope
+                    or recovery_job.cancel_requested
+                ):
+                    return
+                if recovery_job.engine_revision == engine_revision:
+                    max_attempts = min(
+                        max_attempts, recovery_attempt_limit(recovery_job.max_attempts)
+                    )
+                    starting_attempt = max(0, recovery_job.attempt_count)
+                    if starting_attempt >= max_attempts:
+                        error = recovery_job.error or "当前引擎恢复次数已用尽"
+                        paper.translation_status = TranslationStatus.REPAIRING.value
+                        paper.translation_stage = "修复已暂停，等待引擎更新后自动重试"
+                        paper.translation_error = error
+                        paper.translation_eta_seconds = None
+                        await _update_translation_job(
+                            db,
+                            job_id,
+                            status=TranslationJobStatus.REPAIR_PENDING.value,
+                            progress=paper.translation_progress,
+                            error=error,
+                            finished=True,
+                        )
+                        await db.commit()
+                        return
+
         stored_filename = paper.stored_filename
+        access_scope = paper.access_scope
         await _update_translation_job(
             db,
             job_id,
@@ -2037,12 +2333,32 @@ async def _do_translate(
 
         input_path = await asyncio.to_thread(safe_pdf_for_use, input_path)
 
+        if config.backend in PROVIDER_SPECS:
+            from dataclasses import replace
+
+            from app.services.terminology import resolve_terminology
+
+            term_resolution = await resolve_terminology(db, paper.access_scope, paper_id)
+            config = replace(config, terminology=term_resolution["snapshot"])
+
+        if not job_id and any(
+            isinstance(filename, str) and filename
+            for filename in (paper.translated_filename, paper.dual_filename)
+        ):
+            # Legacy retries with a registered draft need a real recovery
+            # record before promising a parked state or releasing the DB.
+            job_id = generate_job_id()
+            durable_job = TranslationJob(
+                id=job_id, paper_id=paper.id, access_scope=access_scope,
+                status=TranslationJobStatus.RUNNING.value,
+                started_at=datetime.now(timezone.utc), heartbeat_at=datetime.now(timezone.utc),
+            )
+            db.add(durable_job)
         if job_id:
             await db.commit()
 
     output_dir = settings.translations_path / paper_id
-    # Clean up old translation files before starting re-translation
-    cleanup_output_dir(output_dir)
+    # Native rendering stages new files; keep the last draft and cache on retry.
     output_dir.mkdir(parents=True, exist_ok=True)
     start_time = time.monotonic()
 
@@ -2070,8 +2386,9 @@ async def _do_translate(
         postprocess_eta_seconds=qa_eta_seconds,
     )
 
-    max_attempts = recovery_attempt_limit(settings.translation_recovery_attempts)
-    engine_revision = current_engine_revision()
+    if (durable_job is not None and durable_job.cancel_requested) or _is_cancel_requested(paper_id):
+        await _finalize_cancelled_translation(paper_id, loop, output_dir, start_time, job_id)
+        return
     trans_result = TranslationResult(error="Translation did not start")
     best_result: TranslationResult | None = None
     best_snapshots: dict[Path, bytes] = {}
@@ -2079,7 +2396,10 @@ async def _do_translate(
     best_score: tuple[int, int] | None = None
     clean_result = False
     qa_failure_error: str | None = None
-    for attempt in range(1, max_attempts + 1):
+    previous_quality_issues: list | None = None
+    attempted = starting_attempt
+    for attempt in range(starting_attempt + 1, max_attempts + 1):
+        attempted = attempt
         if attempt > 1:
             delay = recovery_backoff_seconds(
                 settings.translation_recovery_backoff_seconds,
@@ -2127,14 +2447,13 @@ async def _do_translate(
             trans_result = TranslationResult(error=sanitize_error(e))
 
         if not trans_result.success:
-            worker_error = trans_result.error or "Translation worker failed"
+            error = sanitize_error(trans_result.error or "Translation worker failed")
+            worker_error = error
+            trans_result = TranslationResult(error=error)
             async with async_session() as db:
                 await _update_translation_job(
-                    db,
-                    job_id,
-                    attempt_count=attempt,
-                    last_issue_fingerprint=f"worker:{worker_error}",
-                    error=worker_error,
+                    db, job_id, error=error,
+                    last_issue_fingerprint="worker:" + hashlib.sha256(error.encode()).hexdigest(),
                     heartbeat=True,
                 )
                 if job_id:
@@ -2152,17 +2471,33 @@ async def _do_translate(
         unresolved_issues: list = []
         if trans_result.success and trans_result.mono_path:
             try:
-                unresolved_issues = await asyncio.to_thread(
-                    _run_post_translation_qa,
-                    paper_id,
-                    loop,
-                    input_path,
-                    trans_result,
-                    qa_mode=qa_mode,
-                    max_passes=qa_max_passes,
-                    job_id=job_id,
-                    estimated_seconds=qa_eta_seconds,
-                )
+                try:
+                    unresolved_issues = await asyncio.to_thread(
+                        _run_post_translation_qa,
+                        paper_id,
+                        loop,
+                        input_path,
+                        trans_result,
+                        qa_mode=qa_mode,
+                        max_passes=qa_max_passes,
+                        job_id=job_id,
+                        estimated_seconds=qa_eta_seconds,
+                    )
+                except TranslationCancelledError:
+                    raise
+                except Exception as exc:
+                    from pdf_zh_translator.pdf_layout import TranslationIssue
+
+                    error = sanitize_error(exc)
+                    unresolved_issues = [
+                        TranslationIssue(
+                            page=0,
+                            code="qa_failed",
+                            message=f"Post-translation QA failed: {error}",
+                            severity="error",
+                        )
+                    ]
+                    _append_log(paper_id, loop, f"译后质检执行失败：{error}")
             except TranslationCancelledError:
                 await _finalize_cancelled_translation(
                     paper_id, loop, output_dir, start_time, job_id
@@ -2185,6 +2520,9 @@ async def _do_translate(
             unresolved_issues,
             blocking=blocking,
         )
+        qa_failures = [issue.message for issue in unresolved_issues if issue.code == "qa_failed"]
+        if qa_failures:
+            qa_failure_error += " " + "; ".join(qa_failures)
         fingerprint = issue_fingerprint(unresolved_issues)
         async with async_session() as db:
             await _update_translation_job(
@@ -2197,6 +2535,15 @@ async def _do_translate(
             )
             if job_id:
                 await db.commit()
+        retry_plan = plan_quality_retry(unresolved_issues, previous_quality_issues)
+        previous_quality_issues = list(unresolved_issues)
+        if retry_plan.action is QualityAction.STOP:
+            _append_log(
+                paper_id,
+                loop,
+                "当前问题无法通过重复生成继续修复，已保留最佳译文和检查报告，等待引擎修复",
+            )
+            break
         if attempt < max_attempts:
             strategy = (
                 "重新生成漏翻内容"
@@ -2212,7 +2559,7 @@ async def _do_translate(
         _append_log(
             paper_id,
             loop,
-            "当前引擎已用完自动恢复次数，已保留最佳译文并等待系统修复",
+            "当前引擎已用完自动恢复次数，修复已暂停；已保留最佳译文，等待引擎更新后自动重试",
         )
 
     if not clean_result and best_result is not None:
@@ -2222,6 +2569,9 @@ async def _do_translate(
             best_issues,
             blocking=_has_blocking_qa_error(best_issues),
         )
+        qa_failures = [issue.message for issue in best_issues if issue.code == "qa_failed"]
+        if qa_failures:
+            qa_failure_error += " " + "; ".join(qa_failures)
 
     elapsed = time.monotonic() - start_time
     terminal_job_status: str | None = None
@@ -2230,32 +2580,45 @@ async def _do_translate(
 
     # Phase 3: Write results (short session)
     async with async_session() as db:
-        result = await db.execute(select(Paper).where(Paper.id == paper_id))
+        result = await db.execute(select(Paper).where(
+            Paper.id == paper_id, Paper.access_scope == access_scope,
+        ))
         paper = result.scalar_one_or_none()
         if not paper:
+            # A scope mismatch is not deletion: never move another owner's
+            # outputs. Legacy invalid remnants may be isolated only if the
+            # paper is absent globally, not merely absent from this scope.
+            remaining = await db.execute(select(Paper.id).where(Paper.id == paper_id))
+            if remaining.scalar_one_or_none() is None and durable_job is None:
+                await asyncio.to_thread(
+                    _quarantine_unmanaged_partial_outputs, output_dir, include_qa_reports=True,
+                )
             logger.error("Paper %s disappeared during translation", paper_id)
-            cleanup_output_dir(output_dir)
             _clear_cancel_requested(paper_id)
             return
 
         _update_paper_result(paper, trans_result, output_dir)
         if not clean_result:
-            recovery_error = qa_failure_error or trans_result.error or "Translation failed"
-            paper.translation_status = TranslationStatus.REPAIRING.value
+            error = qa_failure_error or trans_result.error or "Translation failed"
+            repairable = durable_job is not None
+            paper.translation_status = (
+                TranslationStatus.REPAIRING.value if repairable else TranslationStatus.FAILED.value
+            )
             paper.translation_progress = 0.99 if trans_result.success else 0.0
-            paper.translation_error = recovery_error
-            paper.translation_stage = "等待系统修复"
+            paper.translation_error = error
+            paper.translation_stage = (
+                "修复已暂停，等待引擎更新后自动重试"
+                if repairable
+                else "翻译失败"
+            )
             paper.translation_eta_seconds = None
+            if not repairable and not trans_result.success:
+                await asyncio.to_thread(_quarantine_unmanaged_partial_outputs, output_dir)
             await _update_translation_job(
-                db,
-                job_id,
-                status=TranslationJobStatus.REPAIR_PENDING.value,
-                progress=paper.translation_progress,
-                attempt_count=max_attempts,
-                max_attempts=max_attempts,
-                engine_revision=engine_revision,
-                error=recovery_error,
-                heartbeat=True,
+                db, job_id, status=TranslationJobStatus.REPAIR_PENDING.value,
+                progress=paper.translation_progress, attempt_count=attempted,
+                max_attempts=max_attempts, engine_revision=engine_revision,
+                error=error, heartbeat=True,
             )
         else:
             paper.translation_error = None
@@ -2267,7 +2630,7 @@ async def _do_translate(
                 job_id,
                 status=TranslationJobStatus.COMPLETED.value,
                 progress=1.0,
-                attempt_count=min(max_attempts, attempt),
+                attempt_count=attempted,
                 max_attempts=max_attempts,
                 engine_revision=engine_revision,
                 clear_error=True,
@@ -2278,8 +2641,7 @@ async def _do_translate(
         else:
             error = qa_failure_error or trans_result.error
             final_log_message = (
-                f"等待系统修复: {error} (已自动尝试 {max_attempts} 次, "
-                f"耗时 {elapsed:.0f}秒)"
+                f"{paper.translation_stage}: {error} (已尝试 {attempted} 次，耗时 {elapsed:.0f}秒)"
             )
         paper.translation_log = _append_log_text(paper.translation_log, final_log_message)
         terminal_paper_values = {
@@ -2573,7 +2935,7 @@ def _run_post_translation_qa(
             page=0,
             code="qa_failed",
             message=f"Post-translation QA failed: {error}",
-            severity="warning",
+            severity="error",
         )
         logger.warning("Post-translation QA failed for %s: %s", paper_id, error)
         _append_log(
@@ -2947,9 +3309,16 @@ def _audit_terminology_usage(
         # Only audit text that was actually sent for translation. References,
         # tables, and figure internals are intentionally kept in English, so
         # sourcing terms from the whole PDF would guarantee false advisories.
+        terminology = None
+        spec_path = mono_path.parent / ".worker_spec.json"
+        if spec_path.is_file():
+            terminology = json.loads(spec_path.read_text(encoding="utf-8")).get(
+                "config", {},
+            ).get("terminology")
         violations = audit_terminology_usage(
             translation_unit_source_texts(input_path),
             _read_pdf_texts(mono_path),
+            terminology=terminology,
         )
         if violations:
             sample = "、".join(f"{v['en']}→{v['expected_zh']}" for v in violations[:5])
@@ -3158,7 +3527,6 @@ def _update_paper_result(
     else:
         paper.translation_status = TranslationStatus.FAILED.value
         paper.translation_error = trans_result.error
-        cleanup_output_dir(output_dir)
         logger.error("Translation failed for paper %s: %s", paper.id, trans_result.error)
 
 
@@ -3194,7 +3562,7 @@ async def download_original(
         paper,
         "stored_filename",
         settings.papers_path,
-        paper.original_filename,
+        export_filename(paper, "original"),
     )
 
 
@@ -3206,7 +3574,7 @@ async def download_translated(
 ) -> FileResponse:
     """Download the translated PDF file."""
     paper = await _get_paper_or_404(paper_id, db, access_scope)
-    name = f"{Path(paper.original_filename).stem}_zh.pdf"
+    name = export_filename(paper, "translated")
     return await _serve_paper_file(
         paper,
         "translated_filename",
@@ -3223,7 +3591,7 @@ async def download_dual(
 ) -> FileResponse:
     """Download the dual-language PDF file."""
     paper = await _get_paper_or_404(paper_id, db, access_scope)
-    name = f"{Path(paper.original_filename).stem}_dual.pdf"
+    name = export_filename(paper, "dual")
     return await _serve_paper_file(paper, "dual_filename", settings.translations_path, name)
 
 
@@ -3304,7 +3672,12 @@ async def preview_page(
         pdf_path = _get_paper_file(paper, "stored_filename", settings.papers_path)
         pdf_path = await asyncio.to_thread(safe_pdf_for_use, pdf_path)
     else:
-        if paper.translation_status != TranslationStatus.COMPLETED.value:
+        # Match view/download: a retained draft is readable without claiming
+        # QA acceptance. Owner, path and page checks still run below.
+        if (
+            not paper.translated_filename
+            and paper.translation_status != TranslationStatus.COMPLETED.value
+        ):
             raise HTTPException(409, "Translation not completed yet")
         pdf_path = _get_paper_file(paper, "translated_filename", settings.translations_path)
     if not 1 <= page_number <= max(paper.page_count, 1):
@@ -3425,6 +3798,7 @@ async def update_paper(
         paper.notes = request.notes
     await db.commit()
     await db.refresh(paper)
+    await attach_document_info(db, [paper])
     has_original = _file_exists_safe(settings.papers_path, paper.stored_filename)
     has_translated = _file_exists_safe(settings.translations_path, paper.translated_filename)
     has_dual = _file_exists_safe(settings.translations_path, paper.dual_filename)

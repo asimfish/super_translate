@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
@@ -283,21 +284,28 @@ def _term_search_pattern(en: str) -> "re.Pattern[str]":
     return pattern
 
 
-def get_relevant_terms(texts: List[str], max_terms: int = 50) -> Dict[str, str]:
+def get_relevant_terms(
+    texts: List[str], max_terms: int = 50, *, terminology: Mapping[str, str] | None = None,
+) -> Dict[str, str]:
     """Find terminology terms that appear in the given texts.
 
     Returns a dict of english_term → chinese_translation for terms
     that are found in any of the input texts. Limited to max_terms
     to keep the prompt size manageable.
     """
-    terms = _get_flat_terms()
+    terms = (_get_flat_terms() if terminology is None else
+        sorted(terminology.items(), key=lambda item: len(item[0]), reverse=True))
     combined = " ".join(texts).lower()
+    if terminology is not None:
+        combined = unicodedata.normalize("NFKC", combined).casefold()
     found: Dict[str, str] = {}
 
     for en, zh in terms:
         if len(found) >= max_terms:
             break
-        if _term_search_pattern(en).search(combined):
+        pattern = (_term_search_pattern(en) if terminology is None else
+            re.compile(r"(?<!\w)" + re.escape(en.lower()) + r"(?:e?s)?(?!\w)"))
+        if pattern.search(combined):
             found[en] = zh
 
     return found
@@ -391,6 +399,7 @@ def audit_terminology_usage(
     translated_texts: List[str],
     *,
     max_violations: int = 50,
+    terminology: Mapping[str, str] | None = None,
 ) -> List[dict]:
     """Check that corpus terms in the source were rendered with the standard zh.
 
@@ -398,7 +407,7 @@ def audit_terminology_usage(
     For each corpus term present in the source whose standard Chinese is absent
     from the translation, report a (best-effort, advisory) violation.
     """
-    relevant = get_relevant_terms(source_texts, max_terms=200)
+    relevant = get_relevant_terms(source_texts, max_terms=200, terminology=terminology)
     if not relevant:
         return []
     translated_blob = "\n".join(translated_texts)

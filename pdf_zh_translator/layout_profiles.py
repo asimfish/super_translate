@@ -25,59 +25,27 @@ class LayoutProfile:
     page_height: float
     caption_position: str = "unknown"
     risk: str = "medium"
+    kind: str = "generic"
+    sampled_pages: tuple[int, ...] = ()
+    evidence: tuple[str, ...] = ()
+    registry_version: str = ""
+    text_frame: tuple[float, float] = ()
 
 
 def detect_layout_profile(document: object) -> LayoutProfile:
-    """Detect a broad paper template family."""
+    """Detect a family using source identity and geometry beyond the cover."""
     if getattr(document, "page_count", 0) == 0:
         return LayoutProfile("unknown", 0.0, 1, 0.0, 0.0, risk="high")
+    from .layout_families import infer_document_family
 
-    page = document[0]
-    width = float(page.rect.width)
-    height = float(page.rect.height)
-    blocks = _text_blocks(page)
-    columns = _detect_column_count(blocks, width)
-    text = page.get_text("text").lower()
-    caption_position = _caption_position(blocks)
-
-    if columns >= 2 and _is_us_letter(width, height):
-        if "permission to make digital" in text or "acm reference format" in text:
-            return LayoutProfile("acm_two_column", 0.92, columns, width, height, caption_position)
-        if "ieee" in text or "index terms" in text:
-            return LayoutProfile("ieee_two_column", 0.86, columns, width, height, caption_position)
-        return LayoutProfile("generic_two_column", 0.72, columns, width, height, caption_position)
-
-    if columns >= 2 and _looks_like_acl(text, width, height):
-        return LayoutProfile("acl_anthology", 0.82, columns, width, height, caption_position)
-
-    if columns == 1 and (380 <= width <= 460) and (560 <= height <= 720):
-        return LayoutProfile("springer_lncs", 0.78, columns, width, height, caption_position)
-
-    if columns == 1:
-        return LayoutProfile("single_column", 0.65, columns, width, height, caption_position)
-
-    return LayoutProfile("unknown", 0.35, columns, width, height, caption_position, risk="high")
+    return LayoutProfile(**infer_document_family(document))
 
 
 def profile_policy(profile: LayoutProfile) -> dict[str, float | bool]:
-    """Return layout policy knobs for a detected profile."""
-    if profile.name in {"acm_two_column", "ieee_two_column", "acl_anthology"}:
-        return {
-            "caption_extra_height": 46.0,
-            "min_caption_font_size": 3.6,
-            "warn_complex_floats": True,
-        }
-    if profile.name == "springer_lncs":
-        return {
-            "caption_extra_height": 40.0,
-            "min_caption_font_size": 3.8,
-            "warn_complex_floats": True,
-        }
-    return {
-        "caption_extra_height": 36.0,
-        "min_caption_font_size": 3.8,
-        "warn_complex_floats": False,
-    }
+    """Return a fresh policy from the packaged, validated family registry."""
+    from .layout_families import family_policy
+
+    return family_policy(profile.name)
 
 
 def learn_layout_template(

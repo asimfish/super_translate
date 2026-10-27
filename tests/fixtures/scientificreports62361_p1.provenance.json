@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_url": "https://www.nature.com/articles/s41598-024-62361-z.pdf",
+  "doi": "10.1038/s41598-024-62361-z",
+  "source_sha256": "763dfc84242e8a45bb9656e9c22f404c9668419f5cdce484138ffa687d3d7251",
+  "source_page": 1,
+  "fixture_sha256": "bb0ddc3fae20c8aaec758bae4dca242b4b446d91122247811f256b337d9fc256",
+  "license_text_from_source": "Open Access   This article is licensed under a Creative Commons Attribution 4.0 International \nLicense, which permits use, sharing, adaptation, distribution and reproduction in any medium or \nformat, as long as you give appropriate credit to the original author(s) and the source, provide a link to the \nCreative Commons licence, and indicate if changes were made. The images or other third party material in this \narticle are included in the article’s Creative Commons licence, unless indicated otherwise in a credit line to the \nmaterial. If material is not included in the article’s Creative Commons licence and your intended use is not \npermitted by statutory regulation or exceeds the permitted ",
+  "purpose": "Preserve source four-author line and mail glyph while keeping adjacent abstract/body translatable",
+  "full_document_verification": false
+}

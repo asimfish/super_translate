@@ -88,6 +88,23 @@ def test_visual_overlap_is_reported_by_inspector(tmp_path):
     assert any(issue.code == "text_visual_overlap" for issue in issues)
 
 
+def test_new_formula_image_below_the_original_figure_is_not_a_figure_collision():
+    from pdf_zh_translator.page_inspector import _text_visual_overlap_issues
+
+    with fitz.open() as original, fitz.open() as translated:
+        source = original.new_page(width=612, height=792)
+        target = translated.new_page(width=612, height=792)
+        source.insert_text((100, 500), "Body below the original figure.")
+        target.insert_text((100, 500), "原图下方的正文与行内公式。", fontname="china-s")
+        original_figure = (300, 100, 550, 400)
+        output_formula_image = (90, 480, 400, 510)
+        assert _text_visual_overlap_issues(
+            source, target, 1,
+            original_visual_regions=[original_figure],
+            translated_visual_regions=[original_figure, output_formula_image],
+        ) == []
+
+
 def test_qa_repair_scope_is_limited_to_reported_pages(tmp_path, monkeypatch):
     from unittest.mock import patch
 

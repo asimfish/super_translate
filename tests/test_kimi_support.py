@@ -119,6 +119,7 @@ def test_native_kimi_builds_official_vendor_configuration(tmp_path):
         "api_key": "moonshot-key",
         "mode": "openai-compatible",
         "model": "kimi-k3",
+        "terminology": None,
         "source_lang": "en",
         "target_lang": "zh",
         "progress": False,

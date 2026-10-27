@@ -40,6 +40,7 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --chown=appuser:appuser app ./app
 COPY --chown=appuser:appuser pdf_zh_translator ./pdf_zh_translator
+COPY --chown=appuser:appuser scripts/manage_users.py ./scripts/manage_users.py
 
 # App state (SQLite DB, uploaded papers, translated outputs) lives here.
 RUN mkdir -p /app/data && chown -R appuser:appuser /app/data

@@ -31,6 +31,16 @@ Deploy it as a web app and you get a built-in side-by-side reader; install it as
 
 Want to see it in action? [24-second web UI demo →](#web-interface)
 
+## Zotero and the macOS floating client
+
+Use the same SuperTranslate service from the web app, a floating macOS window, or Zotero. Zotero offers item/context-menu, sidebar and PDF-reader entry points, visible task progress, provider/model selection, cancellation and automatic Chinese PDF attachment import. It adds **中文版《Paper title》** while preserving the original PDF, notes and annotations. Document identity, import history and account settings are shared across clients connected to the same service and account.
+
+- [Download the Zotero 0.2.2 XPI](https://github.com/asimfish/super_translate/releases/download/zotero-v0.2.2/supertranslate-zotero-0.2.2.xpi). In Zotero, open **Tools → Plugins → gear → Install Plugin From File**, then connect through **Tools → SuperTranslate** using your translation service URL and credentials.
+- [Complete installation guide (Chinese)](docs/ZOTERO.zh-CN.md): start a local service, create an account, configure a provider API key and translate your first paper. The documented local service runs at `http://127.0.0.1:8001`; change the plugin's default port to match your service.
+- [Build and install the macOS floating client](desktop/README.md), including login startup. Requires macOS 13+; builds are locally signed, with no notarized universal app distribution yet.
+
+The plugin currently declares **Zotero 10.0.x** compatibility and has native macOS evidence for Zotero 10.0.4 / 10.0.6. Other versions and operating systems have not undergone native acceptance. A running translation service and a usable provider account are required; the clients do not create a hosted service. The backend includes the document-library and history endpoints required by both clients, extensible terminology libraries and model discovery for eight providers. See [integration verification and limitations](docs/CLIENTS_RELEASE_20261027.md).
+
 ## Contents
 
 1. [Why This Exists](#why-this-exists)

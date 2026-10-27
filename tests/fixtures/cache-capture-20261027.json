@@ -1,0 +1,50 @@
+[
+  {
+    "cache": "classic20_batchnorm_cache.jsonl",
+    "new_records": 2,
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "original_sha256": "abbd0dada4989bf133fcaf14f7aff83bd15dab01aeca969f9f0995834671116c",
+    "updated_sha256": "0c997ce539e78906d437d514f1e77b19265d7c97d0a9b3a394cb9b40e98c3e73"
+  },
+  {
+    "cache": "classic20_clip_cache.jsonl",
+    "new_records": 4,
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "original_sha256": "35204900b82f5b17a4d22ae1eb0f4d9cba73c1c753b71a23a73d5811a2739135",
+    "updated_sha256": "fc03a87f7c69d9d05a1474c6ee556fbaf21447dae26a65a1b5d5b01d24700c34"
+  },
+  {
+    "cache": "classic20_final_r2_adam_cache.jsonl",
+    "new_records": 6,
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "original_sha256": "f842c63ba58237e81be28b8e66456c9648d89193f55e857a52612ef31e756771",
+    "updated_sha256": "86fba19ad0b093794c6406bbc5390e8c3f14d2272fca8347671f5abe65e1b961"
+  },
+  {
+    "cache": "classic20_final_r2_latent_cache.jsonl",
+    "new_records": 1,
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "original_sha256": "a6bdb13ba6a08cf9b3c0577845dfa100f4b3a4fb7eeee1136e4d4f29c8ed5c75",
+    "updated_sha256": "ae8bd1c47ad36134cf31120dcdef93bddadf92157e00f2ec75f9295db5b4e8a8"
+  },
+  {
+    "cache": "classic20_latent_diffusion_cache.jsonl",
+    "new_records": 2,
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "original_sha256": "8b1ba11643d6daf343581f60de5f62bf0420ea1c11471b3fb14756d5e69934a2",
+    "updated_sha256": "d581201e75b2270be1f4098b4f30f1e39495ecc175168793c5354cdfdc89795b"
+  },
+  {
+    "cache": "otf_production_acceptance_cache.jsonl",
+    "new_records": 2,
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "original_sha256": "44ae3237a196393185cfc37598d1d7d499fbdd662eb8ef6830c4415e33bcfc45",
+    "updated_sha256": "bdc26589a1301815b71578f9c6c7ebcb3ede5c74a387122787f13e0d795cc49f"
+  }
+]

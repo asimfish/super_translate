@@ -1314,14 +1314,18 @@ def test_unanchorable_math_block_flows_sprites_at_body_scale(tmp_path):
 
 class _FrcnnP7Translator:
     def translate_batch(self, texts):
+        import re
+
         outputs = []
         for text in texts:
-            if "Detection results on PASCAL VOC 2007" in text and "test set" in text:
+            if "Detection results on PASCAL VOC " in text and "test set" in text:
                 outputs.append(
                     "表2：PASCAL VOC 2007 测试集上的检测结果（在VOC 2007 "
                     "trainval 上训练）。检测器为带有ZF 网络的Fast R-CNN，"
                     "使用不同的候选框方法进行训练和测试。"
                 )
+                markers = iter(re.findall(r"⟦\d+⟧", text))
+                outputs[-1] = re.sub("2007", lambda _: next(markers, "2007"), outputs[-1])
             else:
                 outputs.append("中文译文")
         return outputs

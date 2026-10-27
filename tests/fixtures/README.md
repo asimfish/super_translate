@@ -1,5 +1,41 @@
 # Golden PDF fixtures
 
+## Full-paper proof and inline-formula regressions (2026-10-19)
+
+`gflownet_inline_records.json` contains text/span geometry excerpts from the
+user-supplied 17-page *Your GFlowNet Secretly Learns an Optimal Transport Plan*
+(arXiv:2606.06272). Original SHA-256:
+`c671f77f878bf9b429712aae9ff7ed800d68bcf839049810286699c1b90631a1`.
+The complete PDF and Zotero library are not included. The excerpts exercise
+cross-object fractions and sums, narrative citations, short proof clauses,
+ordinary-font graph operators, and bold headings interrupted by math fonts.
+No license is inferred from the supplied document; these excerpts serve the
+same internal regression purpose as the other owner-supplied fixtures below.
+
+`gflownet_inline_assumption.json` is the prepared `TextBlock` geometry for
+page 5's paragraph beginning “Assumption 3.1 implies”. It captures the user's
+reported gap before the inline `Z=1` and `U×X`: the academic prefix caused
+these symbols to stay at their original English coordinates. The regression
+checks compact math beside source prose, with separate-row, long, wide, tall,
+inset-continuation and missing-geometry controls that must still retain fixed
+formula placement. The existing PRICE and OTF fixtures also protect compound
+math that extends beyond the translated prose fragment.
+
+The DDPM cache gained one response and the BatchNorm cache four responses
+from actual DeepSeek `deepseek-v4-pro` calls on 2026-10-19. These cover changed
+protected-formula boundaries and three already-missing BatchNorm inputs.
+Responses were checked for placeholder preservation; existing entries remain
+unchanged. The DDPM covariance test checks protected expressions, including
+Sigma, rather than requiring an arbitrary count of formula fragments.
+
+The final-r2 Adam cache also gained two genuine responses from the same model
+and date. Protecting ordinary-font Delta symbols changes these two request
+keys; all prior entries are preserved. The old branch replay passes, while the
+new boundaries require these additional cache entries.
+
+Cache completeness does not establish layout quality. BatchNorm layout
+failures must still be evaluated independently against the engine baseline.
+
 ## Visual inspector regression pairs (`otf_p*_*.pdf` / `*_translated.pdf`)
 
 Page-level pairs extracted from the OFT paper below (CC BY 4.0) and its
@@ -587,3 +623,11 @@ polluted by paragraph tail text, a bibliography continuation translated after
 a false appendix boundary, and invisible selectable formula text incorrectly
 counted as visible small body text. Existing synthetic and production damage
 fixtures remain the non-target controls.
+
+### Source geometry and original-font fixtures (2026-10-27)
+
+`nature_quantum_51162_p9.pdf` and `scientificreports62361_p1.pdf` are open-access publisher excerpts used for scientific prose/formula ownership and title regressions. Their adjacent provenance JSON files record the source DOI/URL, page, license and source/fixture hashes; the original article attribution is retained.
+
+`native_type0_plot_title.pdf` and `native_type3_plot_title.pdf` contain synthetic prose and Latin glyphs with original embedded Inter font object graphs; no article prose is included. See `native_plot_title.provenance.json` for the construction and [INTER-OFL.txt](INTER-OFL.txt) for the Inter font copyright and SIL Open Font License 1.1. These fixture files are independent of the Zotero install package.
+
+The 2026-10-27 integration adds 17 records captured from the real DeepSeek supplier for new numeric protection and source segmentation, without removing older records. [cache-capture-20261027.json](cache-capture-20261027.json) records the model, record counts and before/after fixture hashes. Cache-only replay remains strict; malformed/missing markers and altered numeric literals remain errors.
