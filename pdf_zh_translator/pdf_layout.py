@@ -2189,9 +2189,13 @@ def _translate_units_with_source_style_runs(
     """Translate source-derived run-in prefix/body ranges independently."""
     from .translators import CacheOnlyTranslator
 
-    if isinstance(translator, CacheOnlyTranslator):
+    source_cache = (
+        translator if isinstance(translator, CacheOnlyTranslator)
+        else getattr(translator, "cache_only_translator", None)
+    )
+    if isinstance(source_cache, CacheOnlyTranslator):
         for block, source, mapping in units:
-            translator.register_protected_source(
+            source_cache.register_protected_source(
                 source, mapping, immutable_indices=block.preserved_math_placeholders
             )
     if not getattr(translator, "supports_source_style_segments", True):
@@ -2205,15 +2209,15 @@ def _translate_units_with_source_style_runs(
         units,
         acronym_expansions,
     )
-    if isinstance(translator, CacheOnlyTranslator):
+    if isinstance(source_cache, CacheOnlyTranslator):
         for (block, _source, mapping), (start, count) in zip(units, plans):
             for source in sources[start : start + count]:
-                translator.register_protected_source(
+                source_cache.register_protected_source(
                     source, mapping, immutable_indices=block.preserved_math_placeholders
                 )
-        if not all(translator.can_translate(source) for source in sources):
+        if not all(source_cache.can_translate(source) for source in sources):
             whole_sources = [source for _block, source, _mapping in units]
-            if all(translator.can_translate(source) for source in whole_sources):
+            if all(source_cache.can_translate(source) for source in whole_sources):
                 sources = whole_sources
                 block_types = [block.block_type for block, _source, _mapping in units]
                 plans = [(index, 1) for index in range(len(units))]
@@ -2941,10 +2945,11 @@ _REFERENCE_ENTRY_RE = re.compile(
 # a reference entry. Lowercase surname particles (van/von/de/...) still start
 # genuine entries and must keep the reference-entry shortcut.
 _LEADING_CITATION_PROSE_RE = re.compile(
-    r"^\s*\[\d+\]\s*[,;:]?\s+"
+    r"^\s*\[\d+\]\s*[,;:.]?\s+"
+    r"(?:In\s+(?:general|particular)\b|We\b|This\b|These\b|"
     r"(?!(?:van|von|vander|de|del|della|der|den|di|da|dos|das|du|la|le|lo|"
     r"ter|ten|te|el|al|bin|ibn|abu|zur|zum|am|auf|mac|st)\b)"
-    r"[a-z]"
+    r"[a-z])"
 )
 _REFERENCE_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}[a-z]?\b", re.IGNORECASE)
 _REFERENCE_FRAGMENT_CUE_RE = re.compile(
@@ -4246,6 +4251,18 @@ def _overlap_text_entries_from_block(block: dict) -> List[Tuple[BBox, str]]:
     return []
 
 
+def _looks_like_quoted_formula_expression(text: str) -> bool:
+    quoted_call = r"\b[A-Za-z]\w*\(\s*(?:\"[^\"]*\"|'[^']*')\s*\)"
+    if len(re.findall(quoted_call, text)) < 2:
+        return False
+    remainder = re.sub(quoted_call, " ", text)
+    return bool(
+        re.search(r"[=+−-]", remainder)
+        and substantial_prose_word_count(remainder) <= 1
+        and not re.search(r"[.!?]", remainder)
+    )
+
+
 def _is_reference_or_formula_text(text: str) -> bool:
     compact = " ".join(text.split())
     if not compact:
@@ -4256,6 +4273,10 @@ def _is_reference_or_formula_text(text: str) -> bool:
     if not compact_without_urls:
         return True
     if _looks_like_code_or_symbolic_text(compact_without_urls):
+        return True
+    # Word-vector analogies contain quoted English operands, not prose to
+    # translate. Require multiple calls and an otherwise symbolic expression.
+    if _looks_like_quoted_formula_expression(compact_without_urls):
         return True
     if looks_like_math(compact_without_urls):
         return True
@@ -5045,6 +5066,10 @@ def _looks_like_reference_entry_text(text: str) -> bool:
     if not compact:
         return False
     if _looks_like_supplement_reference_list(compact):
+        return True
+    # PRL can merge a corresponding-author footnote and several references
+    # without any References heading. Journal abbreviations are not sentences.
+    if _looks_like_numbered_reference_list(compact):
         return True
     leading_citation = _REFERENCE_ENTRY_RE.match(compact)
     if (
@@ -7310,6 +7335,11 @@ def _translated_block_still_english(block: TextBlock, translated_text: str) -> b
     # source: after stripping URLs there is nothing left to translate, and
     # retrying such blocks loops forever between echo and paraphrase.
     plain_source = strip_sentinels(block.text)
+    if (
+        _looks_like_quoted_formula_expression(plain_source)
+        and _looks_like_quoted_formula_expression(translated_text)
+    ):
+        return False
     url_stripped = re.sub(r"(?:https?://|www\.)\S+", " ", plain_source)
     if url_stripped != plain_source:
         source_without_urls = " ".join(url_stripped.split())
@@ -15992,6 +16022,38 @@ def _is_bibliography_context(block: TextBlock, all_blocks: List[TextBlock]) -> b
         if _bibliography_seen.get(pi, False):
             return True
     return False
+
+
+def _looks_like_numbered_reference_list(text: str) -> bool:
+    markers = list(re.finditer(r"(?:^|\s)\[(\d{1,3})\]\s*", text))
+    if len(markers) < 2:
+        return False
+    prefix = text[:markers[0].start()]
+    prefix = re.sub(r"\S+@\S+", " ", strip_sentinels(prefix))
+    # A column/page can start halfway through the preceding entry. Accept
+    # that tail only when it ends in publication metadata, not body prose.
+    publication_year_end = r"\((?:19|20)\d{2}[a-z]?\)\s*[.,;]?\s*$"
+    if substantial_prose_word_count(prefix) > 2 and not re.search(
+        publication_year_end, prefix, re.I,
+    ):
+        return False
+    entries = [
+        text[marker.end():markers[index + 1].start() if index + 1 < len(markers) else len(text)]
+        for index, marker in enumerate(markers)
+    ]
+    numbers = [int(marker.group(1)) for marker in markers]
+    return bool(
+        all(right == left + 1 for left, right in zip(numbers, numbers[1:]))
+        and all(
+            _REFERENCE_AUTHOR_START_RE.match(entry)
+            and (
+                re.search(publication_year_end, entry, re.I)
+                or re.search(r"\b(?:doi|arxiv)\s*:", entry, re.I)
+                or re.search(r"\b(?:19|20)\d{2}[a-z]?[.,;]?\s*$", entry, re.I)
+            )
+            for entry in entries[:2]
+        )
+    )
 
 
 def _starts_post_reference_supplement(
@@ -29472,9 +29534,11 @@ def _trim_formula_clip_against_foreign_ink(
             document._pdfzh_span_cache = cache
         spans = cache.get(page_index)
         if spans is None:
+            from .formula_accessibility import source_page_dict
+
             spans = [
                 tuple(float(value) for value in span["bbox"])
-                for block in document[page_index].get_text("dict").get("blocks", [])
+                for block in source_page_dict(document, page_index).get("blocks", [])
                 if block.get("type") == 0
                 for line in block.get("lines", [])
                 for span in line.get("spans", [])
@@ -29957,24 +30021,59 @@ def emit_tokens(
         text: str,
         x_pos: float,
         max_width: Optional[float] = None,
+        copy_baseline: Optional[float] = None,
+        copy_size: Optional[float] = None,
     ) -> None:
         text = _normalize_formula_accessibility_text(text)
-        natural_width = sum(char_width(char, fonts, size) for char in text)
-        hidden_size = size
+        base_size = copy_size if copy_size is not None else size
+        natural_width = sum(char_width(char, fonts, base_size) for char in text)
+        hidden_size = base_size
         if max_width is not None and natural_width > max_width > 0.0:
-            hidden_size = max(size * 0.35, size * max_width / natural_width)
+            hidden_size = max(base_size * 0.35, base_size * max_width / natural_width)
         hidden_x = x_pos
+        hidden_run: List[str] = []
+        hidden_alias: Optional[str] = None
+        hidden_run_x = hidden_x
+
+        def flush_hidden() -> None:
+            if hidden_run:
+                page.insert_text(
+                    (hidden_run_x, baseline if copy_baseline is None else copy_baseline),
+                    "".join(hidden_run), fontname=hidden_alias, fontsize=hidden_size,
+                    color=color, render_mode=3,
+                )
+
         for char in text:
             alias = pick_font_alias(char, fonts)
-            page.insert_text(
-                (hidden_x, baseline),
-                char,
-                fontname=alias,
-                fontsize=hidden_size,
-                color=color,
-                render_mode=3,
-            )
+            if alias != hidden_alias:
+                flush_hidden()
+                hidden_run = []
+                hidden_alias = alias
+                hidden_run_x = hidden_x
+            hidden_run.append(char)
             hidden_x += char_width(char, fonts, hidden_size)
+        flush_hidden()
+
+    def emit_formula_copy_text(token: _Token, target_core: object, width: float) -> None:
+        from .formula_accessibility import formula_copy_rows
+
+        rows = formula_copy_rows(
+            source_document, token.source_page, token.source_atom_bboxes,
+            token.source_bbox, token.source_size or size,
+        )
+        if not rows:
+            emit_hidden_copy_text(token.text, x, width)
+            return
+        source_x0, source_y0, source_x1, source_y1 = token.source_bbox
+        scale_x = target_core.width / max(0.1, source_x1 - source_x0)
+        scale_y = target_core.height / max(0.1, source_y1 - source_y0)
+        for row in rows:
+            emit_hidden_copy_text(
+                row.text, target_core.x0 + (row.bbox[0] - source_x0) * scale_x,
+                (row.bbox[2] - row.bbox[0]) * scale_x,
+                target_core.y0 + (row.baseline - source_y0) * scale_y,
+                min(size, (token.source_size or size) * scale_y),
+            )
 
     for index, token in enumerate(line):
         gap_after = increments.get(index, 0.0)
@@ -30034,7 +30133,10 @@ def emit_tokens(
                         target_rect,
                         token.source_exclusion_bboxes,
                     )
-                    emit_hidden_copy_text(token.text, x, formula_width)
+                    emit_formula_copy_text(token, fitz.Rect(
+                        x, target_rect.y0 + pad_y * scale,
+                        x + formula_width, target_rect.y1 - pad_y * scale,
+                    ), formula_width)
                     x += formula_width + formula_guard
                     if gap_after:
                         x += gap_after
@@ -30092,7 +30194,10 @@ def emit_tokens(
                     source_rect,
                     target_rect,
                 )
-                emit_hidden_copy_text(token.text, x, target_rect.width)
+                emit_formula_copy_text(token, fitz.Rect(
+                    target_rect.x0, target_rect.y0 + pad_top * scale,
+                    target_rect.x1, target_rect.y1 - pad_bottom * scale,
+                ), target_rect.width)
                 x += max(0.1, token.width - formula_guard * 2.0) + formula_guard
                 if gap_after:
                     x += gap_after

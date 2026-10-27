@@ -1410,9 +1410,11 @@ docker compose up -d --build</code></pre>
       </div>
       <div class="qs-panel" id="qsPanelSkill" role="tabpanel">
 <pre id="codeSkill"><button class="copy-btn" data-copy="codeSkill">复制</button><code>git clone https://github.com/asimfish/super_translate.git
+cd super_translate
+uv sync
 <span class="c"># Claude Code（全局技能目录）</span>
 mkdir -p ~/.claude/skills
-ln -s "$PWD/super_translate/skills/paper-translate" ~/.claude/skills/paper-translate
+ln -s "$PWD/skills/paper-translate" ~/.claude/skills/paper-translate
 <span class="c"># Cursor：改为链接到你项目内的 .cursor/skills/ 目录</span></code></pre>
         <p class="qs-note">
           然后在对话里直接说：<b>「把 paper.pdf 翻译成中文，保留原版式」</b>。

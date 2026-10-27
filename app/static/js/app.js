@@ -277,7 +277,10 @@ const api = {
     if (options.qa_mode) params.set('qa_mode', options.qa_mode);
     if (options.qa_max_passes) params.set('qa_max_passes', String(options.qa_max_passes));
     if (options.ocr_mode) params.set('ocr_mode', options.ocr_mode);
-    const res = await apiFetch(`/api/papers/${id}/translate?${params}`, { method: 'POST' });
+    if (options.cache_only) params.set('cache_only', 'true');
+    const body = options.cache_file ? new FormData() : undefined;
+    if (body) body.append('cache_file', options.cache_file);
+    const res = await apiFetch(`/api/papers/${id}/translate?${params}`, { method: 'POST', body });
     if (!res.ok) throw new Error(await errorDetail(res, 'Translation failed'));
     return res.json();
   },
@@ -523,10 +526,16 @@ async function saveProviderCredential(e) {
     }
     renderProviderCredentials([status]);
     toastSuccess(`${status.label} API 配置已保存`);
-    const catalog = await api.refreshProviderModels(provider);
-    if (generation !== providerCatalogGeneration) return;
-    renderProviderModelCatalogs([catalog]);
-    if (catalog.warning) toastError(catalog.warning);
+    try {
+      const catalog = await api.refreshProviderModels(provider);
+      if (generation !== providerCatalogGeneration) return;
+      renderProviderModelCatalogs([catalog]);
+    } catch (err) {
+      if (generation === providerCatalogGeneration) {
+        row.querySelector('.provider-model-meta').textContent =
+          `配置已保存；保留现有模型列表，实时更新失败：${err.message}`;
+      }
+    }
   } catch (err) {
     if (generation === providerCatalogGeneration) toastError(err.message);
   } finally {
@@ -544,10 +553,12 @@ async function refreshProviderModelsForRow(e) {
     const catalog = await api.refreshProviderModels(row.dataset.provider);
     if (generation !== providerCatalogGeneration) return;
     renderProviderModelCatalogs([catalog]);
-    if (catalog.warning) toastError(catalog.warning);
-    else toastSuccess(`${catalog.label} 模型列表已更新`);
+    if (!catalog.warning) toastSuccess(`${catalog.label} 模型列表已更新`);
   } catch (err) {
-    if (generation === providerCatalogGeneration) toastError(err.message);
+    if (generation === providerCatalogGeneration) {
+      row.querySelector('.provider-model-meta').textContent =
+        `保留现有模型列表，实时更新失败：${err.message}`;
+    }
   } finally {
     button.disabled = false;
   }
@@ -2002,7 +2013,13 @@ async function startTranslate() {
     qa_mode: document.getElementById('qa-mode')?.value || 'single',
     qa_max_passes: 4,
     ocr_mode: document.getElementById('ocr-mode')?.value || 'off',
+    cache_only: document.getElementById('cache-only')?.checked || false,
+    cache_file: document.getElementById('translation-cache-file')?.files?.[0],
   };
+  if (!options.cache_only && options.cache_file) {
+    toastError('上传翻译缓存时，请勾选“从缓存离线渲染”');
+    return;
+  }
   doTranslateDirect(currentPaper.id, getTranslationBackend(), quality, options);
 }
 
@@ -2464,6 +2481,9 @@ async function downloadFile(url) {
 function downloadTranslated() {
   if (currentPaper) downloadFile(`/api/papers/${currentPaper.id}/download/translated`);
 }
+function downloadTranslationCache() {
+  if (currentPaper) downloadFile(`/api/papers/${currentPaper.id}/translation-cache`);
+}
 function downloadDual() {
   if (currentPaper) downloadFile(`/api/papers/${currentPaper.id}/download/dual`);
 }
@@ -2700,6 +2720,7 @@ const actionHandlers = {
   'show-provider-settings': showProviderSettings,
   'hide-provider-settings': hideProviderSettings,
   'save-provider-credential': saveProviderCredential,
+  'download-translation-cache': downloadTranslationCache,
   'refresh-provider-models': refreshProviderModelsForRow,
   'delete-provider-credential': deleteProviderCredential,
   'toggle-reader-mode': toggleReaderMode,

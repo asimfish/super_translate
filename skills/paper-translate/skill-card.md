@@ -15,8 +15,8 @@
 | Capability | Declared behavior |
 |---|---|
 | Reads | Explicit PDF, manifest, cache, repository configuration, and generated QA artifacts |
-| Writes | Explicit local output, cache, report, preview, and benchmark work directories |
-| Executes | Repository Python CLI, benchmark harness, tests, linters, and the bundled helper scripts (`scripts/check_env.sh`, `scripts/translate_one.sh`) |
+| Writes | Explicit local output, cache, report, preview, benchmark work directories, and the engine's local font cache |
+| Executes | Repository Python CLI, benchmark harness, tests, linters, and the bundled helper scripts (`scripts/check_env.sh`, `scripts/translate_one.sh`, `scripts/verify_one.py`) |
 | Network | Selected translation provider only; source prose may be transmitted for translation. Benchmark fetch is used only when explicitly requested. |
 | Credentials | Reads the selected provider key through an environment-variable name; the value must not enter commands, logs, artifacts, or model context |
 | External effects | None by default. Upload, publish, notify, or deploy requires a separate explicit user request and destination authorization. |
@@ -41,6 +41,6 @@
 ## Governance disposition
 
 - Third-party provenance/license: not applicable; independent project-local synthesis
-- Bundled executable code: two repository-authored bash helpers (`scripts/check_env.sh` environment check, `scripts/translate_one.sh` translate-plus-inspect wrapper); both only invoke the repository CLI and never read or print credential values
+- Bundled executable code: three repository-authored helpers (`scripts/check_env.sh` environment check, `scripts/translate_one.sh` translate-plus-strict-verification wrapper; `scripts/verify_one.py` full QA/visual gate; they invoke repository tools and never print credential values
 - Publication status: ships inside the open-source repository under `skills/paper-translate/`
 - Remaining uncertainty: provider behavior and document-specific layout risk require per-paper QA and cannot be guaranteed by skill validation alone

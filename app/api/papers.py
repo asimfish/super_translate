@@ -1413,6 +1413,8 @@ async def start_translation(
     ocr_mode: str = "off",
     ocr_language: str = "eng",
     ocr_dpi: int = 180,
+    cache_only: bool = False,
+    cache_file: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, bool | str]:
     """Start translation for a paper.
 
@@ -1454,7 +1456,28 @@ async def start_translation(
     if ocr_dpi < 96 or ocr_dpi > 300:
         raise HTTPException(400, "ocr_dpi must be between 96 and 300")
 
-    selected_backend = backend or settings.translation_backend
+    if cache_file is not None and not cache_only:
+        raise HTTPException(400, "上传翻译缓存时请启用 cache_only=true")
+    cache_payload = None
+    if cache_only:
+        from app.services.offline_cache import (
+            MAX_CACHE_BYTES,
+            previous_cache,
+            read_cache,
+            validate_cache,
+        )
+
+        paper = await _get_paper_or_404(paper_id, db, access_scope)
+        try:
+            if cache_file is not None:
+                cache_payload = validate_cache(await cache_file.read(MAX_CACHE_BYTES + 1))
+            else:
+                cache_payload = read_cache(previous_cache(
+                    settings.translations_path / paper_id, Path(paper.stored_filename).stem,
+                ))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    selected_backend = "cache-only" if cache_only else backend or settings.translation_backend
     # Atomic check-and-set: prevents two concurrent requests from both
     # starting translation for the same paper (TOCTOU race condition).
     result = await db.execute(
@@ -1506,6 +1529,12 @@ async def start_translation(
             )
 
     job_id = generate_job_id()
+    if cache_payload is not None:
+        from app.services.offline_cache import job_cache
+
+        output_dir = settings.translations_path / paper_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        job_cache(output_dir, job_id).write_bytes(cache_payload)
     job = TranslationJob(
         id=job_id,
         paper_id=paper_id,
@@ -1543,6 +1572,25 @@ async def start_translation(
     )
 
     return {"ok": True, "status": "translating", "job_id": job_id}
+
+
+@router.get("/{paper_id}/translation-cache")
+async def download_translation_cache(
+    paper_id: str,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    access_scope: AccessScope,
+) -> FileResponse:
+    """Export only this owner's paper cache, without credentials or worker specs."""
+    from app.services.offline_cache import previous_cache
+
+    paper = await _get_paper_or_404(paper_id, db, access_scope)
+    try:
+        path = previous_cache(
+            settings.translations_path / paper_id, Path(paper.stored_filename).stem,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(path, filename="translation-cache.jsonl", media_type="application/x-ndjson")
 
 
 @router.post("/{paper_id}/cancel")
@@ -1696,7 +1744,7 @@ def _resolve_backend_config(
         base_url = settings.ollama_host
 
     # Fast mode forces Google Translate (no API key needed)
-    if quality_preset == QualityPreset.FAST:
+    if quality_preset == QualityPreset.FAST and backend != "cache-only":
         backend = "google"
         api_key = ""
     elif backend in _BACKEND_API_KEY_ATTRS:
@@ -1897,7 +1945,8 @@ def _run_translation(
         return
 
     try:
-        _clear_cancel_requested(paper_id)
+        if job_id and asyncio.run(_finish_queued_cancellation(paper_id, job_id)):
+            return
         quality_preset = _quality_map.get(quality, QualityPreset.BALANCED)
         provider_credential = None
         if quality_preset != QualityPreset.FAST and backend in PROVIDER_SPECS:
@@ -1954,6 +2003,27 @@ def _run_translation(
         _translation_semaphore.release()
 
 
+async def _finish_queued_cancellation(paper_id: str, job_id: str) -> bool:
+    """Cancellation is terminal even if credentials were deleted while queued."""
+    from app.core.database import async_session
+
+    async with async_session() as db:
+        job = await db.get(TranslationJob, job_id)
+        paper = await db.get(Paper, paper_id)
+        if (
+            job is None or paper is None or job.paper_id != paper_id
+            or job.access_scope != paper.access_scope
+        ):
+            return True
+        cancelled = job.cancel_requested or _is_cancel_requested(paper_id)
+    if cancelled:
+        await _finalize_cancelled_translation(
+            paper_id, asyncio.get_running_loop(), settings.translations_path / paper_id,
+            time.monotonic(), job_id,
+        )
+    return cancelled
+
+
 async def _finalize_cancelled_translation(
     paper_id: str,
     loop: asyncio.AbstractEventLoop,
@@ -1970,11 +2040,38 @@ async def _finalize_cancelled_translation(
 
     elapsed = time.monotonic() - start_time
     logger.info("Translation cancelled for paper %s", paper_id)
-    _append_log(paper_id, loop, f"翻译已取消 (耗时 {elapsed:.0f}秒)")
     async with async_session() as db:
         result = await db.execute(select(Paper).where(Paper.id == paper_id))
         paper = result.scalar_one_or_none()
         if paper:
+            if job_id:
+                job = await db.get(TranslationJob, job_id)
+                latest_id = await db.scalar(
+                    select(TranslationJob.id).where(
+                        TranslationJob.paper_id == paper_id,
+                        TranslationJob.access_scope == paper.access_scope,
+                        TranslationJob.status.in_({"queued", "running"}),
+                    ).order_by(TranslationJob.created_at.desc(), TranslationJob.id.desc()).limit(1),
+                )
+                if (
+                    job is None or job.paper_id != paper_id
+                    or job.access_scope != paper.access_scope
+                    or job.status not in {"queued", "running"}
+                ):
+                    return
+                if (
+                    latest_id != job_id
+                    or paper.translation_status != TranslationStatus.TRANSLATING.value
+                ):
+                    # Finish the old job's history without resetting its newer
+                    # replacement paper/job to pending.
+                    await _update_translation_job(
+                        db, job_id, status=TranslationJobStatus.CANCELLED.value,
+                        cancel_requested=True, error="Translation cancelled by user", finished=True,
+                    )
+                    await db.commit()
+                    return
+            _append_log(paper_id, loop, f"翻译已取消 (耗时 {elapsed:.0f}秒)")
             paper.translation_status = TranslationStatus.PENDING.value
             paper.translation_progress = 0.0
             paper.translation_error = None
@@ -2262,8 +2359,16 @@ async def _do_translate(
                 if (
                     recovery_job.paper_id != paper_id
                     or recovery_job.access_scope != paper.access_scope
-                    or recovery_job.cancel_requested
                 ):
+                    return
+                if recovery_job.cancel_requested:
+                    # Queued cancellation reaches this point only after a slot
+                    # becomes available. Finish it before consuming any budget.
+                    await db.rollback()
+                    await _finalize_cancelled_translation(
+                        paper_id, loop, settings.translations_path / paper_id,
+                        time.monotonic(), job_id,
+                    )
                     return
                 if recovery_job.engine_revision == engine_revision:
                     max_attempts = min(
@@ -2332,6 +2437,15 @@ async def _do_translate(
             return
 
         input_path = await asyncio.to_thread(safe_pdf_for_use, input_path)
+
+        if config.backend == "cache-only":
+            from dataclasses import replace
+
+            from app.services.offline_cache import job_cache
+
+            config = replace(
+                config, cache_file=str(job_cache(settings.translations_path / paper_id, job_id)),
+            )
 
         if config.backend in PROVIDER_SPECS:
             from dataclasses import replace

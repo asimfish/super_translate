@@ -33,6 +33,8 @@ for number, paper_id in enumerate(("012345abcde1", "012345abcde2"), 1):
 PAPERS["012345abcde3"].update(
     title="Repair paper", translation_status="repairing", translation_progress=0.91,
     translation_stage="等待系统修复", translation_error="第 17 页 table_structure_mismatch；译文已保留")
+for paper_id in ("012345abcde4", "012345abcde5"):
+    PAPERS[paper_id] = dict(PAPERS["012345abcde3"], id=paper_id)
 REQUESTS = []
 
 
@@ -67,6 +69,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", "0")))
         REQUESTS.append({"method": "POST", "path": self.path})
+        if self.path == "/api/papers/012345abcde5/cancel":
+            return self.reply({"detail": "Fixture cancellation unavailable"}, 503)
+        if self.path == "/api/papers/012345abcde4/cancel":
+            PAPERS["012345abcde4"]["translation_status"] = "pending"
+            return self.reply({"ok": True, "status": "cancelled"})
         if self.path == "/api/papers/upload":
             return self.reply(dict(PAPERS["012345abcde3"], duplicate=True))
         return self.reply({"ok": True, "status": "translating"})
@@ -103,11 +110,16 @@ let package = Package(name: "FloatingTaskReplay", platforms: [.macOS(.v13)], tar
     (output / "requests.json").write_text(json.dumps(REQUESTS, indent=2))
     starts = [request for request in REQUESTS
               if request["method"] == "POST" and request["path"].split("?")[0].endswith("/translate")]
-    summary = {"swift_exit": result.returncode, "unexpected_translation_starts": len(starts),
+    expected_starts = [request for request in starts
+                       if request["path"].split("?")[0] == "/api/papers/012345abcde4/translate"]
+    unexpected_starts = [request for request in starts if request not in expected_starts]
+    summary = {"swift_exit": result.returncode,
+               "unexpected_translation_starts": len(unexpected_starts),
+               "repair_retry_starts": len(expected_starts),
                "production_requests": 0}
     (output / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary))
-    return result.returncode or (1 if starts else 0)
+    return result.returncode or (1 if unexpected_starts or len(expected_starts) != 1 else 0)
 
 
 if __name__ == "__main__":

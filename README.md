@@ -486,18 +486,22 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8001
 
 日常使用（上传、选后端、看进度、双栏阅读、下载）见中文教程 [docs/TUTORIAL.zh-CN.md](docs/TUTORIAL.zh-CN.md)。
 
+网页还支持[从已有缓存离线重新排版](docs/OFFLINE_RENDER.zh-CN.md)：不需要 API key，可上传或复用本篇翻译缓存，生成后仍通过完整质检。
+
 ## 快速开始 · Agent Skill 模式
 
 仓库自带 `paper-translate` skill（[skills/paper-translate/SKILL.md](skills/paper-translate/SKILL.md)），让 Claude Code / Cursor 等编码 Agent 直接驱动翻译引擎，并按 skill 内置的质量门禁自动跑 QA。
 
 ```bash
-# 先完成本仓库安装（见上文 uv 方式），然后把 skill 复制到你的 Agent 技能目录：
+# 先完成本仓库安装（见上文 uv 方式），在仓库根创建链接：
 
 # Claude Code（全局生效）
-mkdir -p ~/.claude/skills && cp -r skills/paper-translate ~/.claude/skills/
+mkdir -p ~/.claude/skills
+ln -s "$PWD/skills/paper-translate" ~/.claude/skills/paper-translate
 
 # Cursor（当前工作区生效）
-mkdir -p .cursor/skills && cp -r skills/paper-translate .cursor/skills/
+mkdir -p .cursor/skills
+ln -s "$PWD/skills/paper-translate" .cursor/skills/paper-translate
 ```
 
 然后在对话里一句话触发：
@@ -655,7 +659,7 @@ Google 后端（`fast` 档）免 key 可直接用；其余后端各自需要 key
 以下方向来自仓库内已有文档与代码基础，不承诺时间线：
 
 - **基准集持续扩充**：classic20 定位为「growing set」，覆盖更多版式轴与近期论文；`showcase_cc` 组余下四篇（LLaMA / Mamba / CoT / vLLM）待补横向实测
-- **QA 盲区清零**：`inspect` 的每一类漏报（如本轮的无框线小表、越框文本）都应在被发现的同一轮变成检测器；正在跟进的有多行公式隐藏可复制文本层的逐行归属（见 Issues）
+- **QA 盲区清零**：`inspect` 的每一类漏报（如本轮的无框线小表、越框文本）都应在被发现的同一轮变成检测器；多行公式隐藏复制层已加入逐行归属、邻行防串入与可见图像回归检查
 - **规模化部署路径**：面向多用户重负载的 PostgreSQL + 外部任务队列迁移（当前定位单机/小团队）
 - **模型目录跟随更新**：按 [PROVIDER_MODEL_CATALOG](docs/PROVIDER_MODEL_CATALOG.md) 的维护规则持续核验各家新模型
 - **版式模板库**：`layout-learn` 已支持从代表性 PDF 学习 ACM/IEEE/Springer/ACL 风格的版式 profile，逐步沉淀为内置模板

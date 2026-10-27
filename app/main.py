@@ -504,8 +504,7 @@ async def _recover_stuck_translations(
         elif not resume_queued:
             failed_running_job_result = await db.execute(
                 sa_update(TranslationJob)
-                .where(TranslationJob.id == latest_same_scope_job_id)
-            .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
+                .where(TranslationJob.status == TranslationJobStatus.RUNNING.value)
                 .values(
                     status=TranslationJobStatus.FAILED.value,
                     error="Translation was interrupted (server restart)",

@@ -24,7 +24,7 @@ jobs:
         run: uv sync --frozen --extra dev
 
       - name: Ruff lint
-        run: uv run ruff check app pdf_zh_translator tests scripts
+        run: uv run ruff check app pdf_zh_translator tests scripts skills/paper-translate/scripts
 
       - name: Terminology corpus lint
         run: uv run python -m pdf_zh_translator corpus-lint --strict
@@ -50,6 +50,15 @@ jobs:
       - name: Smoke test
         run: PYTHON=.venv/bin/python bash scripts/smoke_test.sh
 
+      - name: Offline render, formula ownership and published helper regressions
+        run: >-
+          uv run pytest -q
+          tests/test_offline_translation.py
+          tests/test_issue_formula_retry.py
+          tests/test_issue_reference_classification.py
+          tests/test_formula_accessibility_rows.py
+          tests/test_skill_helper_contract.py
+
   zotero:
     runs-on: ubuntu-latest
     permissions:
@@ -66,6 +75,7 @@ jobs:
           node --check zotero/content/core.js
           node --check zotero/content/plugin.js
           node --check zotero/content/preferences.js
+          node --check app/static/js/app.js
           python3 -c "from xml.etree import ElementTree; ElementTree.parse('zotero/content/preferences.xhtml')"
       - name: Reproducible install package
         run: |

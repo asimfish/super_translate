@@ -29,13 +29,13 @@ bash <skill目录>/scripts/check_env.sh
 bash <skill目录>/scripts/translate_one.sh INPUT.pdf
 ```
 
-脚本做三件事：调用引擎翻译（默认 DeepSeek 后端 + `--preserve-graphics-text`）、写出 `INPUT.zh.pdf` 与翻译缓存、随后自动跑 `inspect` 视觉检查并在有 error 时以非零码退出。可追加任意 CLI 参数，如：
+脚本做三件事：调用引擎翻译（默认 DeepSeek 后端 + `--preserve-graphics-text`）、写出 `INPUT.zh.pdf` 与翻译缓存、随后自动跑完整译后检查和视觉评分，存在 error、需处理的 warning 或视觉分数低于 0.55 时以非零码退出。可追加任意 CLI 参数，如：
 
 ```bash
-bash <skill目录>/scripts/translate_one.sh INPUT.pdf out_zh.pdf --api-mode openai-compatible --api-url https://... --model gpt-4o-mini
+bash <skill目录>/scripts/translate_one.sh INPUT.pdf out_zh.pdf --api-mode openai-compatible --api-url https://... --model gpt-4o-mini --api-key-env YOUR_PROVIDER_KEY
 ```
 
-API key 通过环境变量传递，永远不要把 key 明文写进命令或输出：`PAPER_CHINA_DEEPSEEK_API_KEY`、`DEEPSEEK_API_KEY`、`PDF_TRANSLATOR_API_KEY` 任一即可（脚本按此顺序探测，只传变量名）。
+API key 通过导出的 shell 环境变量传递（CLI 不加载仓库 `.env`），永远不要把 key 明文写进命令或输出。DeepSeek 默认模式使用：`PAPER_CHINA_DEEPSEEK_API_KEY`、`DEEPSEEK_API_KEY`、`PDF_TRANSLATOR_API_KEY` 任一即可（脚本按此顺序探测，只传变量名）。自定义供应商请显式传 `--api-key-env YOUR_PROVIDER_KEY`，不会自动使用 DeepSeek 密钥。
 
 ## 手动调用 CLI
 
@@ -66,7 +66,8 @@ API key 通过环境变量传递，永远不要把 key 明文写进命令或输�
 
 `inspect` 逐页比对原文/译文，输出 issue 列表（page/code/severity/message），存在 error 级 issue 时退出码为 1。通过标准：
 
-- 零 error 级 issue；页数一致、无空页；
+- 零 error 级 issue、零需处理的 warning；页数一致、无空页；
+- `scripts/verify_one.py` 复用基准门槛，视觉分数至少 0.55；仅 `inspect` 退出码为 0 不能代替完整门禁；
 - 无图片/矢量图/公式丢失，无文字重叠、公式裁切、表格错位；
 - 正文无成段未翻译英文（参考文献除外）。
 

@@ -37,7 +37,9 @@ PAPER_CHINA_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32 | tr '+/' '-_')
 - 首次启动自动建 `data/`（papers/translations/upload_sessions + SQLite）。回环访问免登录（`LOCAL_ACCESS_SCOPE`）。
 - 不需要设置任何 `*_API_KEY` 环境变量。
 
-## cache-only 方案（Web 端离线翻译如何走通）
+## 旧版 cache-only 录制方案（历史记录）
+
+> 当前版本已提供正式[离线重渲染入口](../../OFFLINE_RENDER.zh-CN.md)，无需假 key 或 watcher。下文保留 2026-08 录制时的旧行为，仅供追溯。
 
 Web 端**没有** CLI 的 `--api-mode cache-only` 等价开关，但翻译栈天然支持全缓存命中：
 
