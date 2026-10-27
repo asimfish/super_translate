@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>SuperTranslate · 保版式学术论文翻译系统 · 项目介绍</title>
-<meta name="description" content="SuperTranslate 项目介绍演示文稿：保版式学术论文 PDF 翻译（英→中），公式/图表/双栏零破坏，对象级 QA 审计，Web 与 Agent Skill 双模式。">
+<title>SuperTranslate · Native Reader · 项目介绍</title>
+<meta name="description" content="让 Agent 帮你成为 Native Reader，零压力读论文。SuperTranslate 项目介绍：六个阅读痛点、专业术语、译后质检，以及 Web、Skill、原生 macOS 悬窗与 Zotero。">
 <meta property="og:title" content="SuperTranslate · 项目介绍幻灯片">
-<meta property="og:description" content="18 页讲清保版式论文翻译：冻结结构、术语库注入、只接受严格变好的修复循环，以及 DPO / Mistral 7B 与 pdf2zh 的同机横向实测。">
+<meta property="og:description" content="21 页项目介绍：视频素材与六个痛点、保版式翻译与术语库、质量证据，以及 Web、Agent Skill、原生 macOS 悬窗和 Zotero 的使用与安装。">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://asimfish.github.io/super_translate/slides.html">
-<meta property="og:image" content="https://asimfish.github.io/super_translate/assets/og-image.png">
+<meta property="og:image" content="https://asimfish.github.io/super_translate/assets/promo/v15/cover-landscape.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://asimfish.github.io/super_translate/assets/og-image.png">
+<meta name="twitter:image" content="https://asimfish.github.io/super_translate/assets/promo/v15/cover-landscape.png">
 <link rel="canonical" href="https://asimfish.github.io/super_translate/slides.html">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a0e1c'/%3E%3Ctext x='32' y='44' font-size='34' text-anchor='middle' fill='%236f9dff' font-family='system-ui' font-weight='700'%3E译%3C/text%3E%3C/svg%3E">
 <script>
@@ -443,6 +443,26 @@ window.__ph = function (img) {
     .slide.leaving { transform: none; }
     .frame-bar em::before { animation: none; }
   }
+
+  /* New content retains the existing 16:9 stage and navigation. */
+  .cover h1 { max-width: 1100px; font-size: clamp(76px, 5vw, 96px); }
+  .six-pains { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin-top: 40px; }
+  .six-pains article { border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 28px; min-height: 230px; background: var(--panel); }
+  .six-pains small { color: var(--gold); font: 700 18px/1.5 var(--mono); }
+  .six-pains h3 { margin-top: 16px; font-size: 28px; line-height: 1.4; }
+  .six-pains p { margin-top: 12px; color: var(--muted); font-size: 23px; line-height: 1.65; }
+  .promo-slide-figure { max-width: 1120px; margin: 24px auto 0; }
+  .promo-slide-figure img { width: 100%; max-height: 630px; object-fit: contain; border-radius: var(--radius); }
+  .promo-slide-figure figcaption { margin-top: 12px; font-size: 19px; line-height: 1.6; color: var(--muted); }
+  .native-summary { border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 32px; background: var(--panel); }
+  .native-summary h3 { color: var(--gold); font-size: 30px; line-height: 1.4; }
+  .native-summary ol { padding-left: 32px; margin-top: 24px; }
+  .native-summary li { margin-top: 22px; font-size: 27px; line-height: 1.7; }
+  .native-summary p { font-size: 23px; line-height: 1.7; color: var(--muted); margin-top: 24px; }
+  .native-summary pre { font: 600 26px/2 var(--mono); white-space: pre-wrap; margin-top: 28px; color: var(--ink); }
+  .native-links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 26px; }
+  .native-links a { font-size: 23px; padding: 12px 18px; border: 1px solid var(--line-strong); border-radius: 10px; }
+  .native-caveat { margin-top: 26px; color: var(--muted); font-size: 21px; line-height: 1.65; }
 </style>
 <noscript>
 <style>
@@ -477,18 +497,18 @@ window.__ph = function (img) {
         </svg>
         <span><span class="mono">SUPERTRANSLATE</span><small>OPEN SOURCE · AGPL-3.0 · asimfish/super_translate</small></span>
       </div>
-      <h1>速刷论文，<br>却卡在<b>英文阅读</b>上？</h1>
-      <p class="cover-lead">公式 <span class="warm">·</span> 图表 <span class="warm">·</span> 双栏排版 <span class="gold">零破坏</span></p>
-      <p class="cover-sub">SuperTranslate · 像素级保真的 Agent-Native 论文翻译引擎（英→中）：对象级保护 + LLM 翻译 + 可机读 QA 审计，Web 部署与 Agent Skill 双模式。</p>
+      <h1>让 Agent 帮你成为<br><b>Native Reader</b></h1>
+      <p class="cover-lead">零压力读论文 <span class="warm">·</span> 让注意力回到论文内容</p>
+      <p class="cover-sub">开源的 Native 科研论文翻译工具。目标只有一个：无损的科研原生专业翻译。版式对齐原文，专业术语随段落注入，译后再逐项质检。</p>
     </div>
     <div class="cover-chips">
       <span class="chip gold-chip">75/75 页 QA 通过</span>
       <span class="chip">30 篇基准论文</span>
-      <span class="chip">1855 个测试用例</span>
-      <span class="chip warm-chip">Web + Skill 双模式</span>
+      <span class="chip">译后逐项质检</span>
+      <span class="chip warm-chip">Web · Skill · 悬窗 · Zotero</span>
     </div>
     <aside class="cover-frame">
-      <div class="frame-bar"><i></i><i></i><i></i><span>qwen_robotworld · p1</span><em>LIVE</em></div>
+      <div class="frame-bar"><i></i><i></i><i></i><span>Cosmos · p1</span><em>LIVE</em></div>
       <div class="frame-view" data-ph="assets/comparison/cosmos/hero.gif">
         <img src="assets/comparison/cosmos/hero.gif" alt="Cosmos 第 1 页原文与译文轮播" loading="lazy" onerror="window.__ph&&window.__ph(this)">
       </div>
@@ -497,27 +517,32 @@ window.__ph = function (img) {
     <div class="footer-line"><span>SuperTranslate · 项目介绍</span><span>github.com/asimfish/super_translate</span></div>
   </section>
 
-  <!-- S2 痛点 -->
-  <section class="slide" data-title="痛点">
-    <span class="eyebrow warm">Problem · 痛点</span>
-    <h2 class="s-title">读英文论文，卡在哪里？</h2>
-    <div class="pain-grid">
-      <div class="pain-list">
-        <div class="pain-item"><i>01</i><div><b>精读一篇英文论文动辄半天</b><span>术语查证、来回翻词典频频打断思路；读英文的速度，远赶不上读中文。</span></div></div>
-        <div class="pain-item"><i>02</i><div><b>网页翻译丢公式、丢版式</b><span>复制进翻译器就变纯文本：公式成乱码、图表全丢，只能对着两个窗口来回跳。</span></div></div>
-        <div class="pain-item"><i>03</i><div><b>常见 PDF 翻译工具破坏排版</b><span>公式错乱、图表错位、双栏变单栏、引用编号被改写——版式一坏，读起来比原文还累。</span></div></div>
-        <div class="pain-item"><i>04</i><div><b>翻完没有质检</b><span>漏翻、错改数字全靠肉眼排查；没有证据，译文不敢当可信版本用。</span></div></div>
-      </div>
-      <div class="wreck">
-        <div class="wreck-title">典型翻车现场（示意，非特定产品截图）</div>
-        <div class="wreck-pages">
-          <div class="wpage"><span class="ptag okt">原文</span><i></i><i class="short"></i><i class="formula"></i><div class="cols"><span><i></i><i></i><i class="short"></i></span><span><i></i><i class="short"></i><i></i></span></div><i class="fig"></i><i class="short"></i></div>
-          <div class="wpage bad"><span class="ptag badt">翻译后</span><i></i><i class="short"></i><i class="formula"></i><div class="cols"><span><i></i><i></i><i class="short"></i></span><span><i class="overlap"></i><i class="short"></i><i></i></span></div><i class="fig"></i><i class="short"></i></div>
-        </div>
-        <p class="wreck-note">公式挤出边界 · 双栏并成一栏 · 图表漂移遮挡正文</p>
-      </div>
+  <!-- Original video cover, linked rather than embedding platform scripts -->
+  <section class="slide" data-title="视频与图文介绍">
+    <span class="eyebrow">Watch · 3 分钟介绍</span>
+    <h2 class="s-title">让 Agent 帮你成为 <b>Native Reader</b></h2>
+    <p class="s-sub"><a href="https://b23.tv/dNg3JYK" target="_blank" rel="noopener">▶ 哔哩哔哩视频 ↗</a> · <a href="https://xhslink.cn/o/95CUF7S0njW" target="_blank" rel="noopener">小红书图文 ↗</a> · <a href="index.html">在线效果展示 →</a></p>
+    <figure class="promo-slide-figure">
+      <a href="https://b23.tv/dNg3JYK" target="_blank" rel="noopener"><img src="assets/promo/v15/cover-landscape.png" width="1920" height="1080" alt="V15 原始视频封面：让 Agent 帮你成为 Native Reader，零压力读论文"></a>
+      <figcaption>2026-10-12 V15 原始封面；图中耗时为当时开发版本的单次实测。当前支持与限定见<a href="https://github.com/asimfish/super_translate/blob/main/docs/PRESENTATION.md">素材说明</a>，悬窗与 Zotero 用法见后续页面。</figcaption>
+    </figure>
+    <div class="footer-line"><span>SuperTranslate · 视频与图文</span><span>github.com/asimfish/super_translate</span></div>
+  </section>
+
+  <!-- Six pain points from the V15 narration -->
+  <section class="slide" data-title="六个阅读痛点">
+    <span class="eyebrow warm">Problem · 读论文的人，谁没被翻译坑过</span>
+    <h2 class="s-title">六个痛点，<b>逐个改进</b></h2>
+    <p class="s-sub">AI 论文里的 LLM，应该是“大语言模型”。公式、结构和专业语境，一起决定是否读得顺。</p>
+    <div class="six-pains">
+      <article><small>01 · 公式</small><h3>乱码，变成一串源码</h3><p>数学片段先保护，保留原始符号与位置。</p></article>
+      <article><small>02 · 版式</small><h3>双栏变单栏，图表错位</h3><p>以原页坐标回填中文，保留双栏、图片和页码关系。</p></article>
+      <article><small>03 · 结构</small><h3>标题、加粗、斜体丢失</h3><p>识别结构与样式，让论文层级清晰可读。</p></article>
+      <article><small>04 · 完整性</small><h3>正文漏翻，图中文字乱翻</h3><p>该翻的翻，该留的留；译后逐项质检，尝试有界修复。</p></article>
+      <article><small>05 · 术语</small><h3>同一个词，译法总在变</h3><p>专业术语随段落注入，学科、领域和论文词库可扩展。</p></article>
+      <article><small>06 · 工作流</small><h3>来回切工具，阅读被打断</h3><p>Web、Skill、原生悬窗与 Zotero，跟着阅读习惯走。</p></article>
     </div>
-    <div class="footer-line"><span>SuperTranslate · 痛点</span><span>github.com/asimfish/super_translate</span></div>
+    <div class="footer-line"><span>SuperTranslate · 六个阅读痛点</span><span>版式对齐原文 + 专业术语 + 译后质检</span></div>
   </section>
 
   <!-- S3 方案总览 -->
@@ -735,7 +760,7 @@ window.__ph = function (img) {
         </div>
         <ul class="qa-rules">
           <li><b>Golden pages 回归</b>：字体 / 平台变体的金样页面锁定既有质量</li>
-          <li><b>1855 个自动化测试用例</b>：聚焦 PDF fixture 逐类锁定缺陷</li>
+          <li><b>自动化回归用例</b>：聚焦 PDF fixture 逐类锁定缺陷，结果见最新验收记录</li>
           <li><b>基准门控</b>：30 篇论文批次跑 translate → evaluate → gate 三段脚本</li>
         </ul>
       </div>
@@ -744,8 +769,8 @@ window.__ph = function (img) {
   </section>
 
   <!-- S9 Web 模式 -->
-  <section class="slide" data-title="双模式 · Web">
-    <span class="eyebrow">Mode 1 / 2 · Web 部署</span>
+  <section class="slide" data-title="Web 工作台">
+    <span class="eyebrow">Workflow 1 / 4 · Web 工作台</span>
     <h2 class="s-title">浏览器里的论文翻译工作台</h2>
     <div class="mode-layout">
       <div class="mode-list">
@@ -768,8 +793,8 @@ window.__ph = function (img) {
   </section>
 
   <!-- S10 Skill 模式 -->
-  <section class="slide" data-title="双模式 · Skill">
-    <span class="eyebrow warm">Mode 2 / 2 · Agent Skill</span>
+  <section class="slide" data-title="Agent Skill">
+    <span class="eyebrow warm">Workflow 2 / 4 · Agent Skill</span>
     <h2 class="s-title">在 Claude Code / Cursor 里<b>一句话翻译</b></h2>
     <div class="mode-layout">
       <div class="mode-list">
@@ -796,6 +821,52 @@ window.__ph = function (img) {
     <div class="footer-line"><span>SuperTranslate · Skill 模式</span><span>github.com/asimfish/super_translate</span></div>
   </section>
 
+  <!-- Native clients, using current main-branch capability and installation scope -->
+  <section class="slide" data-title="原生 macOS 悬窗">
+    <span class="eyebrow gold">Workflow 3 / 4 · Native macOS · SwiftUI</span>
+    <h2 class="s-title">悬窗，<b>随用随翻</b></h2>
+    <p class="s-sub">常驻桌面一角，置顶、半透明。把 PDF 拖进去，译完用你习惯的阅读器打开。</p>
+    <div class="mode-layout">
+      <div class="mode-list">
+        <div class="mode-row"><i>PDF</i><div><b>拖入 PDF，自动上传与排队</b><span>查看真实任务进度，后台处理时继续阅读。</span></div></div>
+        <div class="mode-row"><i>LLM</i><div><b>随时切换供应商与模型</b><span>与 Web、Zotero 使用同一服务账号和模型设置。</span></div></div>
+        <div class="mode-row"><i>LIB</i><div><b>文档整理与版本历史</b><span>按内容去重，整理标题，保留不同内容和导入时间。</span></div></div>
+        <div class="mode-row"><i>ON</i><div><b>登录自启，随手使用</b><span>安装脚本支持用户登录后启动；任务状态与记录可续接。</span></div></div>
+      </div>
+      <div class="native-summary">
+        <h3>使用流程</h3>
+        <ol><li>构建并安装原生 SwiftUI 客户端。</li><li>连接翻译服务，登录自己的账号。</li><li>拖入 PDF，查看进度与任务。</li><li>点“查看”，在选定的 PDF 阅读器中阅读。</li></ol>
+        <div class="native-links"><a href="https://github.com/asimfish/super_translate/blob/main/desktop/README.md">构建与安装 →</a><a href="https://github.com/asimfish/super_translate/tree/main/desktop/macos">查看源码 →</a></div>
+      </div>
+    </div>
+    <p class="native-caveat">macOS 13+，需要运行中的翻译服务；当前为源码构建、本机签名，尚无公证的通用 App 安装包。</p>
+    <div class="footer-line"><span>SuperTranslate · 原生 macOS 悬窗</span><span>原生阅读，嵌入生活的每一环</span></div>
+  </section>
+
+  <section class="slide" data-title="Zotero 原生支持">
+    <span class="eyebrow warm">Workflow 4 / 4 · Zotero · 0.2.2 预览版</span>
+    <h2 class="s-title">论文留在文献库，<b>中文版自动归档</b></h2>
+    <p class="s-sub">右键、论文侧栏或 PDF 阅读器中发起翻译；保留英文原文与批注，只新增中文版附件。</p>
+    <div class="mode-layout">
+      <div class="mode-list">
+        <div class="mode-row warm"><i>UI</i><div><b>原生入口，无缝嵌入</b><span>适应系统深色模式，熟悉的侧栏和阅读器入口。</span></div></div>
+        <div class="mode-row warm"><i>QA</i><div><b>进度看得见，暂停有原因</b><span>百分比与进度条、阶段和质检信息，支持取消任务。</span></div></div>
+        <div class="mode-row warm"><i>LLM</i><div><b>模型快捷切换，目录可刷新</b><span>复用服务账号的 API Key，与悬窗、网页同步设置。</span></div></div>
+        <div class="mode-row warm"><i>LIB</i><div><b>共享文档库与历史</b><span>检索网页、悬窗上传的文档，查询导入和内容版本。</span></div></div>
+      </div>
+      <div class="native-summary">
+        <h3>归档结构示意</h3>
+        <pre>原论文条目
+├─ 英文原文.pdf
+└─ 中文版《论文名字》.pdf</pre>
+        <p>下载 XPI → 从文件安装插件 → 登录服务 → 选择论文开始翻译。</p>
+        <div class="native-links"><a href="https://github.com/asimfish/super_translate/releases/download/zotero-v0.2.2/supertranslate-zotero-0.2.2.xpi">下载插件 XPI ↓</a><a href="https://github.com/asimfish/super_translate/blob/main/docs/ZOTERO.zh-CN.md">安装与使用教程 →</a></div>
+      </div>
+    </div>
+    <p class="native-caveat">支持 Zotero 10.0.x，已实测 macOS / Zotero 10.0.4、10.0.6；需要连接自己的服务。其他版本与平台尚未原生验收。</p>
+    <div class="footer-line"><span>SuperTranslate · Zotero</span><span>只新增中文版《论文名字》</span></div>
+  </section>
+
   <!-- S11 实现机制 -->
   <section class="slide" data-title="实现机制">
     <span class="eyebrow">How It Works · 实现机制</span>
@@ -806,7 +877,7 @@ window.__ph = function (img) {
       </a>
     </div>
     <div class="mech-notes">
-      <div class="mech-note"><b>保护区不交给模型，术语随块注入：</b>公式、引用与 URL 先替换为可逆占位符，图形、表格、算法按规则冻结；1,066 条学术术语按当前文本块注入提示词，用户可继续扩展。</div>
+      <div class="mech-note"><b>保护区不交给模型，术语随块注入：</b>公式、引用与 URL 先替换为可逆占位符，图形、表格、算法按规则冻结；1,066 条学术术语按当前文本块注入提示词，可在网页按学科、领域、论文维护词库，支持化学 / 生物模板与 CSV / JSON 导入导出。</div>
       <div class="mech-note gold"><b>未过检就进入 Agentic 修复循环：</b>QA 带缺陷清单打回该对象重译，全部检测器重跑；问题分未严格下降就原子回滚快照——每一轮都写入 *.qa.json。</div>
     </div>
     <div class="footer-line"><span>SuperTranslate · 实现机制</span><span>github.com/asimfish/super_translate</span></div>
@@ -865,23 +936,23 @@ window.__ph = function (img) {
   <!-- S12 数字成绩 -->
   <section class="slide" data-title="数字成绩">
     <span class="eyebrow gold">Numbers · 数字成绩</span>
-    <h2 class="s-title">每个数字，<b>都有证据指针</b></h2>
+    <h2 class="s-title">超高质量的长文翻译，<b>用数据说话</b></h2>
     <div class="num-grid">
       <div class="num gold"><b>75/75</b><span>Cosmos 75 页全篇翻译 QA 通过页数</span></div>
       <div class="num gold"><b>0</b><span>上述全篇审计 issue 数（793 个审计对象）</span></div>
       <div class="num"><b>30 篇</b><span>基准论文批次：经典 20 + 世界模型 10</span></div>
-      <div class="num"><b>1855</b><span>自动化测试用例</span></div>
+      <div class="num"><b>4</b><span>使用入口：Web / Skill / 原生悬窗 / Zotero</span></div>
       <div class="num"><b>1,066</b><span>专业术语库条目（23 个分类 · 3 份语料）</span></div>
-      <div class="num"><b>6</b><span>可切换 LLM 后端：DeepSeek / Kimi / OpenAI / Claude / GLM / Google</span></div>
+      <div class="num"><b>8</b><span>AI 供应商；可刷新账号的可用模型目录</span></div>
     </div>
-    <p class="num-caveat"><b>事实纪律：</b>数字对应仓库内基准清单、QA 报告与测试套件；不凭印象汇报，欢迎跑一遍复核。</p>
+    <p class="num-caveat"><b>范围：</b>75/75 是 Cosmos 指定历史产物的 QA 记录；30 篇是基准清单规模，不代表原 20 篇整体验收全部通过。<a href="https://github.com/asimfish/super_translate/blob/main/docs/CLIENTS_RELEASE_20261027.md">最新验收记录 →</a></p>
     <div class="footer-line"><span>SuperTranslate · 数字成绩</span><span>github.com/asimfish/super_translate</span></div>
   </section>
 
   <!-- S13 快速开始 -->
   <section class="slide" data-title="快速开始">
     <span class="eyebrow">Quick Start · 快速开始</span>
-    <h2 class="s-title">两条路，<b>都是几分钟的事</b></h2>
+    <h2 class="s-title">先准备服务，<b>再选择你的入口</b></h2>
     <div class="qs-grid">
       <div class="qs-card">
         <div class="qk">WEB · DOCKER COMPOSE</div>
@@ -902,6 +973,7 @@ ln -s "$PWD/super_translate/skills/paper-translate" \
         <p class="qnote">然后对话里说：<b>「把 paper.pdf 翻译成中文，保留原版式」</b>；Cursor 用户链到项目 .cursor/skills/ 即可。</p>
       </div>
     </div>
+    <div class="native-links"><a href="https://github.com/asimfish/super_translate/blob/main/docs/ZOTERO.zh-CN.md">已有服务：安装 Zotero →</a><a href="https://github.com/asimfish/super_translate/blob/main/desktop/README.md">已有服务：构建 macOS 悬窗 →</a></div>
     <div class="footer-line"><span>SuperTranslate · 快速开始</span><span>asimfish.github.io/super_translate</span></div>
   </section>
 
@@ -924,13 +996,14 @@ ln -s "$PWD/super_translate/skills/paper-translate" \
     <div class="end-wrap">
       <span class="eyebrow">Star · Issue · PR 都欢迎</span>
       <div class="end-repo">github.com/<b>asimfish/super_translate</b></div>
-      <p class="end-slogan">让每一篇英文论文，都能<b>原版式读中文</b>。</p>
+      <p class="end-slogan">让 Agent 帮你成为 <b>Native Reader</b>，零压力读论文。</p>
       <div class="end-chips">
         <span class="chip">AGPL-3.0-or-later</span>
-        <span class="chip gold-chip">Web + Agent Skill 双模式</span>
-        <span class="chip warm-chip">公式 · 图表 · 双栏 零破坏</span>
+        <span class="chip gold-chip">Web · Skill · 原生悬窗 · Zotero</span>
+        <span class="chip warm-chip">版式对齐 · 专业术语 · 译后质检</span>
       </div>
-      <p class="end-fine">项目主页：<a href="index.html">asimfish.github.io/super_translate</a> · 效果对比可在主页拖动分割线逐像素查看</p>
+      <p class="end-fine"><a href="https://b23.tv/dNg3JYK" target="_blank" rel="noopener">哔哩哔哩视频 ↗</a> · <a href="https://xhslink.cn/o/95CUF7S0njW" target="_blank" rel="noopener">小红书图文 ↗</a></p>
+    <p class="end-fine">项目主页：<a href="index.html">asimfish.github.io/super_translate</a> · 效果对比可在主页拖动分割线逐像素查看</p>
     </div>
     <div class="footer-line"><span>SuperTranslate · 谢谢观看</span><span>github.com/asimfish/super_translate</span></div>
   </section>
@@ -941,7 +1014,7 @@ ln -s "$PWD/super_translate/skills/paper-translate" \
 <a class="hud-home" href="index.html">← 返回主页</a>
 <div class="hud-dots" id="hudDots" role="tablist" aria-label="幻灯片导航"></div>
 <div class="hud-right">
-  <span class="count" id="hudCount">1 / 15</span>
+  <span class="count" id="hudCount">1 / 21</span>
   <button class="hud-btn" id="btnPrev" aria-label="上一页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
   <button class="hud-btn" id="btnNext" aria-label="下一页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
   <button class="hud-btn" id="btnFull" aria-label="全屏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3M16 21h3a2 2 0 002-2v-3"/></svg></button>

@@ -15,33 +15,49 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![GitHub stars](https://img.shields.io/github/stars/asimfish/super_translate?style=flat&logo=github&label=Stars)](https://github.com/asimfish/super_translate/stargazers)
 
-[Bilibili video](https://b23.tv/dNg3JYK) · [Xiaohongshu](https://xhslink.cn/o/95CUF7S0njW)
+[Bilibili video](https://b23.tv/dNg3JYK) · [Xiaohongshu](https://xhslink.cn/o/95CUF7S0njW) · [Live showcase](https://asimfish.github.io/super_translate/) · [Presentation](https://asimfish.github.io/super_translate/slides.html)
 
 </div>
 
-**Racing through papers, but stuck on slow English reading? SuperTranslate — a pixel-faithful, agent-native translation engine for research papers.**
+# Let your Agent help you become a Native Reader
 
-"I have to present this 75-page report at tomorrow's group meeting — can I get a Chinese version where the formulas stay intact, no figures go missing, and the page numbers still match the original?" Machine-translated PDFs cannot deliver that: formulas collapse into garbage, two columns become one, captions drift away from their figures.
+**Read papers with less friction. SuperTranslate is an open-source research PDF translator that keeps the original page layout.**
 
-SuperTranslate takes a different route: **it never re-flows the page**. Formulas, figures, and citations are frozen first — not a single character of them is handed to the model. The translated text is placed back at the original coordinates, so everything sits exactly where it was, and a corpus of 1,066 academic terms pins down the terminology. Every page then has to pass a QA audit, and a repair is only accepted if it is strictly better — measured on the 75-page Cosmos technical report: **75/75 pages, 793 objects, 0 issues**.
+Our goal: professional translation that preserves the paper's structure. Protect formulas and figures, translate prose back into its original coordinates, apply research terminology, and check the result. Use the web app, an Agent Skill, the native macOS floating window, or Zotero.
 
-Deploy it as a web app and you get a built-in side-by-side reader; install it as an agent skill and one sentence in Claude Code / Cursor — "translate this paper into Chinese" — is all it takes.
+[![Watch the SuperTranslate introduction: become a Native Reader](docs/assets/promo/v15/cover-landscape.png)](https://b23.tv/dNg3JYK)
+
+**[▶ Bilibili · 3-minute introduction (Chinese)](https://b23.tv/dNg3JYK) · [Xiaohongshu](https://xhslink.cn/o/95CUF7S0njW) · [Live showcase](https://asimfish.github.io/super_translate/) · [Presentation](https://asimfish.github.io/super_translate/slides.html)**
+
+<sub>Original V15 video cover, October 12, 2026. Timings shown are historical single-run measurements of a development build, not general performance guarantees for the current release. See [presentation sources and scope](docs/PRESENTATION.md).</sub>
+
+The video puts six recurring problems first:
+
+- **Broken formulas or raw source code** → Protect mathematical fragments and their original placement.
+- **Collapsed columns and drifting figures** → Refill text using the source page's coordinates.
+- **Lost headings, bold and italics** → Preserve structural styles and check the output.
+- **Skipped prose or altered figure labels** → Classify content, audit the translation, and attempt bounded repairs.
+- **Inconsistent technical terms** → Use built-in terminology and maintain libraries by discipline, field or paper.
+- **Constant switching between tools** → Translate where you already read and work.
+
+## Zotero and the macOS floating client
+
+**Four ways to read: Web, Agent Skill, native macOS and Zotero.**
+
+- **Web**: [Run the translation workbench](#quick-start-web-mode) with PDF upload, progress and synchronized reading.
+- **Agent Skill**: [Install paper-translate](#quick-start-agent-skill-mode) for Claude Code / Cursor, including translation and QA.
+- **Native macOS floating window**: a translucent SwiftUI window with drag-and-drop, model switching, progress, document history and opening the result in your PDF reader. [Build and installation](desktop/README.md); macOS 13+, source build with local signing, login autostart via the install script. A notarized universal app installer is not available yet.
+- **Zotero 0.2.2 preview**: translate from the library, item sidebar or PDF reader; show progress, switch models, cancel tasks, and save one Chinese attachment named `中文版《Paper title》`. [Download XPI](https://github.com/asimfish/super_translate/releases/download/zotero-v0.2.2/supertranslate-zotero-0.2.2.xpi) · [Installation guide (Chinese)](docs/ZOTERO.zh-CN.md) · [Usage](zotero/README.md).
+
+Web, the floating window and Zotero share a service account, provider settings, document deduplication and version history. Connect to your own running translation service; [set up a local service and account](docs/ZOTERO.zh-CN.md#没有服务先在本机启动) if needed. Zotero support is currently limited to 10.0.x; native checks covered macOS with Zotero 10.0.4 / 10.0.6. Other platforms and versions have not been accepted yet.
+
+API settings support DeepSeek, Kimi, OpenAI, Anthropic, GLM, Gemini, Qwen and Doubao, with refreshable account-specific model catalogs. [Terminology management](docs/TERMINOLOGY.md) includes discipline, field and paper libraries, chemistry / biology starter templates, and CSV / JSON import and export. See [client verification and limitations](docs/CLIENTS_RELEASE_20261027.md).
 
 [See the results](#translation-quality-side-by-side) · [Run it in five minutes](#quick-start-web-mode) · [How it works](#how-it-works-from-original-page-to-trusted-translation)
 
 ![SuperTranslate result: Cosmos page 1, original alternating with the translation](docs/assets/comparison/cosmos/hero.gif)
 
 Want to see it in action? [24-second web UI demo →](#web-interface)
-
-## Zotero and the macOS floating client
-
-Use the same SuperTranslate service from the web app, a floating macOS window, or Zotero. Zotero offers item/context-menu, sidebar and PDF-reader entry points, visible task progress, provider/model selection, cancellation and automatic Chinese PDF attachment import. It adds **中文版《Paper title》** while preserving the original PDF, notes and annotations. Document identity, import history and account settings are shared across clients connected to the same service and account.
-
-- [Download the Zotero 0.2.2 XPI](https://github.com/asimfish/super_translate/releases/download/zotero-v0.2.2/supertranslate-zotero-0.2.2.xpi). In Zotero, open **Tools → Plugins → gear → Install Plugin From File**, then connect through **Tools → SuperTranslate** using your translation service URL and credentials.
-- [Complete installation guide (Chinese)](docs/ZOTERO.zh-CN.md): start a local service, create an account, configure a provider API key and translate your first paper. The documented local service runs at `http://127.0.0.1:8001`; change the plugin's default port to match your service.
-- [Build and install the macOS floating client](desktop/README.md), including login startup. Requires macOS 13+; builds are locally signed, with no notarized universal app distribution yet.
-
-The plugin currently declares **Zotero 10.0.x** compatibility and has native macOS evidence for Zotero 10.0.4 / 10.0.6. Other versions and operating systems have not undergone native acceptance. A running translation service and a usable provider account are required; the clients do not create a hosted service. The backend includes the document-library and history endpoints required by both clients, extensible terminology libraries and model discovery for eight providers. See [integration verification and limitations](docs/CLIENTS_RELEASE_20261027.md).
 
 ## Contents
 

@@ -3,20 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SuperTranslate · 保版式学术论文 PDF 翻译系统（英→中）</title>
-<meta name="description" content="SuperTranslate：开源保版式学术论文 PDF 翻译系统。公式、图表、双栏排版零破坏，对象级 QA 审计，多 LLM 后端，Web 部署与 Agent Skill 双模式。AGPL-3.0。">
-<meta property="og:title" content="SuperTranslate · 英文论文，原版式读中文">
-<meta property="og:description" content="保版式学术论文 PDF 翻译：公式/图表/双栏零破坏 + 对象级 QA 审计。Web 与 Agent Skill 双模式，AGPL-3.0 开源。">
+<title>SuperTranslate · 让 Agent 帮你成为 Native Reader，零压力读论文</title>
+<meta name="description" content="让 Agent 帮你成为 Native Reader，零压力读论文。SuperTranslate 开源科研论文翻译：版式对齐原文、专业术语、译后质检；支持 Web、Agent Skill、原生 macOS 悬窗与 Zotero。">
+<meta property="og:title" content="SuperTranslate · 让 Agent 帮你成为 Native Reader">
+<meta property="og:description" content="零压力读论文：版式对齐原文、专业科研术语、译后质检。Web、Agent Skill、原生 macOS 悬窗与 Zotero，融入你的阅读工作流。">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://asimfish.github.io/super_translate/">
-  <meta property="og:image" content="https://asimfish.github.io/super_translate/assets/og-image.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
+  <meta property="og:image" content="https://asimfish.github.io/super_translate/assets/promo/v15/cover-landscape.png">
+  <meta property="og:image:width" content="1920">
+  <meta property="og:image:height" content="1080">
   <meta property="og:locale" content="zh_CN">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="SuperTranslate · 英文论文，原版式读中文">
-  <meta name="twitter:description" content="保版式学术论文 PDF 翻译：公式/图表/双栏零破坏 + 对象级 QA 审计。Web 与 Agent Skill 双模式，AGPL-3.0 开源。">
-  <meta name="twitter:image" content="https://asimfish.github.io/super_translate/assets/og-image.png">
+  <meta name="twitter:title" content="SuperTranslate · 让 Agent 帮你成为 Native Reader">
+  <meta name="twitter:description" content="零压力读论文：版式对齐原文、专业科研术语、译后质检。Web、Agent Skill、原生 macOS 悬窗与 Zotero，融入你的阅读工作流。">
+  <meta name="twitter:image" content="https://asimfish.github.io/super_translate/assets/promo/v15/cover-landscape.png">
   <link rel="canonical" href="https://asimfish.github.io/super_translate/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a0e1c'/%3E%3Ctext x='32' y='44' font-size='34' text-anchor='middle' fill='%236f9dff' font-family='system-ui' font-weight='700'%3E译%3C/text%3E%3C/svg%3E">
 <script>
@@ -177,7 +177,7 @@ window.__ph = function (img) {
 
   .hero-visual { position: relative; }
   .hero-visual::before {
-    content: ""; position: absolute; inset: -12% -8%;
+    content: ""; position: absolute; inset: -12% 0;
     background: radial-gradient(closest-side, rgba(111, 157, 255, .14), transparent 70%);
     z-index: 0; pointer-events: none;
   }
@@ -653,6 +653,24 @@ window.__ph = function (img) {
     .mech-open { top: 16px; right: 16px; }
     .key-item { padding: 15px 16px; }
   }
+
+  /* Video sources and six reading pain points share the existing site theme. */
+  .promo-cover { display: block; margin-top: var(--sp-4); border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
+  .promo-cover img { width: 100%; height: auto; }
+  .promo-note { margin-top: 14px; color: var(--muted); font-size: var(--fs-small); line-height: 1.8; }
+  .pain-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin-top: var(--sp-4); }
+  .pain-card { padding: 26px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  .pain-card small { color: var(--gold); font: 700 12px/1.5 var(--mono); letter-spacing: .12em; }
+  .pain-card h3 { margin-top: 12px; font-size: var(--fs-h3); line-height: 1.5; }
+  .pain-card p { margin-top: 10px; color: var(--muted); line-height: 1.8; }
+  .client-steps { margin-top: 22px; padding: 20px 22px 20px 42px; background: var(--panel-deep); border-radius: var(--radius-sm); color: var(--ink); }
+  .client-steps li { color: var(--ink); padding-left: 0; }
+  .client-steps li::before { content: none; }
+  .client-links { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 12px 20px; }
+  .install-links { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+  .install-links a { border: 1px solid var(--line-strong); border-radius: 10px; padding: 12px 18px; }
+  @media (max-width: 768px) { .pain-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 480px) { .pain-cards { grid-template-columns: 1fr; } }
 </style>
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 </head>
@@ -666,10 +684,11 @@ window.__ph = function (img) {
     </a>
     <nav class="top-nav">
       <a href="#compare">效果对比</a>
-      <a href="#mechanism">机制</a>
+      <a href="#video">视频</a>
+      <a href="#modes">四种用法</a>
       <a href="#ui">界面</a>
       <a href="#quickstart" class="keep">快速开始</a>
-      <a href="slides.html">Slides</a>
+      <a href="slides.html">介绍幻灯片</a>
       <a class="gh" href="https://github.com/asimfish/super_translate" target="_blank" rel="noopener">GitHub ↗</a>
     </nav>
   </div>
@@ -679,25 +698,25 @@ window.__ph = function (img) {
 <section class="hero" id="top">
   <div class="wrap">
     <div class="fx">
-      <span class="overline">Open Source · AGPL-3.0 · Web 应用 + Agent Skill</span>
-      <h1>速刷论文，却卡在英文阅读上？</h1>
+      <span class="overline">Open Source · Web · Skill · macOS · Zotero</span>
+      <h1>让 Agent 帮你成为<span class="h1-line2">Native Reader</span>零压力读论文</h1>
       <div class="hero-quote">
-        <em>一个再普通不过的需求 · 一位深夜还在读论文的研究生</em>
-        <p>“这篇 75 页的报告明天组会要讲，能不能给我一份中文版——公式别乱，图别丢，页码还能对上原文？”</p>
+        <em>读论文的人，谁没被翻译坑过</em>
+        <p>“AI 论文里的 LLM，不能读成法学硕士。公式别乱、图别丢，正文和术语都要读得顺。”</p>
       </div>
-      <p class="hero-ident">SuperTranslate<span> · 像素级保真的 Agent-Native 论文翻译引擎</span></p>
-      <p class="lede">市面上的工具会先把 PDF 拆开重排：正文是翻出来了，公式挤成一行、双栏变成单栏、图注对不上号。SuperTranslate 走了另一条路——<b>不重排</b>。原文哪一块在哪，译文就在哪：<b>公式、图表、版式，一个像素不动</b>。</p>
+      <p class="hero-ident">SuperTranslate<span> · 开源的 Native 科研论文翻译工具</span></p>
+      <p class="lede">目标只有一个：<b>无损的科研原生专业翻译</b>。保护公式与图表，把中文放回原来的位置；用专业术语和译后质检，让注意力回到论文内容。</p>
       <ul class="hero-vows">
         <li>公式、图表、引用先冻结，一个字符都不交给模型</li>
         <li>译文按原坐标回填，页面几何和原文完全一致</li>
         <li>每页都过 QA 审计，修复只有严格变好才被接受</li>
       </ul>
       <div class="cta-row">
-        <a class="btn primary" href="https://github.com/asimfish/super_translate" target="_blank" rel="noopener">GitHub ↗</a>
-        <a class="btn ghost" href="#quickstart">快速开始</a>
+        <a class="btn primary" href="#video">▶ 观看 3 分钟介绍</a>
+        <a class="btn ghost" href="#modes">选择你的阅读方式</a>
       </div>
-      <p class="hero-formula">对象冻结 + 原位回填 + 确定性 QA 循环 = <b>一份敢逐页对照检查的译文</b></p>
-      <p class="proof-line">75 页 Cosmos 实测 <b>75/75 页 · 0 缺陷</b><i>·</i><b>1,066</b> 条术语库<i>·</i><b>1855</b> 个测试<i>·</i>数据全程留在本地</p>
+      <p class="hero-formula">版式对齐原文 + 专业科研术语 + 译后质检 = <b>把时间留给论文</b></p>
+      <p class="proof-line">75 页 Cosmos 实测 <b>75/75 页 · 0 缺陷</b><i>·</i><b>1,066</b> 条术语库<i>·</i><b>4</b> 种使用入口<i>·</i>连接自己的服务与模型</p>
     </div>
     <div class="hero-visual fx">
       <div class="browser-card">
@@ -718,6 +737,44 @@ window.__ph = function (img) {
           <a href="#compare">拖动对比 ↓</a>
         </div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 视频与六个痛点 ===== -->
+<section id="video" class="alt">
+  <div class="wrap">
+    <header class="sec-head fx">
+      <span class="overline">Watch · 3 分钟看懂 SuperTranslate</span>
+      <h2 class="sec-title">让 Agent 帮你成为 <b>Native Reader</b></h2>
+      <p class="sec-desc">从读论文时的六个痛点出发：版式对齐原文，该翻的翻、该留的留，再用专业术语和译后质检把关。</p>
+    </header>
+    <a class="promo-cover fx" href="https://b23.tv/dNg3JYK" target="_blank" rel="noopener" aria-label="到哔哩哔哩观看 SuperTranslate 3 分钟介绍">
+      <img src="assets/promo/v15/cover-landscape.png" width="1920" height="1080" loading="lazy" alt="SuperTranslate V15 视频封面：让 Agent 帮你成为 Native Reader，零压力读论文">
+    </a>
+    <div class="cta-row fx">
+      <a class="btn primary" href="https://b23.tv/dNg3JYK" target="_blank" rel="noopener">▶ 哔哩哔哩视频 ↗</a>
+      <a class="btn ghost" href="https://xhslink.cn/o/95CUF7S0njW" target="_blank" rel="noopener">小红书图文 ↗</a>
+      <a class="btn ghost" href="slides.html">项目介绍幻灯片 →</a>
+    </div>
+    <p class="promo-note fx">V15 原始封面制作于 2026-10-12，图中耗时为当时开发版本的单次实测。当前客户端与支持范围已更新，见下方四种用法与<a href="https://github.com/asimfish/super_translate/blob/main/docs/PRESENTATION.md">素材说明</a>。</p>
+  </div>
+</section>
+
+<section id="pain-points">
+  <div class="wrap">
+    <header class="sec-head fx">
+      <span class="overline gold">Why · 读论文的人，谁没被翻译坑过</span>
+      <h2 class="sec-title">六个痛点，<b>逐个改进</b></h2>
+      <p class="sec-desc">LLM 应该是“大语言模型”。你要读的是一篇完整的论文，公式、结构和专业语境都很重要。</p>
+    </header>
+    <div class="pain-cards">
+      <article class="pain-card fx"><small>01 · 公式</small><h3>公式乱码，变成一串源码</h3><p>数学片段先保护，保留原始符号与位置，把需要翻译的正文交给模型。</p></article>
+      <article class="pain-card fx"><small>02 · 版式</small><h3>双栏变单栏，图表对不上</h3><p>以原页坐标回填中文，保留双栏、图片与页码关系，便于对照原文。</p></article>
+      <article class="pain-card fx"><small>03 · 结构</small><h3>小标题和加粗丢了</h3><p>识别标题层级、粗体与斜体，让论文的结构清晰可读，并检查译文样式。</p></article>
+      <article class="pain-card fx"><small>04 · 完整性</small><h3>正文漏翻，图中文字乱翻</h3><p>该翻的翻，该留的留。译后逐项质检，发现漏翻和版面缺陷后尝试有界修复。</p></article>
+      <article class="pain-card fx"><small>05 · 专业语境</small><h3>术语翻错，同词不同译</h3><p>专业科研术语库随段落注入；按学科、领域和单篇论文维护你自己的词表。</p></article>
+      <article class="pain-card fx"><small>06 · 工作流</small><h3>来回切工具，读一篇折腾半天</h3><p>网页、Agent Skill、macOS 悬窗和 Zotero，让翻译跟着你的阅读习惯走。</p></article>
     </div>
   </div>
 </section>
@@ -1020,8 +1077,9 @@ window.__ph = function (img) {
         <div class="why-item"><b>结构字重保真</b><p>粗体导语、小节标题、hyperref 链接框都在原位；重排式工具最常丢的就是这些（细节②）。</p></div>
         <div class="why-item"><b>漏翻会被打回</b><p>对象级 QA 统计每块中文覆盖率，定义/引理这类整段漏翻直接判缺陷、带清单重译（细节③）。</p></div>
         <div class="why-item"><b>页面几何逐像素一致</b><p>导师说「看第 4 页式 (5)」，中英两版位置相同——重排式译文做不到与原文互相定位（<a href="#compare">滑块对比</a>）。</p></div>
-        <div class="why-item"><b>质量可自证，盲区会被补上</b><p>每份产物附 QA 报告与 inspect 审计，未过检进入只接受严格变好的修复循环；实测暴露的 QA 盲区当天变成新检测器（<a href="#mechanism">机制</a>）。</p></div>
-        <div class="why-item"><b>不止一个翻译器</b><p>双语对照阅读器、Agent Skill、断点续跑的批处理——是一套读论文的工作流，不是一次性转换（<a href="#modes">两种形态</a>）。</p></div>
+        <div class="why-item"><b>质量可自证，盲区会被补上</b><p>每份产物附 QA 报告与 inspect 审计，未过检进入只接受严格变好的修复循环；实测暴露的 QA 盲区当天变成新检测器（<a href="#video">视频</a>
+      <a href="#modes">四种用法</a>）。</p></div>
+        <div class="why-item"><b>不止一个翻译器</b><p>双语对照阅读器、Agent Skill、断点续跑的批处理——是一套读论文的工作流，不是一次性转换（<a href="#modes">四种入口</a>）。</p></div>
       </div>
 
       <p class="license-note fx">
@@ -1157,6 +1215,7 @@ window.__ph = function (img) {
         </p>
       </div>
     </div>
+    <p class="sec-desc fx"><b>专业的科研术语库，开启属于你的科研专业翻译。</b>网页可按学科、领域和论文建立词库，搜索编辑、CSV / JSON 导入导出；化学、生物模板可直接作为扩展起点。<a href="https://github.com/asimfish/super_translate/blob/main/docs/TERMINOLOGY.md">术语库管理教程 →</a></p>
   </div>
 </section>
 
@@ -1166,7 +1225,7 @@ window.__ph = function (img) {
     <header class="sec-head fx">
       <span class="overline">Features · 核心能力</span>
       <h2 class="sec-title">为「读论文」这件事<b>做深的每一层</b></h2>
-      <p class="sec-desc">从版式引擎到 QA 审计，从 Web 工作台到 Agent Skill——同一套引擎，覆盖个人精读与课题组批量两种节奏。</p>
+      <p class="sec-desc">从版式引擎到 QA 审计，从网页和 Agent 到原生悬窗与 Zotero，覆盖个人精读与课题组协作。</p>
     </header>
     <div class="feat-grid">
       <div class="feat fx">
@@ -1182,7 +1241,7 @@ window.__ph = function (img) {
       <div class="feat fx" style="--fxd:.12s">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 5-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg></div>
         <h3>多 LLM 后端</h3>
-        <p>DeepSeek、Kimi K3、OpenAI、Claude、GLM、Google 随时切换；<b>per-user API key</b> AES-GCM 加密存储，不进日志不回传。</p>
+        <p>DeepSeek、Kimi、OpenAI、Anthropic、智谱、Gemini、Qwen、豆包；可刷新账号可用模型目录，<b>按用户管理 API Key</b>。</p>
       </div>
       <div class="feat fx" style="--fxd:.18s">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="16" rx="1.5"/><rect x="13" y="4" width="8" height="16" rx="1.5"/></svg></div>
@@ -1192,7 +1251,7 @@ window.__ph = function (img) {
       <div class="feat fx">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="16" y2="6"/><line x1="3" y1="12" x2="16" y2="12"/><line x1="3" y1="18" x2="16" y2="18"/><path d="M19 4v16m0 0l-2.5-3M19 20l2.5-3"/></svg></div>
         <h3>批量与断点恢复</h3>
-        <p>多篇队列、任务崩溃后<b>自动恢复</b>、翻译缓存复用——重试不重复消耗 API 额度；大文件分块续传。</p>
+        <p>多篇队列、任务崩溃后<b>恢复排队</b>、翻译缓存复用，减少重复调用；大文件分块续传，暂停时显示原因与保留草稿。</p>
       </div>
       <div class="feat fx" style="--fxd:.06s">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 9l3 3-3 3"/><line x1="12" y1="15" x2="17" y2="15"/></svg></div>
@@ -1202,7 +1261,7 @@ window.__ph = function (img) {
       <div class="feat fx" style="--fxd:.12s">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg></div>
         <h3>本地部署 · 数据私有</h3>
-        <p>自托管 FastAPI + SQLite，论文与 API key 不经第三方；<b>AGPL-3.0</b> 开源，网络服务须向用户开放源码。</p>
+        <p>自托管 FastAPI + SQLite，文档由自己的服务管理；翻译段落发送给所选模型供应商。<b>AGPL-3.0</b> 开源。</p>
       </div>
       <div class="feat fx" style="--fxd:.18s">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="12" y2="18"/></svg></div>
@@ -1213,17 +1272,17 @@ window.__ph = function (img) {
   </div>
 </section>
 
-<!-- ===== 双模式 ===== -->
+<!-- ===== 四种使用入口 ===== -->
 <section id="modes">
   <div class="wrap">
     <header class="sec-head fx">
-      <span class="overline">Two Modes · 双模式</span>
-      <h2 class="sec-title">同一个引擎，<b>两种打开方式</b></h2>
-      <p class="sec-desc">Web 部署给课题组共用，Agent Skill 给生活在 AI 编辑器里的你——底层同一套翻译引擎与 QA 体系。</p>
+      <span class="overline">Your Workflow · 四种使用入口</span>
+      <h2 class="sec-title">原生阅读，<b>嵌入生活的每一环</b></h2>
+      <p class="sec-desc">网页、Skill、无缝悬窗与 Zotero 全支持。Web、悬窗和 Zotero 共用服务、账号、模型设置与文档库；Skill 可直接运行本地引擎。</p>
     </header>
     <div class="mode-grid">
       <div class="mode-card fx">
-        <span class="kicker">MODE 1 · WEB 部署</span>
+        <span class="kicker">01 · WEB 工作台</span>
         <h3>浏览器里的论文翻译工作台</h3>
         <div class="mode-mock">
           <div class="mock-bar"><i></i><i></i><i></i><span>http://localhost:8001 · 双栏对照阅读</span></div>
@@ -1243,7 +1302,7 @@ window.__ph = function (img) {
         <p class="mode-fit"><b>适合</b> 实验室 / 课题组共用一台服务器，手机平板也能读</p>
       </div>
       <div class="mode-card warm fx" style="--fxd:.08s">
-        <span class="kicker">MODE 2 · AGENT SKILL</span>
+        <span class="kicker">02 · AGENT SKILL</span>
         <h3>在 Claude Code / Cursor 里一句话翻译</h3>
         <div class="mode-mock">
           <div class="mock-bar"><i></i><i></i><i></i><span>claude · skills/paper-translate</span></div>
@@ -1264,6 +1323,38 @@ window.__ph = function (img) {
           <li>也可脱离编辑器直接走 CLI：<b>python -m pdf_zh_translator translate</b></li>
         </ul>
         <p class="mode-fit"><b>适合</b> 重度 agent 用户、批量翻译与可复现实验场景</p>
+      </div>
+      <div class="mode-card fx">
+        <span class="kicker">03 · NATIVE macOS · SwiftUI</span>
+        <h3>悬窗，随用随翻</h3>
+        <ol class="client-steps">
+          <li>半透明、置顶，折叠在桌面一角。</li>
+          <li>拖入 PDF，上传、排队，实时查看任务进度。</li>
+          <li>译完点“查看”，用选定的 PDF 阅读器打开。</li>
+        </ol>
+        <ul>
+          <li>切换<b>供应商、模型与质量</b>，查看文档与历史。</li>
+          <li>按内容去重、整理标题和不同版本，方便后续查找。</li>
+          <li>安装脚本支持<b>登录自启</b>；macOS 13+，需连接翻译服务。</li>
+        </ul>
+        <div class="client-links"><a href="https://github.com/asimfish/super_translate/blob/main/desktop/README.md">构建与安装 →</a><a href="https://github.com/asimfish/super_translate/tree/main/desktop/macos">SwiftUI 源码 →</a></div>
+        <p class="mode-fit">当前为源码构建、本机签名；尚无公证的通用 App 安装包。</p>
+      </div>
+      <div class="mode-card warm fx">
+        <span class="kicker">04 · ZOTERO · 0.2.2 预览版</span>
+        <h3>在文献库里，直接得到中文版</h3>
+        <ol class="client-steps">
+          <li>安装 XPI，连接已有的翻译服务与账号。</li>
+          <li>从右键、论文侧栏或 PDF 阅读器发起翻译。</li>
+          <li>新增“中文版《论文名字》”附件，接着读。</li>
+        </ol>
+        <ul>
+          <li>侧栏与阅读器显示<b>百分比和进度条</b>，可取消任务。</li>
+          <li>快捷切模型，查询共享文档库、导入历史与内容版本。</li>
+          <li>保留英文附件与批注，不重复归档同一份已保存译文。</li>
+        </ul>
+        <div class="client-links"><a href="https://github.com/asimfish/super_translate/releases/download/zotero-v0.2.2/supertranslate-zotero-0.2.2.xpi">下载插件 XPI ↓</a><a href="https://github.com/asimfish/super_translate/blob/main/docs/ZOTERO.zh-CN.md">完整安装教程 →</a></div>
+        <p class="mode-fit">Zotero 10.0.x；已实测 macOS / 10.0.4、10.0.6。其他版本与平台尚未原生验收。</p>
       </div>
     </div>
   </div>
@@ -1327,8 +1418,8 @@ window.__ph = function (img) {
   <div class="wrap">
     <header class="sec-head fx">
       <span class="overline">Bring Your Own Key · 自带 API Key</span>
-      <h2 class="sec-title">用自己的 key，<b>数据不出本机</b></h2>
-      <p class="sec-desc">本地部署：论文、译文与 API key 都留在你的服务器上，key 加密存进本机 SQLite，界面只显示尾号。</p>
+      <h2 class="sec-title">用自己的 Key，<b>选择自己的模型</b></h2>
+      <p class="sec-desc">论文与译文由你的服务保存，API Key 加密存储。翻译时，所需段落及命中的术语会发送至你选择的模型供应商。</p>
     </header>
     <div class="byok-grid">
       <div class="fx">
@@ -1343,7 +1434,7 @@ window.__ph = function (img) {
           </a>
         </div>
         <div class="provider-row">
-          <span>DeepSeek</span><span>Kimi</span><span>OpenAI 兼容</span><span>Anthropic</span><span>GLM</span>
+          <span>DeepSeek</span><span>Kimi</span><span>OpenAI</span><span>Anthropic</span><span>智谱</span><span>Gemini</span><span>Qwen</span><span>豆包</span>
         </div>
       </div>
       <div class="key-list fx" style="--fxd:.08s">
@@ -1369,17 +1460,17 @@ window.__ph = function (img) {
   <div class="wrap">
     <header class="sec-head fx">
       <span class="overline gold">Numbers · 质量证据</span>
-      <h2 class="sec-title" style="font-size: clamp(20px, 2.2vw, 26px);">每个数字，都有证据指针</h2>
+      <h2 class="sec-title" style="font-size: clamp(20px, 2.2vw, 26px);">超高质量的长文翻译，<b>用数据说话</b></h2>
     </header>
     <div class="stats-grid fx">
       <div class="stat gold"><b>75/75</b><span>Cosmos 75 页全篇翻译<br>QA 通过页数</span></div>
       <div class="stat gold"><b>0</b><span>上述全篇审计 issue 数<br>（793 个审计对象）</span></div>
       <div class="stat"><b>30 篇</b><span>基准论文批次<br>经典 20 + 世界模型 10</span></div>
-      <div class="stat"><b>1855</b><span>自动化测试用例</span></div>
+      <div class="stat"><b>4</b><span>使用入口<br>Web · Skill · 悬窗 · Zotero</span></div>
       <div class="stat"><b>1,066</b><span>专业术语库条目<br>23 个分类 · 3 份语料</span></div>
-      <div class="stat"><b>6</b><span>可切换 LLM 后端</span></div>
+      <div class="stat"><b>8</b><span>AI 供应商<br>账号可用模型目录可刷新</span></div>
     </div>
-    <p class="stats-caveat fx"><b>事实纪律：</b>以上数字对应仓库内基准清单、QA 报告与测试套件，均可复核；「75/75 · 0 issue」指 75 页《Cosmos World Foundation Model Platform》全篇翻译的正式 QA 结果。</p>
+    <p class="stats-caveat fx"><b>事实纪律：</b>「75/75 · 0 issue」指 Cosmos 指定历史产物的 QA 记录，不代表所有论文无瑕疵。30 篇是基准清单规模，原 20 篇整体验收仍未宣告全部通过。<a href="https://github.com/asimfish/super_translate/blob/main/docs/CLIENTS_RELEASE_20261027.md">查看最新验收范围</a>。</p>
   </div>
 </section>
 
@@ -1388,9 +1479,14 @@ window.__ph = function (img) {
   <div class="wrap">
     <header class="sec-head fx">
       <span class="overline">Quick Start · 快速开始</span>
-      <h2 class="sec-title">两条路，<b>都是几分钟的事</b></h2>
-      <p class="sec-desc">部署成课题组网站，或装进你的 AI 编辑器——选一条开始。</p>
+      <h2 class="sec-title">从你习惯的入口，<b>开始读论文</b></h2>
+      <p class="sec-desc">这是公开效果展示页。实际翻译需启动或连接自己的服务，并配置模型 API Key；已有服务的用户可直接安装悬窗或 Zotero 插件。</p>
     </header>
+    <div class="install-links fx">
+      <a href="https://github.com/asimfish/super_translate/blob/main/docs/ZOTERO.zh-CN.md">安装 Zotero 插件 →</a>
+      <a href="https://github.com/asimfish/super_translate/blob/main/desktop/README.md">构建 macOS 悬窗 →</a>
+      <a href="https://github.com/asimfish/super_translate/blob/main/docs/ZOTERO.zh-CN.md#没有服务先在本机启动">启动本机服务与创建账号 →</a>
+    </div>
     <div class="fx">
       <div class="qs-tabs" role="tablist">
         <button class="qs-tab on" id="qsTabWeb" role="tab" aria-selected="true">Web 部署（docker compose）</button>
@@ -1432,11 +1528,13 @@ ln -s "$PWD/skills/paper-translate" ~/.claude/skills/paper-translate
     <div class="foot-grid">
       <div>
         <span class="overline">SuperTranslate</span>
-        <p class="foot-desc">保版式学术论文 PDF 翻译系统（英→中）。让每一篇英文论文，都能原版式读中文。</p>
+        <p class="foot-desc">让 Agent 帮你成为 Native Reader，零压力读论文。网页、Skill、原生 macOS 悬窗与 Zotero，让阅读回到你熟悉的工作流。</p>
         <div class="foot-links">
           <a href="https://github.com/asimfish/super_translate" target="_blank" rel="noopener">GitHub</a>
           <a href="https://github.com/asimfish/super_translate#readme" target="_blank" rel="noopener">README</a>
           <a href="slides.html">项目 Slides</a>
+          <a href="https://b23.tv/dNg3JYK" target="_blank" rel="noopener">哔哩哔哩</a>
+          <a href="https://xhslink.cn/o/95CUF7S0njW" target="_blank" rel="noopener">小红书</a>
           <a href="https://github.com/asimfish/super_translate/blob/main/docs/DEPLOYMENT.md" target="_blank" rel="noopener">部署指南</a>
           <a href="https://github.com/asimfish/super_translate/blob/main/docs/TUTORIAL.zh-CN.md" target="_blank" rel="noopener">使用教程</a>
           <a href="https://github.com/asimfish/super_translate/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
