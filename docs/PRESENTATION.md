@@ -11,6 +11,18 @@ README、[在线展示](https://asimfish.github.io/super_translate/)和[介绍�
 
 GitHub README 使用可点击封面跳转视频；在线展示和幻灯片也提供视频、图文入口，不要求自动加载第三方播放器。完整成片、配音和开发补丁不进入源码仓库。
 
+## 表达与讲解图
+
+先讲读者看到的结果，再解释原理：**版式对齐原文 → 该翻的翻，该留的留 → 专业的科研术语库 → 随用随翻**。标题尽量使用视频里的短句；“原坐标回填”“有界修复”等实现术语放在技术章节。
+
+三张 SVG 讲解图沿用视频的深色网格、金色章节号和蓝金标注，可放大查看。图中的论文局部嵌入已有 PNG，不改写或重新生成截图文字：
+
+- [版式对齐原文](assets/reading/layout-proof.svg)：使用 `assets/comparison/attention/banner_formula_original.png` 与 `banner_formula_ours.png`。正文译成中文，式 (1) 原样保留。
+- [该翻的翻，该留的留](assets/reading/scope-proof.svg)：使用 `assets/comparison/attention/crop_figure_ours.png`。蓝框标出图形主体，金框标出中文图注；不把图外标题归入保留的图内标注。
+- [专业的科研术语库](assets/reading/terminology.svg)：可编辑的功能讲解图，展示内置 AI / 计算机术语及自定义词库，不是软件界面截图。
+
+论文图例来自仓库已有历史产物，出处与许可沿用[对比素材清单](assets/comparison/manifest.json)。这些讲解图用于说明阅读效果，不代表本轮重新完成了模型翻译或性能测试。
+
 ## 口号与六个痛点
 
 主口号：**让 Agent 帮你成为 Native Reader，零压力读论文。**

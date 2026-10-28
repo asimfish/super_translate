@@ -23,7 +23,7 @@
 
 **Read papers with less friction. SuperTranslate is an open-source research PDF translator that keeps the original page layout.**
 
-Our goal: professional translation that preserves the paper's structure. Protect formulas and figures, translate prose back into its original coordinates, apply research terminology, and check the result. Use the web app, an Agent Skill, the native macOS floating window, or Zotero.
+Our goal: professional research translation that preserves the paper. Protect formulas and figures, translate the prose, put it back where it belongs, then check the result.
 
 [![Watch the SuperTranslate introduction: become a Native Reader](docs/assets/promo/v15/cover-landscape.png)](https://b23.tv/dNg3JYK)
 
@@ -31,7 +31,7 @@ Our goal: professional translation that preserves the paper's structure. Protect
 
 <sub>Original V15 video cover, October 12, 2026. Timings shown are historical single-run measurements of a development build, not general performance guarantees for the current release. See [presentation sources and scope](docs/PRESENTATION.md).</sub>
 
-The video puts six recurring problems first:
+Broken formulas, missing headings, and LLM translated as “Master of Laws”: reading a paper should not mean fixing its translation. The video starts with six familiar frustrations:
 
 - **Broken formulas or raw source code** → Protect mathematical fragments and their original placement.
 - **Collapsed columns and drifting figures** → Refill text using the source page's coordinates.
@@ -39,6 +39,12 @@ The video puts six recurring problems first:
 - **Skipped prose or altered figure labels** → Classify content, audit the translation, and attempt bounded repairs.
 - **Inconsistent technical terms** → Use built-in terminology and maintain libraries by discipline, field or paper.
 - **Constant switching between tools** → Translate where you already read and work.
+
+### Chinese prose. Formulas in place.
+
+This excerpt from *Attention Is All You Need* is the example shown in the video: translated prose, with the original equation still in place.
+
+![Original and translated Attention excerpt, with the equation preserved](docs/assets/reading/layout-proof.svg)
 
 ## Zotero and the macOS floating client
 
