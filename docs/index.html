@@ -671,6 +671,20 @@ window.__ph = function (img) {
   .install-links a { border: 1px solid var(--line-strong); border-radius: 10px; padding: 12px 18px; }
   @media (max-width: 768px) { .pain-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 480px) { .pain-cards { grid-template-columns: 1fr; } }
+
+  /* 视频里的短句、章节号与蓝金标注。 */
+  .hero-proof img { width: 100%; height: auto; border-radius: 16px; }
+  .hero-proof figcaption { margin-top: 12px; color: var(--muted); font-size: var(--fs-small); }
+  .hero-proof figcaption a { margin-left: 12px; white-space: nowrap; }
+  .reading-story { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.4fr); align-items: center; gap: 48px; margin-top: 64px; }
+  .story-no { font: 800 clamp(42px, 5vw, 64px)/1 var(--mono); color: transparent; -webkit-text-stroke: 1px var(--gold); }
+  .story-copy h3 { margin-top: 18px; font-size: clamp(24px, 3vw, 34px); line-height: 1.35; }
+  .story-copy p { margin-top: 18px; color: var(--muted); font-size: 16px; line-height: 1.9; }
+  .story-copy .story-take { color: var(--gold); font-weight: 700; }
+  .story-copy > a { display: inline-block; margin-top: 20px; }
+  .story-art { display: block; border-radius: 16px; border: 1px solid var(--line-strong); overflow: hidden; }
+  .story-art img { width: 100%; height: auto; }
+  @media (max-width: 768px) { .reading-story { grid-template-columns: minmax(0,1fr); gap: 24px; margin-top: 48px; } }
 </style>
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 </head>
@@ -700,44 +714,24 @@ window.__ph = function (img) {
     <div class="fx">
       <span class="overline">Open Source · Web · Skill · macOS · Zotero</span>
       <h1>让 Agent 帮你成为<span class="h1-line2">Native Reader</span>零压力读论文</h1>
-      <div class="hero-quote">
-        <em>读论文的人，谁没被翻译坑过</em>
-        <p>“AI 论文里的 LLM，不能读成法学硕士。公式别乱、图别丢，正文和术语都要读得顺。”</p>
-      </div>
-      <p class="hero-ident">SuperTranslate<span> · 开源的 Native 科研论文翻译工具</span></p>
-      <p class="lede">目标只有一个：<b>无损的科研原生专业翻译</b>。保护公式与图表，把中文放回原来的位置；用专业术语和译后质检，让注意力回到论文内容。</p>
+      <p class="hero-ident">SuperTranslate<span> · 开源科研论文翻译工具</span></p>
+      <p class="lede">目标只有一个：<b>无损的科研原生专业翻译</b>。公式、表格、图片先锁住，只把正文交给模型。译文放回原来的位置，翻完再查一遍。</p>
       <ul class="hero-vows">
-        <li>公式、图表、引用先冻结，一个字符都不交给模型</li>
-        <li>译文按原坐标回填，页面几何和原文完全一致</li>
-        <li>每页都过 QA 审计，修复只有严格变好才被接受</li>
+        <li>版式对齐原文，双栏还是双栏</li>
+        <li>该翻的翻，该留的留</li>
+        <li>专业的科研术语库，还能自己扩展</li>
       </ul>
       <div class="cta-row">
         <a class="btn primary" href="#video">▶ 观看 3 分钟介绍</a>
         <a class="btn ghost" href="#modes">选择你的阅读方式</a>
       </div>
       <p class="hero-formula">版式对齐原文 + 专业科研术语 + 译后质检 = <b>把时间留给论文</b></p>
-      <p class="proof-line">75 页 Cosmos 实测 <b>75/75 页 · 0 缺陷</b><i>·</i><b>1,066</b> 条术语库<i>·</i><b>4</b> 种使用入口<i>·</i>连接自己的服务与模型</p>
+      <p class="proof-line"><b>1,066</b> 条内置术语<i>·</i>原生 macOS 悬窗<i>·</i>Zotero 中文版归档</p>
     </div>
-    <div class="hero-visual fx">
-      <div class="browser-card">
-        <div class="browser-bar">
-          <i></i><i></i><i></i>
-          <span class="browser-addr">localhost:8001 · cosmos_zh.pdf</span>
-          <span class="browser-live">LIVE</span>
-        </div>
-        <div class="wipe" data-ph="assets/comparison/cosmos/original_p1_trim.png / ours_p1_trim.png">
-          <img src="assets/comparison/cosmos/ours_p1_trim.webp" alt="Cosmos 第 1 页译文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
-          <img class="wipe-top" src="assets/comparison/cosmos/original_p1_trim.webp" alt="Cosmos 第 1 页原文" loading="lazy" onerror="window.__ph&&window.__ph(this)">
-          <span class="wipe-bar" aria-hidden="true"></span>
-          <span class="badge en" style="position:absolute; top:10px; left:10px; z-index:3;">EN 原文</span>
-          <span class="badge zh" style="position:absolute; top:10px; right:10px; z-index:3;">ZH 译文</span>
-        </div>
-        <div class="hero-caption">
-          <span><b>Cosmos World Foundation Model Platform</b> · 第 1 页整页渲染，自动扫视</span>
-          <a href="#compare">拖动对比 ↓</a>
-        </div>
-      </div>
-    </div>
+    <figure class="hero-visual hero-proof fx">
+      <img src="assets/reading/layout-proof.svg" width="1440" height="960" fetchpriority="high" alt="Attention 论文原文与译文局部：正文翻成中文，公式留在原位">
+      <figcaption>先看一处真实对比。<a href="#reading">看看它怎么翻 ↓</a></figcaption>
+    </figure>
   </div>
 </section>
 
@@ -765,17 +759,37 @@ window.__ph = function (img) {
   <div class="wrap">
     <header class="sec-head fx">
       <span class="overline gold">Why · 读论文的人，谁没被翻译坑过</span>
-      <h2 class="sec-title">六个痛点，<b>逐个改进</b></h2>
-      <p class="sec-desc">LLM 应该是“大语言模型”。你要读的是一篇完整的论文，公式、结构和专业语境都很重要。</p>
+      <h2 class="sec-title">读论文，别再被<b>翻译打断</b></h2>
+      <p class="sec-desc">LLM 成了“法学硕士”，“摘要”成了“抽象的”。读论文的人，谁没被翻译坑过。</p>
     </header>
     <div class="pain-cards">
-      <article class="pain-card fx"><small>01 · 公式</small><h3>公式乱码，变成一串源码</h3><p>数学片段先保护，保留原始符号与位置，把需要翻译的正文交给模型。</p></article>
-      <article class="pain-card fx"><small>02 · 版式</small><h3>双栏变单栏，图表对不上</h3><p>以原页坐标回填中文，保留双栏、图片与页码关系，便于对照原文。</p></article>
-      <article class="pain-card fx"><small>03 · 结构</small><h3>小标题和加粗丢了</h3><p>识别标题层级、粗体与斜体，让论文的结构清晰可读，并检查译文样式。</p></article>
-      <article class="pain-card fx"><small>04 · 完整性</small><h3>正文漏翻，图中文字乱翻</h3><p>该翻的翻，该留的留。译后逐项质检，发现漏翻和版面缺陷后尝试有界修复。</p></article>
-      <article class="pain-card fx"><small>05 · 专业语境</small><h3>术语翻错，同词不同译</h3><p>专业科研术语库随段落注入；按学科、领域和单篇论文维护你自己的词表。</p></article>
-      <article class="pain-card fx"><small>06 · 工作流</small><h3>来回切工具，读一篇折腾半天</h3><p>网页、Agent Skill、macOS 悬窗和 Zotero，让翻译跟着你的阅读习惯走。</p></article>
+      <article class="pain-card fx"><small>01 · 公式</small><h3>公式乱码，变成一串源码</h3><p>公式先锁住，不交给模型。</p></article>
+      <article class="pain-card fx"><small>02 · 版式</small><h3>双栏变单栏，图表对不上</h3><p>译文放回原来的位置，双栏还是双栏，页码也对得上。</p></article>
+      <article class="pain-card fx"><small>03 · 结构</small><h3>小标题和加粗丢了</h3><p>小标题、加粗、斜体保留下来，论文的结构一眼看清。</p></article>
+      <article class="pain-card fx"><small>04 · 完整性</small><h3>正文漏翻，图中文字乱翻</h3><p>该翻的翻，该留的留。翻完还要查一遍，看看有没有漏翻和排版问题。</p></article>
+      <article class="pain-card fx"><small>05 · 专业语境</small><h3>术语翻错，同词不同译</h3><p>LLM 就是大语言模型。按学科、领域或单篇论文，维护自己的词表。</p></article>
+      <article class="pain-card fx"><small>06 · 工作流</small><h3>来回切工具，读一篇折腾半天</h3><p>网页、Skill、悬窗、Zotero。在哪里读，就在哪里翻。</p></article>
     </div>
+  </div>
+</section>
+
+<!-- ===== 视频的三段讲解：先看图，再讲原理 ===== -->
+<section id="reading" class="alt">
+  <div class="wrap">
+    <header class="sec-head fx"><span class="overline gold">Read · 看看它怎么翻</span><h2 class="sec-title">把论文译成中文，<b>读起来还是那篇论文</b></h2></header>
+    <article class="reading-story fx">
+      <div class="story-copy"><span class="story-no">01</span><h3>版式对齐原文</h3><p>公式、表格、图片先锁住。只把正文交给模型，再放回原来的位置。</p><p class="story-take">双栏还是双栏，页码也对得上。</p></div>
+      <a class="story-art" href="assets/reading/layout-proof.svg" target="_blank" rel="noopener"><img src="assets/reading/layout-proof.svg" width="1440" height="960" loading="lazy" alt="正文翻成中文，公式留在原位：Attention 原文与历史译文局部"></a>
+    </article>
+    <article class="reading-story fx">
+      <div class="story-copy"><span class="story-no">02</span><h3>该翻的翻，<br>该留的留</h3><p>正文、标题、图注翻成中文。图里的标注、公式、表里的数字，先保护起来。</p><p class="story-take">翻完，还要查一遍。</p></div>
+      <a class="story-art" href="assets/reading/scope-proof.svg" target="_blank" rel="noopener"><img src="assets/reading/scope-proof.svg" width="1440" height="960" loading="lazy" alt="Attention 图2历史译文局部，蓝色标出图形区域，金色标出中文图注"></a>
+    </article>
+    <article class="reading-story fx">
+      <div class="story-copy"><span class="story-no">03</span><h3>专业的科研术语库</h3><p>LLM 就是大语言模型。常用术语统一起来，模型名和机构名保留原样。</p><p class="story-take">开启属于你的科研专业翻译。</p><a href="https://github.com/asimfish/super_translate/blob/main/docs/TERMINOLOGY.md">建一份自己的词表 →</a></div>
+      <a class="story-art" href="assets/reading/terminology.svg" target="_blank" rel="noopener"><img src="assets/reading/terminology.svg" width="1440" height="960" loading="lazy" alt="内置1066条AI和计算机学术术语，可按学科、领域和论文扩展，并导入导出词表"></a>
+    </article>
+    <p class="promo-note">讲解图沿用视频的蓝金标注。论文局部来自仓库已有历史产物，术语图为功能说明；<a href="https://github.com/asimfish/super_translate/blob/main/docs/PRESENTATION.md">素材出处与适用范围 →</a></p>
   </div>
 </section>
 
@@ -1185,7 +1199,7 @@ window.__ph = function (img) {
   <div class="wrap">
     <div class="term-grid">
       <div class="fx">
-        <span class="overline">Terminology · 专业术语库</span>
+        <span class="overline">专业的科研术语库，开启属于你的科研专业翻译</span>
         <div class="term-big">1,066</div>
         <p class="term-sub">条精编术语 · 23 个分类 · 3 份语料</p>
         <ul class="term-comp">
@@ -1196,8 +1210,8 @@ window.__ph = function (img) {
       </div>
       <div class="fx" style="--fxd:.08s">
         <div class="term-chips">
-          <span class="term-chip"><span class="en">PAC-Bayes Bound</span><i>→</i><b>PAC-贝叶斯界</b></span>
-          <span class="term-chip"><span class="en">Rademacher Complexity</span><i>→</i><b>拉德马赫复杂度</b></span>
+          <span class="term-chip"><span class="en">Large Language Model</span><i>→</i><b>大语言模型</b></span>
+          <span class="term-chip"><span class="en">In-Context Learning</span><i>→</i><b>上下文学习</b></span>
           <span class="term-chip"><span class="en">Score-Based Generative Model</span><i>→</i><b>基于分数的生成模型</b></span>
           <span class="term-chip"><span class="en">Partially Observable Markov Decision Process</span><i>→</i><b>部分可观测马尔可夫决策过程</b></span>
           <span class="term-chip"><span class="en">Amortized Inference</span><i>→</i><b>摊销推断</b></span>

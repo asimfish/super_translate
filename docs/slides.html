@@ -463,6 +463,9 @@ window.__ph = function (img) {
   .native-links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 26px; }
   .native-links a { font-size: 23px; padding: 12px 18px; border: 1px solid var(--line-strong); border-radius: 10px; }
   .native-caveat { margin-top: 26px; color: var(--muted); font-size: 21px; line-height: 1.65; }
+  .reading-slide .chapter-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .reading-slide figure { max-width: 1290px; margin: 18px auto 0; }
+  .reading-slide figure img { width: 100%; height: 830px; object-fit: contain; }
 </style>
 <noscript>
 <style>
@@ -499,7 +502,7 @@ window.__ph = function (img) {
       </div>
       <h1>让 Agent 帮你成为<br><b>Native Reader</b></h1>
       <p class="cover-lead">零压力读论文 <span class="warm">·</span> 让注意力回到论文内容</p>
-      <p class="cover-sub">开源的 Native 科研论文翻译工具。目标只有一个：无损的科研原生专业翻译。版式对齐原文，专业术语随段落注入，译后再逐项质检。</p>
+      <p class="cover-sub">开源的 Native 科研论文翻译工具，零压力帮你丝滑读论文。目标只有一个：无损的科研原生专业翻译。</p>
     </div>
     <div class="cover-chips">
       <span class="chip gold-chip">75/75 页 QA 通过</span>
@@ -532,76 +535,33 @@ window.__ph = function (img) {
   <!-- Six pain points from the V15 narration -->
   <section class="slide" data-title="六个阅读痛点">
     <span class="eyebrow warm">Problem · 读论文的人，谁没被翻译坑过</span>
-    <h2 class="s-title">六个痛点，<b>逐个改进</b></h2>
+    <h2 class="s-title">读论文，别再被<b>翻译打断</b></h2>
     <p class="s-sub">AI 论文里的 LLM，应该是“大语言模型”。公式、结构和专业语境，一起决定是否读得顺。</p>
     <div class="six-pains">
       <article><small>01 · 公式</small><h3>乱码，变成一串源码</h3><p>数学片段先保护，保留原始符号与位置。</p></article>
-      <article><small>02 · 版式</small><h3>双栏变单栏，图表错位</h3><p>以原页坐标回填中文，保留双栏、图片和页码关系。</p></article>
+      <article><small>02 · 版式</small><h3>双栏变单栏，图表错位</h3><p>译文放回原来的位置。双栏还是双栏，页码也对得上。</p></article>
       <article><small>03 · 结构</small><h3>标题、加粗、斜体丢失</h3><p>识别结构与样式，让论文层级清晰可读。</p></article>
-      <article><small>04 · 完整性</small><h3>正文漏翻，图中文字乱翻</h3><p>该翻的翻，该留的留；译后逐项质检，尝试有界修复。</p></article>
-      <article><small>05 · 术语</small><h3>同一个词，译法总在变</h3><p>专业术语随段落注入，学科、领域和论文词库可扩展。</p></article>
+      <article><small>04 · 完整性</small><h3>正文漏翻，图中文字乱翻</h3><p>该翻的翻，该留的留。翻完，还要查一遍。</p></article>
+      <article><small>05 · 术语</small><h3>同一个词，译法总在变</h3><p>LLM 就是大语言模型，还能挂上你自己的词表。</p></article>
       <article><small>06 · 工作流</small><h3>来回切工具，阅读被打断</h3><p>Web、Skill、原生悬窗与 Zotero，跟着阅读习惯走。</p></article>
     </div>
     <div class="footer-line"><span>SuperTranslate · 六个阅读痛点</span><span>版式对齐原文 + 专业术语 + 译后质检</span></div>
   </section>
 
   <!-- S3 方案总览 -->
-  <section class="slide" data-title="方案总览">
-    <span class="eyebrow">Solution · 方案总览</span>
-    <h2 class="s-title">翻译是流水线，<b>版式是契约</b></h2>
-    <p class="s-sub">从 PDF 进、到双 PDF 出，每一步都有确定性的检查点。</p>
-    <div class="flow">
-      <div class="flow-step"><small>PARSE</small><b>对象解析</b><span>逐块识别正文 / 公式 / 图表 / 表格 / 引用</span></div>
-      <i class="arr">→</i>
-      <div class="flow-step gold"><small>FREEZE</small><b>保护区冻结</b><span>公式、图内文字、表格、引用编号原样锁定</span></div>
-      <i class="arr">→</i>
-      <div class="flow-step"><small>TRANSLATE</small><b>LLM 翻译</b><span>正文分块翻译，按相关性注入 1,066 条专业术语</span></div>
-      <i class="arr">→</i>
-      <div class="flow-step warm"><small>REFILL</small><b>原位回填</b><span>按原坐标写回，CJK 字体子集嵌入</span></div>
-      <i class="arr">→</i>
-      <div class="flow-step gold"><small>AUDIT</small><b>对象级 QA</b><span>漏翻 / 保护区 / 版面 / 术语四类检测</span></div>
-      <i class="arr">→</i>
-      <div class="flow-step green"><small>DELIVER</small><b>双 PDF 交付</b><span>纯中文 _zh.pdf + 双语对照 _dual.pdf + qa.json</span></div>
-    </div>
-    <div class="flow-chips">
-      <span class="chip">确定性质量环：分数严格改善才替换</span>
-      <span class="chip gold-chip">任务崩溃可恢复 · 缓存可重放</span>
-      <span class="chip warm-chip">全程留证据：每个数字可追溯</span>
-    </div>
-    <div class="footer-line"><span>SuperTranslate · 方案总览</span><span>github.com/asimfish/super_translate</span></div>
+  <section class="slide reading-slide" data-title="版式对齐原文">
+    <span class="eyebrow gold">01 · Native Reader</span>
+    <h2 class="chapter-heading">版式对齐原文</h2>
+    <figure><img src="assets/reading/layout-proof.svg" width="1440" height="960" alt="Attention 第4页的原文与中文译文局部"></figure>
+    <div class="footer-line"><span>SuperTranslate · 版式对齐原文</span><span>视频风格讲解 · 来源见 docs/PRESENTATION.md</span></div>
   </section>
 
   <!-- S4 引擎原理 -->
-  <section class="slide" data-title="保版式引擎">
-    <span class="eyebrow">Engine · 保版式引擎原理</span>
-    <h2 class="s-title">逐对象分类，<b>该动的才动</b></h2>
-    <div class="engine-grid">
-      <div>
-        <div class="page-schema" aria-label="页面对象分类示意">
-          <div class="zone zt">正文段落 → 翻译后原坐标回填</div>
-          <div class="zone zf">公式 Attention(Q,K,V) = softmax(QKᵀ/√d)V → 冻结</div>
-          <div class="zcols">
-            <div class="zone zt">左栏正文 → 栏宽不变</div>
-            <div class="zone zt">右栏正文 → 栏宽不变</div>
-          </div>
-          <div class="zone zg">图 / 矢量图形 / 图内文字 → 冻结（图注翻译）</div>
-          <div class="zone zr">参考文献 [1][2][3] → 编号与格式冻结</div>
-        </div>
-        <div class="schema-legend">
-          <span><i class="lt"></i>可翻译文本</span>
-          <span><i class="lf"></i>公式保护区</span>
-          <span><i class="lg"></i>图形保护区</span>
-          <span><i class="lr"></i>引用保护区</span>
-        </div>
-      </div>
-      <div class="engine-points">
-        <div class="engine-point"><b>不是整页重排，是逐对象手术</b><span>页尺寸、图片、矢量图形一个字节不动；只有确认为可翻译的文本块被替换。</span></div>
-        <div class="engine-point gold"><b>公式、表格、算法伪代码零改动</b><span>连实验数字被意外改写都会被 QA 查出来——保护区是审计对象，不是尽力而为。</span></div>
-        <div class="engine-point warm"><b>译文回填自适应</b><span>控制字符清理、图注压缩、重叠检查兜底；CJK 字体子集嵌入，产物体积可控。</span></div>
-        <div class="engine-point green"><b>模板版式可学习</b><span>ACM / IEEE / Springer / ACL 等版式画像可从代表性 PDF 学习复用。</span></div>
-      </div>
-    </div>
-    <div class="footer-line"><span>SuperTranslate · 保版式引擎</span><span>github.com/asimfish/super_translate</span></div>
+  <section class="slide reading-slide" data-title="该翻的翻，该留的留">
+    <span class="eyebrow gold">02 · Native Reader</span>
+    <h2 class="chapter-heading">该翻的翻，该留的留</h2>
+    <figure><img src="assets/reading/scope-proof.svg" width="1440" height="960" alt="Attention 历史译文图2：图形区域与图注的蓝金标注"></figure>
+    <div class="footer-line"><span>SuperTranslate · 该翻的翻，该留的留</span><span>视频风格讲解 · 来源见 docs/PRESENTATION.md</span></div>
   </section>
 
   <!-- S5 效果对比 0 横向实测 -->
@@ -902,35 +862,11 @@ window.__ph = function (img) {
   </section>
 
   <!-- S13 30 篇基准 -->
-  <section class="slide" data-title="30 篇基准">
-    <span class="eyebrow">Benchmark · 基准集</span>
-    <h2 class="s-title">30 篇论文，<b>盯住每一种版式</b></h2>
-    <div class="bench-grid">
-      <div>
-        <div class="bench-stat">
-          <div class="big">20 <i>+</i> 10</div>
-          <p><b>classic20</b>：Attention、ResNet、BERT 等经典论文严格门控批次；<b>worldmodel10</b>：Cosmos、DreamGen 等世界模型前沿论文。</p>
-        </div>
-        <div class="axes">
-          <span>单栏</span><span>双栏</span><span>公式密集</span><span>算法块</span><span>表格密集</span>
-          <span>图表密集</span><span>长参考文献</span><span>附录厚重</span><span>短论文</span><span>长论文</span>
-        </div>
-        <p class="cloud-legend">10 个版式轴全覆盖 · 每篇每页跑同一套严格 QA 门槛</p>
-      </div>
-      <div>
-        <div class="paper-cloud">
-          <span>Attention</span><span>ResNet</span><span>BERT</span><span>GAN</span><span>Adam</span>
-          <span>ViT</span><span>CLIP</span><span>DDPM</span><span>U-Net</span><span>GPT-3</span>
-          <span>LoRA</span><span>SAM</span><span>LLaMA</span><span>Mamba</span><span>DPO</span>
-          <span>vLLM</span><span>InstructGPT</span><span>Faster R-CNN</span><span>word2vec</span><span>BatchNorm</span>
-          <span class="wm">Cosmos</span><span class="wm">DreamGen</span><span class="wm">MiniWorld</span><span class="wm">Vid2World</span>
-          <span class="wm">HunyuanWorld</span><span class="wm">Qwen-RobotWorld</span><span class="wm">1X Humanoid</span>
-          <span class="wm">Robot-Factored WM</span><span class="wm">Physics in Video WM</span><span class="wm">WM Survey</span>
-        </div>
-        <p class="cloud-legend">蓝 = classic20 经典批次 · <b>橙 = worldmodel10 世界模型批次</b></p>
-      </div>
-    </div>
-    <div class="footer-line"><span>SuperTranslate · 30 篇基准</span><span>benchmarks/classic20/ · 清单入库可复核</span></div>
+  <section class="slide reading-slide" data-title="专业的科研术语库">
+    <span class="eyebrow gold">03 · Native Reader</span>
+    <h2 class="chapter-heading">专业的科研术语库</h2>
+    <figure><img src="assets/reading/terminology.svg" width="1440" height="960" alt="1066条内置AI学术术语，自定义学科、领域和论文词库"></figure>
+    <div class="footer-line"><span>SuperTranslate · 专业的科研术语库</span><span>视频风格讲解 · 来源见 docs/PRESENTATION.md</span></div>
   </section>
 
   <!-- S12 数字成绩 -->
