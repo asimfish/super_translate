@@ -34,6 +34,10 @@ class TranslationError(RuntimeError):
     """Raised when the translation supplier returns an unusable response."""
 
 
+class ProviderAuthenticationError(TranslationError):
+    """A provider rejected credentials; formatting fallbacks cannot repair it."""
+
+
 _CACHE_PLACEHOLDER_RE = re.compile(r"⟦\d+⟧")
 _LIST_MARKER_RE = re.compile(r"^\s*(?:\d{1,3}[.)]|\([a-zA-Z0-9]{1,3}\)|[•◦▪●‣-])\s+")
 _CACHE_NUMERIC_LITERAL_RE = re.compile(
@@ -631,6 +635,8 @@ class VendorTranslator(Translator):
     def _translate_chunk_with_fallback(self, chunk: Sequence[str]) -> List[str]:
         try:
             translated = self._translate_chunk(chunk)
+        except ProviderAuthenticationError:
+            raise
         except (TranslationError, json.JSONDecodeError) as exc:
             if len(chunk) == 1:
                 return [self._translate_single_plain(chunk[0], exc)]
@@ -905,6 +911,13 @@ class VendorTranslator(Translator):
                 json.JSONDecodeError,
             ) as exc:
                 last_error = exc
+                # A new request cannot repair invalid credentials or permissions.
+                if isinstance(exc, urllib.error.HTTPError) and exc.code in {401, 403}:
+                    raise ProviderAuthenticationError(
+                        "Translation API request failed: HTTP Error %d: "
+                        "provider authentication failed"
+                        % exc.code
+                    ) from exc
                 if attempt >= self.retries:
                     break
                 time.sleep(0.8 * (2**attempt))

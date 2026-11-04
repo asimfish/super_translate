@@ -637,6 +637,8 @@ uv run python scripts/classic_benchmark.py gate
 **必须要 API key 吗？**
 Google 后端（`fast` 档）免 key 可直接用；其余后端各自需要 key。Web 部署下每个用户在「API 设置」里填自己的 key（AES-GCM 加密存储，不回传浏览器），服务器级环境变量仅作为管理员回退。
 
+若任务提示模型接口 401 或 403，请在「API 设置」更新有效密钥或检查模型权限，再点击「重试」，无需重新上传 PDF。系统会停止这类无效重试并保留原文与已有草稿；更新排版引擎不会解除供应商的鉴权限制。
+
 **翻译一篇论文要多久、花多少钱？**
 取决于后端与篇幅：单任务默认超时 30 分钟（可调）。块级翻译缓存保证重试时已完成部分不重复计费；限速 key 建议设 `PAPER_CHINA_TRANSLATION_CONCURRENCY=1`。
 

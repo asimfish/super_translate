@@ -110,6 +110,8 @@ jobs:
           tests/test_terminology.py
           tests/test_provider_model_catalog.py
           tests/test_canonical_repair_recovery.py
+          tests/test_provider_auth_recovery.py
+          tests/test_repair_pending_recovery.py
           tests/test_startup_recovery_integrity.py
           tests/test_resumable_document_identity.py
           tests/test_translation_engine_fingerprint.py

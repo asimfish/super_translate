@@ -31,7 +31,7 @@ from app.core.config import ensure_dirs, settings
 from app.core.database import init_db
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.users import refresh_token_scopes
-from app.services.translation_recovery import current_engine_revision
+from app.services.translation_recovery import current_engine_revision, provider_action_required
 
 # Stats cache with async lock, partitioned by workspace access scope so one
 # workspace can never observe another workspace's aggregate counters.
@@ -605,7 +605,6 @@ async def _recover_repair_pending_translations() -> list[dict[str, object]]:
                                  canonical.access_scope == Paper.access_scope))
         .where(canonical.id.is_(None), TranslationJob.id == latest_job,
                TranslationJob.status == TranslationJobStatus.REPAIR_PENDING.value,
-               TranslationJob.engine_revision != revision,
                TranslationJob.cancel_requested.is_(False),
                Paper.translation_status == TranslationStatus.REPAIRING.value)
     )
@@ -615,9 +614,36 @@ async def _recover_repair_pending_translations() -> list[dict[str, object]]:
             .order_by(TranslationJob.created_at.asc(), TranslationJob.id.asc())
         )).all()
         payloads = []
+        changed_jobs = 0
         for job in jobs:
+            configuration_error = provider_action_required(job.error, job.backend)
+            if configuration_error is None and job.engine_revision == revision:
+                continue
             # Recheck eligibility in the write itself. A second scheduler or a
             # cancellation after the read cannot claim the same repair twice.
+            if configuration_error:
+                claimed = await db.execute(
+                    sa_update(TranslationJob)
+                    .where(TranslationJob.id == job.id, TranslationJob.id.in_(eligible),
+                           TranslationJob.engine_revision == job.engine_revision,
+                           TranslationJob.error == job.error)
+                    .values(status=TranslationJobStatus.FAILED.value, error=configuration_error,
+                            finished_at=func.now(), updated_at=func.now())
+                )
+                if claimed.rowcount != 1:
+                    continue
+                changed = await db.execute(
+                    sa_update(Paper)
+                    .where(Paper.id == job.paper_id, Paper.access_scope == job.access_scope,
+                           Paper.translation_status == TranslationStatus.REPAIRING.value)
+                    .values(translation_status=TranslationStatus.FAILED.value,
+                            translation_error=configuration_error,
+                            translation_stage="需要更新 API 设置", translation_eta_seconds=None)
+                )
+                if changed.rowcount != 1:
+                    raise RuntimeError("Auth failure lost its owning paper; transaction aborted")
+                changed_jobs += 1
+                continue
             claimed = await db.execute(
                 sa_update(TranslationJob)
                 .where(TranslationJob.id == job.id, TranslationJob.id.in_(eligible),
@@ -639,8 +665,9 @@ async def _recover_repair_pending_translations() -> list[dict[str, object]]:
             )
             if changed.rowcount != 1:
                 raise RuntimeError("Repair claim lost its owning paper; transaction aborted")
+            changed_jobs += 1
             payloads.append(_translation_job_resume_payload(job))
-        if payloads:
+        if changed_jobs:
             await db.commit()
             logger.info("Requeued %d parked jobs for engine revision %s", len(payloads), revision)
         return payloads

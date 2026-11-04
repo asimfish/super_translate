@@ -4,9 +4,39 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import re
 import stat
 from functools import lru_cache
 from pathlib import Path
+
+from app.core.provider_credentials import PROVIDER_SPECS
+
+
+def provider_action_required(error: str | None, provider: str) -> str | None:
+    """Explain provider auth failures without retaining vendor response secrets."""
+    if provider not in PROVIDER_SPECS or not error:
+        return None
+    message = str(error)[:1000]
+    status = re.search(
+        r"\b(?:http(?:\s+error)?|error\s+code|status(?:[_\s]+code)?)"
+        r"\s*[:=]?\s*['\"]?(401|403)\b",
+        message, re.IGNORECASE,
+    )
+    code = status.group(1) if status else None
+    if code is None and re.search(
+        r"\b(?:authentication_error|invalid_api_key|incorrect api key|"
+        r"invalid api key|authentication fails)\b", message, re.IGNORECASE,
+    ):
+        code = "401"
+    if code is None:
+        return None
+    label = PROVIDER_SPECS[provider].label
+    if code == "403":
+        return (f"{label} 模型接口拒绝访问（HTTP 403）。请在 API 设置中检查 API Key "
+                "和所选模型的访问权限，保存后重试翻译。")
+    return (f"{label} 模型接口鉴权失败（HTTP 401）。请在 API 设置中更新有效的 API Key，"
+            "保存后重试翻译。")
+
 
 _REVISION_FILES = (
     'pdf_zh_translator/pdf_layout.py',
