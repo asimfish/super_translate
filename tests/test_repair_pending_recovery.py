@@ -259,6 +259,92 @@ async def test_permanent_failure_parks_after_exact_budget(recovery_state, monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider,status", [("deepseek", 401), ("openai", 401),
+                                            ("anthropic", 403)])
+async def test_provider_auth_failure_stops_once_and_preserves_draft(
+    recovery_state, monkeypatch, provider, status,
+):
+    sessions, draft, cache = recovery_state
+    original = draft.read_bytes(), cache.read_bytes()
+    async with sessions() as db:
+        db.add(TranslationJob(id="job209", paper_id="paper209", access_scope="alice",
+                             backend=provider))
+        await db.commit()
+    calls = []
+
+    async def worker(*args, **kwargs):
+        calls.append(1)
+        return TranslationResult(error=f"Translation API request failed: HTTP Error {status}: "
+                                       "Authorization Required")
+
+    monkeypatch.setattr(api, "_run_translate_in_worker", worker)
+    await api._do_translate("paper209", TranslationConfig(backend=provider), "quality",
+                            job_id="job209")
+    assert len(calls) == 1, "Invalid credentials must not consume the retry budget"
+    assert (draft.read_bytes(), cache.read_bytes()) == original
+    async with sessions() as db:
+        paper = await db.get(Paper, "paper209")
+        job = await db.get(TranslationJob, "job209")
+        assert job.status == paper.translation_status == "failed"
+        assert job.attempt_count == 1 and job.finished_at is not None
+        assert job.error == paper.translation_error
+        assert f"HTTP {status}" in job.error and "API 设置" in job.error
+        assert "等待引擎" not in paper.translation_stage
+        assert paper.translated_filename == "paper209/previous.pdf"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ["engine-a", "engine-b"])
+async def test_legacy_auth_failure_requires_settings_instead_of_engine_retry(
+    recovery_state, revision,
+):
+    sessions, draft, cache = recovery_state
+    original = draft.read_bytes(), cache.read_bytes()
+    async with sessions() as db:
+        paper = await db.get(Paper, "paper209")
+        paper.translation_status = "repairing"
+        db.add(TranslationJob(
+            id="job209", paper_id="paper209", access_scope="alice", backend="deepseek",
+            status="repair_pending", attempt_count=3, max_attempts=3,
+            engine_revision=revision,
+            error="Translation API request failed: HTTP Error 401: Authorization Required",
+        ))
+        await db.commit()
+    assert await app_main._recover_repair_pending_translations() == []
+    assert await app_main._recover_repair_pending_translations() == []
+    assert (draft.read_bytes(), cache.read_bytes()) == original
+    async with sessions() as db:
+        paper = await db.get(Paper, "paper209")
+        job = await db.get(TranslationJob, "job209")
+        assert job.status == paper.translation_status == "failed"
+        assert job.attempt_count == 3 and job.finished_at is not None
+        assert job.error == paper.translation_error and "API 设置" in job.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope,cancelled", [("bob", False), ("alice", True)])
+async def test_auth_reconciliation_preserves_foreign_and_cancelled_jobs(
+    recovery_state, scope, cancelled,
+):
+    sessions, _, _ = recovery_state
+    error = "Translation API request failed: HTTP Error 401: Authorization Required"
+    async with sessions() as db:
+        paper = await db.get(Paper, "paper209")
+        paper.translation_status = "repairing"
+        db.add(TranslationJob(
+            id="job209", paper_id="paper209", access_scope=scope, backend="deepseek",
+            status="repair_pending", attempt_count=3, engine_revision="engine-a",
+            error=error, cancel_requested=cancelled,
+        ))
+        await db.commit()
+    assert await app_main._recover_repair_pending_translations() == []
+    async with sessions() as db:
+        job = await db.get(TranslationJob, "job209")
+        assert job.status == "repair_pending" and job.error == error
+        assert (await db.get(Paper, "paper209")).translation_status == "repairing"
+
+
+@pytest.mark.asyncio
 async def test_same_revision_exhausted_budget_never_calls_supplier(recovery_state, monkeypatch):
     sessions, _, _ = recovery_state
     async with sessions() as db:

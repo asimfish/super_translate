@@ -86,6 +86,7 @@ from app.services.resumable_uploads import (
 )
 from app.services.translation_recovery import (
     current_engine_revision,
+    provider_action_required,
     recovery_attempt_limit,
     recovery_backoff_seconds,
 )
@@ -2511,6 +2512,7 @@ async def _do_translate(
     clean_result = False
     qa_failure_error: str | None = None
     previous_quality_issues: list | None = None
+    configuration_error: str | None = None
     attempted = starting_attempt
     for attempt in range(starting_attempt + 1, max_attempts + 1):
         attempted = attempt
@@ -2562,6 +2564,8 @@ async def _do_translate(
 
         if not trans_result.success:
             error = sanitize_error(trans_result.error or "Translation worker failed")
+            configuration_error = provider_action_required(error, config.backend)
+            error = configuration_error or error
             worker_error = error
             trans_result = TranslationResult(error=error)
             async with async_session() as db:
@@ -2572,6 +2576,9 @@ async def _do_translate(
                 )
                 if job_id:
                     await db.commit()
+            if configuration_error:
+                _append_log(paper_id, loop, configuration_error)
+                break
             if attempt < max_attempts:
                 _append_log(
                     paper_id,
@@ -2713,14 +2720,16 @@ async def _do_translate(
 
         _update_paper_result(paper, trans_result, output_dir)
         if not clean_result:
-            error = qa_failure_error or trans_result.error or "Translation failed"
-            repairable = durable_job is not None
+            error = (configuration_error or qa_failure_error or trans_result.error
+                     or "Translation failed")
+            repairable = durable_job is not None and configuration_error is None
             paper.translation_status = (
                 TranslationStatus.REPAIRING.value if repairable else TranslationStatus.FAILED.value
             )
             paper.translation_progress = 0.99 if trans_result.success else 0.0
             paper.translation_error = error
             paper.translation_stage = (
+                "需要更新 API 设置" if configuration_error else
                 "修复已暂停，等待引擎更新后自动重试"
                 if repairable
                 else "翻译失败"
@@ -2729,11 +2738,15 @@ async def _do_translate(
             if not repairable and not trans_result.success:
                 await asyncio.to_thread(_quarantine_unmanaged_partial_outputs, output_dir)
             await _update_translation_job(
-                db, job_id, status=TranslationJobStatus.REPAIR_PENDING.value,
+                db, job_id, status=(TranslationJobStatus.REPAIR_PENDING.value if repairable
+                                   else TranslationJobStatus.FAILED.value),
                 progress=paper.translation_progress, attempt_count=attempted,
                 max_attempts=max_attempts, engine_revision=engine_revision,
-                error=error, heartbeat=True,
+                error=error, heartbeat=True, finished=not repairable,
             )
+            if not repairable:
+                terminal_job_status = TranslationJobStatus.FAILED.value
+                terminal_job_error = error
         else:
             paper.translation_error = None
             paper.translation_stage = "翻译完成"
@@ -2753,7 +2766,7 @@ async def _do_translate(
         if clean_result:
             final_log_message = f"翻译完成! 耗时 {elapsed:.0f}秒"
         else:
-            error = qa_failure_error or trans_result.error
+            error = paper.translation_error
             final_log_message = (
                 f"{paper.translation_stage}: {error} (已尝试 {attempted} 次，耗时 {elapsed:.0f}秒)"
             )
