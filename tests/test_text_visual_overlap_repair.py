@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fitz
+import pytest
 
 
 def _make_overlap_pdf(path):
@@ -132,7 +133,8 @@ def test_qa_repair_scope_is_limited_to_reported_pages(tmp_path, monkeypatch):
     repair.assert_called_once_with(mono, visual_overlap_pages={2})
 
 
-def test_post_translation_qa_rechecks_visual_overlap_after_repair(tmp_path):
+@pytest.mark.parametrize("issue_code", ["text_visual_overlap", "text_overlap"])
+def test_post_translation_qa_rechecks_text_overlap_after_repair(tmp_path, issue_code):
     from unittest.mock import MagicMock, patch
 
     from app.api.papers import _run_post_translation_qa
@@ -147,7 +149,7 @@ def test_post_translation_qa_rechecks_visual_overlap_after_repair(tmp_path):
         "Issue",
         (),
         {
-            "code": "text_visual_overlap",
+            "code": issue_code,
             "severity": "error",
             "page": 1,
             "message": "body over figure",

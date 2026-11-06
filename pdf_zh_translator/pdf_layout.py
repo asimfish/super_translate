@@ -8097,7 +8097,13 @@ def _extract_formula_fragments(
                     # Keep prose connectors separate before collecting exact
                     # formula signatures; their translations need not match.
                     if re.search(
-                        r"\b(?:let|and|where|as|on|here|giving|indicates|satisf(?:y|ies)|initialize(?:d|s|ing)?)\b",
+                        # These words are prose connectors that are often
+                        # glued to a math span by PDF extraction. Keeping one
+                        # inside a formula fingerprint makes a correct
+                        # translated connector look like formula damage.
+                        r"\b(?:let|and|where|as|on|here|giving|indicates|"
+                        r"satisf(?:y|ies)|initialize(?:d|s|ing)?|when|"
+                        r"otherwise|if|for|with|over|under|be)\b",
                         span_text,
                         re.IGNORECASE,
                     ):
@@ -8135,7 +8141,9 @@ def _extract_formula_fragments(
         # signature makes a correct ``and -> 及`` translation look like a
         # damaged formula and also couples otherwise independent equations.
         for candidate in re.split(
-            r"\b(?:let|and|where|as|on|here|giving|indicates|satisf(?:y|ies)|initialize(?:d|s|ing)?)\b",
+            r"\b(?:let|and|where|as|on|here|giving|indicates|"
+            r"satisf(?:y|ies)|initialize(?:d|s|ing)?|when|otherwise|"
+            r"if|for|with|over|under|be)\b",
             text,
             flags=re.IGNORECASE,
         ):
