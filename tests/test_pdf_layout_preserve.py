@@ -14519,6 +14519,23 @@ class FormulaFragmentExtractionProseTrimTests(unittest.TestCase):
             fragments,
         )
 
+    def test_formula_signature_excludes_condition_and_range_connectors(self):
+        document = fitz.open()
+        page = document.new_page(width=500, height=200)
+        page.insert_text(
+            (30, 80),
+            "r_v = d+_v/d_v when d_v > 0, otherwise r_v = 1/2; "
+            "p is epsilon-binary for epsilon in [0, 1/k).",
+            fontsize=10,
+        )
+        fragments = _extract_formula_fragments(page)
+        document.close()
+        compact = " ".join(fragments).lower()
+        assert "when" not in compact
+        assert "otherwise" not in compact
+        assert "epsilon-binary" not in compact
+        assert any("dv>0" in fragment.replace("_", "") for fragment in fragments)
+
     def test_ligatured_prose_around_math_is_not_a_formula_fragment(self):
         self.assertFalse(_looks_like_formula_fragment("output ﬂow (qi−si+d)."))
 

@@ -2950,10 +2950,20 @@ def _run_post_translation_qa(
             before_repair_issues = list(issues)
             snapshot = _snapshot_translated_outputs(trans_result)
             try:
+                # Layout repair has a stricter, page-scoped path for every
+                # text/float collision. Previously only the visual-overlap
+                # detector opted into it, so ordinary text_overlap reports
+                # could leave a body block painted through an algorithm or
+                # figure even though the QA report had identified the page.
                 visual_overlap_pages = {
                     int(issue.page)
                     for issue in issues
-                    if getattr(issue, "code", "") == "text_visual_overlap"
+                    if getattr(issue, "code", "") in {
+                        "caption_overlap",
+                        "raster_heading_body_overlap",
+                        "text_overlap",
+                        "text_visual_overlap",
+                    }
                     and isinstance(getattr(issue, "page", None), int)
                     and issue.page > 0
                 }
