@@ -161,9 +161,10 @@ def repair_cached_layout(
                     history.update(accepted=True, status="improved")
             except RepairCancelled:
                 raise
-            except Exception:
+            except Exception as exc:
                 # A failed render/cache miss cannot discard the usable draft.
                 history["status"] = "candidate_failed"
+                history["failure_kind"] = type(exc).__name__
             outcome.history.append(history)
             if not before:
                 break
@@ -174,13 +175,17 @@ def _render_candidate(spec: dict, *, cancelled: Callable[[], bool], timeout: flo
     """Run native code with a hard deadline and owner cancellation polling."""
     spec_path = Path(spec["output_path"]).with_suffix(".json")
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
-    deadline = time.monotonic() + max(1.0, min(1800.0, float(timeout)))
+    budget = max(1.0, min(1800.0, float(timeout)))
+    deadline = time.monotonic() + budget
     proc = subprocess.Popen(
         [sys.executable, "-m", "app.services.quality_repair", str(spec_path)],
         cwd=str(Path(__file__).resolve().parents[2]),
         # Keep native crashes and cache misses in the existing server log.
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-        env=dict(os.environ, PYTHONFAULTHANDLER="1"),
+        env=dict(
+            os.environ, PYTHONFAULTHANDLER="1",
+            SUPERTRANSLATE_REPAIR_TRACE_AFTER=str(max(1.0, budget - 5.0)),
+        ),
     )
     try:
         while proc.poll() is None:
@@ -200,10 +205,17 @@ def _render_candidate(spec: dict, *, cancelled: Callable[[], bool], timeout: flo
 
 def main() -> None:
     """Strict cache replay: no vendor is constructed or called in this process."""
+    import faulthandler
+
     from pdf_zh_translator.pdf_layout import translate_pdf
     from pdf_zh_translator.translators import CacheOnlyTranslator
 
     spec = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    trace_after = float(os.environ.get("SUPERTRANSLATE_REPAIR_TRACE_AFTER", "0"))
+    if trace_after > 0:
+        # A near-deadline stack distinguishes slow font preparation, native
+        # rendering and a blocked cache read without logging document contents.
+        faulthandler.dump_traceback_later(trace_after)
     profile = _PROFILES[spec["profile"]]
     translator = CacheOnlyTranslator(Path(spec["cache_path"]))
     # Older installed engines accept only the cache path in the constructor;

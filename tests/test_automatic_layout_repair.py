@@ -161,9 +161,9 @@ def test_real_cached_render_repairs_crushed_fonts_without_a_supplier(tmp_path):
     )
     outcome = repair.repair_cached_layout(
         source, result, before, verify=verify_translation_issues,
-        cancelled=lambda: False, on_stage=Mock(), timeout=60,
+        cancelled=lambda: False, on_stage=Mock(),
     )
-    assert not [item for item in outcome.issues if item.severity == "error"]
+    assert not [item for item in outcome.issues if item.severity == "error"], outcome.history
     # Font metrics differ across macOS and Linux. Either registered profile
     # may be the successful one; the final document must pass the same QA.
     assert any(candidate["accepted"] for candidate in outcome.history)
@@ -193,3 +193,20 @@ def test_repair_child_supports_legacy_cache_constructor(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["repair", str(spec)])
     repair.main()
     assert render.call_args.args[2].supports_source_style_segments is True
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_inflight_candidate_is_killed_on_timeout_or_cancellation(tmp_path, monkeypatch, cancelled):
+    process = Mock()
+    process.poll.return_value = None
+    monkeypatch.setattr(repair.subprocess, "Popen", Mock(return_value=process))
+    monkeypatch.setattr(repair.time, "monotonic", Mock(side_effect=[0, 2]))
+    output = tmp_path / "candidate.pdf"
+    expected = repair.RepairCancelled if cancelled else TimeoutError
+    with pytest.raises(expected):
+        repair._render_candidate(
+            {"output_path": str(output)}, cancelled=lambda: cancelled, timeout=1,
+        )
+    process.kill.assert_called_once()
+    process.wait.assert_called_once()
+    assert not output.with_suffix(".json").exists()
