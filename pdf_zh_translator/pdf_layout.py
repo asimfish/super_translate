@@ -8124,6 +8124,13 @@ def _extract_formula_fragments(
         # formula are translated prose, not part of the preservation
         # signature (``sqrt(beta(tau)) (Song et al., 2020)``).
         text = AUTHOR_YEAR_CITATION_RE.sub("", text)
+        # Parenthesized cross-references are translated prose even when PDF
+        # extraction glues them to the preceding mathematical expression.
+        text = re.sub(
+            r"\(\s*(?:Sections?|Appendix|Appendices|Equations?|Eqs?\.?|"
+            r"Figures?|Figs?\.?|Tables?)\s*[A-Z]?\d*(?:\.\d+)*\s*\)",
+            " ", text, flags=re.IGNORECASE,
+        )
         # A reported improvement is prose around two exact numeric values,
         # not a formula containing the English words "from" and "to".
         # Keep checking both fractions even when the connectors translate.
@@ -8182,6 +8189,9 @@ def _normalize_formula_fragment_for_compare(text: str) -> str:
         # The portable text layer follows Unicode compatibility mappings for
         # TeX's spacing dot accent and phi variant. Retain the dot itself.
         .replace("˙", "\u0307")
+        # The source font can expose a standalone macron while the portable
+        # formula text layer uses its combining form. Keep the accent itself.
+        .replace("¯", "\u0304")
         .replace("ϕ", "φ")
         # TeX math fonts use both the lunate epsilon (ϵ) and Greek epsilon
         # (ε) for the same semantic variable. Formula sprites and their
