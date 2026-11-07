@@ -102,6 +102,8 @@ jobs:
           python-version: "3.13"
           enable-cache: true
       - run: uv sync --frozen --extra dev
+      - name: Install fonts for isolated cached-render acceptance
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
       - name: Shared client API and recovery regressions
         run: >-
           uv run pytest -q
@@ -117,6 +119,11 @@ jobs:
           tests/test_translation_engine_fingerprint.py
           tests/test_translation_draft_retention.py
           tests/test_translation_cache_model_identity.py
+          tests/test_automatic_layout_repair.py
+          tests/test_automatic_qa_recovery.py
+          tests/test_retry_no_progress.py
+          tests/test_translation_recovery.py
+          tests/test_engine_revision_dependencies.py
           tests/test_translators.py
 
   desktop:

@@ -2097,72 +2097,58 @@ def _verify_translation_isolated(
 
     PyMuPDF can segfault on specific produced documents (PhiZero, 2026-08-05:
     crash in page_get_textpage during QA), and the check runs in the web
-    process — so it runs isolated instead. A crash degrades to a qa_failed
-    WARNING (the translation itself is unaffected).
+    process — so it runs isolated instead. Retry a crashed checker in a fresh
+    process once; an unverified document must never be reported as passing.
     """
     import subprocess
     import sys
 
     from pdf_zh_translator.pdf_layout import TranslationIssue
 
-    work_dir = translated_path.parent
-    token = uuid.uuid4().hex
-    spec_path = work_dir / f".verify-{token}.spec.json"
-    result_path = work_dir / f".verify-{token}.json"
-    spec = {
-        "mode": "verify",
-        "original_path": str(original_path),
-        "translated_path": str(translated_path),
-        "result_path": str(result_path),
-    }
-    spec_path.write_text(json.dumps(spec), encoding="utf-8")
-    env = dict(os.environ, PYTHONFAULTHANDLER="1")
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "app.services.worker", str(spec_path)],
-            cwd=str(settings.base_dir),
-            env=env,
-            stdout=subprocess.DEVNULL,
-            timeout=600,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        pass
-    finally:
-        spec_path.unlink(missing_ok=True)
-
-    issues: list = []
-    crashed = not result_path.exists()
-    if not crashed:
+    for attempt in range(2):
+        token = uuid.uuid4().hex
+        spec_path = translated_path.parent / f".verify-{token}.spec.json"
+        result_path = translated_path.parent / f".verify-{token}.json"
+        spec_path.write_text(json.dumps({
+            "mode": "verify",
+            "original_path": str(original_path),
+            "translated_path": str(translated_path),
+            "result_path": str(result_path),
+        }), encoding="utf-8")
         try:
-            payload = json.loads(result_path.read_text(encoding="utf-8"))
-            crashed = bool(payload.get("crashed"))
-            for item in payload.get("issues", []):
-                issues.append(
-                    TranslationIssue(
-                        page=int(item.get("page", 0)),
-                        code=str(item.get("code", "unknown")),
-                        message=str(item.get("message", "")),
-                        severity=str(item.get("severity", "warning")),
-                    )
-                )
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            crashed = True
-    result_path.unlink(missing_ok=True)
-    if crashed:
-        logger.warning(
-            "QA verification crashed in native code for %s; degrading to warning",
-            translated_path,
-        )
-        issues.append(
-            TranslationIssue(
-                page=0,
-                code="qa_failed",
-                message="QA verification crashed in native code; skipped",
-                severity="warning",
+            completed = subprocess.run(
+                [sys.executable, "-m", "app.services.worker", str(spec_path)],
+                cwd=str(settings.base_dir),
+                env=dict(os.environ, PYTHONFAULTHANDLER="1"),
+                stdout=subprocess.DEVNULL, timeout=600, check=False,
             )
-        )
-    return issues
+            if completed.returncode != 0:
+                raise ValueError("QA subprocess exited unsuccessfully")
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("crashed") is not False:
+                raise ValueError("QA subprocess did not finish")
+            rows = payload.get("issues")
+            if not isinstance(rows, list) or any(
+                not isinstance(row, dict)
+                or type(row.get("page")) is not int or row["page"] < 0
+                or not isinstance(row.get("code"), str) or not row["code"]
+                or not isinstance(row.get("message"), str)
+                or row.get("severity") not in {"error", "warning"}
+                for row in rows
+            ):
+                raise ValueError("QA subprocess returned an invalid issue report")
+            return [TranslationIssue(**row) for row in rows]
+        except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+            logger.warning(
+                "QA subprocess failed for %s (attempt %d/2)", translated_path, attempt + 1,
+            )
+        finally:
+            spec_path.unlink(missing_ok=True)
+            result_path.unlink(missing_ok=True)
+    return [TranslationIssue(
+        page=0, code="qa_failed", severity="error",
+        message="译后检查进程连续两次未完成，译文尚未通过验证；已保留草稿和修复记录",
+    )]
 
 
 async def _run_translate_in_worker(
@@ -2263,6 +2249,10 @@ async def _run_translate_in_worker(
                 mono_path=Path(data["mono_path"]) if data.get("mono_path") else None,
                 dual_path=Path(data["dual_path"]) if data.get("dual_path") else None,
                 error=data.get("error"),
+                repair_cache_path=(
+                    Path(data["repair_cache_path"]) if data.get("repair_cache_path") else None
+                ),
+                repair_preserve_graphics_text=bool(data.get("repair_preserve_graphics_text", True)),
             )
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
@@ -3051,6 +3041,42 @@ def _run_post_translation_qa(
             if qa_mode != "iterative":
                 break
 
+        from app.services.quality_repair import RepairCancelled, repair_cached_layout
+
+        try:
+            outcome = repair_cached_layout(
+                input_path, trans_result, issues,
+                verify=_verify_translation_isolated,
+                cancelled=lambda: _is_cancel_requested(paper_id),
+                on_stage=lambda stage: (
+                    _append_log(paper_id, loop, stage),
+                    _set_translation_stage(paper_id, loop, stage, job_id=job_id),
+                ),
+                timeout=getattr(settings, "translation_layout_repair_timeout_seconds", 300),
+            )
+        except RepairCancelled:
+            raise TranslationCancelledError("Translation cancelled by user") from None
+        issues = outcome.issues
+        for candidate in outcome.history:
+            passes_run += int(candidate["verified"])
+            repair_attempted = True
+            pass_history.append({
+                **_qa_pass_summary(
+                    passes_run, issues, agent_action=QualityAction.REPAIR_LAYOUT,
+                    agent_reason="supplier-free alternate layout",
+                    issue_fingerprint=issue_fingerprint(issues),
+                ),
+                "cached_render": candidate,
+                **({key: candidate[key] for key in (
+                    "error_count", "warning_count", "issue_count", "issue_codes",
+                    "issue_fingerprint",
+                )} if candidate["verified"] else {}),
+            })
+            _append_log(
+                paper_id, loop,
+                f"缓存版面修复 {candidate['profile']}："
+                + ("复查改善，已保留" if candidate["accepted"] else "未改善，保留原译文"),
+            )
         _write_qa_report(
             trans_result,
             issues,
@@ -3058,7 +3084,9 @@ def _run_post_translation_qa(
             passes_run=passes_run,
             repair_attempted=repair_attempted,
             pass_history=pass_history,
-            status="failed" if _has_unresolved_error(issues) else "warning",
+            status=(
+                "failed" if _has_unresolved_error(issues) else "warning" if issues else "passed"
+            ),
         )
         return issues
     except TranslationCancelledError:

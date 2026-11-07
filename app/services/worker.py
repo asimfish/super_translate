@@ -94,6 +94,10 @@ def _main_translate(spec: dict) -> int:
                 "mono_path": str(result.mono_path) if result.mono_path else None,
                 "dual_path": str(result.dual_path) if result.dual_path else None,
                 "error": result.error,
+                "repair_cache_path": (
+                    str(result.repair_cache_path) if result.repair_cache_path else None
+                ),
+                "repair_preserve_graphics_text": result.repair_preserve_graphics_text,
             }
         ),
         encoding="utf-8",
