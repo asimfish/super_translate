@@ -8103,7 +8103,8 @@ def _extract_formula_fragments(
                         # translated connector look like formula damage.
                         r"\b(?:let|and|where|as|on|here|giving|indicates|"
                         r"satisf(?:y|ies)|initialize(?:d|s|ing)?|when|"
-                        r"otherwise|if|for|with|over|under|be)\b",
+                        r"otherwise|if|for|with|over|under|be|so|at|"
+                        r"gives?|in\s+only|only|large|versus|to|ensures?)\b",
                         span_text,
                         re.IGNORECASE,
                     ):
@@ -8143,11 +8144,18 @@ def _extract_formula_fragments(
         for candidate in re.split(
             r"\b(?:let|and|where|as|on|here|giving|indicates|"
             r"satisf(?:y|ies)|initialize(?:d|s|ing)?|when|otherwise|"
-            r"if|for|with|over|under|be)\b",
+            r"if|for|with|over|under|be|so|at|gives?|in\s+only|only|large|"
+            r"versus|to|ensures?)\b",
             text,
             flags=re.IGNORECASE,
         ):
-            if not _looks_like_formula_fragment(candidate):
+            # Reported numeric ratios remain exact owners after their prose
+            # connector is removed (``c=1 gives 4.51/9.79``). The generic
+            # formula heuristic deliberately rejects a lone numeric ratio.
+            numeric_ratio = re.fullmatch(
+                r"\s*\d+(?:\.\d+)?/\d+(?:\.\d+)?[.,;:]?\s*", candidate,
+            )
+            if not numeric_ratio and not _looks_like_formula_fragment(candidate):
                 continue
             compact = re.sub(r"\s+", "", candidate)
             if compact and compact not in seen:
@@ -24918,6 +24926,8 @@ def _combine_inline_style_translation_items(
         body: TextBlock,
         heading_line: BBox,
         body_line: BBox,
+        *,
+        max_prose_gap: float = 4.0,
     ) -> bool:
         vertical_overlap = min(body_line[3], heading_line[3]) - max(
             body_line[1], heading_line[1]
@@ -24927,7 +24937,7 @@ def _combine_inline_style_translation_items(
             heading_line[3] - heading_line[1],
         ) * 0.65:
             return False
-        if -1.0 <= body_line[0] - heading_line[2] <= 4.0:
+        if -1.0 <= body_line[0] - heading_line[2] <= max_prose_gap:
             return True
         for keepout in dict.fromkeys(
             [*(heading.keepout_bboxes or []), *(body.keepout_bboxes or [])]
@@ -24961,6 +24971,18 @@ def _combine_inline_style_translation_items(
             if heading.source_line_bboxes
             else heading.bbox
         )
+        # A bold lead-in can be classified as a standalone heading while
+        # the rest of its paragraph wraps back to the same left margin.
+        # That native wrap proves shared ownership; same-row proximity alone
+        # would also match unrelated text in a neighbouring column.
+        wrapped_leadin = (
+            heading.block_type == "heading"
+            and heading.source_lines == 1
+            and body.source_lines > 1
+            and abs(body.bbox[0] - heading_line[0]) <= 4.0
+            and body.bbox[3] > heading_line[3] + heading.font_size * 0.6
+            and abs(body.font_size - heading.font_size) <= 1.0
+        )
         matching_body_line = next(
             (
                 line_bbox
@@ -24970,12 +24992,14 @@ def _combine_inline_style_translation_items(
                     body,
                     heading_line,
                     line_bbox,
+                    max_prose_gap=(max(4.0, heading.font_size * 1.5) if wrapped_leadin else 4.0),
                 )
             ),
             None,
         )
         if (
-            heading.block_type != "run_in_heading"
+            (heading.block_type != "run_in_heading" and not wrapped_leadin)
+            or heading.page_index != body.page_index
             or not heading.bold
             or body.block_type not in {"body", "formula_prose"}
             or matching_body_line is None
@@ -26445,7 +26469,8 @@ def _expand_multiline_block_bbox(
     above it without moving or redacting the preceding item.
     """
     if (
-        block.block_type not in {"body", "formula_prose", "list"}
+        block.block_type not in {"body", "formula_prose", "list", "run_in_heading"}
+        or (block.block_type == "run_in_heading" and block.bold)
         or block.source_lines < 2
         or block.nowrap
         or block.preserve_position
@@ -29895,7 +29920,10 @@ def _formula_atom_masked_pixmap(
             atom = fitz.Rect(atom_bbox) & source_rect
             atom_area = max(0.1, atom.width * atom.height)
             overlap = atom & exclusion
-            if overlap.width * overlap.height >= atom_area * 0.5:
+            same_source_row = abs(
+                (atom.y0 + atom.y1) / 2.0 - (exclusion.y0 + exclusion.y1) / 2.0
+            ) <= min(atom.height, exclusion.height) * 0.35
+            if same_source_row and overlap.width * overlap.height >= atom_area * 0.5:
                 owned_atoms.append(atom)
         x0 = max(0, math.floor(exclusion.x0 * zoom) - pixmap.x)
         y0 = max(0, math.floor(exclusion.y0 * zoom) - pixmap.y)
@@ -29907,8 +29935,10 @@ def _formula_atom_masked_pixmap(
             masked_alpha[start:stop] = b"\x00" * (stop - start)
     # A prose span and a math span can share most of the same font box even
     # when they describe different glyphs on one baseline. In that case the
-    # math span is the authoritative owner; otherwise exclusions erase Greek
-    # atoms while leaving only their accents or relation signs visible.
+    # math span is the authoritative owner on the same source row; otherwise
+    # exclusions erase Greek atoms while leaving only accents or relations.
+    # An inflated CMEX accent bbox can also cover most of the *next* prose
+    # row. It supplies no same-row ownership and must not reopen those pixels.
     for atom in owned_atoms:
         protected = fitz.Rect(
             atom.x0 - atom_margin,
