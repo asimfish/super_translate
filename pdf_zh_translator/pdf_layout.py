@@ -8104,7 +8104,7 @@ def _extract_formula_fragments(
                         r"\b(?:let|and|where|as|on|here|giving|indicates|"
                         r"satisf(?:y|ies)|initialize(?:d|s|ing)?|when|"
                         r"otherwise|if|for|with|over|under|be|so|at|"
-                        r"gives?|in|only|large|versus|to|ensures?|is|are|it)\b",
+                        r"gives?|in|only|large|versus|to|ensures?|is|it)\b",
                         span_text,
                         re.IGNORECASE,
                     ):
@@ -8145,7 +8145,7 @@ def _extract_formula_fragments(
             r"\b(?:let|and|where|as|on|here|giving|indicates|"
             r"satisf(?:y|ies)|initialize(?:d|s|ing)?|when|otherwise|"
             r"if|for|with|over|under|be|so|at|gives?|in|only|large|"
-            r"versus|to|ensures?|is|are|it)\b",
+            r"versus|to|ensures?|is|it)\b",
             text,
             flags=re.IGNORECASE,
         ):
