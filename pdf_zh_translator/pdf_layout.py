@@ -8104,7 +8104,7 @@ def _extract_formula_fragments(
                         r"\b(?:let|and|where|as|on|here|giving|indicates|"
                         r"satisf(?:y|ies)|initialize(?:d|s|ing)?|when|"
                         r"otherwise|if|for|with|over|under|be|so|at|"
-                        r"gives?|in\s+only|only|large|versus|to|ensures?)\b",
+                        r"gives?|in|only|large|versus|to|ensures?|is|are|it)\b",
                         span_text,
                         re.IGNORECASE,
                     ):
@@ -8144,8 +8144,8 @@ def _extract_formula_fragments(
         for candidate in re.split(
             r"\b(?:let|and|where|as|on|here|giving|indicates|"
             r"satisf(?:y|ies)|initialize(?:d|s|ing)?|when|otherwise|"
-            r"if|for|with|over|under|be|so|at|gives?|in\s+only|only|large|"
-            r"versus|to|ensures?)\b",
+            r"if|for|with|over|under|be|so|at|gives?|in|only|large|"
+            r"versus|to|ensures?|is|are|it)\b",
             text,
             flags=re.IGNORECASE,
         ):
@@ -25208,7 +25208,10 @@ def _combine_academic_formula_statement_translation_items(
                     preserve_position=False,
                     nowrap=False,
                     bold_prefix=block.bold_prefix,
-                    flow_inline_math=False,
+                    # Only an actual fragment merge establishes a fixed
+                    # structural formula flow. A complete statement already
+                    # carries the extraction's source-geometry decision.
+                    flow_inline_math=(block.flow_inline_math if cursor == index + 1 else False),
                 ),
                 statement_translation,
             )
