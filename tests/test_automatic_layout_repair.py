@@ -164,7 +164,9 @@ def test_real_cached_render_repairs_crushed_fonts_without_a_supplier(tmp_path):
         cancelled=lambda: False, on_stage=Mock(), timeout=60,
     )
     assert not [item for item in outcome.issues if item.severity == "error"]
-    assert outcome.history[0]["accepted"] is True
+    # Font metrics differ across macOS and Linux. Either registered profile
+    # may be the successful one; the final document must pass the same QA.
+    assert any(candidate["accepted"] for candidate in outcome.history)
     with fitz.open(mono) as repaired, fitz.open(dual) as paired:
         assert repaired.page_count == 1 and paired.page_count == 2
         assert paired[1].get_text() == repaired[0].get_text()
