@@ -15,11 +15,13 @@ when the process restarts.
 ## Decision
 
 Each job records a bounded attempt budget, the current engine revision, and the
-latest issue fingerprint. Worker failures and all error-severity QA findings are
-retried within that budget. The best rendered output and QA report are retained
-across attempts.
+latest issue fingerprint. Transient worker failures and supported untranslated-prose
+QA findings are retried within that budget. Unsupported deterministic findings
+stop earlier; another full render of the same source/cache cannot repair them.
+The best rendered output and QA report are retained across attempts.
 
-When the budget is exhausted, the paper enters `repairing` and its job enters
+When the budget is exhausted or no supported improving action remains, the paper
+enters `repairing` and its job enters
 `repair_pending`. This is a durable, non-terminal product state: the output,
 error detail, parameters, and attempt history remain available. A startup under
 a newer translation-engine revision resets the attempt budget and automatically
