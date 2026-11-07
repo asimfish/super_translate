@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     # loop on deterministic layout defects.
     translation_recovery_attempts: int = 3
     translation_recovery_backoff_seconds: float = 2.0
+    # Each cached alternative layout runs in isolation with no supplier cost.
+    translation_layout_repair_timeout_seconds: int = 300
     # Keep translation jobs durable across local server restarts. Queued jobs
     # and jobs interrupted mid-run are reset to queued and restarted on startup.
     resume_queued_translations_on_startup: bool = True

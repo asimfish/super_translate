@@ -9,6 +9,8 @@ from app.services import translation_recovery
 
 
 @pytest.mark.parametrize("relative", [
+    "app/services/quality_repair.py",
+    "app/services/worker.py",
     "app/services/translator.py",
     "pdf_zh_translator/translators.py",
     "pdf_zh_translator/journal_layout.py",

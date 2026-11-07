@@ -218,6 +218,8 @@ class TranslationResult:
     mono_path: Path | None = None
     dual_path: Path | None = None
     error: str | None = None
+    repair_cache_path: Path | None = None
+    repair_preserve_graphics_text: bool = True
 
     @property
     def success(self) -> bool:
@@ -674,7 +676,15 @@ def _translate_sync_native(
         dual_path.unlink(missing_ok=True)
         result_dual_path = None
     cleanup_output_dir(staging_dir)
-    return TranslationResult(mono_path=mono_path, dual_path=result_dual_path)
+    return TranslationResult(
+        mono_path=mono_path, dual_path=result_dual_path,
+        # OCR source coordinates differ from the uploaded PDF; do not replay
+        # them against the original until that source has durable storage.
+        repair_cache_path=(
+            Path(config.cache_file) if config.backend == "cache-only" else cache_path
+        ) if config.ocr_mode == "off" else None,
+        repair_preserve_graphics_text=config.preserve_graphics_text,
+    )
 
 
 def _translate_sync(

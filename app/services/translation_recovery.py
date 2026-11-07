@@ -44,6 +44,8 @@ _REVISION_FILES = (
     'app/api/papers.py',
     'app/services/layout_fix.py',
     'app/services/quality_agent.py',
+    'app/services/quality_repair.py',
+    'app/services/worker.py',
     'app/services/translation_recovery.py',
     'app/services/translator.py',
     'pdf_zh_translator/translators.py',

@@ -16,7 +16,16 @@ when the process restarts.
 
 Each job records a bounded attempt budget, the current engine revision, and the
 latest issue fingerprint. Transient worker failures and supported untranslated-prose
-QA findings are retried within that budget. Unsupported deterministic findings
+QA findings are retried within that budget. Before parking a native non-OCR draft,
+layout errors also trigger two isolated renders from that exact job's model cache:
+source font scale and compact text-box padding. These require no supplier request.
+Candidates are fully verified and must reduce blocking errors without increasing
+any blocking page/code count; worse candidates and partial dual-PDF installs are
+rolled back. Missing/foreign caches cannot be used. Each candidate has a deadline
+(`translation_layout_repair_timeout_seconds`, default 300 seconds) and cancellation
+polling. Verification subprocess failure gets one fresh-process retry and remains
+an error if neither check completes. The QA report records each candidate outcome.
+Unsupported deterministic findings
 stop earlier; another full render of the same source/cache cannot repair them.
 The best rendered output and QA report are retained across attempts.
 
@@ -43,6 +52,14 @@ repeat an identical deterministic defect indefinitely.
 Rejected because transient worker failures and newly fixed QA defects require
 manual resubmission and lose the distinction between unrecoverable input and a
 system defect awaiting repair.
+
+### Repeating one layout render
+
+Rejected as the recovery path for rejected layouts: the same geometry and cached
+text cannot correct a deterministic layout fault. Two fixed, reviewable render
+profiles add a real alternative while keeping formula protection, the QA gate,
+the supplier budget, and source ownership unchanged. OCR replays remain excluded
+until the exact OCR source coordinates have durable storage.
 
 ### External distributed queue
 
