@@ -168,3 +168,26 @@ def test_real_cached_render_repairs_crushed_fonts_without_a_supplier(tmp_path):
     with fitz.open(mono) as repaired, fitz.open(dual) as paired:
         assert repaired.page_count == 1 and paired.page_count == 2
         assert paired[1].get_text() == repaired[0].get_text()
+
+
+def test_repair_child_supports_legacy_cache_constructor(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from pdf_zh_translator import pdf_layout, translators
+
+    class LegacyCache:
+        def __init__(self, cache_file):
+            self.cache_file = cache_file
+
+    spec = tmp_path / "candidate.json"
+    spec.write_text(json.dumps({
+        "input_path": "source.pdf", "output_path": "candidate.pdf",
+        "cache_path": "cache.jsonl", "profile": "source_font", "preserve_graphics_text": True,
+    }))
+    render = Mock()
+    monkeypatch.setattr(translators, "CacheOnlyTranslator", LegacyCache)
+    monkeypatch.setattr(pdf_layout, "translate_pdf", render)
+    monkeypatch.setattr(sys, "argv", ["repair", str(spec)])
+    repair.main()
+    assert render.call_args.args[2].supports_source_style_segments is True

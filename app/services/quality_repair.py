@@ -178,7 +178,8 @@ def _render_candidate(spec: dict, *, cancelled: Callable[[], bool], timeout: flo
     proc = subprocess.Popen(
         [sys.executable, "-m", "app.services.quality_repair", str(spec_path)],
         cwd=str(Path(__file__).resolve().parents[2]),
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        # Keep native crashes and cache misses in the existing server log.
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         env=dict(os.environ, PYTHONFAULTHANDLER="1"),
     )
     try:
@@ -204,9 +205,13 @@ def main() -> None:
 
     spec = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     profile = _PROFILES[spec["profile"]]
+    translator = CacheOnlyTranslator(Path(spec["cache_path"]))
+    # Older installed engines accept only the cache path in the constructor;
+    # their strict lookup is still usable for the live segmented model cache.
+    translator.supports_source_style_segments = True
     translate_pdf(
         Path(spec["input_path"]), Path(spec["output_path"]),
-        CacheOnlyTranslator(Path(spec["cache_path"]), segment_source_styles=True),
+        translator,
         font_scale=profile.font_scale, margin=profile.margin,
         preserve_graphics_text=spec["preserve_graphics_text"], skip_overflow=False,
     )
