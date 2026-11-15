@@ -670,6 +670,10 @@ Google 后端（`fast` 档）免 key 可直接用；其余后端各自需要 key
 - **模型目录跟随更新**：按 [PROVIDER_MODEL_CATALOG](docs/PROVIDER_MODEL_CATALOG.md) 的维护规则持续核验各家新模型
 - **版式模板库**：`layout-learn` 已支持从代表性 PDF 学习 ACM/IEEE/Springer/ACL 风格的版式 profile，逐步沉淀为内置模板
 
+## 原生辅助库开发验证
+
+MuPDF 颜色／渐变辅助库的目标架构编译、固定头文件检查及实际 PDF 回归，见 [原生辅助库工具说明](scripts/native_observers/README.md)。这些工具不调用翻译供应商；辅助库回归通过不代表完整论文翻译或 20 篇验收通过。
+
 ## License 与引用
 
 [AGPL-3.0-or-later](LICENSE)。
